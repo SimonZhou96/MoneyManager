@@ -1,3 +1,4 @@
 pandas
 yfinance
 mplfinance
+futu-api
