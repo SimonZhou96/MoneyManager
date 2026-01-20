@@ -19,6 +19,19 @@ Repository initialized on 2026-01-20.
 
 2. Open the project and follow the language-specific setup (this repo may contain multiple languages).
 
+## Xiaomi EMA strategy example
+
+This repo includes a simple Python example that downloads Xiaomi (1810.HK) data,
+computes EMA10/EMA150, and applies the buy/sell rules described in the prompt.
+
+1. Install dependencies:
+
+   python -m pip install -r requirements.txt
+
+2. Run the strategy:
+
+   python xiaomi_strategy.py --ticker 1810.HK --lookback-days 220 --last-n 10
+
 ## Contributing
 
 Contributions are welcome — please open an issue or submit a pull request describing your changes.
