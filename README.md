@@ -32,6 +32,9 @@ computes EMA10/EMA150, and applies the buy/sell rules described in the prompt.
 
    python xiaomi_strategy.py --ticker 1810.HK --lookback-days 220 --last-n 10
 
+The script will save a candlestick chart with EMA10/EMA150 and buy/sell markers
+to `xiaomi_chart.png` by default (use `--plot-file` to change the path).
+
 ## Contributing
 
 Contributions are welcome — please open an issue or submit a pull request describing your changes.

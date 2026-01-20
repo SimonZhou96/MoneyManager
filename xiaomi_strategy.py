@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
+import matplotlib.pyplot as plt
+import mplfinance as mpf
 import pandas as pd
 import yfinance as yf
 
@@ -228,6 +230,77 @@ def format_trades(trades: Iterable[Trade]) -> str:
     return "\n".join(rows)
 
 
+def build_trade_markers(
+    df: pd.DataFrame, trades: Iterable[Trade]
+) -> Tuple[pd.Series, pd.Series]:
+    buy_actions = {"open_long", "close_short", "stop_short"}
+    sell_actions = {"open_short", "close_long", "stop_long"}
+
+    buy_series = pd.Series(index=df.index, dtype="float64")
+    sell_series = pd.Series(index=df.index, dtype="float64")
+
+    for trade in trades:
+        if trade.date not in df.index:
+            continue
+        if trade.action in buy_actions:
+            buy_series.loc[trade.date] = trade.price
+        elif trade.action in sell_actions:
+            sell_series.loc[trade.date] = trade.price
+
+    return buy_series, sell_series
+
+
+def plot_chart(
+    df: pd.DataFrame,
+    trades: Iterable[Trade],
+    *,
+    last_n: int,
+    output_file: str,
+    show_plot: bool,
+) -> None:
+    plot_df = df.tail(last_n).copy()
+    buy_markers, sell_markers = build_trade_markers(plot_df, trades)
+
+    addplots = [
+        mpf.make_addplot(plot_df["ema10"], color="tab:blue", width=1.0),
+        mpf.make_addplot(plot_df["ema150"], color="tab:orange", width=1.0),
+    ]
+    if not buy_markers.isna().all():
+        addplots.append(
+            mpf.make_addplot(
+                buy_markers,
+                type="scatter",
+                markersize=80,
+                marker="^",
+                color="tab:green",
+            )
+        )
+    if not sell_markers.isna().all():
+        addplots.append(
+            mpf.make_addplot(
+                sell_markers,
+                type="scatter",
+                markersize=80,
+                marker="v",
+                color="tab:red",
+            )
+        )
+
+    mpf.plot(
+        plot_df,
+        type="candle",
+        style="yahoo",
+        addplot=addplots,
+        volume=False,
+        title="Xiaomi EMA10/EMA150 Strategy",
+        ylabel="Price",
+        savefig=output_file,
+    )
+
+    if show_plot:
+        plt.show()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="EMA10/EMA150 strategy example for Xiaomi (1810.HK)."
@@ -250,6 +323,16 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.01,
         help="Minimum price increment; 10 points equals 10 * tick-size.",
+    )
+    parser.add_argument(
+        "--plot-file",
+        default="xiaomi_chart.png",
+        help="Output image file for the candlestick chart.",
+    )
+    parser.add_argument(
+        "--show-plot",
+        action="store_true",
+        help="Display the chart window (if supported).",
     )
     return parser.parse_args()
 
@@ -279,6 +362,16 @@ def main() -> None:
         print(format_trades(recent_trades))
     else:
         print("No trades triggered in the recent window.")
+
+    if args.plot_file:
+        plot_chart(
+            data,
+            trades,
+            last_n=args.last_n,
+            output_file=args.plot_file,
+            show_plot=args.show_plot,
+        )
+        print(f"\nChart saved to: {args.plot_file}")
 
 
 if __name__ == "__main__":
