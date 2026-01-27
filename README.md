@@ -11,6 +11,24 @@ Repository initialized on 2026-01-20.
 - Set budgets and alerts
 - Generate monthly reports
 
+## HK EMA Crossover Screener (Streamlit)
+
+This repository now includes a simple Streamlit app that screens Hong Kong stocks
+for an EMA10/EMA150 bullish crossover and visualizes candlesticks with EMA/HMA
+overlays.
+
+### Setup
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+### Run
+
+```bash
+python3 -m streamlit run app.py
+```
+
 ## Getting started
 
 1. Clone the repository:
