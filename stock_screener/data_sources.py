@@ -81,13 +81,16 @@ def parse_tickers(text: str) -> List[str]:
 
 
 def download_price_history(ticker: str, period: str = "5y") -> pd.DataFrame:
-    data = yf.download(
-        ticker,
-        period=period,
-        interval="1d",
-        auto_adjust=False,
-        progress=False,
-    )
+    try:
+        data = yf.download(
+            ticker,
+            period=period,
+            interval="1d",
+            auto_adjust=False,
+            progress=False,
+        )
+    except Exception:
+        return pd.DataFrame()
     if data.empty:
         return data
     data = data.dropna(how="any")
@@ -97,14 +100,17 @@ def download_price_history(ticker: str, period: str = "5y") -> pd.DataFrame:
 
 def download_bulk_history(tickers: Iterable[str], period: str = "5y") -> Dict[str, pd.DataFrame]:
     tickers_list = list(tickers)
-    data = yf.download(
-        tickers=tickers_list,
-        period=period,
-        interval="1d",
-        auto_adjust=False,
-        group_by="ticker",
-        progress=False,
-    )
+    try:
+        data = yf.download(
+            tickers=tickers_list,
+            period=period,
+            interval="1d",
+            auto_adjust=False,
+            group_by="ticker",
+            progress=False,
+        )
+    except Exception:
+        return {}
     results: Dict[str, pd.DataFrame] = {}
     if data.empty:
         return results
@@ -127,7 +133,10 @@ def download_bulk_history(tickers: Iterable[str], period: str = "5y") -> Dict[st
 
 
 def fetch_profile(ticker: str) -> StockProfile:
-    info = yf.Ticker(ticker).info
+    try:
+        info = yf.Ticker(ticker).info or {}
+    except Exception:
+        info = {}
     name = info.get("shortName") or info.get("longName") or ticker
     sector = info.get("sector") or info.get("industry") or "未知"
     return StockProfile(symbol=ticker, name=name, sector=sector)
