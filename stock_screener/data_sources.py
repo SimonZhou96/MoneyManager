@@ -1,44 +1,47 @@
 import re
 from dataclasses import dataclass
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Tuple
 
 import pandas as pd
-import yfinance as yf
+from futu import AuType, KLType, Market, OpenQuoteContext, PlateClass, RET_OK
+
+FUTU_HOST = "127.0.0.1"
+FUTU_PORT = 11111
 
 DEFAULT_TICKERS = [
-    "0700.HK",
-    "0939.HK",
-    "0941.HK",
-    "0992.HK",
-    "1024.HK",
-    "1038.HK",
-    "1093.HK",
-    "1113.HK",
-    "1177.HK",
-    "1211.HK",
-    "1299.HK",
-    "1810.HK",
-    "1818.HK",
-    "1918.HK",
-    "1928.HK",
-    "2007.HK",
-    "2015.HK",
-    "2269.HK",
-    "2318.HK",
-    "2319.HK",
-    "2331.HK",
-    "2382.HK",
-    "2388.HK",
-    "2628.HK",
-    "3690.HK",
-    "3968.HK",
-    "3988.HK",
-    "6098.HK",
-    "6690.HK",
-    "9618.HK",
-    "9888.HK",
-    "9898.HK",
-    "9999.HK",
+    "HK.00700",
+    "HK.00939",
+    "HK.00941",
+    "HK.00992",
+    "HK.01024",
+    "HK.01038",
+    "HK.01093",
+    "HK.01113",
+    "HK.01177",
+    "HK.01211",
+    "HK.01299",
+    "HK.01810",
+    "HK.01818",
+    "HK.01918",
+    "HK.01928",
+    "HK.02007",
+    "HK.02015",
+    "HK.02269",
+    "HK.02318",
+    "HK.02319",
+    "HK.02331",
+    "HK.02382",
+    "HK.02388",
+    "HK.02628",
+    "HK.03690",
+    "HK.03968",
+    "HK.03988",
+    "HK.06098",
+    "HK.06690",
+    "HK.09618",
+    "HK.09888",
+    "HK.09898",
+    "HK.09999",
 ]
 
 
@@ -53,15 +56,26 @@ def normalize_hk_ticker(raw: str) -> str:
     raw = raw.strip().upper()
     if not raw:
         return ""
-    if raw.endswith(".HK"):
+    if raw.startswith("HK."):
+        code = raw[3:]
+        if code.isdigit():
+            return f"HK.{code.zfill(5)}"
         return raw
-    if raw.endswith("HK") and raw[:-2].isdigit():
-        return raw[:-2].zfill(4) + ".HK"
+    if raw.endswith(".HK"):
+        raw = raw[:-3]
+    elif raw.endswith("HK") and raw[:-2].isdigit():
+        raw = raw[:-2]
+    elif raw.endswith(".HKG"):
+        raw = raw[:-4]
     if raw.isdigit():
-        return raw.zfill(4) + ".HK"
-    if raw.endswith(".HKG"):
-        return raw.replace(".HKG", ".HK")
+        return f"HK.{raw.zfill(5)}"
     return raw
+
+
+def to_display_symbol(code: str) -> str:
+    if code.startswith("HK.") and code[3:].isdigit():
+        return f"{code[3:]}.HK"
+    return code
 
 
 def parse_tickers(text: str) -> List[str]:
@@ -80,63 +94,156 @@ def parse_tickers(text: str) -> List[str]:
     return tickers
 
 
+def open_quote_context() -> OpenQuoteContext:
+    return OpenQuoteContext(host=FUTU_HOST, port=FUTU_PORT)
+
+
+def period_to_dates(period: str) -> Tuple[str, str]:
+    end = pd.Timestamp.today().normalize()
+    years = 5
+    if period.endswith("y") and period[:-1].isdigit():
+        years = int(period[:-1])
+    start = end - pd.DateOffset(years=years)
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
+
+def _format_kline_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    frame = frame.drop_duplicates(subset=["time_key"]).copy()
+    frame["time_key"] = pd.to_datetime(frame["time_key"])
+    frame = frame.sort_values("time_key")
+    frame = frame.rename(
+        columns={
+            "open": "Open",
+            "high": "High",
+            "low": "Low",
+            "close": "Close",
+            "volume": "Volume",
+        }
+    )
+    columns = [col for col in ["Open", "High", "Low", "Close", "Volume"] if col in frame.columns]
+    frame = frame.set_index("time_key")[columns]
+    frame = frame.dropna(how="any")
+    return frame
+
+
+def _fetch_history_with_ctx(
+    quote_ctx: OpenQuoteContext, ticker: str, start: str, end: str
+) -> pd.DataFrame:
+    frames: List[pd.DataFrame] = []
+    page_req_key = None
+    while True:
+        try:
+            ret, data, page_req_key = quote_ctx.request_history_kline(
+                ticker,
+                start=start,
+                end=end,
+                ktype=KLType.K_DAY,
+                autype=AuType.NONE,
+                page_req_key=page_req_key,
+            )
+        except Exception:
+            break
+        if ret != RET_OK:
+            break
+        if data is not None and not data.empty:
+            frames.append(data)
+        if page_req_key is None:
+            break
+    if not frames:
+        return pd.DataFrame()
+    combined = pd.concat(frames, ignore_index=True)
+    return _format_kline_frame(combined)
+
+
 def download_price_history(ticker: str, period: str = "5y") -> pd.DataFrame:
+    start, end = period_to_dates(period)
     try:
-        data = yf.download(
-            ticker,
-            period=period,
-            interval="1d",
-            auto_adjust=False,
-            progress=False,
-        )
+        quote_ctx = open_quote_context()
     except Exception:
         return pd.DataFrame()
-    if data.empty:
-        return data
-    data = data.dropna(how="any")
-    data.index = pd.to_datetime(data.index)
-    return data
+    try:
+        return _fetch_history_with_ctx(quote_ctx, ticker, start, end)
+    finally:
+        quote_ctx.close()
 
 
 def download_bulk_history(tickers: Iterable[str], period: str = "5y") -> Dict[str, pd.DataFrame]:
     tickers_list = list(tickers)
-    try:
-        data = yf.download(
-            tickers=tickers_list,
-            period=period,
-            interval="1d",
-            auto_adjust=False,
-            group_by="ticker",
-            progress=False,
-        )
-    except Exception:
-        return {}
     results: Dict[str, pd.DataFrame] = {}
-    if data.empty:
+    try:
+        quote_ctx = open_quote_context()
+    except Exception:
         return results
-
-    if isinstance(data.columns, pd.MultiIndex):
+    start, end = period_to_dates(period)
+    try:
         for ticker in tickers_list:
-            if ticker not in data.columns.levels[0]:
-                continue
-            frame = data[ticker].dropna(how="any")
-            if not frame.empty:
-                frame.index = pd.to_datetime(frame.index)
-                results[ticker] = frame
-        return results
-
-    data = data.dropna(how="any")
-    data.index = pd.to_datetime(data.index)
-    if tickers_list:
-        results[tickers_list[0]] = data
+            hist = _fetch_history_with_ctx(quote_ctx, ticker, start, end)
+            if not hist.empty:
+                results[ticker] = hist
+    finally:
+        quote_ctx.close()
     return results
 
 
-def fetch_profile(ticker: str) -> StockProfile:
+def _fetch_plate_map(
+    quote_ctx: OpenQuoteContext, tickers: Iterable[str]
+) -> Dict[str, str]:
     try:
-        info = yf.Ticker(ticker).info or {}
+        ret, plate_data = quote_ctx.get_plate_list(Market.HK, PlateClass.INDUSTRY)
     except Exception:
-        info = {}
-    name = info.get("shortName") or info.get("longName") or ticker
-    sector = info.get("sector") or info.get("industry") or "未知"
-    return StockProfile(symbol=ticker, name=name, sector=sector)
+        return {}
+    if ret != RET_OK or plate_data is None or plate_data.empty:
+        return {}
+
+    remaining = set(tickers)
+    mapping: Dict[str, str] = {}
+    for _, row in plate_data.iterrows():
+        if not remaining:
+            break
+        plate_code = row.get("plate_code")
+        plate_name = row.get("plate_name")
+        if not plate_code or not plate_name:
+            continue
+        try:
+            ret, members = quote_ctx.get_plate_stock(plate_code)
+        except Exception:
+            continue
+        if ret != RET_OK or members is None or members.empty:
+            continue
+        hits = members[members["code"].isin(remaining)]
+        for code in hits["code"].tolist():
+            mapping[code] = plate_name
+            remaining.discard(code)
+    return mapping
+
+
+def fetch_profiles(tickers: Iterable[str]) -> Dict[str, StockProfile]:
+    tickers_list = list(tickers)
+    if not tickers_list:
+        return {}
+    try:
+        quote_ctx = open_quote_context()
+    except Exception:
+        return {}
+    try:
+        name_map: Dict[str, str] = {}
+        try:
+            ret, name_data = quote_ctx.get_stock_name(tickers_list)
+        except Exception:
+            ret, name_data = None, None
+        if ret == RET_OK and name_data is not None and not name_data.empty:
+            name_map = dict(zip(name_data["code"], name_data["name"]))
+        plate_map = _fetch_plate_map(quote_ctx, tickers_list)
+    finally:
+        quote_ctx.close()
+
+    profiles: Dict[str, StockProfile] = {}
+    for ticker in tickers_list:
+        profiles[ticker] = StockProfile(
+            symbol=ticker,
+            name=name_map.get(ticker, ticker),
+            sector=plate_map.get(ticker, "未知"),
+        )
+    return profiles

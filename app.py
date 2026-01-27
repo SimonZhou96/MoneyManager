@@ -9,9 +9,10 @@ from stock_screener.data_sources import (
     DEFAULT_TICKERS,
     StockProfile,
     download_bulk_history,
-    fetch_profile,
+    fetch_profiles,
     normalize_hk_ticker,
     parse_tickers,
+    to_display_symbol,
 )
 from stock_screener.indicators import ema, hma
 from stock_screener.plotting import build_candlestick_chart
@@ -27,14 +28,14 @@ def cached_bulk_history(tickers: Tuple[str, ...], period: str) -> Dict[str, pd.D
 
 
 @st.cache_data(ttl=24 * 60 * 60)
-def cached_profile(ticker: str) -> StockProfile:
-    return fetch_profile(ticker)
+def cached_profiles(tickers: Tuple[str, ...]) -> Dict[str, StockProfile]:
+    return fetch_profiles(list(tickers))
 
 
 def results_to_frame(results: List) -> pd.DataFrame:
     data = [
         {
-            "Symbol": item.symbol,
+            "Symbol": to_display_symbol(item.symbol),
             "Name": item.name,
             "Sector": item.sector,
             "Last Close": round(item.last_close, 3),
@@ -59,7 +60,10 @@ def build_overlays(hist: pd.DataFrame) -> Dict[str, pd.Series]:
 
 
 st.title("HK EMA10/EMA150 Crossover Screener")
-st.write("Condition: EMA10 crosses above EMA150 on the most recent trading day.")
+st.write(
+    "Condition: EMA10 crosses above EMA150 on the most recent trading day. "
+    "Data source: Futu OpenD (127.0.0.1:11111)."
+)
 
 with st.sidebar:
     st.header("Universe")
@@ -69,7 +73,12 @@ with st.sidebar:
         st.caption(f"Using {len(tickers)} sample HK tickers.")
     else:
         default_text = "\n".join(DEFAULT_TICKERS[:10])
-        text = st.text_area("Enter HK tickers (one per line)", value=default_text, height=200)
+        text = st.text_area(
+            "Enter HK tickers (one per line)",
+            value=default_text,
+            height=200,
+            help="Accepts formats like HK.00700, 0700, or 0700.HK.",
+        )
         tickers = parse_tickers(text)
 
     period = st.selectbox("History period", ["3y", "5y", "10y"], index=1)
@@ -81,21 +90,22 @@ if run:
         st.stop()
 
     normalized = [normalize_hk_ticker(ticker) for ticker in tickers]
-    normalized = [ticker for ticker in normalized if ticker.endswith(".HK")]
+    normalized = [ticker for ticker in normalized if ticker.startswith("HK.")]
     if not normalized:
-        st.warning("No HK tickers detected (must end with .HK).")
+        st.warning("No HK tickers detected (use HK.00700 or 0700).")
         st.stop()
 
     with st.spinner("Downloading history and screening..."):
         histories = cached_bulk_history(tuple(normalized), period)
         results = []
-        profile_cache: Dict[str, StockProfile] = {}
+        profile_cache = cached_profiles(tuple(normalized))
         for ticker in normalized:
             hist = histories.get(ticker)
             if hist is None or hist.empty:
                 continue
-            profile = cached_profile(ticker)
-            profile_cache[ticker] = profile
+            profile = profile_cache.get(
+                ticker, StockProfile(symbol=ticker, name=ticker, sector="Unknown")
+            )
             crossed, ema10, ema150 = evaluate_cross(hist)
             if crossed:
                 results.append(build_result(profile, hist, ema10, ema150))
@@ -115,7 +125,7 @@ if results:
         st.markdown(f"#### {sector} ({len(group)})")
         st.dataframe(group.reset_index(drop=True), use_container_width=True)
 
-    options = {f"{row.symbol} - {row.name}": row.symbol for row in results}
+    options = {f"{to_display_symbol(row.symbol)} - {row.name}": row.symbol for row in results}
     selected_label = st.selectbox("Select a stock to chart", list(options.keys()))
     selected_symbol = options[selected_label]
 
@@ -123,7 +133,11 @@ if results:
     if hist is not None and not hist.empty:
         overlay_series = build_overlays(hist)
         name = profiles.get(selected_symbol).name if selected_symbol in profiles else selected_symbol
-        fig = build_candlestick_chart(hist, overlay_series, f"{selected_symbol} - {name}")
+        fig = build_candlestick_chart(
+            hist,
+            overlay_series,
+            f"{to_display_symbol(selected_symbol)} - {name}",
+        )
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning("No price data available for the selected stock.")

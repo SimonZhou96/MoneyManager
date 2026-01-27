@@ -13,9 +13,9 @@ Repository initialized on 2026-01-20.
 
 ## HK EMA Crossover Screener (Streamlit)
 
-This repository now includes a simple Streamlit app that screens Hong Kong stocks
-for an EMA10/EMA150 bullish crossover and visualizes candlesticks with EMA/HMA
-overlays.
+This repository now includes a Streamlit app that screens Hong Kong stocks for an
+EMA10/EMA150 bullish crossover and visualizes candlesticks with EMA/HMA overlays.
+The data source is Futu OpenAPI (FutuOpenD running locally).
 
 ### Setup
 
@@ -24,6 +24,8 @@ python3 -m pip install -r requirements.txt
 ```
 
 ### Run
+
+Make sure FutuOpenD is running on `127.0.0.1:11111` (default in the app).
 
 ```bash
 python3 -m streamlit run app.py
