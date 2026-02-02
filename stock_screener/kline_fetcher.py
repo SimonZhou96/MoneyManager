@@ -93,7 +93,10 @@ class AKShareKlineFetcher(KlineFetcherBase):
         """转换股票代码格式：HK.00700 -> 00700"""
         # 移除HK.前缀
         if stock_code.startswith('HK.'):
-            return stock_code[3:]
+            stock_code = stock_code[3:]
+        stock_code = str(stock_code)
+        if stock_code.isdigit():
+            return stock_code.zfill(5)
         return stock_code
     
     def fetch(self, stock_code, start_date=None, end_date=None, max_count=800):
@@ -123,24 +126,8 @@ class AKShareKlineFetcher(KlineFetcherBase):
             data = None
             last_error = None
             
-            # 方法1: 尝试 stock_hk_hist（如果存在）
-            if hasattr(self.ak, 'stock_hk_hist'):
-                try:
-                    data = self.ak.stock_hk_hist(
-                        symbol=hk_code,
-                        period="daily",
-                        start_date=start_date,
-                        end_date=end_date,
-                        adjust="qfq"
-                    )
-                    if data is not None and len(data) > 0:
-                        pass  # 成功获取
-                except Exception as e:
-                    last_error = e
-                    data = None
-            
-            # 方法2: 如果方法1失败，尝试 stock_hk_daily
-            if (data is None or len(data) == 0) and hasattr(self.ak, 'stock_hk_daily'):
+            # 方法1: 优先使用 stock_hk_daily（Sina，稳定且列名统一）
+            if hasattr(self.ak, 'stock_hk_daily'):
                 try:
                     data = self.ak.stock_hk_daily(symbol=hk_code, adjust="qfq")
                     # 过滤日期范围
@@ -161,7 +148,23 @@ class AKShareKlineFetcher(KlineFetcherBase):
                     last_error = e
                     if data is None:
                         data = None
-            
+
+            # 方法2: 如果 stock_hk_daily 失败，尝试 stock_hk_hist（东方财富）
+            if (data is None or len(data) == 0) and hasattr(self.ak, 'stock_hk_hist'):
+                try:
+                    data = self.ak.stock_hk_hist(
+                        symbol=hk_code,
+                        period="daily",
+                        start_date=start_date,
+                        end_date=end_date,
+                        adjust="qfq"
+                    )
+                    if data is not None and len(data) > 0:
+                        pass  # 成功获取
+                except Exception as e:
+                    last_error = e
+                    data = None
+
             # 方法3: 如果前两种都失败，尝试通过A+H股接口
             # 注意：这需要股票代码在A+H股列表中，且代码格式可能需要调整
             if (data is None or len(data) == 0) and hasattr(self.ak, 'stock_zh_ah_daily'):
@@ -261,7 +264,7 @@ class KlineDataManager:
         try:
             self.akshare_fetcher = AKShareKlineFetcher()
         except ImportError:
-            print("⚠ AKShare未安装，将无法使用AKShare作为fallback")
+            print("⚠ AKShare未安装，将无法使用AKShare作为主数据源")
             self.akshare_fetcher = None
     
     def _get_cache_file_path(self, stock_code):
@@ -364,36 +367,10 @@ class KlineDataManager:
                     print(f"  ✓ {stock_code} 从缓存加载: {len(cached_data)} 条 (最新: {latest_date})")
                 return cached_data
         
-        # 2. 优先使用富途API
+        # 2. 优先使用AKShare
         data = None
-        use_futu = False
         
-        if self.futu_fetcher:
-            try:
-                if verbose:
-                    print(f"  📡 {stock_code} 尝试使用富途API获取...")
-                data = self.futu_fetcher.fetch(stock_code, start_date, end_date, max_count)
-                use_futu = True
-                
-                if data is not None and len(data) > 0:
-                    if verbose:
-                        latest_date = data['date'].max().strftime('%Y-%m-%d')
-                        oldest_date = data['date'].min().strftime('%Y-%m-%d')
-                        print(f"  ✓ {stock_code} 富途API获取成功: {len(data)} 条 ({oldest_date} ~ {latest_date})")
-                    # 保存到缓存
-                    self._save_to_cache(stock_code, data)
-                    return data
-            except Exception as e:
-                error_msg = str(e)
-                if 'quota' in error_msg.lower() or '额度' in error_msg or 'too frequent' in error_msg.lower():
-                    if verbose:
-                        print(f"  ⚠ {stock_code} 富途API额度用尽，切换到AKShare...")
-                else:
-                    if verbose:
-                        print(f"  ✗ {stock_code} 富途API获取失败: {e}")
-        
-        # 3. Fallback到AKShare
-        if data is None and self.akshare_fetcher:
+        if self.akshare_fetcher:
             try:
                 if verbose:
                     print(f"  📡 {stock_code} 使用AKShare获取...")
@@ -413,6 +390,26 @@ class KlineDataManager:
             except Exception as e:
                 if verbose:
                     print(f"  ✗ {stock_code} AKShare获取失败: {e}")
+        
+        # 3. Fallback到富途API（如果可用）
+        if data is None and self.futu_fetcher:
+            try:
+                if verbose:
+                    print(f"  📡 {stock_code} 尝试使用富途API获取...")
+                data = self.futu_fetcher.fetch(stock_code, start_date, end_date, max_count)
+                
+                if data is not None and len(data) > 0:
+                    if verbose:
+                        latest_date = data['date'].max().strftime('%Y-%m-%d')
+                        oldest_date = data['date'].min().strftime('%Y-%m-%d')
+                        print(f"  ✓ {stock_code} 富途API获取成功: {len(data)} 条 ({oldest_date} ~ {latest_date})")
+                    # 保存到缓存
+                    self._save_to_cache(stock_code, data)
+                    return data
+            except Exception as e:
+                error_msg = str(e)
+                if verbose:
+                    print(f"  ✗ {stock_code} 富途API获取失败: {error_msg}")
         
         # 4. 如果都失败了，返回None
         if verbose and data is None:

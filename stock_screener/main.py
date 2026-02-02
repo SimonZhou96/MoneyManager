@@ -4,20 +4,44 @@
 港股股票筛选器 - EMA10向上突破EMA150筛选
 """
 
-import pandas as pd
-import numpy as np
-import futu as ft
-import pandas_ta as ta
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import tkinter as tk
-from tkinter import ttk, messagebox
-from datetime import datetime, date
-import threading
-import os
+import argparse
 import json
+import os
+import threading
 import time
+from datetime import datetime, date
+
+import numpy as np
+import pandas as pd
+import pandas_ta as ta
+
 from kline_fetcher import KlineDataManager
+
+try:
+    import futu as ft
+    FUTU_AVAILABLE = True
+except Exception:
+    ft = None
+    FUTU_AVAILABLE = False
+
+try:
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+    GUI_AVAILABLE = True
+except Exception:
+    tk = None
+    ttk = None
+    messagebox = None
+    GUI_AVAILABLE = False
+
+try:
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    MPL_AVAILABLE = True
+except Exception:
+    plt = None
+    FigureCanvasTkAgg = None
+    MPL_AVAILABLE = False
 
 # 配置
 FUTU_HOST = '127.0.0.1'
@@ -80,18 +104,25 @@ class StockScreener:
         
     def connect(self):
         """连接Futu OpenD"""
+        # 无论是否连接Futu，先启用AKShare获取器
+        self.kline_manager.set_akshare_fetcher()
+
+        if not FUTU_AVAILABLE:
+            print("⚠ futu-api 未安装，将仅使用 AKShare 获取数据")
+            return False
+
         try:
             self.quote_ctx = ft.OpenQuoteContext(host=FUTU_HOST, port=FUTU_PORT)
             print(f"✓ 成功连接到 Futu OpenD ({FUTU_HOST}:{FUTU_PORT})")
             
             # 设置K线数据管理器
             self.kline_manager.set_futu_fetcher(self.quote_ctx, self.rate_limiter)
-            self.kline_manager.set_akshare_fetcher()  # 尝试设置AKShare作为fallback
             
             return True
         except Exception as e:
             print(f"✗ 连接失败: {e}")
-            print("请确保 FutuOpenD 正在运行")
+            print("将继续使用 AKShare，不影响程序运行")
+            self.quote_ctx = None
             return False
     
     def disconnect(self):
@@ -100,6 +131,55 @@ class StockScreener:
             self.quote_ctx.close()
             print("✓ 已断开连接")
     
+    def _get_hk_stocks_from_akshare(self):
+        """使用 AKShare 获取港股列表"""
+        try:
+            import akshare as ak
+        except Exception:
+            return []
+
+        data = None
+        # 优先使用新浪接口
+        if hasattr(ak, 'stock_hk_spot'):
+            try:
+                data = ak.stock_hk_spot()
+            except Exception:
+                data = None
+        # 备选东方财富接口
+        if (data is None or len(data) == 0) and hasattr(ak, 'stock_hk_spot_em'):
+            try:
+                data = ak.stock_hk_spot_em()
+            except Exception:
+                data = None
+
+        if data is None or len(data) == 0:
+            return []
+
+        code_col = None
+        name_col = None
+        for col in data.columns:
+            if code_col is None and ('代码' in col or 'code' in col.lower()):
+                code_col = col
+            if name_col is None and ('名称' in col or 'name' in col.lower()):
+                name_col = col
+        if code_col is None:
+            return []
+
+        stocks = []
+        for _, row in data.iterrows():
+            raw_code = str(row[code_col]).strip()
+            if not raw_code:
+                continue
+            if raw_code.startswith('HK.'):
+                raw_code = raw_code[3:]
+            if raw_code.isdigit():
+                raw_code = raw_code.zfill(5)
+            else:
+                continue
+            name = str(row[name_col]).strip() if name_col else f"HK.{raw_code}"
+            stocks.append({'code': f"HK.{raw_code}", 'name': name})
+        return stocks
+
     def get_hk_stocks(self):
         """获取港股全量股票列表（优先从缓存读取）"""
         # 检查缓存文件是否存在且是今天的
@@ -119,35 +199,44 @@ class StockScreener:
             except Exception as e:
                 print(f"读取缓存失败: {e}，重新获取")
         
-        # 从API获取
-        try:
-            ret, data = self.quote_ctx.get_stock_basicinfo(
-                market=ft.Market.HK,
-                stock_type=ft.SecurityType.STOCK
-            )
-            if ret == ft.RET_OK:
-                stocks = data[['code', 'name']].to_dict('records')
-                print(f"✓ 从API获取到 {len(stocks)} 只港股")
-                
-                # 保存到缓存
+        # 优先使用 AKShare 获取
+        stocks = self._get_hk_stocks_from_akshare()
+        if stocks:
+            print(f"✓ AKShare 获取到 {len(stocks)} 只港股")
+        else:
+            # AKShare失败时才尝试 Futu
+            if self.quote_ctx and FUTU_AVAILABLE:
                 try:
-                    cache_data = {
-                        'date': today_str,
-                        'stocks': stocks
-                    }
-                    with open(STOCKS_CACHE_FILE, 'w', encoding='utf-8') as f:
-                        json.dump(cache_data, f, ensure_ascii=False, indent=2)
-                    print(f"✓ 股票列表已保存到缓存")
+                    ret, data = self.quote_ctx.get_stock_basicinfo(
+                        market=ft.Market.HK,
+                        stock_type=ft.SecurityType.STOCK
+                    )
+                    if ret == ft.RET_OK:
+                        stocks = data[['code', 'name']].to_dict('records')
+                        print(f"✓ Futu 获取到 {len(stocks)} 只港股")
+                    else:
+                        print(f"✗ 获取股票列表失败: {data}")
+                        stocks = []
                 except Exception as e:
-                    print(f"保存缓存失败: {e}")
-                
-                return stocks
-            else:
-                print(f"✗ 获取股票列表失败: {data}")
-                return []
-        except Exception as e:
-            print(f"✗ 获取股票列表异常: {e}")
+                    print(f"✗ 获取股票列表异常: {e}")
+                    stocks = []
+
+        if not stocks:
             return []
+
+        # 保存到缓存
+        try:
+            cache_data = {
+                'date': today_str,
+                'stocks': stocks
+            }
+            with open(STOCKS_CACHE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, ensure_ascii=False, indent=2)
+            print("✓ 股票列表已保存到缓存")
+        except Exception as e:
+            print(f"保存缓存失败: {e}")
+
+        return stocks
     
     def save_filtered_results_cache(self, filtered_stocks):
         """保存筛选结果到缓存文件"""
@@ -306,7 +395,7 @@ class StockScreener:
                 reason.append(f"当前EMA10({curr_ema10:.2f})<=EMA150({curr_ema150:.2f})")
             return False, "; ".join(reason)
     
-    def screen_stocks(self, stocks, progress_callback=None):
+    def screen_stocks(self, stocks, progress_callback=None, verbose=True):
         """筛选股票"""
         filtered = []
         total = len(stocks)
@@ -318,9 +407,10 @@ class StockScreener:
             'passed': 0
         }
         
-        print(f"\n{'='*80}")
-        print(f"开始筛选 {total} 只港股股票...")
-        print(f"{'='*80}\n")
+        if verbose:
+            print(f"\n{'='*80}")
+            print(f"开始筛选 {total} 只港股股票...")
+            print(f"{'='*80}\n")
         
         for idx, stock in enumerate(stocks):
             stock_code = stock['code']
@@ -329,24 +419,31 @@ class StockScreener:
             if progress_callback:
                 progress_callback(idx + 1, total, stock_name)
             
-            print(f"\n[{idx+1}/{total}] 处理股票: {stock_code} ({stock_name})")
+            if verbose:
+                print(f"\n[{idx+1}/{total}] 处理股票: {stock_code} ({stock_name})")
             
             # 获取K线数据
-            kline_data = self.get_history_kline(stock_code, verbose=True)
+            kline_data = self.get_history_kline(stock_code, verbose=verbose)
             if kline_data is None:
                 stats['kline_failed'] += 1
-                print(f"  ❌ {stock_code} 跳过：无法获取K线数据")
+                if verbose:
+                    print(f"  ❌ {stock_code} 跳过：无法获取K线数据")
                 continue
             
             # 计算指标
-            df_with_indicators = self.calculate_indicators(kline_data, stock_code=stock_code, verbose=True)
+            df_with_indicators = self.calculate_indicators(
+                kline_data, stock_code=stock_code, verbose=verbose
+            )
             if df_with_indicators is None:
                 stats['indicators_failed'] += 1
-                print(f"  ❌ {stock_code} 跳过：无法计算技术指标")
+                if verbose:
+                    print(f"  ❌ {stock_code} 跳过：无法计算技术指标")
                 continue
             
             # 检查突破
-            is_cross, reason = self.check_ema_cross(df_with_indicators, stock_code=stock_code, stock_name=stock_name, verbose=True)
+            is_cross, reason = self.check_ema_cross(
+                df_with_indicators, stock_code=stock_code, stock_name=stock_name, verbose=verbose
+            )
             
             if is_cross:
                 # 保存数据
@@ -365,23 +462,27 @@ class StockScreener:
                 })
                 
                 stats['passed'] += 1
-                print(f"  ✅ {stock_code} ({stock_name}) 符合条件！收盘价={latest_close:.2f}")
+                if verbose:
+                    print(f"  ✅ {stock_code} ({stock_name}) 符合条件！收盘价={latest_close:.2f}")
             else:
                 stats['no_cross'] += 1
-                print(f"  ❌ {stock_code} ({stock_name}) 不符合条件: {reason}")
+                if verbose:
+                    print(f"  ❌ {stock_code} ({stock_name}) 不符合条件: {reason}")
         
         # 打印统计信息
-        print(f"\n{'='*80}")
-        print(f"筛选统计:")
-        print(f"  总股票数: {stats['total']}")
-        print(f"  ✓ 符合条件: {stats['passed']} 只")
-        print(f"  ✗ K线获取失败: {stats['kline_failed']} 只")
-        print(f"  ✗ 指标计算失败: {stats['indicators_failed']} 只")
-        print(f"  ✗ 未满足突破条件: {stats['no_cross']} 只")
-        print(f"{'='*80}\n")
+        if verbose:
+            print(f"\n{'='*80}")
+            print("筛选统计:")
+            print(f"  总股票数: {stats['total']}")
+            print(f"  ✓ 符合条件: {stats['passed']} 只")
+            print(f"  ✗ K线获取失败: {stats['kline_failed']} 只")
+            print(f"  ✗ 指标计算失败: {stats['indicators_failed']} 只")
+            print(f"  ✗ 未满足突破条件: {stats['no_cross']} 只")
+            print(f"{'='*80}\n")
         
         self.filtered_stocks = filtered
-        print(f"✓ 筛选完成，找到 {len(filtered)} 只符合条件的股票")
+        if verbose:
+            print(f"✓ 筛选完成，找到 {len(filtered)} 只符合条件的股票")
         
         # 保存筛选结果到缓存
         self.save_filtered_results_cache(filtered)
@@ -390,18 +491,23 @@ class StockScreener:
     
     def plot_stock_chart(self, stock_code, stock_name):
         """绘制股票图表"""
+        if not GUI_AVAILABLE or not MPL_AVAILABLE:
+            print("GUI/绘图依赖不可用，无法显示图表")
+            return
         # 如果数据不在内存中（比如从缓存加载的结果），则重新获取
         if stock_code not in self.stocks_data:
             print(f"⚠ {stock_code} 的数据不在内存中，正在获取K线数据...")
             kline_data = self.get_history_kline(stock_code, verbose=True)
             if kline_data is None:
-                messagebox.showerror("错误", f"无法获取股票 {stock_code} 的K线数据")
+                if messagebox:
+                    messagebox.showerror("错误", f"无法获取股票 {stock_code} 的K线数据")
                 return
             
             # 计算指标
             df_with_indicators = self.calculate_indicators(kline_data, stock_code=stock_code)
             if df_with_indicators is None:
-                messagebox.showerror("错误", f"无法计算股票 {stock_code} 的技术指标")
+                if messagebox:
+                    messagebox.showerror("错误", f"无法计算股票 {stock_code} 的技术指标")
                 return
             
             # 保存到内存
@@ -474,6 +580,10 @@ class StockScreener:
     
     def run_gui(self):
         """运行GUI界面"""
+        if not GUI_AVAILABLE or not MPL_AVAILABLE:
+            print("GUI 依赖不可用，无法启动界面")
+            return
+
         self.root = tk.Tk()
         self.root.title("港股股票筛选器 - EMA10突破EMA150")
         self.root.geometry("1000x700")
@@ -537,9 +647,11 @@ class StockScreener:
     
     def start_screening(self):
         """开始筛选（在新线程中运行）"""
-        if not self.quote_ctx:
-            messagebox.showerror("错误", "请先连接Futu OpenD\n\n请确保：\n1. FutuOpenD 正在运行\n2. 已登录富途牛牛账户\n3. 已开启OpenD服务")
-            return
+        if not self.quote_ctx and messagebox:
+            messagebox.showwarning(
+                "提示",
+                "Futu OpenD 未连接，将使用 AKShare 获取数据",
+            )
         
         # 重置进度
         self.progress_var.set("开始筛选...")
@@ -602,22 +714,66 @@ class StockScreener:
         if self.filtered_stocks:
             self.update_results(self.filtered_stocks)
 
+    def save_results_to_file(self, filtered_stocks, output_path):
+        """保存筛选结果到文件"""
+        if not output_path:
+            return
+        df = pd.DataFrame(filtered_stocks)
+        if df.empty:
+            print("无筛选结果可保存")
+            return
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        if output_path.lower().endswith('.json'):
+            df.to_json(output_path, orient='records', force_ascii=False, indent=2)
+        else:
+            df.to_csv(output_path, index=False, encoding='utf-8-sig')
+        print(f"✓ 筛选结果已保存到: {output_path}")
+
+    def print_results(self, filtered_stocks):
+        """命令行输出筛选结果"""
+        df = pd.DataFrame(filtered_stocks)
+        if df.empty:
+            print("未找到符合条件的股票")
+            return
+        print("\n筛选结果：")
+        print(df.to_string(index=False))
+
+    def run_cli(self, output_path='filtered_results.csv', limit=None):
+        """命令行模式运行"""
+        stocks = self.get_hk_stocks()
+        if not stocks:
+            print("无法获取股票列表，退出")
+            return
+        if limit:
+            stocks = stocks[:limit]
+        filtered = self.screen_stocks(stocks, progress_callback=None, verbose=False)
+        self.print_results(filtered)
+        self.save_results_to_file(filtered, output_path)
+
 
 def main():
     """主函数"""
+    parser = argparse.ArgumentParser(description="港股 EMA10/EMA150 突破筛选器")
+    parser.add_argument("--cli", action="store_true", help="使用命令行模式运行")
+    parser.add_argument("--output", default="filtered_results.csv", help="筛选结果输出文件")
+    parser.add_argument("--limit", type=int, default=None, help="限制筛选的股票数量")
+    args = parser.parse_args()
+
     screener = StockScreener()
     
-    # 连接Futu
-    if not screener.connect():
-        print("\n请确保：")
-        print("1. FutuOpenD 正在运行")
-        print("2. 已登录富途牛牛账户")
-        print("3. 已开启OpenD服务")
-        return
+    # 连接Futu（可选）
+    screener.connect()
     
     try:
-        # 运行GUI
-        screener.run_gui()
+        # 运行GUI或CLI
+        if args.cli or not GUI_AVAILABLE or not MPL_AVAILABLE:
+            if not (GUI_AVAILABLE and MPL_AVAILABLE) and not args.cli:
+                print("GUI 依赖不可用，自动切换到命令行模式")
+            screener.run_cli(output_path=args.output, limit=args.limit)
+        else:
+            screener.run_gui()
     except KeyboardInterrupt:
         print("\n程序中断")
     finally:

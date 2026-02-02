@@ -5,7 +5,7 @@
 ## 功能特性
 
 1. **自动筛选**：筛选EMA10刚刚向上突破EMA150的港股
-2. **多数据源支持**：优先使用富途API，额度用尽时自动切换到AKShare
+2. **多数据源支持**：优先使用 AKShare，Futu OpenD 可选
 3. **智能缓存**：K线数据自动缓存到本地文件，避免重复获取
 4. **图表展示**：双击股票可查看详细K线图和技术指标
 5. **技术指标**：显示EMA10、EMA150、HMA40、HMA200、HMA600
@@ -23,13 +23,13 @@ pip install -r requirements.txt
 
 ## 使用前准备
 
-1. **安装FutuOpenD**（可选，优先使用）
+1. **安装FutuOpenD**（可选）
    - 下载并安装富途牛牛客户端
    - 在设置中开启OpenD服务
    - 确保OpenD正在运行（默认端口11111）
    - 登录账户
 
-2. **安装AKShare**（fallback数据源）
+2. **安装AKShare**（主数据源）
    ```bash
    pip install akshare
    ```
@@ -40,6 +40,12 @@ pip install -r requirements.txt
 python main.py
 ```
 
+### 命令行模式（无 GUI 环境）
+
+```bash
+python main.py --cli --output filtered_results.csv
+```
+
 ## 使用说明
 
 1. 启动程序后，点击"开始筛选"按钮
@@ -47,8 +53,8 @@ python main.py
    - 获取港股全量股票列表（带缓存）
    - 对每只股票获取历史K线数据：
      - 优先从本地缓存读取（如果存在且是最新的）
-     - 如果缓存不存在或过期，优先使用富途API获取
-     - 如果富途API失败（额度用尽等），自动切换到AKShare
+  - 如果缓存不存在或过期，优先使用 AKShare 获取
+  - 如果 AKShare 失败，再尝试使用 Futu OpenD 获取（若已连接）
      - 获取成功后自动保存到缓存
    - 计算技术指标（EMA10、EMA150、HMA等）
    - 筛选符合条件的股票
@@ -89,15 +95,15 @@ python main.py
 ## 数据源优先级
 
 1. **本地缓存**（最快）
-2. **富途API**（优先，数据质量高）
-3. **AKShare**（fallback，当富途API额度用尽时）
+2. **AKShare**（优先）
+3. **富途API**（可选 fallback）
 
 ## 注意事项
 
 - 首次运行可能需要较长时间（需要获取大量股票数据）
 - 建议在网络稳定的环境下运行
 - 富途API有额度限制（60次/30秒），程序会自动限流
-- 如果富途API额度用尽，程序会自动切换到AKShare
+- 即使未连接 OpenD，程序也可以使用 AKShare 正常运行
 - K线数据会自动缓存，避免重复获取浪费额度
 - 缓存文件会占用磁盘空间，建议定期清理
 
