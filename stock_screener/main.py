@@ -94,6 +94,7 @@ class StockScreener:
         self.quote_ctx = None
         self.stocks_data = {}  # {stock_code: DataFrame}
         self.filtered_stocks = []  # 筛选后的股票列表
+        self.last_log_records = []  # 结构化日志记录
         self.root = None
         self.rate_limiter = RateLimiter()  # 限流器
         self.kline_manager = KlineDataManager()  # K线数据管理器
@@ -395,9 +396,43 @@ class StockScreener:
                 reason.append(f"当前EMA10({curr_ema10:.2f})<=EMA150({curr_ema150:.2f})")
             return False, "; ".join(reason)
     
+    def _build_log_record(self, stock_code, stock_name, status, reason, df=None):
+        """生成结构化日志记录"""
+        last_close = None
+        last_ema10 = None
+        last_ema150 = None
+        last_date = None
+        if df is not None and len(df) > 0:
+            last_row = df.iloc[-1]
+            last_close = float(last_row['close']) if 'close' in df.columns else None
+            last_ema10 = float(last_row['EMA10']) if 'EMA10' in df.columns else None
+            last_ema150 = float(last_row['EMA150']) if 'EMA150' in df.columns else None
+            if 'time_key' in df.columns:
+                try:
+                    last_date = pd.to_datetime(last_row['time_key']).strftime('%Y-%m-%d')
+                except Exception:
+                    last_date = None
+            elif 'date' in df.columns:
+                try:
+                    last_date = pd.to_datetime(last_row['date']).strftime('%Y-%m-%d')
+                except Exception:
+                    last_date = None
+
+        return {
+            'code': stock_code,
+            'name': stock_name,
+            'status': status,
+            'reason': reason,
+            'close': last_close,
+            'ema10': last_ema10,
+            'ema150': last_ema150,
+            'date': last_date,
+        }
+
     def screen_stocks(self, stocks, progress_callback=None, verbose=True):
         """筛选股票"""
         filtered = []
+        log_records = []
         total = len(stocks)
         stats = {
             'total': total,
@@ -428,6 +463,11 @@ class StockScreener:
                 stats['kline_failed'] += 1
                 if verbose:
                     print(f"  ❌ {stock_code} 跳过：无法获取K线数据")
+                log_records.append(
+                    self._build_log_record(
+                        stock_code, stock_name, 'failed', '无法获取K线数据', None
+                    )
+                )
                 continue
             
             # 计算指标
@@ -438,6 +478,11 @@ class StockScreener:
                 stats['indicators_failed'] += 1
                 if verbose:
                     print(f"  ❌ {stock_code} 跳过：无法计算技术指标")
+                log_records.append(
+                    self._build_log_record(
+                        stock_code, stock_name, 'failed', '无法计算技术指标', kline_data
+                    )
+                )
                 continue
             
             # 检查突破
@@ -460,6 +505,11 @@ class StockScreener:
                     'ema10': latest_ema10,
                     'ema150': latest_ema150
                 })
+                log_records.append(
+                    self._build_log_record(
+                        stock_code, stock_name, 'passed', '满足突破条件', df_with_indicators
+                    )
+                )
                 
                 stats['passed'] += 1
                 if verbose:
@@ -468,6 +518,11 @@ class StockScreener:
                 stats['no_cross'] += 1
                 if verbose:
                     print(f"  ❌ {stock_code} ({stock_name}) 不符合条件: {reason}")
+                log_records.append(
+                    self._build_log_record(
+                        stock_code, stock_name, 'failed', reason, df_with_indicators
+                    )
+                )
         
         # 打印统计信息
         if verbose:
@@ -481,6 +536,7 @@ class StockScreener:
             print(f"{'='*80}\n")
         
         self.filtered_stocks = filtered
+        self.last_log_records = log_records
         if verbose:
             print(f"✓ 筛选完成，找到 {len(filtered)} 只符合条件的股票")
         
@@ -731,6 +787,21 @@ class StockScreener:
             df.to_csv(output_path, index=False, encoding='utf-8-sig')
         print(f"✓ 筛选结果已保存到: {output_path}")
 
+    def save_log_to_file(self, log_records, output_path):
+        """保存结构化日志到文件（JSON Lines）"""
+        if not output_path:
+            return
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        if not log_records:
+            print("无日志记录可保存")
+            return
+        with open(output_path, 'w', encoding='utf-8') as f:
+            for record in log_records:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        print(f"✓ 日志已保存到: {output_path}")
+
     def print_results(self, filtered_stocks):
         """命令行输出筛选结果"""
         df = pd.DataFrame(filtered_stocks)
@@ -740,7 +811,7 @@ class StockScreener:
         print("\n筛选结果：")
         print(df.to_string(index=False))
 
-    def run_cli(self, output_path='filtered_results.csv', limit=None):
+    def run_cli(self, output_path='filtered_results.csv', log_path=None, limit=None):
         """命令行模式运行"""
         stocks = self.get_hk_stocks()
         if not stocks:
@@ -751,6 +822,10 @@ class StockScreener:
         filtered = self.screen_stocks(stocks, progress_callback=None, verbose=False)
         self.print_results(filtered)
         self.save_results_to_file(filtered, output_path)
+        if log_path is None:
+            today = date.today().strftime('%Y-%m-%d')
+            log_path = os.path.join('output', f'screen_log_{today}.jsonl')
+        self.save_log_to_file(self.last_log_records, log_path)
 
 
 def main():
@@ -758,6 +833,7 @@ def main():
     parser = argparse.ArgumentParser(description="港股 EMA10/EMA150 突破筛选器")
     parser.add_argument("--cli", action="store_true", help="使用命令行模式运行")
     parser.add_argument("--output", default="filtered_results.csv", help="筛选结果输出文件")
+    parser.add_argument("--log", default=None, help="结构化日志输出文件(JSONL)")
     parser.add_argument("--limit", type=int, default=None, help="限制筛选的股票数量")
     args = parser.parse_args()
 
@@ -771,7 +847,7 @@ def main():
         if args.cli or not GUI_AVAILABLE or not MPL_AVAILABLE:
             if not (GUI_AVAILABLE and MPL_AVAILABLE) and not args.cli:
                 print("GUI 依赖不可用，自动切换到命令行模式")
-            screener.run_cli(output_path=args.output, limit=args.limit)
+            screener.run_cli(output_path=args.output, log_path=args.log, limit=args.limit)
         else:
             screener.run_gui()
     except KeyboardInterrupt:

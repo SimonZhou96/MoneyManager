@@ -46,6 +46,14 @@ python main.py
 python main.py --cli --output filtered_results.csv
 ```
 
+可选输出结构化日志（JSON Lines）：
+
+```bash
+python main.py --cli --output filtered_results.csv --log output/screen_log_2026-01-27.jsonl
+```
+
+如果不提供 `--log`，默认输出到 `output/screen_log_YYYY-MM-DD.jsonl`。
+
 ## 使用说明
 
 1. 启动程序后，点击"开始筛选"按钮
