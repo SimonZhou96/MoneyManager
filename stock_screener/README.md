@@ -1,10 +1,10 @@
-# 港股股票筛选器
+# 港股/美股股票筛选器
 
-基于EMA10向上突破EMA150策略的港股筛选工具。
+基于EMA10向上突破EMA150策略的港股/美股筛选工具。
 
 ## 功能特性
 
-1. **自动筛选**：筛选EMA10刚刚向上突破EMA150的港股
+1. **自动筛选**：筛选EMA10刚刚向上突破EMA150的港股/美股
 2. **多数据源支持**：优先使用 AKShare，Futu OpenD 可选
 3. **智能缓存**：K线数据自动缓存到本地文件，避免重复获取
 4. **图表展示**：双击股票可查看详细K线图和技术指标
@@ -18,7 +18,7 @@ pip install -r requirements.txt
 ```
 
 **新增依赖**：
-- `akshare`：用于港股K线数据获取（fallback）
+- `akshare`：用于港股/美股K线数据获取（主数据源）
 - `pyarrow`：用于高效的parquet格式缓存（可选，如果不可用会自动使用CSV）
 
 ## 使用前准备
@@ -52,13 +52,20 @@ python main.py --cli --output filtered_results.csv
 python main.py --cli --output filtered_results.csv --log output/screen_log_2026-01-27.jsonl
 ```
 
-如果不提供 `--log`，默认输出到 `output/screen_log_YYYY-MM-DD.jsonl`。
+如果不提供 `--log`，默认输出到 `output/screen_log_{MARKET}_YYYY-MM-DD.jsonl`。
+
+选择市场：
+
+```bash
+python main.py --cli --market HK --output filtered_results.csv
+python main.py --cli --market US --output filtered_results.csv
+```
 
 ## 使用说明
 
-1. 启动程序后，点击"开始筛选"按钮
+1. 启动程序后，选择市场（HK/US），点击"开始筛选"按钮
 2. 程序会自动：
-   - 获取港股全量股票列表（带缓存）
+   - 获取所选市场的股票列表（带缓存）
    - 对每只股票获取历史K线数据：
      - 优先从本地缓存读取（如果存在且是最新的）
   - 如果缓存不存在或过期，优先使用 AKShare 获取
@@ -89,15 +96,15 @@ python main.py --cli --output filtered_results.csv --log output/screen_log_2026-
 - **刷新策略**：
   - 如果缓存数据的最新日期是今天或昨天，直接使用缓存
   - 否则重新获取数据并更新缓存
-- **文件命名**：`{股票代码}.parquet` 或 `{股票代码}.csv`
-  - 例如：`HK_00700.parquet`
+- **文件命名**：`{市场}_{股票代码}.parquet` 或 `{市场}_{股票代码}.csv`
+  - 例如：`HK_00700.parquet`、`US_AAPL.parquet`
 
 ### 股票列表缓存
-- **位置**：`cache/hk_stocks.json`
+- **位置**：`cache/hk_stocks.json` 或 `cache/us_stocks.json`
 - **刷新策略**：按天刷新
 
 ### 筛选结果缓存
-- **位置**：`cache/filtered_results.json`
+- **位置**：`cache/hk_filtered_results.json` 或 `cache/us_filtered_results.json`
 - **刷新策略**：按天刷新
 
 ## 数据源优先级

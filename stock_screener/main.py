@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-港股股票筛选器 - EMA10向上突破EMA150筛选
+股票筛选器 - EMA10向上突破EMA150筛选（支持港股/美股）
 """
 
 import argparse
@@ -47,8 +47,16 @@ except Exception:
 FUTU_HOST = '127.0.0.1'
 FUTU_PORT = 11111
 CACHE_DIR = 'cache'  # 缓存目录
-STOCKS_CACHE_FILE = os.path.join(CACHE_DIR, 'hk_stocks.json')  # 股票列表缓存文件
-FILTERED_RESULTS_CACHE_FILE = os.path.join(CACHE_DIR, 'filtered_results.json')  # 筛选结果缓存文件
+
+MARKET_CONFIG = {
+    "HK": {"label": "港股"},
+    "US": {"label": "美股"},
+}
+
+
+def normalize_market(value: str) -> str:
+    market = str(value).upper()
+    return market if market in MARKET_CONFIG else "HK"
 
 # 限流配置：最多60次请求/30秒
 MAX_REQUESTS_PER_WINDOW = 60
@@ -90,12 +98,13 @@ class RateLimiter:
 
 
 class StockScreener:
-    def __init__(self):
+    def __init__(self, market="HK"):
         self.quote_ctx = None
         self.stocks_data = {}  # {stock_code: DataFrame}
         self.filtered_stocks = []  # 筛选后的股票列表
         self.last_log_records = []  # 结构化日志记录
         self.root = None
+        self.market = normalize_market(market)
         self.rate_limiter = RateLimiter()  # 限流器
         self.kline_manager = KlineDataManager()  # K线数据管理器
         
@@ -103,6 +112,15 @@ class StockScreener:
         if not os.path.exists(CACHE_DIR):
             os.makedirs(CACHE_DIR)
         
+    def set_market(self, market: str):
+        self.market = normalize_market(market)
+
+    def _stocks_cache_file(self):
+        return os.path.join(CACHE_DIR, f"{self.market.lower()}_stocks.json")
+
+    def _filtered_results_cache_file(self):
+        return os.path.join(CACHE_DIR, f"{self.market.lower()}_filtered_results.json")
+
     def connect(self):
         """连接Futu OpenD"""
         # 无论是否连接Futu，先启用AKShare获取器
@@ -181,14 +199,61 @@ class StockScreener:
             stocks.append({'code': f"HK.{raw_code}", 'name': name})
         return stocks
 
-    def get_hk_stocks(self):
-        """获取港股全量股票列表（优先从缓存读取）"""
+    def _get_us_stocks_from_akshare(self):
+        """使用 AKShare 获取美股列表"""
+        try:
+            import akshare as ak
+        except Exception:
+            return []
+
+        data = None
+        # 优先使用新浪接口
+        if hasattr(ak, 'stock_us_spot'):
+            try:
+                data = ak.stock_us_spot()
+            except Exception:
+                data = None
+        # 备选东方财富接口
+        if (data is None or len(data) == 0) and hasattr(ak, 'stock_us_spot_em'):
+            try:
+                data = ak.stock_us_spot_em()
+            except Exception:
+                data = None
+
+        if data is None or len(data) == 0:
+            return []
+
+        code_col = None
+        name_col = None
+        for col in data.columns:
+            col_lower = col.lower()
+            if code_col is None and ('代码' in col or 'symbol' in col_lower or 'ticker' in col_lower):
+                code_col = col
+            if name_col is None and ('名称' in col or 'name' in col_lower):
+                name_col = col
+        if code_col is None:
+            return []
+
+        stocks = []
+        for _, row in data.iterrows():
+            raw_code = str(row[code_col]).strip()
+            if not raw_code:
+                continue
+            if raw_code.upper().startswith('US.'):
+                raw_code = raw_code[3:]
+            name = str(row[name_col]).strip() if name_col else raw_code
+            stocks.append({'code': raw_code, 'name': name})
+        return stocks
+
+    def get_stocks(self):
+        """获取股票列表（优先从缓存读取）"""
         # 检查缓存文件是否存在且是今天的
         today_str = date.today().isoformat()
         
-        if os.path.exists(STOCKS_CACHE_FILE):
+        stocks_cache_file = self._stocks_cache_file()
+        if os.path.exists(stocks_cache_file):
             try:
-                with open(STOCKS_CACHE_FILE, 'r', encoding='utf-8') as f:
+                with open(stocks_cache_file, 'r', encoding='utf-8') as f:
                     cache_data = json.load(f)
                 
                 # 检查缓存日期是否为今天
@@ -201,20 +266,25 @@ class StockScreener:
                 print(f"读取缓存失败: {e}，重新获取")
         
         # 优先使用 AKShare 获取
-        stocks = self._get_hk_stocks_from_akshare()
+        if self.market == "US":
+            stocks = self._get_us_stocks_from_akshare()
+        else:
+            stocks = self._get_hk_stocks_from_akshare()
+
         if stocks:
-            print(f"✓ AKShare 获取到 {len(stocks)} 只港股")
+            print(f"✓ AKShare 获取到 {len(stocks)} 只{MARKET_CONFIG[self.market]['label']}")
         else:
             # AKShare失败时才尝试 Futu
             if self.quote_ctx and FUTU_AVAILABLE:
                 try:
+                    market_enum = ft.Market.US if self.market == "US" else ft.Market.HK
                     ret, data = self.quote_ctx.get_stock_basicinfo(
-                        market=ft.Market.HK,
+                        market=market_enum,
                         stock_type=ft.SecurityType.STOCK
                     )
                     if ret == ft.RET_OK:
                         stocks = data[['code', 'name']].to_dict('records')
-                        print(f"✓ Futu 获取到 {len(stocks)} 只港股")
+                        print(f"✓ Futu 获取到 {len(stocks)} 只{MARKET_CONFIG[self.market]['label']}")
                     else:
                         print(f"✗ 获取股票列表失败: {data}")
                         stocks = []
@@ -231,7 +301,7 @@ class StockScreener:
                 'date': today_str,
                 'stocks': stocks
             }
-            with open(STOCKS_CACHE_FILE, 'w', encoding='utf-8') as f:
+            with open(stocks_cache_file, 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, ensure_ascii=False, indent=2)
             print("✓ 股票列表已保存到缓存")
         except Exception as e:
@@ -246,9 +316,10 @@ class StockScreener:
             cache_data = {
                 'date': today_str,
                 'count': len(filtered_stocks),
+                'market': self.market,
                 'stocks': filtered_stocks
             }
-            with open(FILTERED_RESULTS_CACHE_FILE, 'w', encoding='utf-8') as f:
+            with open(self._filtered_results_cache_file(), 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, ensure_ascii=False, indent=2)
             print(f"✓ 筛选结果已保存到缓存（{len(filtered_stocks)} 只股票）")
         except Exception as e:
@@ -258,9 +329,10 @@ class StockScreener:
         """从缓存文件加载筛选结果"""
         today_str = date.today().isoformat()
         
-        if os.path.exists(FILTERED_RESULTS_CACHE_FILE):
+        cache_file = self._filtered_results_cache_file()
+        if os.path.exists(cache_file):
             try:
-                with open(FILTERED_RESULTS_CACHE_FILE, 'r', encoding='utf-8') as f:
+                with open(cache_file, 'r', encoding='utf-8') as f:
                     cache_data = json.load(f)
                 
                 # 检查缓存日期是否为今天
@@ -280,6 +352,7 @@ class StockScreener:
         # 使用K线数据管理器获取数据
         data = self.kline_manager.get_kline_data(
             stock_code=stock_code,
+            market=self.market,
             max_count=max_count,
             use_cache=True,
             verbose=verbose
@@ -419,6 +492,7 @@ class StockScreener:
                     last_date = None
 
         return {
+            'market': self.market,
             'code': stock_code,
             'name': stock_name,
             'status': status,
@@ -444,7 +518,7 @@ class StockScreener:
         
         if verbose:
             print(f"\n{'='*80}")
-            print(f"开始筛选 {total} 只港股股票...")
+            print(f"开始筛选 {total} 只{MARKET_CONFIG[self.market]['label']}股票...")
             print(f"{'='*80}\n")
         
         for idx, stock in enumerate(stocks):
@@ -641,13 +715,29 @@ class StockScreener:
             return
 
         self.root = tk.Tk()
-        self.root.title("港股股票筛选器 - EMA10突破EMA150")
+        self.root.title("股票筛选器 - EMA10突破EMA150")
         self.root.geometry("1000x700")
         
         # 顶部按钮区域
         top_frame = ttk.Frame(self.root, padding="10")
         top_frame.pack(fill=tk.X)
-        
+
+        ttk.Label(top_frame, text="市场:").pack(side=tk.LEFT, padx=(0, 5))
+        self.market_var = tk.StringVar(value=self.market)
+        market_values = list(MARKET_CONFIG.keys())
+        market_combo = ttk.Combobox(
+            top_frame,
+            textvariable=self.market_var,
+            values=market_values,
+            state="readonly",
+            width=6,
+        )
+        market_combo.pack(side=tk.LEFT, padx=5)
+        ttk.Label(
+            top_frame,
+            text="HK=港股, US=美股",
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
         ttk.Button(top_frame, text="开始筛选", command=self.start_screening).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_frame, text="刷新", command=self.refresh_results).pack(side=tk.LEFT, padx=5)
         
@@ -703,6 +793,10 @@ class StockScreener:
     
     def start_screening(self):
         """开始筛选（在新线程中运行）"""
+        if hasattr(self, "market_var"):
+            self.set_market(self.market_var.get())
+            self.root.title(f"{MARKET_CONFIG[self.market]['label']}筛选器 - EMA10突破EMA150")
+
         if not self.quote_ctx and messagebox:
             messagebox.showwarning(
                 "提示",
@@ -715,7 +809,7 @@ class StockScreener:
         
         def screening_thread():
             # 获取股票列表
-            stocks = self.get_hk_stocks()
+            stocks = self.get_stocks()
             if not stocks:
                 self.root.after(0, lambda: messagebox.showerror("错误", "无法获取股票列表"))
                 return
@@ -813,7 +907,7 @@ class StockScreener:
 
     def run_cli(self, output_path='filtered_results.csv', log_path=None, limit=None):
         """命令行模式运行"""
-        stocks = self.get_hk_stocks()
+        stocks = self.get_stocks()
         if not stocks:
             print("无法获取股票列表，退出")
             return
@@ -824,20 +918,21 @@ class StockScreener:
         self.save_results_to_file(filtered, output_path)
         if log_path is None:
             today = date.today().strftime('%Y-%m-%d')
-            log_path = os.path.join('output', f'screen_log_{today}.jsonl')
+            log_path = os.path.join('output', f'screen_log_{self.market}_{today}.jsonl')
         self.save_log_to_file(self.last_log_records, log_path)
 
 
 def main():
     """主函数"""
-    parser = argparse.ArgumentParser(description="港股 EMA10/EMA150 突破筛选器")
+    parser = argparse.ArgumentParser(description="股票 EMA10/EMA150 突破筛选器")
     parser.add_argument("--cli", action="store_true", help="使用命令行模式运行")
     parser.add_argument("--output", default="filtered_results.csv", help="筛选结果输出文件")
     parser.add_argument("--log", default=None, help="结构化日志输出文件(JSONL)")
     parser.add_argument("--limit", type=int, default=None, help="限制筛选的股票数量")
+    parser.add_argument("--market", default="HK", help="市场选择: HK 或 US")
     args = parser.parse_args()
 
-    screener = StockScreener()
+    screener = StockScreener(market=args.market)
     
     # 连接Futu（可选）
     screener.connect()
