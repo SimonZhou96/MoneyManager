@@ -5,3 +5,4 @@ pandas-ta>=0.3.14b
 matplotlib>=3.6.0
 akshare>=1.12.0
 pyarrow>=10.0.0
+PyMySQL
