@@ -108,11 +108,16 @@ def run_once(
     for market in markets:
         market = normalize_market(market)
         if db.stock_count(market) == 0:
+            stocks_source = None
             stocks = fetch_stock_list_akshare(market)
-            if not stocks and futu_ctx:
-                stocks = fetch_stock_list_futu(futu_ctx, market)
             if stocks:
-                db.upsert_stocks(market, stocks, source="AKShare" if stocks else None)
+                stocks_source = "AKShare"
+            elif futu_ctx:
+                stocks = fetch_stock_list_futu(futu_ctx, market)
+                if stocks:
+                    stocks_source = "Futu"
+            if stocks:
+                db.upsert_stocks(market, stocks, source=stocks_source)
                 print(f"✓ {market_label(market)}股票列表已入库 ({len(stocks)} 只)")
         stocks = db.get_stocks(market)
         if not stocks:
