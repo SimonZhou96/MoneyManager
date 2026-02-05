@@ -1,5 +1,5 @@
 {
-  "date": "2026-02-01",
+  "date": "2026-02-05",
   "stocks": [
     {
       "code": "HK.00001",
@@ -1508,6 +1508,10 @@
     {
       "code": "HK.00468",
       "name": "GAPACK"
+    },
+    {
+      "code": "HK.00470",
+      "name": "WUXI LEAD"
     },
     {
       "code": "HK.00471",
@@ -3854,10 +3858,6 @@
       "name": "LABIXIAOXIN"
     },
     {
-      "code": "HK.01263",
-      "name": "PC PARTNER"
-    },
-    {
       "code": "HK.01265",
       "name": "TIANJINJINRAN"
     },
@@ -4407,7 +4407,7 @@
     },
     {
       "code": "HK.01471",
-      "name": "ZHONGMIAO"
+      "name": "ZHONGMIAO-100"
     },
     {
       "code": "HK.01472",
@@ -6275,7 +6275,7 @@
     },
     {
       "code": "HK.02147",
-      "name": "ZHENGWEI GP-NEW"
+      "name": "ZHENGWEI GROUP"
     },
     {
       "code": "HK.02149",
@@ -7766,12 +7766,20 @@
       "name": "GREEN INTL HLDG"
     },
     {
+      "code": "HK.02706",
+      "name": "HAIZHI TECH GP"
+    },
+    {
       "code": "HK.02714",
       "name": "MUYUAN"
     },
     {
       "code": "HK.02718",
       "name": "MININGLAMP-W"
+    },
+    {
+      "code": "HK.02720",
+      "name": "RIDGE OUTDOOR"
     },
     {
       "code": "HK.02722",
@@ -7899,11 +7907,23 @@
     },
     {
       "code": "HK.02901",
-      "name": "HUANGGUANHUANQIUJITUANGUQUAN"
+      "name": "CROWNICORP RTS"
     },
     {
       "code": "HK.02902",
-      "name": "ZHONGMIAOKONGGU(WUBAI)"
+      "name": "ZHONGMIAO-500"
+    },
+    {
+      "code": "HK.02903",
+      "name": "SILKWAVEINC RTS"
+    },
+    {
+      "code": "HK.02904",
+      "name": "HKC INT'L HOLD"
+    },
+    {
+      "code": "HK.02905",
+      "name": "HANG YICK HLDGS"
     },
     {
       "code": "HK.02914",
@@ -7926,18 +7946,6 @@
       "name": "CHUANGLIAN-OLD"
     },
     {
-      "code": "HK.02983",
-      "name": "ZHONGJIA GX RTS"
-    },
-    {
-      "code": "HK.02990",
-      "name": "HONY MEDIA-OLD"
-    },
-    {
-      "code": "HK.02991",
-      "name": "CMON-OLD"
-    },
-    {
       "code": "HK.02993",
       "name": "FEG HOLDING-OLD"
     },
@@ -7948,10 +7956,6 @@
     {
       "code": "HK.02996",
       "name": "SYNERTONE RTS"
-    },
-    {
-      "code": "HK.02997",
-      "name": "SHUN WO GP RTS"
     },
     {
       "code": "HK.02998",
@@ -9790,10 +9794,6 @@
       "name": "STARGLORY HLDGS"
     },
     {
-      "code": "HK.08215",
-      "name": "FIRST CREDIT"
-    },
-    {
       "code": "HK.08217",
       "name": "JU FU TANG BIOT"
     },
@@ -10511,7 +10511,7 @@
     },
     {
       "code": "HK.08596",
-      "name": "HUITAOJITUANGUQUAN"
+      "name": "WINTO GROUP RTS"
     },
     {
       "code": "HK.08601",
@@ -10960,6 +10960,10 @@
     {
       "code": "HK.09980",
       "name": "EASTROC"
+    },
+    {
+      "code": "HK.09981",
+      "name": "WOER"
     },
     {
       "code": "HK.09982",
@@ -12650,10 +12654,6 @@
       "name": "Shengwei Times Technology Co., Ltd"
     },
     {
-      "code": "HK.810648",
-      "name": "Ridge Outdoor International Limited"
-    },
-    {
       "code": "HK.810649",
       "name": "ALSCO Pooling Service Co., Ltd"
     },
@@ -12736,10 +12736,6 @@
     {
       "code": "HK.810705",
       "name": "Boche Holding Limited"
-    },
-    {
-      "code": "HK.810707",
-      "name": "Lead Intelligent Equipment"
     },
     {
       "code": "HK.810708",
@@ -14232,6 +14228,62 @@
     {
       "code": "HK.811117",
       "name": "Tyligand Bioscience Ltd."
+    },
+    {
+      "code": "HK.811118",
+      "name": "YESMRO Holdings Limited"
+    },
+    {
+      "code": "HK.811119",
+      "name": "RUIGU GROUP CO., LTD."
+    },
+    {
+      "code": "HK.811120",
+      "name": "Beijing Tiandi Hexing Technology Co., Ltd.*"
+    },
+    {
+      "code": "HK.811121",
+      "name": "COSMOPlat IoT Technology Co., Ltd."
+    },
+    {
+      "code": "HK.811122",
+      "name": "TAILG Technology Co., Ltd."
+    },
+    {
+      "code": "HK.811123",
+      "name": "Eaglerise Electric & Electronic (CHINA) Co., Ltd."
+    },
+    {
+      "code": "HK.811124",
+      "name": "JIANGSU ZHONGXIN PRIDON NEW MATERIAL CO., LTD."
+    },
+    {
+      "code": "HK.811125",
+      "name": "Zenshine Pharmaceuticals (Nanjing) Group Co., Ltd."
+    },
+    {
+      "code": "HK.811126",
+      "name": "WiseTek Med Ltd."
+    },
+    {
+      "code": "HK.811127",
+      "name": "ZHEJIANG ENERGY MARINE ENVIRONMENTAL TECHNOLOGY CO., LTD"
+    },
+    {
+      "code": "HK.811128",
+      "name": "ZHE JIANG HAI LIANG CO., LTD."
+    },
+    {
+      "code": "HK.811129",
+      "name": "Ti Testing & Certification Group Co., Ltd."
+    },
+    {
+      "code": "HK.811130",
+      "name": "Guangzhou Great Power Energy & Technology Co., Ltd."
+    },
+    {
+      "code": "HK.811131",
+      "name": "Ugreen Group Limited*"
     },
     {
       "code": "HK.81211",
