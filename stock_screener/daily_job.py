@@ -15,6 +15,7 @@ import pandas as pd
 from db import MarketDatabase, MySqlConfig
 from kline_fetcher import KlineFetcherFactory
 from market import market_label, parse_markets, normalize_market
+from strategy import analyze_stock_ema_breakout, EMABreakoutResult
 from universe import fetch_stock_list_akshare, fetch_stock_list_futu
 
 
@@ -109,6 +110,63 @@ def _build_log_record(market, code, name, status, reason, rows, last_date):
         "last_date": last_date,
         "timestamp": datetime.utcnow().isoformat(),
     }
+
+
+def check_and_save_ema_breakout(
+    db: MarketDatabase,
+    market: str,
+    code: str,
+    check_date: date,
+    verbose: bool = True,
+) -> None:
+    """
+    检查单只股票的 EMA 突破情况并立即写入数据库
+    
+    设计原则：
+    - 高内聚：所有 EMA 突破检查逻辑集中在此函数
+    - 低耦合：只依赖 db 和 strategy 模块，不依赖具体的数据获取方式
+    - 可复用：可被 run_once、sync_single_stock 或其他函数调用
+    
+    Args:
+        db: 数据库连接对象
+        market: 市场（HK/US）
+        code: 股票代码
+        check_date: 检查日期（一般是今天）
+        verbose: 是否输出详细信息
+    """
+    # 从数据库获取 K 线数据（需要至少 152 天来计算 EMA150 + 2天回溯）
+    # 为安全起见，获取更多数据
+    start_date = (check_date - timedelta(days=365)).strftime("%Y-%m-%d")
+    end_date = check_date.strftime("%Y-%m-%d")
+    
+    df = db.get_klines(market, code, start_date=start_date, end_date=end_date)
+    
+    # 执行策略分析
+    signal = analyze_stock_ema_breakout(
+        market=market,
+        code=code,
+        df=df,
+        check_date=check_date,
+    )
+    
+    # 立即写入数据库
+    db.upsert_ema_breakout_signal(
+        market=signal.market,
+        code=signal.code,
+        check_date=signal.check_date,
+        result_type=signal.result.value,
+        is_satisfied=signal.result.is_satisfied(),
+        breakout_date=signal.breakout_date,
+        ema10=signal.ema10,
+        ema150=signal.ema150,
+        close_price=signal.close_price,
+        data_rows=signal.data_rows,
+        result_desc=signal.result.get_description(),
+    )
+    
+    if verbose:
+        satisfied_mark = "✅" if signal.result.is_satisfied() else "❌"
+        print(f"  {satisfied_mark} EMA突破检查: {code} -> {signal.result.value} ({signal.result.get_description()})")
 
 
 def _init_futu_context(host: str, port: int):
@@ -271,7 +329,13 @@ def sync_single_stock(
             db.upsert_klines(market, code, df, source=source, adj_type="qfq")
             print(f"✓ 从 {source} 获取并存储: {len(df)} 条记录")
     
-    # 3. 记录日志
+    # 3. 执行 EMA 突破策略检查
+    try:
+        check_and_save_ema_breakout(db, market, code, today, verbose=True)
+    except Exception as e:
+        print(f"⚠️ EMA突破检查异常: {code} - {e}")
+    
+    # 4. 记录日志
     last_date = db.last_kline_date(market, code)
     stock_info = next((s for s in db.get_stocks(market) if s["code"] == code), None)
     name = stock_info.get("name") if stock_info else code
@@ -350,6 +414,11 @@ def run_once(
                         market, code, name, "skipped", "目标交易日已入库", 0, last_date
                     )
                 )
+                # 即使跳过数据同步，也需要执行 EMA 突破检查
+                try:
+                    check_and_save_ema_breakout(db, market, code, today, verbose=True)
+                except Exception as e:
+                    print(f"  ⚠️ EMA突破检查异常: {code} - {e}")
                 continue
 
             start_date = cutoff_date.strftime("%Y-%m-%d")
@@ -457,6 +526,11 @@ def run_once(
                         market, code, name, "failed", f"{source} 无数据", 0, last_date
                     )
                 )
+                # 即使数据获取失败，也尝试用现有数据库数据进行 EMA 突破检查
+                try:
+                    check_and_save_ema_breakout(db, market, code, today, verbose=True)
+                except Exception as e:
+                    print(f"  ⚠️ EMA突破检查异常: {code} - {e}")
                 continue
 
             pruned = db.prune_old_klines(market, code, cutoff_date, adj_type="qfq")
@@ -471,6 +545,12 @@ def run_once(
                     last_date,
                 )
             )
+            
+            # 数据同步成功后，执行 EMA 突破策略检查并写入数据库
+            try:
+                check_and_save_ema_breakout(db, market, code, today, verbose=True)
+            except Exception as e:
+                print(f"  ⚠️ EMA突破检查异常: {code} - {e}")
 
     if futu_ctx:
         futu_ctx.close()

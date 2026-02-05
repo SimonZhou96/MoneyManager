@@ -112,6 +112,33 @@ class MarketDatabase:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            # EMA突破信号表：记录每日每只股票的EMA突破策略判断结果
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ema_breakout_signals (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    market VARCHAR(8) NOT NULL COMMENT '市场（HK/US）',
+                    code VARCHAR(32) NOT NULL COMMENT '股票代码',
+                    check_date DATE NOT NULL COMMENT '检查日期（执行策略判断的日期）',
+                    result_type VARCHAR(32) NOT NULL COMMENT '结果类型枚举值',
+                    is_satisfied TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否满足突破条件',
+                    breakout_date DATE NULL COMMENT '突破发生的日期',
+                    ema10 DECIMAL(20,6) NULL COMMENT '最新EMA10值',
+                    ema150 DECIMAL(20,6) NULL COMMENT '最新EMA150值',
+                    close_price DECIMAL(20,6) NULL COMMENT '最新收盘价',
+                    data_rows INT NULL COMMENT '用于计算的K线数据行数',
+                    result_desc VARCHAR(255) NULL COMMENT '结果描述',
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_ema_market_code_date (market, code, check_date),
+                    KEY idx_ema_check_date (check_date),
+                    KEY idx_ema_result_type (result_type),
+                    KEY idx_ema_is_satisfied (is_satisfied),
+                    KEY idx_ema_market_date (market, check_date)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='EMA突破策略信号记录表'
+                """
+            )
 
     def stock_count(self, market: str) -> int:
         with self.conn.cursor() as cursor:
@@ -312,3 +339,122 @@ class MarketDatabase:
             df["date"] = pd.to_datetime(df["date"])
             
             return df
+
+    def upsert_ema_breakout_signal(
+        self,
+        market: str,
+        code: str,
+        check_date: date,
+        result_type: str,
+        is_satisfied: bool,
+        breakout_date: Optional[date] = None,
+        ema10: Optional[float] = None,
+        ema150: Optional[float] = None,
+        close_price: Optional[float] = None,
+        data_rows: Optional[int] = None,
+        result_desc: Optional[str] = None,
+    ):
+        """
+        插入或更新 EMA 突破信号记录
+        
+        Args:
+            market: 市场（HK/US）
+            code: 股票代码
+            check_date: 检查日期
+            result_type: 结果类型枚举值
+            is_satisfied: 是否满足突破条件
+            breakout_date: 突破发生的日期
+            ema10: 最新 EMA10 值
+            ema150: 最新 EMA150 值
+            close_price: 最新收盘价
+            data_rows: 用于计算的 K 线数据行数
+            result_desc: 结果描述
+        """
+        sql = """
+            INSERT INTO ema_breakout_signals
+                (market, code, check_date, result_type, is_satisfied, 
+                 breakout_date, ema10, ema150, close_price, data_rows, result_desc)
+            VALUES
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                result_type=VALUES(result_type),
+                is_satisfied=VALUES(is_satisfied),
+                breakout_date=VALUES(breakout_date),
+                ema10=VALUES(ema10),
+                ema150=VALUES(ema150),
+                close_price=VALUES(close_price),
+                data_rows=VALUES(data_rows),
+                result_desc=VALUES(result_desc)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (
+                    market,
+                    code,
+                    check_date,
+                    result_type,
+                    1 if is_satisfied else 0,
+                    breakout_date,
+                    ema10,
+                    ema150,
+                    close_price,
+                    data_rows,
+                    result_desc,
+                ),
+            )
+
+    def get_ema_breakout_signals(
+        self,
+        market: Optional[str] = None,
+        check_date: Optional[date] = None,
+        is_satisfied: Optional[bool] = None,
+        limit: int = 100,
+    ) -> List[dict]:
+        """
+        查询 EMA 突破信号记录
+        
+        Args:
+            market: 市场（可选）
+            check_date: 检查日期（可选）
+            is_satisfied: 是否满足条件（可选）
+            limit: 最大返回数量
+            
+        Returns:
+            信号记录列表
+        """
+        query = "SELECT market, code, check_date, result_type, is_satisfied, breakout_date, ema10, ema150, close_price, data_rows, result_desc FROM ema_breakout_signals WHERE 1=1"
+        params = []
+        
+        if market:
+            query += " AND market=%s"
+            params.append(market)
+        if check_date:
+            query += " AND check_date=%s"
+            params.append(check_date)
+        if is_satisfied is not None:
+            query += " AND is_satisfied=%s"
+            params.append(1 if is_satisfied else 0)
+        
+        query += " ORDER BY check_date DESC, market, code LIMIT %s"
+        params.append(limit)
+        
+        with self.conn.cursor() as cursor:
+            cursor.execute(query, tuple(params))
+            rows = cursor.fetchall() or []
+            return [
+                {
+                    "market": row[0],
+                    "code": row[1],
+                    "check_date": row[2],
+                    "result_type": row[3],
+                    "is_satisfied": bool(row[4]),
+                    "breakout_date": row[5],
+                    "ema10": float(row[6]) if row[6] else None,
+                    "ema150": float(row[7]) if row[7] else None,
+                    "close_price": float(row[8]) if row[8] else None,
+                    "data_rows": row[9],
+                    "result_desc": row[10],
+                }
+                for row in rows
+            ]
