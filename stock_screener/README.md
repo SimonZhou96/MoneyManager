@@ -76,11 +76,11 @@ python daily_job.py --markets HK,US --db data/market_data.db --log logs/daily_sy
 python daily_job.py --markets HK,US --db data/market_data.db --log logs/daily_sync.jsonl --loop
 ```
 
-### Docker 部署
+### Podman 部署
 
 ```bash
-docker build -t stock-screener:latest .
-docker run --rm -v $(pwd)/data:/app/data -v $(pwd)/logs:/app/logs stock-screener:latest
+podman build -t stock-screener:latest .
+podman run --rm -v $(pwd)/data:/app/data -v $(pwd)/logs:/app/logs stock-screener:latest
 ```
 
 ## 使用说明
