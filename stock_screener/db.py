@@ -94,8 +94,12 @@ class MarketDatabase:
                     high DECIMAL(20,6) NULL,
                     low DECIMAL(20,6) NULL,
                     close DECIMAL(20,6) NULL,
+                    last_close DECIMAL(20,6) NULL,
                     volume DECIMAL(28,6) NULL,
                     turnover DECIMAL(28,6) NULL,
+                    turnover_rate DECIMAL(20,8) NULL,
+                    change_rate DECIMAL(20,8) NULL,
+                    pe_ratio DECIMAL(20,6) NULL,
                     adj_type VARCHAR(16) NOT NULL DEFAULT 'qfq',
                     source VARCHAR(32) NULL,
                     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
@@ -202,8 +206,12 @@ class MarketDatabase:
                     float(row.get("high")) if pd.notna(row.get("high")) else None,
                     float(row.get("low")) if pd.notna(row.get("low")) else None,
                     float(row.get("close")) if pd.notna(row.get("close")) else None,
+                    float(row.get("last_close")) if pd.notna(row.get("last_close")) else None,
                     float(row.get("volume")) if pd.notna(row.get("volume")) else None,
                     float(row.get("turnover")) if pd.notna(row.get("turnover")) else None,
+                    float(row.get("turnover_rate")) if pd.notna(row.get("turnover_rate")) else None,
+                    float(row.get("change_rate")) if pd.notna(row.get("change_rate")) else None,
+                    float(row.get("pe_ratio")) if pd.notna(row.get("pe_ratio")) else None,
                     adj_type,
                     source,
                 )
@@ -214,16 +222,25 @@ class MarketDatabase:
 
         sql = """
             INSERT INTO kline_daily
-                (market, code, trade_date, open, high, low, close, volume, turnover, adj_type, source)
+                (
+                    market, code, trade_date,
+                    open, high, low, close, last_close,
+                    volume, turnover, turnover_rate, change_rate, pe_ratio,
+                    adj_type, source
+                )
             VALUES
-                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 open=VALUES(open),
                 high=VALUES(high),
                 low=VALUES(low),
                 close=VALUES(close),
+                last_close=VALUES(last_close),
                 volume=VALUES(volume),
                 turnover=VALUES(turnover),
+                turnover_rate=VALUES(turnover_rate),
+                change_rate=VALUES(change_rate),
+                pe_ratio=VALUES(pe_ratio),
                 source=VALUES(source)
         """
         with self.conn.cursor() as cursor:

@@ -53,6 +53,51 @@ def _normalize_kline_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _load_kline_cache(code: str, market: str) -> pd.DataFrame | None:
+    """
+    复用 `cache/kline_data` 的本地文件（parquet 优先，csv fallback）。
+    文件名规则与 `KlineDataManager` 保持一致：{MARKET}_{CODE_SAFE}.parquet
+    例如：HK.00001 -> HK_HK_00001.parquet（注意：当前缓存实际为 HK_00001.parquet）
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    cache_dir = os.path.join(base_dir, "cache", "kline_data")
+    if not os.path.isdir(cache_dir):
+        return None
+
+    market_tag = str(market).upper()
+    safe_code = str(code).replace(".", "_").replace("/", "_")
+
+    # 兼容当前缓存命名：HK.00001 -> HK_00001.parquet（即去掉 market 前缀的 HK.）
+    candidates = []
+    if safe_code.startswith(f"{market_tag}_"):
+        candidates.append(os.path.join(cache_dir, f"{safe_code}.parquet"))
+        candidates.append(os.path.join(cache_dir, f"{safe_code}.csv"))
+        candidates.append(os.path.join(cache_dir, f"{market_tag}_{safe_code}.parquet"))
+        candidates.append(os.path.join(cache_dir, f"{market_tag}_{safe_code}.csv"))
+    else:
+        candidates.append(os.path.join(cache_dir, f"{market_tag}_{safe_code}.parquet"))
+        candidates.append(os.path.join(cache_dir, f"{market_tag}_{safe_code}.csv"))
+
+    file_path = next((p for p in candidates if os.path.exists(p)), None)
+    if not file_path:
+        return None
+
+    try:
+        if file_path.endswith(".parquet"):
+            df = pd.read_parquet(file_path)
+        else:
+            df = pd.read_csv(file_path, encoding="utf-8")
+        if df is None or df.empty:
+            return None
+        if "date" in df.columns:
+            df = df.copy()
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df = df[df["date"].notna()]
+        return df
+    except Exception:
+        return None
+
+
 def _build_log_record(market, code, name, status, reason, rows, last_date):
     return {
         "market": market,
@@ -147,23 +192,93 @@ def run_once(
                 except Exception:
                     start_date = cutoff_date.strftime("%Y-%m-%d")
 
-            df = ak_fetcher.fetch(
-                code,
-                market=market,
-                start_date=start_date,
-                end_date=end_date,
-                max_count=5000,
-            )
-            source = "AKShare"
-            if (df is None or df.empty) and futu_fetcher:
-                df = futu_fetcher.fetch(
+            # 1) 优先复用本地 cache/kline_data
+            df_cache = _load_kline_cache(code, market)
+            df = None
+            source = None
+
+            start_dt = pd.to_datetime(start_date).date()
+            end_dt = pd.to_datetime(end_date).date()
+
+            cache_min = None
+            cache_max = None
+            if df_cache is not None and not df_cache.empty and "date" in df_cache.columns:
+                try:
+                    cache_min = pd.to_datetime(df_cache["date"]).dt.date.min()
+                    cache_max = pd.to_datetime(df_cache["date"]).dt.date.max()
+                except Exception:
+                    cache_min, cache_max = None, None
+
+            # 2) 用 cache 覆盖可用区间
+            cache_used_rows = 0
+            if cache_min and cache_max:
+                # 过滤近两年 + 目标区间
+                try:
+                    df_cache_norm = df_cache.copy()
+                    df_cache_norm["date"] = pd.to_datetime(df_cache_norm["date"]).dt.strftime("%Y-%m-%d")
+                    df_cache_dates = pd.to_datetime(df_cache_norm["date"]).dt.date
+                    df_cache_norm = df_cache_norm[(df_cache_dates >= cutoff_date) & (df_cache_dates >= start_dt) & (df_cache_dates <= end_dt)]
+                    if not df_cache_norm.empty:
+                        df_cache_norm = _normalize_kline_df(df_cache_norm)
+                        db.upsert_klines(market, code, df_cache_norm, source="Cache", adj_type="qfq")
+                        cache_used_rows = len(df_cache_norm)
+                except Exception:
+                    cache_used_rows = 0
+
+            # 3) 若 cache 无法覆盖完整缺口，再按缺口区间调用外部数据源补齐
+            # 缺口A：cache_min > start_dt，需要补 [start_dt, cache_min-1]
+            # 缺口B：cache_max < end_dt，需要补 [cache_max+1, end_dt]
+            fetch_ranges: list[tuple[date, date]] = []
+            if cache_min is None or cache_max is None:
+                fetch_ranges = [(start_dt, end_dt)]
+            else:
+                if start_dt < cache_min:
+                    fetch_ranges.append((start_dt, min(end_dt, cache_min - timedelta(days=1))))
+                if cache_max < end_dt:
+                    fetch_ranges.append((max(start_dt, cache_max + timedelta(days=1)), end_dt))
+
+            fetched_rows = 0
+            for r_start, r_end in fetch_ranges:
+                if r_start > r_end:
+                    continue
+                df_part = ak_fetcher.fetch(
                     code,
                     market=market,
-                    start_date=start_date,
-                    end_date=end_date,
+                    start_date=r_start.strftime("%Y-%m-%d"),
+                    end_date=r_end.strftime("%Y-%m-%d"),
                     max_count=5000,
                 )
-                source = "Futu"
+                part_source = "AKShare"
+                if (df_part is None or df_part.empty) and futu_fetcher:
+                    df_part = futu_fetcher.fetch(
+                        code,
+                        market=market,
+                        start_date=r_start.strftime("%Y-%m-%d"),
+                        end_date=r_end.strftime("%Y-%m-%d"),
+                        max_count=5000,
+                    )
+                    part_source = "Futu"
+                if df_part is None or df_part.empty:
+                    continue
+
+                df_part = _normalize_kline_df(df_part)
+                if df_part is None or df_part.empty:
+                    continue
+                try:
+                    df_dates = pd.to_datetime(df_part["date"]).dt.date
+                    df_part = df_part[df_dates >= cutoff_date]
+                except Exception:
+                    pass
+                db.upsert_klines(market, code, df_part, source=part_source, adj_type="qfq")
+                fetched_rows += len(df_part)
+
+            # 4) 日志用：若 cache/外部都没拿到任何数据，则认为失败
+            if cache_used_rows == 0 and fetched_rows == 0:
+                df = None
+                source = "Cache/AKShare/Futu"
+            else:
+                df = pd.DataFrame()
+                source = f"cache={cache_used_rows}, fetched={fetched_rows}"
 
             if df is None or df.empty:
                 log_records.append(
@@ -173,23 +288,6 @@ def run_once(
                 )
                 continue
 
-            df = _normalize_kline_df(df)
-            if df is None or df.empty:
-                log_records.append(
-                    _build_log_record(
-                        market, code, name, "failed", "数据格式异常", 0, last_date
-                    )
-                )
-                continue
-
-            # 仅写入近两年范围（避免数据源返回过长历史）
-            try:
-                df_dates = pd.to_datetime(df["date"]).dt.date
-                df = df[df_dates >= cutoff_date]
-            except Exception:
-                pass
-
-            db.upsert_klines(market, code, df, source=source, adj_type="qfq")
             pruned = db.prune_old_klines(market, code, cutoff_date, adj_type="qfq")
             log_records.append(
                 _build_log_record(
@@ -198,7 +296,7 @@ def run_once(
                     name,
                     "updated",
                     f"{source} 写入成功; prune<{cutoff_date}={pruned}",
-                    len(df),
+                    0,
                     last_date,
                 )
             )
