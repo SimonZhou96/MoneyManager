@@ -1,2 +1,5 @@
 /cache/
 /stock_screener/output/
+/stock_screener/data/
+/stock_screener/logs/
+*.db

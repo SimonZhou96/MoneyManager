@@ -9,13 +9,13 @@ import json
 import os
 import threading
 import time
-from datetime import datetime, date
-
-import numpy as np
+from datetime import date
 import pandas as pd
 import pandas_ta as ta
 
 from kline_fetcher import KlineDataManager
+from market import MARKET_CONFIG, market_label, normalize_market
+from universe import fetch_stock_list_akshare, fetch_stock_list_futu
 
 try:
     import futu as ft
@@ -47,16 +47,6 @@ except Exception:
 FUTU_HOST = '127.0.0.1'
 FUTU_PORT = 11111
 CACHE_DIR = 'cache'  # 缓存目录
-
-MARKET_CONFIG = {
-    "HK": {"label": "港股"},
-    "US": {"label": "美股"},
-}
-
-
-def normalize_market(value: str) -> str:
-    market = str(value).upper()
-    return market if market in MARKET_CONFIG else "HK"
 
 # 限流配置：最多60次请求/30秒
 MAX_REQUESTS_PER_WINDOW = 60
@@ -150,101 +140,6 @@ class StockScreener:
             self.quote_ctx.close()
             print("✓ 已断开连接")
     
-    def _get_hk_stocks_from_akshare(self):
-        """使用 AKShare 获取港股列表"""
-        try:
-            import akshare as ak
-        except Exception:
-            return []
-
-        data = None
-        # 优先使用新浪接口
-        if hasattr(ak, 'stock_hk_spot'):
-            try:
-                data = ak.stock_hk_spot()
-            except Exception:
-                data = None
-        # 备选东方财富接口
-        if (data is None or len(data) == 0) and hasattr(ak, 'stock_hk_spot_em'):
-            try:
-                data = ak.stock_hk_spot_em()
-            except Exception:
-                data = None
-
-        if data is None or len(data) == 0:
-            return []
-
-        code_col = None
-        name_col = None
-        for col in data.columns:
-            if code_col is None and ('代码' in col or 'code' in col.lower()):
-                code_col = col
-            if name_col is None and ('名称' in col or 'name' in col.lower()):
-                name_col = col
-        if code_col is None:
-            return []
-
-        stocks = []
-        for _, row in data.iterrows():
-            raw_code = str(row[code_col]).strip()
-            if not raw_code:
-                continue
-            if raw_code.startswith('HK.'):
-                raw_code = raw_code[3:]
-            if raw_code.isdigit():
-                raw_code = raw_code.zfill(5)
-            else:
-                continue
-            name = str(row[name_col]).strip() if name_col else f"HK.{raw_code}"
-            stocks.append({'code': f"HK.{raw_code}", 'name': name})
-        return stocks
-
-    def _get_us_stocks_from_akshare(self):
-        """使用 AKShare 获取美股列表"""
-        try:
-            import akshare as ak
-        except Exception:
-            return []
-
-        data = None
-        # 优先使用新浪接口
-        if hasattr(ak, 'stock_us_spot'):
-            try:
-                data = ak.stock_us_spot()
-            except Exception:
-                data = None
-        # 备选东方财富接口
-        if (data is None or len(data) == 0) and hasattr(ak, 'stock_us_spot_em'):
-            try:
-                data = ak.stock_us_spot_em()
-            except Exception:
-                data = None
-
-        if data is None or len(data) == 0:
-            return []
-
-        code_col = None
-        name_col = None
-        for col in data.columns:
-            col_lower = col.lower()
-            if code_col is None and ('代码' in col or 'symbol' in col_lower or 'ticker' in col_lower):
-                code_col = col
-            if name_col is None and ('名称' in col or 'name' in col_lower):
-                name_col = col
-        if code_col is None:
-            return []
-
-        stocks = []
-        for _, row in data.iterrows():
-            raw_code = str(row[code_col]).strip()
-            if not raw_code:
-                continue
-            if raw_code.upper().startswith('US.'):
-                raw_code = raw_code[3:]
-            name = str(row[name_col]).strip() if name_col else raw_code
-            stocks.append({'code': raw_code, 'name': name})
-        return stocks
-
     def get_stocks(self):
         """获取股票列表（优先从缓存读取）"""
         # 检查缓存文件是否存在且是今天的
@@ -266,28 +161,19 @@ class StockScreener:
                 print(f"读取缓存失败: {e}，重新获取")
         
         # 优先使用 AKShare 获取
-        if self.market == "US":
-            stocks = self._get_us_stocks_from_akshare()
-        else:
-            stocks = self._get_hk_stocks_from_akshare()
+        stocks = fetch_stock_list_akshare(self.market)
 
         if stocks:
-            print(f"✓ AKShare 获取到 {len(stocks)} 只{MARKET_CONFIG[self.market]['label']}")
+            print(f"✓ AKShare 获取到 {len(stocks)} 只{market_label(self.market)}")
         else:
             # AKShare失败时才尝试 Futu
             if self.quote_ctx and FUTU_AVAILABLE:
                 try:
-                    market_enum = ft.Market.US if self.market == "US" else ft.Market.HK
-                    ret, data = self.quote_ctx.get_stock_basicinfo(
-                        market=market_enum,
-                        stock_type=ft.SecurityType.STOCK
-                    )
-                    if ret == ft.RET_OK:
-                        stocks = data[['code', 'name']].to_dict('records')
-                        print(f"✓ Futu 获取到 {len(stocks)} 只{MARKET_CONFIG[self.market]['label']}")
+                    stocks = fetch_stock_list_futu(self.quote_ctx, self.market)
+                    if stocks:
+                        print(f"✓ Futu 获取到 {len(stocks)} 只{market_label(self.market)}")
                     else:
-                        print(f"✗ 获取股票列表失败: {data}")
-                        stocks = []
+                        print("✗ 获取股票列表失败: Futu 返回空数据")
                 except Exception as e:
                     print(f"✗ 获取股票列表异常: {e}")
                     stocks = []
@@ -518,7 +404,7 @@ class StockScreener:
         
         if verbose:
             print(f"\n{'='*80}")
-            print(f"开始筛选 {total} 只{MARKET_CONFIG[self.market]['label']}股票...")
+            print(f"开始筛选 {total} 只{market_label(self.market)}股票...")
             print(f"{'='*80}\n")
         
         for idx, stock in enumerate(stocks):
@@ -795,7 +681,7 @@ class StockScreener:
         """开始筛选（在新线程中运行）"""
         if hasattr(self, "market_var"):
             self.set_market(self.market_var.get())
-            self.root.title(f"{MARKET_CONFIG[self.market]['label']}筛选器 - EMA10突破EMA150")
+            self.root.title(f"{market_label(self.market)}筛选器 - EMA10突破EMA150")
 
         if not self.quote_ctx and messagebox:
             messagebox.showwarning(

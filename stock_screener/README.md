@@ -1,6 +1,6 @@
 # 港股/美股股票筛选器
 
-基于EMA10向上突破EMA150策略的港股/美股筛选工具。
+基于EMA10向上突破EMA150策略的港股/美股筛选工具，并支持每日数据入库任务。
 
 ## 功能特性
 
@@ -10,6 +10,7 @@
 4. **图表展示**：双击股票可查看详细K线图和技术指标
 5. **技术指标**：显示EMA10、EMA150、HMA40、HMA200、HMA600
 6. **详细日志**：显示每只股票的处理过程和筛选结果
+7. **每日入库**：支持港股/美股股票列表与K线历史入库
 
 ## 安装依赖
 
@@ -59,6 +60,27 @@ python main.py --cli --output filtered_results.csv --log output/screen_log_2026-
 ```bash
 python main.py --cli --market HK --output filtered_results.csv
 python main.py --cli --market US --output filtered_results.csv
+```
+
+## 每日数据入库任务
+
+使用 `daily_job.py` 将股票列表和K线历史写入 SQLite，默认每天执行一次即可。
+
+```bash
+python daily_job.py --markets HK,US --db data/market_data.db --log logs/daily_sync.jsonl
+```
+
+如果仅运行一次可不加 `--loop`；若希望容器内自动循环执行：
+
+```bash
+python daily_job.py --markets HK,US --db data/market_data.db --log logs/daily_sync.jsonl --loop
+```
+
+### Docker 部署
+
+```bash
+docker build -t stock-screener:latest .
+docker run --rm -v $(pwd)/data:/app/data -v $(pwd)/logs:/app/logs stock-screener:latest
 ```
 
 ## 使用说明
@@ -128,6 +150,10 @@ python main.py --cli --market US --output filtered_results.csv
 stock_screener/
 ├── main.py              # 主程序
 ├── kline_fetcher.py     # K线数据获取器（支持多数据源和缓存）
+├── daily_job.py         # 每日数据入库任务
+├── db.py                # SQLite 数据库访问
+├── market.py            # 市场配置与工具
+├── universe.py          # 股票列表获取
 ├── requirements.txt      # 依赖包
 ├── README.md           # 使用说明
 ├── cache/              # 缓存目录
@@ -137,5 +163,9 @@ stock_screener/
 │       ├── HK_00700.parquet
 │       ├── HK_00001.parquet
 │       └── ...
+├── data/               # SQLite 数据库目录
+│   └── market_data.db
+├── logs/               # 每日入库日志
+│   └── daily_sync.jsonl
 └── .gitignore          # Git忽略文件
 ```
