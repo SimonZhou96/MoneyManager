@@ -64,24 +64,194 @@ python main.py --cli --market US --output filtered_results.csv
 
 ## 每日数据入库任务
 
-使用 `daily_job.py` 将股票列表和K线历史写入 SQLite，默认每天执行一次即可。
+使用 `daily_job.py` 将股票列表和K线历史写入 MySQL，默认每天执行一次即可。
+
+### 单股票同步模式
+
+同步单个股票的近5年K线数据：
 
 ```bash
-python daily_job.py --markets HK,US --db data/market_data.db --log logs/daily_sync.jsonl
+# 同步港股
+python daily_job.py --stock-code HK.00700 --mysql-password your_password
+
+# 同步美股
+python daily_job.py --stock-code US.AAPL --mysql-password your_password
 ```
 
-如果仅运行一次可不加 `--loop`；若希望容器内自动循环执行：
+功能说明：
+- 如果股票不在 `stocks` 表中，会自动获取并插入股票信息
+- 自动获取近5年的K线数据并存储到 `kline_daily` 表
+- 支持使用缓存数据（如果可用）
+- 优先使用 AKShare，失败时使用 Futu OpenD（如果启用）
+
+## K线图绘制工具
+
+使用 `plot_kline.py` 从数据库查询并绘制股票K线图。
+
+### 基本使用
 
 ```bash
-python daily_job.py --markets HK,US --db data/market_data.db --log logs/daily_sync.jsonl --loop
+# 绘制港股K线图
+python plot_kline.py HK.00700 --mysql-password your_password
+
+# 绘制美股K线图
+python plot_kline.py US.AAPL --mysql-password your_password
 ```
 
-### Docker 部署
+### 高级选项
 
 ```bash
+# 指定日期范围
+python plot_kline.py HK.00700 \
+  --start-date 2024-01-01 \
+  --end-date 2024-12-31 \
+  --mysql-password your_password
+
+# 不显示成交量
+python plot_kline.py HK.00700 --no-volume --mysql-password your_password
+
+# 保存图表到文件
+python plot_kline.py HK.00700 \
+  --save output/kline_HK.00700.png \
+  --mysql-password your_password
+```
+
+### 功能特性
+
+- 📊 **专业K线图**：绘制标准的蜡烛图（红涨绿跌）
+- 📈 **成交量显示**：下方显示成交量柱状图（可选）
+- 📅 **日期范围**：支持指定开始和结束日期
+- 💾 **保存功能**：支持保存为PNG图片文件
+- 🎨 **美观界面**：自动显示价格统计信息（最高/最低/最新收盘价）
+
+### 数据库要求
+
+- **MySQL 版本**：支持 MySQL 5.7+ 和 MySQL 8.0+
+- **字符集**：推荐使用 `utf8mb4`
+- **认证方法**：
+  - MySQL 5.7：默认使用 `mysql_native_password`（无需额外配置）
+  - MySQL 8.0+：默认使用 `caching_sha2_password`（需要 `cryptography` 包，已包含在依赖中）
+
+### 本地运行
+
+```bash
+python daily_job.py --markets HK,US --mysql-host 127.0.0.1 --mysql-user root --mysql-password your_password --log logs/daily_sync.jsonl
+```
+
+如果仅运行一次可不加 `--loop`；若希望自动循环执行：
+
+```bash
+python daily_job.py --markets HK,US --mysql-host 127.0.0.1 --mysql-user root --mysql-password your_password --log logs/daily_sync.jsonl --loop
+```
+
+### Docker/Podman 部署
+
+#### 1. 构建镜像
+
+**使用 Docker：**
+```bash
+cd stock_screener
 docker build -t stock-screener:latest .
-docker run --rm -v $(pwd)/data:/app/data -v $(pwd)/logs:/app/logs stock-screener:latest
 ```
+
+**使用 Podman：**
+```bash
+cd stock_screener
+podman build -t stock-screener:latest .
+```
+
+#### 2. 运行容器
+
+**基本运行（单次执行）：**
+```bash
+# Docker
+docker run --rm \
+  -v $(pwd)/logs:/app/logs \
+  -e MYSQL_HOST=your_mysql_host \
+  -e MYSQL_PORT=3306 \
+  -e MYSQL_USER=root \
+  -e MYSQL_PASSWORD=your_password \
+  -e MYSQL_DATABASE=market_data \
+  stock-screener:latest
+
+# Podman
+podman run --rm \
+  -v $(pwd)/logs:/app/logs \
+  -e MYSQL_HOST=your_mysql_host \
+  -e MYSQL_PORT=3306 \
+  -e MYSQL_USER=root \
+  -e MYSQL_PASSWORD=your_password \
+  -e MYSQL_DATABASE=market_data \
+  stock-screener:latest
+```
+
+**循环执行（推荐用于生产环境）：**
+```bash
+# Podman（循环执行，每24小时执行一次）
+podman run -d --name stock-screener \
+  -v $(pwd)/logs:/app/logs \
+  -e MYSQL_HOST=your_mysql_host \
+  -e MYSQL_PORT=3306 \
+  -e MYSQL_USER=root \
+  -e MYSQL_PASSWORD=your_password \
+  -e MYSQL_DATABASE=market_data \
+  stock-screener:latest
+```
+
+**自定义参数运行：**
+```bash
+# Podman（覆盖默认参数）
+podman run --rm \
+  -v $(pwd)/logs:/app/logs \
+  -e MYSQL_HOST=your_mysql_host \
+  -e MYSQL_USER=root \
+  -e MYSQL_PASSWORD=your_password \
+  stock-screener:latest \
+  python daily_job.py \
+    --markets HK \
+    --mysql-host your_mysql_host \
+    --mysql-user root \
+    --mysql-password your_password \
+    --log logs/daily_sync.jsonl \
+    --loop \
+    --interval-hours 12
+```
+
+**如果 MySQL 在宿主机上，需要连接宿主机网络：**
+```bash
+# Podman（连接到宿主机网络）
+podman run --rm \
+  --network host \
+  -v $(pwd)/logs:/app/logs \
+  -e MYSQL_HOST=127.0.0.1 \
+  -e MYSQL_USER=root \
+  -e MYSQL_PASSWORD=your_password \
+  stock-screener:latest
+```
+
+**查看日志：**
+```bash
+# 查看运行中的容器日志
+podman logs -f stock-screener
+
+# 查看挂载的日志文件
+tail -f logs/daily_sync.jsonl
+```
+
+**停止和删除容器：**
+```bash
+# 停止容器
+podman stop stock-screener
+
+# 删除容器
+podman rm stock-screener
+```
+
+**注意：** 
+- 如果使用 IDE（如 Cursor/VS Code）的 Docker 扩展来构建，但实际使用的是 Podman，建议直接在终端使用 `podman build` 命令
+- MySQL 密码建议使用环境变量文件（`.env`）或 Podman secrets 管理，避免在命令行中暴露
+- 如果 MySQL 在容器中运行，可以使用 `--network` 参数连接同一网络，或使用容器名称作为主机名
+- **MySQL 版本兼容性**：支持 MySQL 5.7 和 MySQL 8.0+，`cryptography` 包已包含以支持所有认证方法
 
 ## 使用说明
 

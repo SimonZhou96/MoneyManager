@@ -253,3 +253,62 @@ class MarketDatabase:
                 (market, code, adj_type, cutoff_date),
             )
             return int(cursor.rowcount or 0)
+
+    def get_klines(
+        self,
+        market: str,
+        code: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        adj_type: str = "qfq",
+    ) -> pd.DataFrame:
+        """
+        查询K线数据
+        
+        Args:
+            market: 市场（HK/US）
+            code: 股票代码
+            start_date: 开始日期（YYYY-MM-DD），可选
+            end_date: 结束日期（YYYY-MM-DD），可选
+            adj_type: 复权类型，默认 qfq（前复权）
+            
+        Returns:
+            pd.DataFrame with columns: date, open, high, low, close, volume, turnover, etc.
+        """
+        query = """
+            SELECT 
+                trade_date AS date,
+                open, high, low, close, last_close,
+                volume, turnover, turnover_rate, change_rate, pe_ratio
+            FROM kline_daily
+            WHERE market=%s AND code=%s AND adj_type=%s
+        """
+        params = [market, code, adj_type]
+        
+        if start_date:
+            query += " AND trade_date >= %s"
+            params.append(start_date)
+        if end_date:
+            query += " AND trade_date <= %s"
+            params.append(end_date)
+        
+        query += " ORDER BY trade_date ASC"
+        
+        with self.conn.cursor() as cursor:
+            cursor.execute(query, tuple(params))
+            rows = cursor.fetchall()
+            
+            if not rows:
+                return pd.DataFrame()
+            
+            # 转换为DataFrame
+            columns = [
+                "date", "open", "high", "low", "close", "last_close",
+                "volume", "turnover", "turnover_rate", "change_rate", "pe_ratio"
+            ]
+            df = pd.DataFrame(rows, columns=columns)
+            
+            # 确保date列是datetime类型
+            df["date"] = pd.to_datetime(df["date"])
+            
+            return df

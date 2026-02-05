@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 
 from db import MarketDatabase, MySqlConfig
-from kline_fetcher import AKShareKlineFetcher, FutuKlineFetcher
+from kline_fetcher import KlineFetcherFactory
 from market import market_label, parse_markets, normalize_market
 from universe import fetch_stock_list_akshare, fetch_stock_list_futu
 
@@ -123,6 +123,176 @@ def _init_futu_context(host: str, port: int):
         return None, None
 
 
+def _parse_stock_code(stock_code: str) -> tuple[str, str] | None:
+    """
+    解析股票代码，返回 (market, code) 元组
+    例如: "HK.00700" -> ("HK", "HK.00700")
+          "US.AAPL" -> ("US", "US.AAPL")
+    """
+    code = str(stock_code).strip().upper()
+    if code.startswith("HK."):
+        return ("HK", code)
+    elif code.startswith("US."):
+        return ("US", code)
+    elif code.isdigit() and len(code) == 5:
+        # 假设5位数字是港股代码
+        return ("HK", f"HK.{code}")
+    else:
+        # 尝试作为美股代码
+        return ("US", f"US.{code}")
+
+
+def sync_single_stock(
+    mysql: MySqlConfig,
+    stock_code: str,
+    use_futu: bool,
+    futu_host: str,
+    futu_port: int,
+    log_path: str,
+):
+    """
+    同步单个股票的数据：
+    1. 如果股票不在 stocks 表中，则插入
+    2. 获取近5年的K线数据
+    3. 存储K线数据到 kline_daily 表
+    
+    高内聚：所有单个股票同步逻辑集中在此函数
+    低耦合：独立于 run_once，不影响现有批量同步功能
+    """
+    # 解析股票代码
+    parsed = _parse_stock_code(stock_code)
+    if not parsed:
+        print(f"❌ 无法解析股票代码: {stock_code}")
+        return
+    market, code = parsed
+    
+    db = MarketDatabase(mysql)
+    db.init_schema()
+    
+    # 使用工厂模式创建获取器链
+    futu_ctx = None
+    if use_futu:
+        futu_ctx, _ = _init_futu_context(futu_host, futu_port)
+    
+    fetchers = KlineFetcherFactory.create_fetcher_chain(quote_ctx=futu_ctx)
+    
+    # 1. 检查股票是否在 stocks 表中，如果不存在则插入
+    existing_stocks = db.get_stocks(market)
+    stock_exists = any(s["code"] == code for s in existing_stocks)
+    
+    if not stock_exists:
+        print(f"📋 股票 {code} 不在列表中，正在获取股票信息...")
+        # 尝试从 AKShare 获取股票信息
+        stocks = fetch_stock_list_akshare(market)
+        target_stock = next((s for s in stocks if s["code"] == code), None)
+        
+        if not target_stock and futu_ctx:
+            # 如果 AKShare 没有，尝试 Futu
+            stocks = fetch_stock_list_futu(futu_ctx, market)
+            target_stock = next((s for s in stocks if s["code"] == code), None)
+        
+        if target_stock:
+            db.upsert_stocks(market, [target_stock], source="AKShare" if not futu_ctx else "Futu")
+            print(f"✓ 股票 {code} ({target_stock.get('name', 'N/A')}) 已添加到列表")
+        else:
+            # 如果找不到股票信息，创建一个基本记录
+            db.upsert_stocks(market, [{"code": code, "name": code}], source="Manual")
+            print(f"⚠️  未找到股票 {code} 的详细信息，已创建基本记录")
+    else:
+        stock_info = next((s for s in existing_stocks if s["code"] == code), None)
+        print(f"✓ 股票 {code} ({stock_info.get('name', 'N/A') if stock_info else 'N/A'}) 已在列表中")
+    
+    # 2. 获取近5年的K线数据
+    today = date.today()
+    target_end = _previous_business_day(today)
+    start_date = (target_end - timedelta(days=365 * 5)).strftime("%Y-%m-%d")
+    end_date = target_end.strftime("%Y-%m-%d")
+    
+    print(f"📊 正在获取 {code} 的K线数据 ({start_date} 至 {end_date})...")
+    
+    # 优先使用缓存
+    df_cache = _load_kline_cache(code, market)
+    df = None
+    source = None
+    
+    # 如果缓存存在且覆盖所需日期范围，直接使用缓存
+    if df_cache is not None and not df_cache.empty and "date" in df_cache.columns:
+        try:
+            cache_min = pd.to_datetime(df_cache["date"]).dt.date.min()
+            cache_max = pd.to_datetime(df_cache["date"]).dt.date.max()
+            start_dt = pd.to_datetime(start_date).date()
+            end_dt = pd.to_datetime(end_date).date()
+            
+            if cache_min <= start_dt and cache_max >= end_dt:
+                # 缓存完全覆盖所需范围
+                df_cache_norm = df_cache.copy()
+                df_cache_norm["date"] = pd.to_datetime(df_cache_norm["date"]).dt.strftime("%Y-%m-%d")
+                df_cache_dates = pd.to_datetime(df_cache_norm["date"]).dt.date
+                df_cache_norm = df_cache_norm[
+                    (df_cache_dates >= start_dt) & (df_cache_dates <= end_dt)
+                ]
+                if not df_cache_norm.empty:
+                    df_cache_norm = _normalize_kline_df(df_cache_norm)
+                    db.upsert_klines(market, code, df_cache_norm, source="Cache", adj_type="qfq")
+                    print(f"✓ 使用缓存数据: {len(df_cache_norm)} 条记录")
+                    df = df_cache_norm
+                    source = "Cache"
+        except Exception as e:
+            print(f"⚠️  处理缓存数据时出错: {e}")
+    
+    # 如果缓存不可用，从数据源获取
+    if df is None or df.empty:
+        # 按优先级尝试各个数据源
+        for fetcher in fetchers:
+            try:
+                df = fetcher.fetch(
+                    code,
+                    market=market,
+                    start_date=start_date,
+                    end_date=end_date,
+                    max_count=5000,
+                )
+                if df is not None and not df.empty:
+                    source = fetcher.get_name()
+                    break
+            except Exception:
+                continue
+        
+        if df is None or df.empty:
+            print(f"❌ 无法获取 {code} 的K线数据")
+            if futu_ctx:
+                futu_ctx.close()
+            db.close()
+            return
+        
+        # 标准化并存储
+        df = _normalize_kline_df(df)
+        if df is not None and not df.empty:
+            db.upsert_klines(market, code, df, source=source, adj_type="qfq")
+            print(f"✓ 从 {source} 获取并存储: {len(df)} 条记录")
+    
+    # 3. 记录日志
+    last_date = db.last_kline_date(market, code)
+    stock_info = next((s for s in db.get_stocks(market) if s["code"] == code), None)
+    name = stock_info.get("name") if stock_info else code
+    
+    log_record = _build_log_record(
+        market, code, name, "updated", f"{source} 同步成功", len(df) if df is not None else 0, last_date
+    )
+    
+    if log_path:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(log_record, ensure_ascii=False) + "\n")
+        print(f"✓ 日志已追加到: {log_path}")
+    
+    if futu_ctx:
+        futu_ctx.close()
+    db.close()
+    
+    print(f"✅ 股票 {code} 同步完成！")
+
+
 def run_once(
     mysql: MySqlConfig,
     markets,
@@ -134,20 +304,19 @@ def run_once(
 ):
     db = MarketDatabase(mysql)
     db.init_schema()
-    ak_fetcher = AKShareKlineFetcher()
+    
+    # 使用工厂模式创建获取器链
     futu_ctx = None
-    futu_fetcher = None
-
     if use_futu:
         futu_ctx, _ = _init_futu_context(futu_host, futu_port)
-        if futu_ctx:
-            futu_fetcher = FutuKlineFetcher(futu_ctx)
+    
+    fetchers = KlineFetcherFactory.create_fetcher_chain(quote_ctx=futu_ctx)
 
     log_records = []
     today = date.today()
     target_end = _previous_business_day(today)
-    # 仅保留近两年数据（含 target_end 当日）
-    cutoff_date = target_end - timedelta(days=365 * 2)
+    # 仅保留近五年数据（含 target_end 当日）
+    cutoff_date = target_end - timedelta(days=365 * 5)
     end_date = target_end.strftime("%Y-%m-%d")
 
     for market in markets:
@@ -212,7 +381,7 @@ def run_once(
             # 2) 用 cache 覆盖可用区间
             cache_used_rows = 0
             if cache_min and cache_max:
-                # 过滤近两年 + 目标区间
+                # 过滤近五年 + 目标区间
                 try:
                     df_cache_norm = df_cache.copy()
                     df_cache_norm["date"] = pd.to_datetime(df_cache_norm["date"]).dt.strftime("%Y-%m-%d")
@@ -238,26 +407,28 @@ def run_once(
                     fetch_ranges.append((max(start_dt, cache_max + timedelta(days=1)), end_dt))
 
             fetched_rows = 0
+            part_source = None
             for r_start, r_end in fetch_ranges:
                 if r_start > r_end:
                     continue
-                df_part = ak_fetcher.fetch(
-                    code,
-                    market=market,
-                    start_date=r_start.strftime("%Y-%m-%d"),
-                    end_date=r_end.strftime("%Y-%m-%d"),
-                    max_count=5000,
-                )
-                part_source = "AKShare"
-                if (df_part is None or df_part.empty) and futu_fetcher:
-                    df_part = futu_fetcher.fetch(
-                        code,
-                        market=market,
-                        start_date=r_start.strftime("%Y-%m-%d"),
-                        end_date=r_end.strftime("%Y-%m-%d"),
-                        max_count=5000,
-                    )
-                    part_source = "Futu"
+                
+                # 按优先级尝试各个数据源
+                df_part = None
+                for fetcher in fetchers:
+                    try:
+                        df_part = fetcher.fetch(
+                            code,
+                            market=market,
+                            start_date=r_start.strftime("%Y-%m-%d"),
+                            end_date=r_end.strftime("%Y-%m-%d"),
+                            max_count=5000,
+                        )
+                        if df_part is not None and not df_part.empty:
+                            part_source = fetcher.get_name()
+                            break
+                    except Exception:
+                        continue
+                
                 if df_part is None or df_part.empty:
                     continue
 
@@ -269,7 +440,7 @@ def run_once(
                     df_part = df_part[df_dates >= cutoff_date]
                 except Exception:
                     pass
-                db.upsert_klines(market, code, df_part, source=part_source, adj_type="qfq")
+                db.upsert_klines(market, code, df_part, source=part_source or "Unknown", adj_type="qfq")
                 fetched_rows += len(df_part)
 
             # 4) 日志用：若 cache/外部都没拿到任何数据，则认为失败
@@ -327,20 +498,20 @@ def main():
     parser.add_argument("--mysql-host", default=os.getenv("MYSQL_HOST", "127.0.0.1"), help="MySQL Host")
     parser.add_argument("--mysql-port", type=int, default=int(os.getenv("MYSQL_PORT", "3306")), help="MySQL Port")
     parser.add_argument("--mysql-user", default=os.getenv("MYSQL_USER", "root"), help="MySQL User")
-    parser.add_argument("--mysql-password", default=os.getenv("MYSQL_PASSWORD", ""), help="MySQL Password")
+    parser.add_argument("--mysql-password", default=os.getenv("MYSQL_PASSWORD", "123456"), help="MySQL Password")
     parser.add_argument("--mysql-database", default=os.getenv("MYSQL_DATABASE", "market_data"), help="MySQL Database")
     parser.add_argument("--mysql-charset", default=os.getenv("MYSQL_CHARSET", "utf8mb4"), help="MySQL Charset")
     parser.add_argument("--markets", default="HK,US", help="市场列表: HK,US")
-    parser.add_argument("--use-futu", action="store_true", help="允许使用 Futu OpenD 作为备用数据源")
+    parser.add_argument("--use-futu", action="store_true", default='True', help="允许使用 Futu OpenD 作为备用数据源")
     parser.add_argument("--futu-host", default="127.0.0.1", help="Futu OpenD Host")
     parser.add_argument("--futu-port", type=int, default=11111, help="Futu OpenD Port")
     parser.add_argument("--log", default="logs/daily_sync.jsonl", help="日志输出文件(JSONL)")
     parser.add_argument("--limit", type=int, default=None, help="限制股票数量")
     parser.add_argument("--loop", action="store_true", help="循环执行(默认单次)")
     parser.add_argument("--interval-hours", type=int, default=24, help="循环间隔小时")
+    parser.add_argument("--stock-code", default=os.getenv("STOCK_CODE", ""), help="单个股票代码，例如: HK.00700 或 US.AAPL。如果提供，将只同步该股票")
     args = parser.parse_args()
 
-    markets = parse_markets(args.markets)
     mysql = MySqlConfig(
         host=args.mysql_host,
         port=args.mysql_port,
@@ -349,6 +520,21 @@ def main():
         database=args.mysql_database,
         charset=args.mysql_charset,
     )
+    
+    # 如果提供了单个股票代码，执行单股票同步模式
+    if args.stock_code:
+        sync_single_stock(
+            mysql=mysql,
+            stock_code=args.stock_code,
+            use_futu=args.use_futu,
+            futu_host=args.futu_host,
+            futu_port=args.futu_port,
+            log_path=args.log,
+        )
+        return
+    
+    # 否则执行原有的批量同步逻辑
+    markets = parse_markets(args.markets)
     if args.loop:
         run_loop(
             interval_hours=args.interval_hours,

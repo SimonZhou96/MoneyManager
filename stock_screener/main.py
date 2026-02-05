@@ -125,7 +125,7 @@ class StockScreener:
             print(f"✓ 成功连接到 Futu OpenD ({FUTU_HOST}:{FUTU_PORT})")
             
             # 设置K线数据管理器
-            self.kline_manager.set_futu_fetcher(self.quote_ctx, self.rate_limiter)
+            self.kline_manager.set_futu_context(self.quote_ctx, self.rate_limiter)
             
             return True
         except Exception as e:
