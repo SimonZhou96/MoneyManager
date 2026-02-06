@@ -6,7 +6,7 @@
 """
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from enum import Enum
 from typing import Optional, Tuple
 
@@ -21,9 +21,8 @@ class EMABreakoutResult(Enum):
     - BREAKOUT_T2: 前两个交易日刚刚向上突破
     
     不满足条件的情况：
-    - NO_BREAKOUT_BELOW: EMA10 仍在 EMA150 下方，未发生突破
-    - NO_BREAKOUT_ALREADY_ABOVE: EMA10 早已在 EMA150 上方（超过2个交易日）
-    - NO_BREAKOUT_DOWNWARD: EMA10 向下跌破（从上方跌到下方）
+    - NO_BREAKOUT_BELOW: EMA10 仍在 EMA150 下方
+    - NO_BREAKOUT_ALREADY_ABOVE: EMA10 早已在 EMA150 上方（非最近2个交易日突破）
     - INSUFFICIENT_DATA: 数据不足，无法计算 EMA
     - INVALID_DATA: 数据异常（如 close 价格为空或为负）
     """
@@ -34,7 +33,6 @@ class EMABreakoutResult(Enum):
     # 不满足条件
     NO_BREAKOUT_BELOW = "no_breakout_below"  # EMA10 仍在下方
     NO_BREAKOUT_ALREADY_ABOVE = "no_breakout_already_above"  # 早已在上方
-    NO_BREAKOUT_DOWNWARD = "no_breakout_downward"  # 向下跌破
     INSUFFICIENT_DATA = "insufficient_data"  # 数据不足
     INVALID_DATA = "invalid_data"  # 数据异常
 
@@ -49,7 +47,6 @@ class EMABreakoutResult(Enum):
             EMABreakoutResult.BREAKOUT_T2: "前两个交易日EMA10向上突破EMA150",
             EMABreakoutResult.NO_BREAKOUT_BELOW: "EMA10仍在EMA150下方，未发生突破",
             EMABreakoutResult.NO_BREAKOUT_ALREADY_ABOVE: "EMA10早已在EMA150上方（超过2个交易日）",
-            EMABreakoutResult.NO_BREAKOUT_DOWNWARD: "EMA10向下跌破EMA150",
             EMABreakoutResult.INSUFFICIENT_DATA: "K线数据不足，无法计算EMA",
             EMABreakoutResult.INVALID_DATA: "K线数据异常",
         }
@@ -137,24 +134,20 @@ def check_ema_breakout(
     check_date: date,
     ema_short: int = 10,
     ema_long: int = 150,
-    lookback_days: int = 2,
 ) -> Tuple[EMABreakoutResult, Optional[date], Optional[float], Optional[float]]:
     """
     检查 EMA 向上突破条件
     
     判断逻辑：
     1. 计算 EMA10 和 EMA150
-    2. 检查最近 lookback_days 个交易日内是否发生向上突破
-       （即 EMA10 从下方穿越到上方）
-    3. 向上突破定义：前一天 EMA10 < EMA150，当天 EMA10 >= EMA150
+    2. 检查最近两个交易日内是否发生向上突破（仅接受 T-1 或 T-2）
+    3. 向上突破定义：前一天 EMA10 <= EMA150，当天 EMA10 > EMA150
     
     Args:
         df: K线数据 DataFrame，需包含 'date' 和 'close' 列
         check_date: 检查日期（一般是今天）
         ema_short: 短期 EMA 周期，默认 10
         ema_long: 长期 EMA 周期，默认 150
-        lookback_days: 回溯天数，默认 2（检查前1天和前2天）
-        
     Returns:
         (result, breakout_date, ema_short_value, ema_long_value)
     """
@@ -167,9 +160,8 @@ def check_ema_breakout(
     df = _prepare_kline_data(df)
     
     # 需要至少 ema_long 个数据点才能计算有意义的 EMA150
-    # 实际上 EMA 可以从第一个点开始计算，但前 ema_long 个点的值不够稳定
-    # 我们要求至少有 ema_long + lookback_days 个点
-    min_required = ema_long + lookback_days
+    # 同时需要最近 3 个交易日来判断 T-1 / T-2 的突破
+    min_required = ema_long + 2
     if len(df) < min_required:
         return EMABreakoutResult.INSUFFICIENT_DATA, None, None, None
     
@@ -178,63 +170,28 @@ def check_ema_breakout(
     df["ema_long"] = calculate_ema(df["close"], ema_long)
     
     # 获取最近的数据点（按 check_date 筛选）
-    df["date_only"] = df["date"].dt.date
-    df_before_check = df[df["date_only"] <= check_date]
-    
-    if len(df_before_check) < lookback_days + 2:
-        # 需要至少 lookback_days + 2 个点来判断趋势
+    df = df[df["date"].dt.date <= check_date]
+    if len(df) < 3:
         return EMABreakoutResult.INSUFFICIENT_DATA, None, None, None
-    
-    # 获取最后几个交易日的数据
-    recent_data = df_before_check.tail(lookback_days + 2).reset_index(drop=True)
-    
-    # 当前最新一天的 EMA 值
-    latest = recent_data.iloc[-1]
-    ema_short_val = float(latest["ema_short"])
-    ema_long_val = float(latest["ema_long"])
-    
-    # 判断突破情况
-    # 检查每一天是否发生突破
-    for i in range(len(recent_data) - 1, 0, -1):  # 从最新往前遍历
-        current = recent_data.iloc[i]
-        previous = recent_data.iloc[i - 1]
-        
-        current_above = current["ema_short"] >= current["ema_long"]
-        previous_above = previous["ema_short"] >= previous["ema_long"]
-        
-        # 向上突破：前一天在下方，当天在上方或相等
-        if current_above and not previous_above:
-            breakout_date = current["date_only"]
-            days_ago = len(recent_data) - 1 - i
-            
-            if days_ago == 0:
-                # 今天突破（如果 check_date 是最新数据日期）
-                return EMABreakoutResult.BREAKOUT_T1, breakout_date, ema_short_val, ema_long_val
-            elif days_ago == 1:
-                # 前一天突破
-                return EMABreakoutResult.BREAKOUT_T1, breakout_date, ema_short_val, ema_long_val
-            elif days_ago == 2:
-                # 前两天突破
-                return EMABreakoutResult.BREAKOUT_T2, breakout_date, ema_short_val, ema_long_val
-            else:
-                # 超过2天前突破，属于"早已在上方"
-                break
-        
-        # 向下跌破：前一天在上方，当天在下方
-        if not current_above and previous_above:
-            # 最近发生了向下跌破
-            if len(recent_data) - 1 - i <= lookback_days:
-                return EMABreakoutResult.NO_BREAKOUT_DOWNWARD, None, ema_short_val, ema_long_val
-    
-    # 没有在 lookback_days 内发生突破，判断当前位置
-    latest_above = recent_data.iloc[-1]["ema_short"] >= recent_data.iloc[-1]["ema_long"]
-    
-    if latest_above:
-        # EMA10 在上方但不是刚刚突破 -> 早已在上方
+
+    recent = df.tail(3).reset_index(drop=True)  # t-2, t-1, t
+    t2, t1, t0 = recent.iloc[0], recent.iloc[1], recent.iloc[2]
+
+    ema_short_val = float(t0["ema_short"])
+    ema_long_val = float(t0["ema_long"])
+
+    def _crossed_up(prev, curr) -> bool:
+        return prev["ema_short"] <= prev["ema_long"] and curr["ema_short"] > curr["ema_long"]
+
+    if _crossed_up(t1, t0):
+        return EMABreakoutResult.BREAKOUT_T1, t0["date"].date(), ema_short_val, ema_long_val
+    if _crossed_up(t2, t1):
+        return EMABreakoutResult.BREAKOUT_T2, t1["date"].date(), ema_short_val, ema_long_val
+
+    if ema_short_val >= ema_long_val:
         return EMABreakoutResult.NO_BREAKOUT_ALREADY_ABOVE, None, ema_short_val, ema_long_val
-    else:
-        # EMA10 在下方 -> 未突破
-        return EMABreakoutResult.NO_BREAKOUT_BELOW, None, ema_short_val, ema_long_val
+
+    return EMABreakoutResult.NO_BREAKOUT_BELOW, None, ema_short_val, ema_long_val
 
 
 def analyze_stock_ema_breakout(
@@ -260,7 +217,6 @@ def analyze_stock_ema_breakout(
         check_date=check_date,
         ema_short=10,
         ema_long=150,
-        lookback_days=2,
     )
     
     # 获取最新收盘价
