@@ -582,7 +582,7 @@ def main():
     parser.add_argument("--mysql-database", default=os.getenv("MYSQL_DATABASE", "market_data"), help="MySQL Database")
     parser.add_argument("--mysql-charset", default=os.getenv("MYSQL_CHARSET", "utf8mb4"), help="MySQL Charset")
     parser.add_argument("--markets", default="HK,US", help="市场列表: HK,US")
-    parser.add_argument("--use-futu", action="store_true", default='True', help="允许使用 Futu OpenD 作为备用数据源")
+    parser.add_argument("--use-futu", action="store_true", default=False, help="允许使用 Futu OpenD 作为备用数据源")
     parser.add_argument("--futu-host", default="127.0.0.1", help="Futu OpenD Host")
     parser.add_argument("--futu-port", type=int, default=11111, help="Futu OpenD Port")
     parser.add_argument("--log", default="logs/daily_sync.jsonl", help="日志输出文件(JSONL)")
