@@ -10,17 +10,49 @@
 """
 
 import argparse
+import csv
 import json
 import os
 import time
 from datetime import date, datetime
 
+import pandas as pd
+
 from db import MarketDatabase, MySqlConfig
 from kline_fetcher import KlineFetcherFactory
 from market import market_label, parse_markets, normalize_market
 from strategy import analyze_stock_ema_breakout
-from timeframe import parse_timeframe
+from timeframe import is_intraday, parse_timeframe
 from universe import fetch_stock_list_akshare, fetch_stock_list_futu
+
+
+# ------------------------------------------------------------------
+# 辅助：计算每日平均成交量
+# ------------------------------------------------------------------
+
+
+def _compute_avg_daily_volume(df: pd.DataFrame, timeframe: str) -> float | None:
+    """
+    计算每日平均成交量。
+    - 日线(1d/5d/1wk/1mo/3mo)：每行即一日，直接对 volume 取均值
+    - 日内(1m/5m/15m 等)：按日期聚合后取日均
+    """
+    if df is None or df.empty or "volume" not in df.columns:
+        return None
+    try:
+        if is_intraday(timeframe):
+            # 日内：按日期聚合
+            if isinstance(df.index, pd.DatetimeIndex):
+                daily = df["volume"].groupby(df.index.date).sum()
+            elif "date" in df.columns:
+                dt = pd.to_datetime(df["date"])
+                daily = df["volume"].groupby(dt.dt.date).sum()
+            else:
+                return float(df["volume"].mean())
+            return float(daily.mean()) if len(daily) > 0 else None
+        return float(df["volume"].mean())
+    except Exception:
+        return None
 
 
 # ------------------------------------------------------------------
@@ -99,6 +131,15 @@ def _scan_single_stock(
         mark = "✅" if signal.result.is_satisfied() else "❌"
         print(f"  {mark} {code} [{source}] {signal.result.value} ({len(df)} bars)")
 
+    # 公司有盈利：PE > 0 且有限
+    pe = pe_ratio
+    is_profitable = None
+    if pe is not None:
+        try:
+            is_profitable = pe > 0 and abs(pe) != float("inf")
+        except (TypeError, ValueError):
+            is_profitable = None
+
     return {
         "market": market,
         "code": code,
@@ -107,7 +148,54 @@ def _scan_single_stock(
         "is_satisfied": signal.result.is_satisfied(),
         "source": source,
         "data_rows": len(df),
+        # CSV 额外字段（不写入 DB）
+        "market_cap": market_cap,
+        "pe_ratio": pe_ratio,
+        "close_price": signal.close_price,
+        "avg_daily_volume": _compute_avg_daily_volume(df, timeframe),
+        "is_profitable": is_profitable,
     }
+
+
+# ------------------------------------------------------------------
+# CSV 导出（仅满足条件的股票）
+# ------------------------------------------------------------------
+
+
+def _write_satisfied_csv(records: list[dict], csv_path: str):
+    """
+    将满足 EMA 突破条件的股票写入 CSV。
+    列：代码, 名称, 市值, 每日平均交易量, 股票价格, 市盈率, 公司有盈利
+    """
+    if not records:
+        return
+    os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+    # (表头, 字段名)
+    columns = [
+        ("代码", "code"),
+        ("名称", "name"),
+        ("市值", "market_cap"),
+        ("每日平均交易量", "avg_daily_volume"),
+        ("股票价格", "close_price"),
+        ("市盈率", "pe_ratio"),
+        ("公司有盈利", "is_profitable"),
+    ]
+    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow([c[0] for c in columns])
+        for r in records:
+            row = []
+            for _, key in columns:
+                val = r.get(key)
+                if key == "is_profitable":
+                    if val is True:
+                        val = "是"
+                    elif val is False:
+                        val = "否"
+                    else:
+                        val = "未知"
+                row.append("" if val is None else val)
+            w.writerow(row)
 
 
 # ------------------------------------------------------------------
@@ -136,6 +224,7 @@ def run_once(
     futu_port: int = 11111,
     limit: int | None = None,
     log_path: str | None = None,
+    csv_path: str | None = None,
 ):
     db = MarketDatabase(mysql)
     db.init_schema(timeframe)
@@ -200,6 +289,10 @@ def run_once(
     satisfied = [r for r in log_records if r.get("is_satisfied")]
     print(f"\n扫描完成：共 {len(log_records)} 只，突破 {len(satisfied)} 只")
 
+    if csv_path and satisfied:
+        _write_satisfied_csv(satisfied, csv_path)
+        print(f"✓ 突破股票已导出 CSV: {csv_path}")
+
 
 def run_loop(interval_hours: int, **kwargs):
     while True:
@@ -235,6 +328,7 @@ def main():
 
     # 运行模式
     parser.add_argument("--log", default="logs/daily_sync.jsonl", help="日志文件路径")
+    parser.add_argument("--csv", default=None, help="将满足条件的股票导出到 CSV 文件路径")
     parser.add_argument("--loop", action="store_true", help="循环执行")
     parser.add_argument("--interval-hours", type=int, default=24, help="循环间隔（小时）")
 
@@ -257,13 +351,13 @@ def main():
             interval_hours=args.interval_hours,
             mysql=mysql, markets=markets, timeframe=timeframe,
             use_futu=args.use_futu, futu_host=args.futu_host, futu_port=args.futu_port,
-            limit=args.limit, log_path=args.log,
+            limit=args.limit, log_path=args.log, csv_path=args.csv,
         )
     else:
         run_once(
             mysql=mysql, markets=markets, timeframe=timeframe,
             use_futu=args.use_futu, futu_host=args.futu_host, futu_port=args.futu_port,
-            limit=args.limit, log_path=args.log,
+            limit=args.limit, log_path=args.log, csv_path=args.csv,
         )
 
 

@@ -18,10 +18,12 @@
 """
 
 import argparse
+import csv
 import os
 import time
 from datetime import date
 
+from daily_job import _compute_avg_daily_volume, _write_satisfied_csv
 from db import MarketDatabase, MySqlConfig
 from filters import (
     FilterChain,
@@ -126,6 +128,7 @@ def run_screening(
     verbose: bool = True,
     save_to_db: bool = True,
     universe_reducer=None,
+    csv_path: str | None = None,
 ):
     """
     执行股票筛选
@@ -258,7 +261,39 @@ def run_screening(
             print(f"{stock.code:<15} {stock.name:<20} {sector:<15} {close_price:<10} {pe:<10}")
         
         print("-" * 80)
-    
+
+    # 导出 CSV（仅通过筛选的股票）
+    if csv_path and passed:
+        records = []
+        for result in passed:
+            stock = result.stock
+            close_price = None
+            if stock.kline_df is not None and not stock.kline_df.empty and "close" in stock.kline_df.columns:
+                close_price = float(stock.kline_df["close"].iloc[-1])
+            else:
+                for output in result.filter_outputs:
+                    if output.filter_name == "EMABreakoutFilter" and output.details:
+                        close_price = output.details.get("close_price")
+                        break
+            pe = stock.pe_ratio
+            is_profitable = None
+            if pe is not None:
+                try:
+                    is_profitable = pe > 0 and abs(pe) != float("inf")
+                except (TypeError, ValueError):
+                    pass
+            records.append({
+                "code": stock.code,
+                "name": stock.name or "",
+                "market_cap": stock.market_cap,
+                "avg_daily_volume": _compute_avg_daily_volume(stock.kline_df, timeframe) if stock.kline_df is not None else None,
+                "close_price": close_price,
+                "pe_ratio": pe,
+                "is_profitable": is_profitable,
+            })
+        _write_satisfied_csv(records, csv_path)
+        print(f"✓ 通过筛选的股票已导出 CSV: {csv_path}")
+
     db.close()
     return passed
 
@@ -314,6 +349,7 @@ def main():
     
     # 存储选项
     parser.add_argument("--no-save-to-db", action="store_true", help="不将筛选结果保存到 MySQL")
+    parser.add_argument("--csv", default=None, help="将通过筛选的股票导出到 CSV 文件路径")
     
     args = parser.parse_args()
     
@@ -355,6 +391,7 @@ def main():
         verbose=args.verbose,
         save_to_db=not args.no_save_to_db,
         universe_reducer=universe_reducer,
+        csv_path=args.csv,
     )
 
 

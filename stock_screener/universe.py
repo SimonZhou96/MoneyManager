@@ -100,8 +100,21 @@ def fetch_stock_list_akshare(market: str) -> List[dict]:
 
     code_col = _find_column(data.columns, ["代码", "code", "symbol", "ticker"])
     name_col = _find_column(data.columns, ["名称", "name", "中文名称", "英文名称"])
+    market_cap_col = _find_column(data.columns, ["总市值", "流通市值", "market_cap", "市值"])
+    pe_col = _find_column(data.columns, ["市盈率", "市盈率-动态", "pe", "pe_ratio"])
     if code_col is None:
         return []
+
+    def _safe_float(val):
+        if val is None or (isinstance(val, float) and (val != val or val == float("inf"))):
+            return None
+        try:
+            s = str(val).strip().replace(",", "").replace("--", "")
+            if not s:
+                return None
+            return float(s)
+        except (ValueError, TypeError):
+            return None
 
     stocks = []
     for _, row in data.iterrows():
@@ -115,7 +128,12 @@ def fetch_stock_list_akshare(market: str) -> List[dict]:
         if not code:
             continue
         name = str(row[name_col]).strip() if name_col else code
-        stocks.append({"code": code, "name": name})
+        item = {"code": code, "name": name}
+        if market_cap_col and market_cap_col in row:
+            item["market_cap"] = _safe_float(row[market_cap_col])
+        if pe_col and pe_col in row:
+            item["pe_ratio"] = _safe_float(row[pe_col])
+        stocks.append(item)
     return stocks
 
 
