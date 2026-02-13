@@ -17,6 +17,12 @@ from kline_fetcher import KlineFetcherFactory
 from market import market_label, parse_markets, normalize_market
 from strategy import analyze_stock_ema_breakout, EMABreakoutResult
 from universe import fetch_stock_list_akshare, fetch_stock_list_futu
+from sector_fetcher import SectorDataManager, SectorInfo
+from filters import (
+    FilterChain, FilterContext, StockInfo, StockFilterResult,
+    EMABreakoutFilter, MarketCapFilter, PEFilter, SectorFilter,
+    create_default_filter_chain, stocks_to_stock_infos
+)
 
 
 def _previous_business_day(today: date) -> date:
@@ -118,6 +124,8 @@ def check_and_save_ema_breakout(
     code: str,
     check_date: date,
     verbose: bool = True,
+    stock_info: dict = None,
+    sector_manager: SectorDataManager = None,
 ) -> None:
     """
     检查单只股票的 EMA 突破情况并立即写入数据库
@@ -133,6 +141,8 @@ def check_and_save_ema_breakout(
         code: 股票代码
         check_date: 检查日期（一般是今天）
         verbose: 是否输出详细信息
+        stock_info: 股票信息字典（包含 name, sector, industry 等）
+        sector_manager: 板块数据管理器（用于获取板块信息）
     """
     # 从数据库获取 K 线数据（需要至少 152 天来计算 EMA150 + 2天回溯）
     # 为安全起见，获取更多数据
@@ -149,6 +159,30 @@ def check_and_save_ema_breakout(
         check_date=check_date,
     )
     
+    # 获取股票附加信息
+    name = None
+    sector = None
+    industry = None
+    market_cap = None
+    pe_ratio = None
+    
+    if stock_info:
+        name = stock_info.get("name")
+        sector = stock_info.get("sector")
+        industry = stock_info.get("industry")
+        market_cap = stock_info.get("market_cap")
+        pe_ratio = stock_info.get("pe_ratio")
+    
+    # 如果没有板块信息，尝试从 sector_manager 获取
+    if not sector and not industry and sector_manager:
+        try:
+            sector_info = sector_manager.get_stock_sector(code, market)
+            if sector_info:
+                sector = sector_info.sector
+                industry = sector_info.industry
+        except Exception:
+            pass
+    
     # 立即写入数据库
     db.upsert_ema_breakout_signal(
         market=signal.market,
@@ -162,11 +196,17 @@ def check_and_save_ema_breakout(
         close_price=signal.close_price,
         data_rows=signal.data_rows,
         result_desc=signal.result.get_description(),
+        name=name,
+        sector=sector,
+        industry=industry,
+        market_cap=market_cap,
+        pe_ratio=pe_ratio,
     )
     
     if verbose:
         satisfied_mark = "✅" if signal.result.is_satisfied() else "❌"
-        print(f"  {satisfied_mark} EMA突破检查: {code} -> {signal.result.value} ({signal.result.get_description()})")
+        sector_info = f" [{sector or industry or '未知板块'}]" if (sector or industry) else ""
+        print(f"  {satisfied_mark} EMA突破检查: {code}{sector_info} -> {signal.result.value}")
 
 
 def _init_futu_context(host: str, port: int):
@@ -186,17 +226,22 @@ def _parse_stock_code(stock_code: str) -> tuple[str, str] | None:
     解析股票代码，返回 (market, code) 元组
     例如: "HK.00700" -> ("HK", "HK.00700")
           "US.AAPL" -> ("US", "US.AAPL")
+          "000001.SZ" -> ("A", "000001.SZ")
+          "600000.SS" -> ("A", "600000.SS")
     """
     code = str(stock_code).strip().upper()
     if code.startswith("HK."):
         return ("HK", code)
     elif code.startswith("US."):
         return ("US", code)
+    elif code.endswith(".SS") or code.endswith(".SZ"):
+        return ("A", code)
+    elif code.isdigit() and len(code) == 6:
+        # 6 位数字：上交所 6 开头，深交所 0/3 开头
+        return ("A", f"{code}.SS" if code.startswith("6") else f"{code}.SZ")
     elif code.isdigit() and len(code) == 5:
-        # 假设5位数字是港股代码
         return ("HK", f"HK.{code}")
     else:
-        # 尝试作为美股代码
         return ("US", f"US.{code}")
 
 
@@ -330,16 +375,34 @@ def sync_single_stock(
             print(f"✓ 从 {source} 获取并存储: {len(df)} 条记录")
     
     # 3. 执行 EMA 突破策略检查
+    # 初始化板块管理器
+    sector_manager = SectorDataManager(quote_ctx=futu_ctx)
+    
+    # 获取股票信息（含名称）
+    stocks_in_db = db.get_stocks(market)
+    stock_row = next((s for s in stocks_in_db if s["code"] == code), None)
+    name = stock_row.get("name", code) if stock_row else code
+    stock_info = {"code": code, "name": name}
     try:
-        check_and_save_ema_breakout(db, market, code, today, verbose=True)
+        sector_info = sector_manager.get_stock_sector(code, market)
+        if sector_info:
+            stock_info["sector"] = sector_info.sector
+            stock_info["industry"] = sector_info.industry
+            # 更新数据库中的板块信息
+            db.update_stock_sector(market, code, sector=sector_info.sector, industry=sector_info.industry)
+    except Exception as e:
+        print(f"⚠️ 获取板块信息失败: {code} - {e}")
+    
+    try:
+        check_and_save_ema_breakout(
+            db, market, code, today, verbose=True,
+            stock_info=stock_info, sector_manager=sector_manager
+        )
     except Exception as e:
         print(f"⚠️ EMA突破检查异常: {code} - {e}")
     
     # 4. 记录日志
     last_date = db.last_kline_date(market, code)
-    stock_info = next((s for s in db.get_stocks(market) if s["code"] == code), None)
-    name = stock_info.get("name") if stock_info else code
-    
     log_record = _build_log_record(
         market, code, name, "updated", f"{source} 同步成功", len(df) if df is not None else 0, last_date
     )
@@ -365,9 +428,16 @@ def run_once(
     futu_port: int,
     log_path: str,
     limit: int | None,
+    fetch_sectors: bool = True,
 ):
     db = MarketDatabase(mysql)
     db.init_schema()
+    
+    # 尝试迁移添加新列（幂等操作）
+    try:
+        db.migrate_add_sector_columns()
+    except Exception as e:
+        print(f"⚠️ 数据库迁移提示: {e}")
     
     # 使用工厂模式创建获取器链
     futu_ctx = None
@@ -375,6 +445,9 @@ def run_once(
         futu_ctx, _ = _init_futu_context(futu_host, futu_port)
     
     fetchers = KlineFetcherFactory.create_fetcher_chain(quote_ctx=futu_ctx)
+    
+    # 初始化板块数据管理器
+    sector_manager = SectorDataManager(quote_ctx=futu_ctx) if fetch_sectors else None
 
     log_records = []
     today = date.today()
@@ -397,12 +470,42 @@ def run_once(
             if stocks:
                 db.upsert_stocks(market, stocks, source=stocks_source)
                 print(f"✓ {market_label(market)}股票列表已入库 ({len(stocks)} 只)")
-        stocks = db.get_stocks(market)
+        stocks = db.get_stocks(market, include_fundamentals=True)
         if not stocks:
             print(f"✗ 未获取到{market_label(market)}股票列表，跳过")
             continue
         if limit:
             stocks = stocks[:limit]
+        
+        # 批量获取并更新板块信息
+        if sector_manager and fetch_sectors:
+            print(f"📊 正在获取 {market_label(market)} 股票板块信息...")
+            try:
+                codes = [s["code"] for s in stocks]
+                sector_data = sector_manager.get_batch_stock_sectors(codes, market, verbose=True)
+                
+                # 更新到数据库
+                update_data = []
+                for code, sector_info in sector_data.items():
+                    update_data.append({
+                        "code": code,
+                        "sector": sector_info.sector,
+                        "industry": sector_info.industry,
+                        "sector_code": sector_info.sector_code,
+                        "industry_code": sector_info.industry_code,
+                    })
+                if update_data:
+                    db.batch_update_stock_sectors(market, update_data)
+                    print(f"✓ 已更新 {len(update_data)} 只股票的板块信息")
+                
+                # 更新 stocks 列表中的板块信息
+                for stock in stocks:
+                    code = stock["code"]
+                    if code in sector_data:
+                        stock["sector"] = sector_data[code].sector
+                        stock["industry"] = sector_data[code].industry
+            except Exception as e:
+                print(f"⚠️ 批量获取板块信息失败: {e}")
 
         for stock in stocks:
             code = stock["code"]
@@ -416,7 +519,10 @@ def run_once(
                 )
                 # 即使跳过数据同步，也需要执行 EMA 突破检查
                 try:
-                    check_and_save_ema_breakout(db, market, code, today, verbose=True)
+                    check_and_save_ema_breakout(
+                        db, market, code, today, verbose=True,
+                        stock_info=stock, sector_manager=sector_manager
+                    )
                 except Exception as e:
                     print(f"  ⚠️ EMA突破检查异常: {code} - {e}")
                 continue
@@ -528,7 +634,10 @@ def run_once(
                 )
                 # 即使数据获取失败，也尝试用现有数据库数据进行 EMA 突破检查
                 try:
-                    check_and_save_ema_breakout(db, market, code, today, verbose=True)
+                    check_and_save_ema_breakout(
+                        db, market, code, today, verbose=True,
+                        stock_info=stock, sector_manager=sector_manager
+                    )
                 except Exception as e:
                     print(f"  ⚠️ EMA突破检查异常: {code} - {e}")
                 continue
@@ -548,7 +657,10 @@ def run_once(
             
             # 数据同步成功后，执行 EMA 突破策略检查并写入数据库
             try:
-                check_and_save_ema_breakout(db, market, code, today, verbose=True)
+                check_and_save_ema_breakout(
+                    db, market, code, today, verbose=True,
+                    stock_info=stock, sector_manager=sector_manager
+                )
             except Exception as e:
                 print(f"  ⚠️ EMA突破检查异常: {code} - {e}")
 
@@ -566,10 +678,11 @@ def run_once(
 
 def run_loop(
     interval_hours: int,
+    fetch_sectors: bool = True,
     **kwargs,
 ):
     while True:
-        run_once(**kwargs)
+        run_once(fetch_sectors=fetch_sectors, **kwargs)
         time.sleep(interval_hours * 3600)
 
 
@@ -581,7 +694,7 @@ def main():
     parser.add_argument("--mysql-password", default=os.getenv("MYSQL_PASSWORD", "123456"), help="MySQL Password")
     parser.add_argument("--mysql-database", default=os.getenv("MYSQL_DATABASE", "market_data"), help="MySQL Database")
     parser.add_argument("--mysql-charset", default=os.getenv("MYSQL_CHARSET", "utf8mb4"), help="MySQL Charset")
-    parser.add_argument("--markets", default="HK,US", help="市场列表: HK,US")
+    parser.add_argument("--markets", default="US", help="市场列表: HK,US,A")
     parser.add_argument("--use-futu", action="store_true", default=False, help="允许使用 Futu OpenD 作为备用数据源")
     parser.add_argument("--futu-host", default="127.0.0.1", help="Futu OpenD Host")
     parser.add_argument("--futu-port", type=int, default=11111, help="Futu OpenD Port")
@@ -590,6 +703,8 @@ def main():
     parser.add_argument("--loop", action="store_true", help="循环执行(默认单次)")
     parser.add_argument("--interval-hours", type=int, default=24, help="循环间隔小时")
     parser.add_argument("--stock-code", default=os.getenv("STOCK_CODE", ""), help="单个股票代码，例如: HK.00700 或 US.AAPL。如果提供，将只同步该股票")
+    parser.add_argument("--fetch-sectors", action="store_true", default=True, help="是否获取板块信息（默认开启）")
+    parser.add_argument("--no-fetch-sectors", action="store_false", dest="fetch_sectors", help="禁用板块信息获取")
     args = parser.parse_args()
 
     mysql = MySqlConfig(
@@ -625,6 +740,7 @@ def main():
             futu_port=args.futu_port,
             log_path=args.log,
             limit=args.limit,
+            fetch_sectors=args.fetch_sectors,
         )
     else:
         run_once(
@@ -635,6 +751,7 @@ def main():
             futu_port=args.futu_port,
             log_path=args.log,
             limit=args.limit,
+            fetch_sectors=args.fetch_sectors,
         )
 
 

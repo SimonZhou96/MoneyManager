@@ -70,7 +70,41 @@ class AKShareKlineFetcher(KlineFetcherBase):
         if code.upper().startswith('US.'):
             return code[3:]
         return code
-    
+
+    def _convert_a_code(self, stock_code: str) -> str:
+        """转换 A 股代码格式：000001.SZ / 600000.SS -> 000001 / 600000（6 位纯数字）"""
+        code = str(stock_code).strip()
+        if "." in code:
+            code = code.split(".")[0]
+        if code.isdigit() and len(code) == 6:
+            return code
+        return code.zfill(6) if code.isdigit() else code
+
+    def _try_a_methods(self, a_code: str, start_date: str, end_date: str, max_retries: int = 2) -> Optional[pd.DataFrame]:
+        """A 股 K 线获取，使用 stock_zh_a_hist"""
+        if not hasattr(self.ak, "stock_zh_a_hist"):
+            return None
+        for retry in range(max_retries):
+            try:
+                if retry > 0:
+                    time.sleep(1 + random.uniform(0, 1))
+                data = self.ak.stock_zh_a_hist(
+                    symbol=a_code,
+                    period="daily",
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjust="qfq",
+                )
+                if data is not None and len(data) > 0:
+                    normalized = self._normalize_dataframe(data, start_date, end_date)
+                    if normalized is not None and len(normalized) > 0:
+                        return normalized
+            except Exception as e:
+                if retry == max_retries - 1:
+                    print(f"✗ 获取A股{a_code}失败: {str(e)[:80]}")
+                continue
+        return None
+
     def _normalize_date_format(self, date_str: Optional[str]) -> Optional[str]:
         """转换日期格式：YYYY-MM-DD -> YYYYMMDD"""
         if date_str is None:
@@ -333,6 +367,9 @@ class AKShareKlineFetcher(KlineFetcherBase):
             if market == "HK":
                 hk_code = self._convert_hk_code(stock_code)
                 data = self._try_hk_methods(hk_code, start_date_str, end_date_str)
+            elif market == "A":
+                a_code = self._convert_a_code(stock_code)
+                data = self._try_a_methods(a_code, start_date_str, end_date_str)
             else:
                 us_code = self._convert_us_code(stock_code)
                 data = self._try_us_methods(us_code, start_date_str, end_date_str)
@@ -351,7 +388,7 @@ class AKShareKlineFetcher(KlineFetcherBase):
 
 
 class YFinanceKlineFetcher(KlineFetcherBase):
-    """YFinance K线数据获取器 - 支持港股和美股"""
+    """YFinance K线数据获取器 - 支持港股、美股、A股"""
     
     def __init__(self):
         try:
@@ -375,6 +412,15 @@ class YFinanceKlineFetcher(KlineFetcherBase):
         if stock_code.upper().startswith('US.'):
             return stock_code[3:]
         return stock_code
+
+    def _convert_a_code(self, stock_code: str) -> str:
+        """转换 A 股代码格式：000001.SZ / 600000.SS（yfinance 直接使用此格式）"""
+        code = str(stock_code).strip()
+        if "." in code:
+            return code  # 已有后缀
+        if code.isdigit() and len(code) == 6:
+            return f"{code}.SS" if code.startswith("6") else f"{code}.SZ"
+        return code
     
     def fetch(self, stock_code: str, market: str = "HK", start_date: Optional[str] = None,
               end_date: Optional[str] = None, max_count: int = 800) -> Optional[pd.DataFrame]:
@@ -385,6 +431,8 @@ class YFinanceKlineFetcher(KlineFetcherBase):
             # 转换股票代码
             if market == "HK":
                 yf_code = self._convert_hk_code(stock_code)
+            elif market == "A":
+                yf_code = self._convert_a_code(stock_code)
             else:
                 yf_code = self._convert_us_code(stock_code)
             
@@ -528,6 +576,14 @@ class FutuKlineFetcher(KlineFetcherBase):
             if code.startswith("US."):
                 return code
             return f"US.{code}"
+        elif market == "A":
+            # 富途 A 股: SH.600000 / SZ.000001
+            if code.endswith(".SS"):
+                return f"SH.{code[:-3]}"
+            if code.endswith(".SZ"):
+                return f"SZ.{code[:-3]}"
+            if code.isdigit() and len(code) == 6:
+                return f"SH.{code}" if code.startswith("6") else f"SZ.{code}"
         return code
 
     def fetch(self, stock_code: str, market: str = "HK", start_date: Optional[str] = None,

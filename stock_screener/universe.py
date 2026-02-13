@@ -36,6 +36,28 @@ def _normalize_us_code(raw_code: str) -> Optional[str]:
     return code
 
 
+def _normalize_a_code(raw_code: str) -> Optional[str]:
+    """
+    标准化 A 股代码为 6 位 + 交易所后缀
+    上交所 6xxxxx -> XXXXXX.SS，深交所 0xxxxx/3xxxxx -> XXXXXX.SZ
+    """
+    code = str(raw_code).strip()
+    if not code:
+        return None
+    # 去除已有后缀
+    if "." in code:
+        code = code.split(".")[0]
+    if not code.isdigit() or len(code) != 6:
+        return None
+    # 上交所: 6 开头
+    if code.startswith("6"):
+        return f"{code}.SS"
+    # 深交所: 0 或 3 开头
+    if code.startswith("0") or code.startswith("3"):
+        return f"{code}.SZ"
+    return None
+
+
 def fetch_stock_list_akshare(market: str) -> List[dict]:
     market = normalize_market(market)
     try:
@@ -53,6 +75,12 @@ def fetch_stock_list_akshare(market: str) -> List[dict]:
         if (data is None or len(data) == 0) and hasattr(ak, "stock_us_spot_em"):
             try:
                 data = ak.stock_us_spot_em()
+            except Exception:
+                data = None
+    elif market == "A":
+        if hasattr(ak, "stock_zh_a_spot_em"):
+            try:
+                data = ak.stock_zh_a_spot_em()
             except Exception:
                 data = None
     else:
@@ -80,6 +108,8 @@ def fetch_stock_list_akshare(market: str) -> List[dict]:
         raw_code = row[code_col]
         if market == "US":
             code = _normalize_us_code(raw_code)
+        elif market == "A":
+            code = _normalize_a_code(raw_code)
         else:
             code = _normalize_hk_code(raw_code)
         if not code:
@@ -96,8 +126,18 @@ def fetch_stock_list_futu(quote_ctx, market: str) -> List[dict]:
     except Exception:
         return []
 
-    market_enum = ft.Market.US if market == "US" else ft.Market.HK
+    market_map = {"US": ft.Market.US, "HK": ft.Market.HK, "A": ft.Market.CN}
+    market_enum = market_map.get(market, ft.Market.HK)
     ret, data = quote_ctx.get_stock_basicinfo(market=market_enum, stock_type=ft.SecurityType.STOCK)
     if ret != ft.RET_OK:
         return []
-    return data[["code", "name"]].to_dict("records")
+    records = data[["code", "name"]].to_dict("records")
+    # Futu A 股返回 SH.600000 / SZ.000001，统一为 600000.SS / 000001.SZ
+    if market == "A":
+        for r in records:
+            raw = str(r.get("code", ""))
+            if raw.startswith("SH."):
+                r["code"] = raw[3:] + ".SS"
+            elif raw.startswith("SZ."):
+                r["code"] = raw[3:] + ".SZ"
+    return records

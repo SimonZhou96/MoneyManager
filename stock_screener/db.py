@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
 import pandas as pd
 
@@ -73,13 +74,22 @@ class MarketDatabase:
                     status VARCHAR(16) NULL,
                     listing_date DATE NULL,
                     delisting_date DATE NULL,
+                    sector VARCHAR(128) NULL COMMENT '板块名称',
+                    sector_code VARCHAR(64) NULL COMMENT '板块代码',
+                    industry VARCHAR(128) NULL COMMENT '行业名称',
+                    industry_code VARCHAR(64) NULL COMMENT '行业代码',
+                    market_cap DECIMAL(28,2) NULL COMMENT '市值',
+                    pe_ratio DECIMAL(20,6) NULL COMMENT '市盈率',
+                    pb_ratio DECIMAL(20,6) NULL COMMENT '市净率',
                     source VARCHAR(32) NULL,
                     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
                     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
                     PRIMARY KEY (id),
                     UNIQUE KEY uk_stocks_market_code (market, code),
                     KEY idx_stocks_market (market),
-                    KEY idx_stocks_code (code)
+                    KEY idx_stocks_code (code),
+                    KEY idx_stocks_sector (sector),
+                    KEY idx_stocks_industry (industry)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
@@ -119,6 +129,7 @@ class MarketDatabase:
                     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
                     market VARCHAR(8) NOT NULL COMMENT '市场（HK/US）',
                     code VARCHAR(32) NOT NULL COMMENT '股票代码',
+                    name VARCHAR(255) NULL COMMENT '股票名称',
                     check_date DATE NOT NULL COMMENT '检查日期（执行策略判断的日期）',
                     result_type VARCHAR(32) NOT NULL COMMENT '结果类型枚举值',
                     is_satisfied TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否满足突破条件',
@@ -128,6 +139,10 @@ class MarketDatabase:
                     close_price DECIMAL(20,6) NULL COMMENT '最新收盘价',
                     data_rows INT NULL COMMENT '用于计算的K线数据行数',
                     result_desc VARCHAR(255) NULL COMMENT '结果描述',
+                    sector VARCHAR(128) NULL COMMENT '板块名称',
+                    industry VARCHAR(128) NULL COMMENT '行业名称',
+                    market_cap DECIMAL(28,2) NULL COMMENT '市值',
+                    pe_ratio DECIMAL(20,6) NULL COMMENT '市盈率',
                     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
                     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
                     PRIMARY KEY (id),
@@ -135,8 +150,37 @@ class MarketDatabase:
                     KEY idx_ema_check_date (check_date),
                     KEY idx_ema_result_type (result_type),
                     KEY idx_ema_is_satisfied (is_satisfied),
-                    KEY idx_ema_market_date (market, check_date)
+                    KEY idx_ema_market_date (market, check_date),
+                    KEY idx_ema_sector (sector),
+                    KEY idx_ema_industry (industry)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='EMA突破策略信号记录表'
+                """
+            )
+            # 筛选结果表：记录每只股票的筛选器链执行结果
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS screening_results (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    market VARCHAR(8) NOT NULL COMMENT '市场（HK/US）',
+                    code VARCHAR(32) NOT NULL COMMENT '股票代码',
+                    name VARCHAR(255) NULL COMMENT '股票名称',
+                    check_date DATE NOT NULL COMMENT '筛选日期',
+                    is_passed TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否通过所有筛选条件',
+                    filter_summary VARCHAR(512) NULL COMMENT '筛选结果摘要',
+                    filter_details JSON NULL COMMENT '各筛选器详细结果(JSON)',
+                    sector VARCHAR(128) NULL COMMENT '板块名称',
+                    industry VARCHAR(128) NULL COMMENT '行业名称',
+                    market_cap DECIMAL(28,2) NULL COMMENT '市值',
+                    pe_ratio DECIMAL(20,6) NULL COMMENT '市盈率',
+                    close_price DECIMAL(20,6) NULL COMMENT '最新收盘价',
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_screening_market_code_date (market, code, check_date),
+                    KEY idx_screening_check_date (check_date),
+                    KEY idx_screening_is_passed (is_passed),
+                    KEY idx_screening_market_date (market, check_date)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='股票筛选结果记录表'
                 """
             )
 
@@ -160,6 +204,13 @@ class MarketDatabase:
                     item.get("status"),
                     item.get("listing_date"),
                     item.get("delisting_date"),
+                    item.get("sector"),
+                    item.get("sector_code"),
+                    item.get("industry"),
+                    item.get("industry_code"),
+                    item.get("market_cap"),
+                    item.get("pe_ratio"),
+                    item.get("pb_ratio"),
                     source or item.get("source"),
                 )
             )
@@ -169,9 +220,10 @@ class MarketDatabase:
 
         sql = """
             INSERT INTO stocks
-                (market, code, name, exchange, currency, lot_size, status, listing_date, delisting_date, source)
+                (market, code, name, exchange, currency, lot_size, status, listing_date, delisting_date,
+                 sector, sector_code, industry, industry_code, market_cap, pe_ratio, pb_ratio, source)
             VALUES
-                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 name=VALUES(name),
                 exchange=VALUES(exchange),
@@ -180,19 +232,52 @@ class MarketDatabase:
                 status=VALUES(status),
                 listing_date=VALUES(listing_date),
                 delisting_date=VALUES(delisting_date),
+                sector=COALESCE(VALUES(sector), sector),
+                sector_code=COALESCE(VALUES(sector_code), sector_code),
+                industry=COALESCE(VALUES(industry), industry),
+                industry_code=COALESCE(VALUES(industry_code), industry_code),
+                market_cap=COALESCE(VALUES(market_cap), market_cap),
+                pe_ratio=COALESCE(VALUES(pe_ratio), pe_ratio),
+                pb_ratio=COALESCE(VALUES(pb_ratio), pb_ratio),
                 source=VALUES(source)
         """
         with self.conn.cursor() as cursor:
             cursor.executemany(sql, rows)
 
-    def get_stocks(self, market: str) -> List[dict]:
+    def get_stocks(self, market: str, include_fundamentals: bool = False) -> List[dict]:
         with self.conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT code, name FROM stocks WHERE market=%s ORDER BY code",
-                (market,),
-            )
-            rows = cursor.fetchall() or []
-            return [{"code": row[0], "name": row[1]} for row in rows]
+            if include_fundamentals:
+                cursor.execute(
+                    """SELECT code, name, sector, sector_code, industry, industry_code, 
+                              market_cap, pe_ratio, pb_ratio 
+                       FROM stocks WHERE market=%s ORDER BY code""",
+                    (market,),
+                )
+                rows = cursor.fetchall() or []
+                return [
+                    {
+                        "code": row[0],
+                        "name": row[1],
+                        "sector": row[2],
+                        "sector_code": row[3],
+                        "industry": row[4],
+                        "industry_code": row[5],
+                        "market_cap": float(row[6]) if row[6] else None,
+                        "pe_ratio": float(row[7]) if row[7] else None,
+                        "pb_ratio": float(row[8]) if row[8] else None,
+                    }
+                    for row in rows
+                ]
+            else:
+                cursor.execute(
+                    "SELECT code, name, sector, industry FROM stocks WHERE market=%s ORDER BY code",
+                    (market,),
+                )
+                rows = cursor.fetchall() or []
+                return [
+                    {"code": row[0], "name": row[1], "sector": row[2], "industry": row[3]}
+                    for row in rows
+                ]
 
     def last_kline_date(self, market: str, code: str, adj_type: str = "qfq") -> Optional[str]:
         with self.conn.cursor() as cursor:
@@ -353,6 +438,11 @@ class MarketDatabase:
         close_price: Optional[float] = None,
         data_rows: Optional[int] = None,
         result_desc: Optional[str] = None,
+        name: Optional[str] = None,
+        sector: Optional[str] = None,
+        industry: Optional[str] = None,
+        market_cap: Optional[float] = None,
+        pe_ratio: Optional[float] = None,
     ):
         """
         插入或更新 EMA 突破信号记录
@@ -369,14 +459,21 @@ class MarketDatabase:
             close_price: 最新收盘价
             data_rows: 用于计算的 K 线数据行数
             result_desc: 结果描述
+            name: 股票名称
+            sector: 板块名称
+            industry: 行业名称
+            market_cap: 市值
+            pe_ratio: 市盈率
         """
         sql = """
             INSERT INTO ema_breakout_signals
-                (market, code, check_date, result_type, is_satisfied, 
-                 breakout_date, ema10, ema150, close_price, data_rows, result_desc)
+                (market, code, name, check_date, result_type, is_satisfied, 
+                 breakout_date, ema10, ema150, close_price, data_rows, result_desc,
+                 sector, industry, market_cap, pe_ratio)
             VALUES
-                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
+                name=COALESCE(VALUES(name), name),
                 result_type=VALUES(result_type),
                 is_satisfied=VALUES(is_satisfied),
                 breakout_date=VALUES(breakout_date),
@@ -384,7 +481,11 @@ class MarketDatabase:
                 ema150=VALUES(ema150),
                 close_price=VALUES(close_price),
                 data_rows=VALUES(data_rows),
-                result_desc=VALUES(result_desc)
+                result_desc=VALUES(result_desc),
+                sector=COALESCE(VALUES(sector), sector),
+                industry=COALESCE(VALUES(industry), industry),
+                market_cap=COALESCE(VALUES(market_cap), market_cap),
+                pe_ratio=COALESCE(VALUES(pe_ratio), pe_ratio)
         """
         with self.conn.cursor() as cursor:
             cursor.execute(
@@ -392,6 +493,7 @@ class MarketDatabase:
                 (
                     market,
                     code,
+                    name,
                     check_date,
                     result_type,
                     1 if is_satisfied else 0,
@@ -401,6 +503,10 @@ class MarketDatabase:
                     close_price,
                     data_rows,
                     result_desc,
+                    sector,
+                    industry,
+                    market_cap,
+                    pe_ratio,
                 ),
             )
 
@@ -409,6 +515,8 @@ class MarketDatabase:
         market: Optional[str] = None,
         check_date: Optional[date] = None,
         is_satisfied: Optional[bool] = None,
+        sector: Optional[str] = None,
+        industry: Optional[str] = None,
         limit: int = 100,
     ) -> List[dict]:
         """
@@ -418,12 +526,17 @@ class MarketDatabase:
             market: 市场（可选）
             check_date: 检查日期（可选）
             is_satisfied: 是否满足条件（可选）
+            sector: 板块过滤（可选）
+            industry: 行业过滤（可选）
             limit: 最大返回数量
             
         Returns:
             信号记录列表
         """
-        query = "SELECT market, code, check_date, result_type, is_satisfied, breakout_date, ema10, ema150, close_price, data_rows, result_desc FROM ema_breakout_signals WHERE 1=1"
+        query = """SELECT market, code, name, check_date, result_type, is_satisfied, breakout_date, 
+                          ema10, ema150, close_price, data_rows, result_desc, sector, industry, 
+                          market_cap, pe_ratio 
+                   FROM ema_breakout_signals WHERE 1=1"""
         params = []
         
         if market:
@@ -435,6 +548,12 @@ class MarketDatabase:
         if is_satisfied is not None:
             query += " AND is_satisfied=%s"
             params.append(1 if is_satisfied else 0)
+        if sector:
+            query += " AND sector=%s"
+            params.append(sector)
+        if industry:
+            query += " AND industry=%s"
+            params.append(industry)
         
         query += " ORDER BY check_date DESC, market, code LIMIT %s"
         params.append(limit)
@@ -446,15 +565,234 @@ class MarketDatabase:
                 {
                     "market": row[0],
                     "code": row[1],
-                    "check_date": row[2],
-                    "result_type": row[3],
-                    "is_satisfied": bool(row[4]),
-                    "breakout_date": row[5],
-                    "ema10": float(row[6]) if row[6] else None,
-                    "ema150": float(row[7]) if row[7] else None,
-                    "close_price": float(row[8]) if row[8] else None,
-                    "data_rows": row[9],
-                    "result_desc": row[10],
+                    "name": row[2],
+                    "check_date": row[3],
+                    "result_type": row[4],
+                    "is_satisfied": bool(row[5]),
+                    "breakout_date": row[6],
+                    "ema10": float(row[7]) if row[7] else None,
+                    "ema150": float(row[8]) if row[8] else None,
+                    "close_price": float(row[9]) if row[9] else None,
+                    "data_rows": row[10],
+                    "result_desc": row[11],
+                    "sector": row[12],
+                    "industry": row[13],
+                    "market_cap": float(row[14]) if row[14] else None,
+                    "pe_ratio": float(row[15]) if row[15] else None,
                 }
                 for row in rows
             ]
+
+    def upsert_screening_results(
+        self,
+        check_date: date,
+        results: Iterable[dict],
+    ):
+        """
+        批量插入或更新筛选结果
+
+        Args:
+            check_date: 筛选日期
+            results: 筛选结果列表，每项需包含: market, code, name, is_passed,
+                     filter_summary, filter_details(dict/JSON), sector, industry,
+                     market_cap, pe_ratio, close_price
+        """
+        rows = []
+        for item in results:
+            filter_details = item.get("filter_details")
+            if isinstance(filter_details, dict):
+                filter_details_str = json.dumps(filter_details, ensure_ascii=False)
+            elif isinstance(filter_details, str):
+                filter_details_str = filter_details
+            else:
+                filter_details_str = None
+            rows.append(
+                (
+                    item.get("market"),
+                    str(item.get("code") or "").strip(),
+                    item.get("name"),
+                    check_date,
+                    1 if item.get("is_passed") else 0,
+                    item.get("filter_summary"),
+                    filter_details_str,
+                    item.get("sector"),
+                    item.get("industry"),
+                    item.get("market_cap"),
+                    item.get("pe_ratio"),
+                    item.get("close_price"),
+                )
+            )
+        rows = [r for r in rows if r[1]]
+        if not rows:
+            return
+        sql = """
+            INSERT INTO screening_results
+                (market, code, name, check_date, is_passed, filter_summary, filter_details,
+                 sector, industry, market_cap, pe_ratio, close_price)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                name=VALUES(name),
+                is_passed=VALUES(is_passed),
+                filter_summary=VALUES(filter_summary),
+                filter_details=VALUES(filter_details),
+                sector=VALUES(sector),
+                industry=VALUES(industry),
+                market_cap=VALUES(market_cap),
+                pe_ratio=VALUES(pe_ratio),
+                close_price=VALUES(close_price)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.executemany(sql, rows)
+
+    def update_stock_sector(
+        self,
+        market: str,
+        code: str,
+        sector: Optional[str] = None,
+        sector_code: Optional[str] = None,
+        industry: Optional[str] = None,
+        industry_code: Optional[str] = None,
+    ):
+        """
+        更新股票的板块/行业信息
+        
+        Args:
+            market: 市场
+            code: 股票代码
+            sector: 板块名称
+            sector_code: 板块代码
+            industry: 行业名称
+            industry_code: 行业代码
+        """
+        sql = """
+            UPDATE stocks SET
+                sector=COALESCE(%s, sector),
+                sector_code=COALESCE(%s, sector_code),
+                industry=COALESCE(%s, industry),
+                industry_code=COALESCE(%s, industry_code)
+            WHERE market=%s AND code=%s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (sector, sector_code, industry, industry_code, market, code))
+
+    def update_stock_fundamentals(
+        self,
+        market: str,
+        code: str,
+        market_cap: Optional[float] = None,
+        pe_ratio: Optional[float] = None,
+        pb_ratio: Optional[float] = None,
+    ):
+        """
+        更新股票的基本面数据
+        
+        Args:
+            market: 市场
+            code: 股票代码
+            market_cap: 市值
+            pe_ratio: 市盈率
+            pb_ratio: 市净率
+        """
+        sql = """
+            UPDATE stocks SET
+                market_cap=COALESCE(%s, market_cap),
+                pe_ratio=COALESCE(%s, pe_ratio),
+                pb_ratio=COALESCE(%s, pb_ratio)
+            WHERE market=%s AND code=%s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (market_cap, pe_ratio, pb_ratio, market, code))
+
+    def batch_update_stock_sectors(
+        self,
+        market: str,
+        sector_data: Iterable[dict],
+    ):
+        """
+        批量更新股票板块信息
+        
+        Args:
+            market: 市场
+            sector_data: 板块数据列表 [{"code": "...", "sector": "...", "industry": "..."}, ...]
+        """
+        rows = []
+        for item in sector_data:
+            code = str(item.get("code") or "").strip()
+            if not code:
+                continue
+            rows.append((
+                item.get("sector"),
+                item.get("sector_code"),
+                item.get("industry"),
+                item.get("industry_code"),
+                market,
+                code,
+            ))
+        
+        if not rows:
+            return
+        
+        sql = """
+            UPDATE stocks SET
+                sector=COALESCE(%s, sector),
+                sector_code=COALESCE(%s, sector_code),
+                industry=COALESCE(%s, industry),
+                industry_code=COALESCE(%s, industry_code)
+            WHERE market=%s AND code=%s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.executemany(sql, rows)
+
+    def migrate_add_sector_columns(self):
+        """
+        数据库迁移：为现有表添加板块相关列
+        
+        此方法用于在已有表结构上添加新列，可以安全地多次执行（幂等）。
+        """
+        alter_statements = [
+            # stocks 表新增列
+            ("stocks", "sector", "ALTER TABLE stocks ADD COLUMN sector VARCHAR(128) NULL COMMENT '板块名称' AFTER delisting_date"),
+            ("stocks", "sector_code", "ALTER TABLE stocks ADD COLUMN sector_code VARCHAR(64) NULL COMMENT '板块代码' AFTER sector"),
+            ("stocks", "industry", "ALTER TABLE stocks ADD COLUMN industry VARCHAR(128) NULL COMMENT '行业名称' AFTER sector_code"),
+            ("stocks", "industry_code", "ALTER TABLE stocks ADD COLUMN industry_code VARCHAR(64) NULL COMMENT '行业代码' AFTER industry"),
+            ("stocks", "market_cap", "ALTER TABLE stocks ADD COLUMN market_cap DECIMAL(28,2) NULL COMMENT '市值' AFTER industry_code"),
+            ("stocks", "pe_ratio", "ALTER TABLE stocks ADD COLUMN pe_ratio DECIMAL(20,6) NULL COMMENT '市盈率' AFTER market_cap"),
+            ("stocks", "pb_ratio", "ALTER TABLE stocks ADD COLUMN pb_ratio DECIMAL(20,6) NULL COMMENT '市净率' AFTER pe_ratio"),
+            # ema_breakout_signals 表新增列
+            ("ema_breakout_signals", "name", "ALTER TABLE ema_breakout_signals ADD COLUMN name VARCHAR(255) NULL COMMENT '股票名称' AFTER code"),
+            ("ema_breakout_signals", "sector", "ALTER TABLE ema_breakout_signals ADD COLUMN sector VARCHAR(128) NULL COMMENT '板块名称' AFTER result_desc"),
+            ("ema_breakout_signals", "industry", "ALTER TABLE ema_breakout_signals ADD COLUMN industry VARCHAR(128) NULL COMMENT '行业名称' AFTER sector"),
+            ("ema_breakout_signals", "market_cap", "ALTER TABLE ema_breakout_signals ADD COLUMN market_cap DECIMAL(28,2) NULL COMMENT '市值' AFTER industry"),
+            ("ema_breakout_signals", "pe_ratio", "ALTER TABLE ema_breakout_signals ADD COLUMN pe_ratio DECIMAL(20,6) NULL COMMENT '市盈率' AFTER market_cap"),
+        ]
+        
+        # 添加索引
+        index_statements = [
+            ("stocks", "idx_stocks_sector", "ALTER TABLE stocks ADD INDEX idx_stocks_sector (sector)"),
+            ("stocks", "idx_stocks_industry", "ALTER TABLE stocks ADD INDEX idx_stocks_industry (industry)"),
+            ("ema_breakout_signals", "idx_ema_sector", "ALTER TABLE ema_breakout_signals ADD INDEX idx_ema_sector (sector)"),
+            ("ema_breakout_signals", "idx_ema_industry", "ALTER TABLE ema_breakout_signals ADD INDEX idx_ema_industry (industry)"),
+        ]
+        
+        with self.conn.cursor() as cursor:
+            # 检查并添加列
+            for table, column, alter_sql in alter_statements:
+                try:
+                    cursor.execute(f"SELECT {column} FROM {table} LIMIT 1")
+                except Exception:
+                    # 列不存在，添加它
+                    try:
+                        cursor.execute(alter_sql)
+                        print(f"✓ 添加列: {table}.{column}")
+                    except Exception as e:
+                        print(f"⚠️ 添加列失败: {table}.{column} - {e}")
+            
+            # 检查并添加索引
+            for table, index_name, index_sql in index_statements:
+                try:
+                    cursor.execute(f"SHOW INDEX FROM {table} WHERE Key_name = %s", (index_name,))
+                    if not cursor.fetchone():
+                        cursor.execute(index_sql)
+                        print(f"✓ 添加索引: {table}.{index_name}")
+                except Exception as e:
+                    print(f"⚠️ 添加索引失败: {table}.{index_name} - {e}")

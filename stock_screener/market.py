@@ -1,6 +1,7 @@
 MARKET_CONFIG = {
     "HK": {"label": "港股"},
     "US": {"label": "美股"},
+    "A": {"label": "A股"},
 }
 
 

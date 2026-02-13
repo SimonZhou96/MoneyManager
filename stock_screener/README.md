@@ -1,341 +1,331 @@
-# 港股/美股股票筛选器
+# MoneyManager 股票筛选器
 
-基于EMA10向上突破EMA150策略的港股/美股筛选工具，并支持每日数据入库任务。
+基于 EMA10 向上突破 EMA150 策略的多市场股票筛选系统，支持港股、美股、A 股。支持每日数据入库、多维度筛选、K 线绘图。
+
+---
+
+## 目录
+
+- [功能特性](#功能特性)
+- [环境要求](#环境要求)
+- [从零开始部署](#从零开始部署)
+- [配置说明](#配置说明)
+- [使用方式](#使用方式)
+- [文件结构](#文件结构)
+- [常见问题](#常见问题)
+
+---
 
 ## 功能特性
 
-1. **自动筛选**：筛选EMA10刚刚向上突破EMA150的港股/美股
-2. **多数据源支持**：优先使用 AKShare，Futu OpenD 可选
-3. **智能缓存**：K线数据自动缓存到本地文件，避免重复获取
-4. **图表展示**：双击股票可查看详细K线图和技术指标
-5. **技术指标**：显示EMA10、EMA150、HMA40、HMA200、HMA600
-6. **详细日志**：显示每只股票的处理过程和筛选结果
-7. **每日入库**：支持港股/美股股票列表与K线历史入库
+| 功能 | 说明 |
+|------|------|
+| **多市场** | 港股 (HK)、美股 (US)、A 股 (A) |
+| **EMA 突破筛选** | EMA10 向上突破 EMA150（T-1 或 T-2 突破） |
+| **多维度筛选** | 市值、PE、板块、换手率、成交量等 |
+| **多数据源** | AKShare（主）→ YFinance → Futu OpenD（可选） |
+| **MySQL 持久化** | 股票列表、K 线、EMA 信号、筛选结果入库 |
+| **增量同步** | 仅拉取缺失日期，支持本地缓存 |
+| **K 线绘图** | 从数据库查询并绘制 K 线图 |
 
-## 安装依赖
+---
+
+## 环境要求
+
+| 项目 | 要求 |
+|------|------|
+| Python | 3.10+ |
+| MySQL | 5.7+ 或 8.0+ |
+| 网络 | 可访问东方财富等数据源（AKShare） |
+| 可选 | Futu OpenD（富途牛牛 + OpenD 服务） |
+
+---
+
+## 从零开始部署
+
+### 第一步：克隆代码
+
+```bash
+git clone https://github.com/your-org/MoneyManager.git
+cd MoneyManager/stock_screener
+```
+
+### 第二步：创建 Python 虚拟环境（推荐）
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate   # Linux/macOS
+# 或 Windows: .venv\Scripts\activate
+```
+
+### 第三步：安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**新增依赖**：
-- `akshare`：用于港股/美股K线数据获取（主数据源）
-- `pyarrow`：用于高效的parquet格式缓存（可选，如果不可用会自动使用CSV）
+主要依赖：`akshare`、`pandas`、`PyMySQL`、`pyarrow`、`matplotlib` 等。
 
-## 使用前准备
+### 第四步：准备 MySQL 数据库
 
-1. **安装FutuOpenD**（可选）
-   - 下载并安装富途牛牛客户端
-   - 在设置中开启OpenD服务
-   - 确保OpenD正在运行（默认端口11111）
-   - 登录账户
+1. **安装 MySQL**（若未安装）：
+   - macOS: `brew install mysql` 或从官网下载
+   - Linux: `apt install mysql-server` / `yum install mysql-server`
+   - Windows: 从 [MySQL 官网](https://dev.mysql.com/downloads/mysql/) 下载安装
 
-2. **安装AKShare**（主数据源）
-   ```bash
-   pip install akshare
-   ```
+2. **创建数据库和用户**：
 
-## 运行程序
+```sql
+-- 登录 MySQL
+mysql -u root -p
+
+-- 创建数据库
+CREATE DATABASE market_data CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- 创建用户（可选，推荐不用 root）
+CREATE USER 'market_user'@'%' IDENTIFIED BY 'your_password';
+GRANT ALL PRIVILEGES ON market_data.* TO 'market_user'@'%';
+FLUSH PRIVILEGES;
+```
+
+3. **表结构**：首次运行 `daily_job.py` 时会自动创建 `stocks`、`kline_daily`、`ema_breakout_signals`、`screening_results` 等表，无需手动建表。
+
+### 第五步：首次运行（单次同步）
+
+```bash
+# 同步港股（限制 10 只，用于验证）
+python daily_job.py --markets HK --limit 10 --mysql-password your_password
+
+# 同步美股
+python daily_job.py --markets US --limit 10 --mysql-password your_password
+
+# 同步 A 股
+python daily_job.py --markets A --limit 10 --mysql-password your_password
+```
+
+若输出正常，说明部署成功。
+
+### 第六步：执行筛选
+
+```bash
+# 筛选港股（EMA 突破）
+python screen_with_filters.py --market HK --use-ema --mysql-password your_password
+
+# 筛选 A 股，并限制 PE 0-50
+python screen_with_filters.py --market A --use-ema --min-pe 0 --max-pe 50 --mysql-password your_password
+```
+
+### 第七步：绘制 K 线图（可选）
+
+```bash
+python plot_kline.py HK.00700 --mysql-password your_password
+python plot_kline.py 000001.SZ --mysql-password your_password
+```
+
+---
+
+## 配置说明
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MYSQL_HOST` | 127.0.0.1 | MySQL 主机 |
+| `MYSQL_PORT` | 3306 | MySQL 端口 |
+| `MYSQL_USER` | root | MySQL 用户名 |
+| `MYSQL_PASSWORD` | 123456 | MySQL 密码 |
+| `MYSQL_DATABASE` | market_data | 数据库名 |
+
+可通过环境变量或命令行参数传入，命令行优先。
+
+### 命令行参数（daily_job.py）
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--markets` | US | 市场列表：HK,US,A |
+| `--limit` | 无 | 限制股票数量（测试用） |
+| `--loop` | 否 | 是否循环执行 |
+| `--interval-hours` | 24 | 循环间隔（小时） |
+| `--use-futu` | 否 | 启用 Futu OpenD 作为备用数据源 |
+| `--stock-code` | 无 | 仅同步单只股票，如 HK.00700、000001.SZ |
+
+### 股票代码格式
+
+| 市场 | 格式 | 示例 |
+|------|------|------|
+| 港股 | HK.XXXXX | HK.00700 |
+| 美股 | US.XXXX 或 XXXX | US.AAPL、AAPL |
+| A 股（上交所） | XXXXXX.SS | 600000.SS |
+| A 股（深交所） | XXXXXX.SZ | 000001.SZ |
+
+---
+
+## 使用方式
+
+### 1. 每日数据同步（推荐定时任务）
+
+```bash
+# 单次执行
+python daily_job.py --markets HK,US,A --mysql-password your_password --log logs/daily_sync.jsonl
+
+# 循环执行（每 24 小时）
+python daily_job.py --markets HK,US,A --mysql-password your_password --log logs/daily_sync.jsonl --loop
+```
+
+### 2. 单只股票同步
+
+```bash
+python daily_job.py --stock-code HK.00700 --mysql-password your_password
+python daily_job.py --stock-code 000001.SZ --mysql-password your_password
+```
+
+### 3. 筛选器（screen_with_filters.py）
+
+```bash
+# 仅 EMA 突破
+python screen_with_filters.py --market HK --use-ema
+
+# EMA + 市值 + PE
+python screen_with_filters.py --market A --use-ema --min-market-cap 1e9 --min-pe 0 --max-pe 50
+
+# 股票池预筛 + 筛选
+python screen_with_filters.py --market HK --use-ema --universe-min-cap 5e8 --universe-max-pe 30
+```
+
+### 4. GUI 模式（main.py）
 
 ```bash
 python main.py
 ```
 
-### 命令行模式（无 GUI 环境）
+选择市场后点击「开始筛选」，支持双击查看 K 线图。
 
-```bash
-python main.py --cli --output filtered_results.csv
-```
-
-可选输出结构化日志（JSON Lines）：
-
-```bash
-python main.py --cli --output filtered_results.csv --log output/screen_log_2026-01-27.jsonl
-```
-
-如果不提供 `--log`，默认输出到 `output/screen_log_{MARKET}_YYYY-MM-DD.jsonl`。
-
-选择市场：
+### 5. 命令行模式（无 GUI）
 
 ```bash
 python main.py --cli --market HK --output filtered_results.csv
-python main.py --cli --market US --output filtered_results.csv
 ```
 
-## 每日数据入库任务
+---
 
-使用 `daily_job.py` 将股票列表和K线历史写入 MySQL，默认每天执行一次即可。
+## Docker / Podman 部署
 
-### 单股票同步模式
+### 构建镜像
 
-同步单个股票的近5年K线数据：
-
-```bash
-# 同步港股
-python daily_job.py --stock-code HK.00700 --mysql-password your_password
-
-# 同步美股
-python daily_job.py --stock-code US.AAPL --mysql-password your_password
-```
-
-功能说明：
-- 如果股票不在 `stocks` 表中，会自动获取并插入股票信息
-- 自动获取近5年的K线数据并存储到 `kline_daily` 表
-- 支持使用缓存数据（如果可用）
-- 优先使用 AKShare，失败时使用 Futu OpenD（如果启用）
-
-## K线图绘制工具
-
-使用 `plot_kline.py` 从数据库查询并绘制股票K线图。
-
-### 基本使用
-
-```bash
-# 绘制港股K线图
-python plot_kline.py HK.00700 --mysql-password your_password
-
-# 绘制美股K线图
-python plot_kline.py US.AAPL --mysql-password your_password
-```
-
-### 高级选项
-
-```bash
-# 指定日期范围
-python plot_kline.py HK.00700 \
-  --start-date 2024-01-01 \
-  --end-date 2024-12-31 \
-  --mysql-password your_password
-
-# 不显示成交量
-python plot_kline.py HK.00700 --no-volume --mysql-password your_password
-
-# 保存图表到文件
-python plot_kline.py HK.00700 \
-  --save output/kline_HK.00700.png \
-  --mysql-password your_password
-```
-
-### 功能特性
-
-- 📊 **专业K线图**：绘制标准的蜡烛图（红涨绿跌）
-- 📈 **成交量显示**：下方显示成交量柱状图（可选）
-- 📅 **日期范围**：支持指定开始和结束日期
-- 💾 **保存功能**：支持保存为PNG图片文件
-- 🎨 **美观界面**：自动显示价格统计信息（最高/最低/最新收盘价）
-
-### 数据库要求
-
-- **MySQL 版本**：支持 MySQL 5.7+ 和 MySQL 8.0+
-- **字符集**：推荐使用 `utf8mb4`
-- **认证方法**：
-  - MySQL 5.7：默认使用 `mysql_native_password`（无需额外配置）
-  - MySQL 8.0+：默认使用 `caching_sha2_password`（需要 `cryptography` 包，已包含在依赖中）
-
-### 本地运行
-
-```bash
-python daily_job.py --markets HK,US --mysql-host 127.0.0.1 --mysql-user root --mysql-password your_password --log logs/daily_sync.jsonl
-```
-
-如果仅运行一次可不加 `--loop`；若希望自动循环执行：
-
-```bash
-python daily_job.py --markets HK,US --mysql-host 127.0.0.1 --mysql-user root --mysql-password your_password --log logs/daily_sync.jsonl --loop
-```
-
-### Docker/Podman 部署
-
-#### 1. 构建镜像
-
-**使用 Docker：**
 ```bash
 cd stock_screener
 docker build -t stock-screener:latest .
+# 或: podman build -t stock-screener:latest .
 ```
 
-**使用 Podman：**
-```bash
-cd stock_screener
-podman build -t stock-screener:latest .
-```
+### 运行容器
 
-#### 2. 运行容器
-
-**基本运行（单次执行）：**
 ```bash
-# Docker
+# 单次执行
 docker run --rm \
   -v $(pwd)/logs:/app/logs \
-  -e MYSQL_HOST=your_mysql_host \
-  -e MYSQL_PORT=3306 \
-  -e MYSQL_USER=root \
+  -e MYSQL_HOST=host.docker.internal \
   -e MYSQL_PASSWORD=your_password \
-  -e MYSQL_DATABASE=market_data \
   stock-screener:latest
 
-# Podman
-podman run --rm \
+# 循环执行（后台）
+docker run -d --name stock-screener \
   -v $(pwd)/logs:/app/logs \
-  -e MYSQL_HOST=your_mysql_host \
-  -e MYSQL_PORT=3306 \
-  -e MYSQL_USER=root \
+  -e MYSQL_HOST=host.docker.internal \
   -e MYSQL_PASSWORD=your_password \
-  -e MYSQL_DATABASE=market_data \
+  -e MARKETS=HK,US,A \
   stock-screener:latest
 ```
 
-**循环执行（推荐用于生产环境）：**
+### 使用 deploy.sh（Podman）
+
 ```bash
-# Podman（循环执行，每24小时执行一次）
-podman run -d --name stock-screener \
-  -v $(pwd)/logs:/app/logs \
-  -e MYSQL_HOST=your_mysql_host \
-  -e MYSQL_PORT=3306 \
-  -e MYSQL_USER=root \
-  -e MYSQL_PASSWORD=your_password \
-  -e MYSQL_DATABASE=market_data \
-  stock-screener:latest
+# 构建
+MYSQL_PASSWORD=your_password ./deploy.sh build
+
+# 运行
+MYSQL_PASSWORD=your_password ./deploy.sh run
+
+# 查看日志
+./deploy.sh logs
+
+# 停止
+./deploy.sh stop
 ```
 
-**自定义参数运行：**
-```bash
-# Podman（覆盖默认参数）
-podman run --rm \
-  -v $(pwd)/logs:/app/logs \
-  -e MYSQL_HOST=your_mysql_host \
-  -e MYSQL_USER=root \
-  -e MYSQL_PASSWORD=your_password \
-  stock-screener:latest \
-  python daily_job.py \
-    --markets HK \
-    --mysql-host your_mysql_host \
-    --mysql-user root \
-    --mysql-password your_password \
-    --log logs/daily_sync.jsonl \
-    --loop \
-    --interval-hours 12
-```
-
-**如果 MySQL 在宿主机上，需要连接宿主机网络：**
-```bash
-# Podman（连接到宿主机网络）
-podman run --rm \
-  --network host \
-  -v $(pwd)/logs:/app/logs \
-  -e MYSQL_HOST=127.0.0.1 \
-  -e MYSQL_USER=root \
-  -e MYSQL_PASSWORD=your_password \
-  stock-screener:latest
-```
-
-**查看日志：**
-```bash
-# 查看运行中的容器日志
-podman logs -f stock-screener
-
-# 查看挂载的日志文件
-tail -f logs/daily_sync.jsonl
-```
-
-**停止和删除容器：**
-```bash
-# 停止容器
-podman stop stock-screener
-
-# 删除容器
-podman rm stock-screener
-```
-
-**注意：** 
-- 如果使用 IDE（如 Cursor/VS Code）的 Docker 扩展来构建，但实际使用的是 Podman，建议直接在终端使用 `podman build` 命令
-- MySQL 密码建议使用环境变量文件（`.env`）或 Podman secrets 管理，避免在命令行中暴露
-- 如果 MySQL 在容器中运行，可以使用 `--network` 参数连接同一网络，或使用容器名称作为主机名
-- **MySQL 版本兼容性**：支持 MySQL 5.7 和 MySQL 8.0+，`cryptography` 包已包含以支持所有认证方法
-
-## 使用说明
-
-1. 启动程序后，选择市场（HK/US），点击"开始筛选"按钮
-2. 程序会自动：
-   - 获取所选市场的股票列表（带缓存）
-   - 对每只股票获取历史K线数据：
-     - 优先从本地缓存读取（如果存在且是最新的）
-  - 如果缓存不存在或过期，优先使用 AKShare 获取
-  - 如果 AKShare 失败，再尝试使用 Futu OpenD 获取（若已连接）
-     - 获取成功后自动保存到缓存
-   - 计算技术指标（EMA10、EMA150、HMA等）
-   - 筛选符合条件的股票
-3. 结果直接显示在表格中
-4. 双击任意股票可查看详细图表
-
-## 筛选条件
-
-- EMA10在前一个交易日 < EMA150
-- EMA10在当前交易日 > EMA150（严格大于，表示向上突破）
-- 需要至少150个交易日的历史数据
-
-## 技术指标说明
-
-- **EMA10/EMA150**：指数移动平均线
-- **HMA40/200/600**：Hull移动平均线
-- 所有指标基于前复权价格计算
-
-## 缓存机制
-
-### K线数据缓存
-- **位置**：`cache/kline_data/` 目录
-- **格式**：Parquet格式（优先）或CSV格式（fallback）
-- **刷新策略**：
-  - 如果缓存数据的最新日期是今天或昨天，直接使用缓存
-  - 否则重新获取数据并更新缓存
-- **文件命名**：`{市场}_{股票代码}.parquet` 或 `{市场}_{股票代码}.csv`
-  - 例如：`HK_00700.parquet`、`US_AAPL.parquet`
-
-### 股票列表缓存
-- **位置**：`cache/hk_stocks.json` 或 `cache/us_stocks.json`
-- **刷新策略**：按天刷新
-
-### 筛选结果缓存
-- **位置**：`cache/hk_filtered_results.json` 或 `cache/us_filtered_results.json`
-- **刷新策略**：按天刷新
-
-## 数据源优先级
-
-1. **本地缓存**（最快）
-2. **AKShare**（优先）
-3. **富途API**（可选 fallback）
-
-## 注意事项
-
-- 首次运行可能需要较长时间（需要获取大量股票数据）
-- 建议在网络稳定的环境下运行
-- 富途API有额度限制（60次/30秒），程序会自动限流
-- 即使未连接 OpenD，程序也可以使用 AKShare 正常运行
-- K线数据会自动缓存，避免重复获取浪费额度
-- 缓存文件会占用磁盘空间，建议定期清理
+---
 
 ## 文件结构
 
 ```
 stock_screener/
-├── main.py              # 主程序
-├── kline_fetcher.py     # K线数据获取器（支持多数据源和缓存）
-├── daily_job.py         # 每日数据入库任务
-├── db.py                # SQLite 数据库访问
-├── market.py            # 市场配置与工具
-├── universe.py          # 股票列表获取
-├── requirements.txt      # 依赖包
-├── README.md           # 使用说明
-├── cache/              # 缓存目录
-│   ├── hk_stocks.json           # 股票列表缓存
-│   ├── filtered_results.json    # 筛选结果缓存
-│   └── kline_data/              # K线数据缓存
-│       ├── HK_00700.parquet
-│       ├── HK_00001.parquet
-│       └── ...
-├── data/               # SQLite 数据库目录
-│   └── market_data.db
-├── logs/               # 每日入库日志
+├── main.py              # 主程序（GUI + 命令行）
+├── daily_job.py         # 每日数据同步任务
+├── screen_with_filters.py  # 筛选器链（多维度筛选）
+├── plot_kline.py       # K 线绘图
+├── db.py               # MySQL 数据库访问
+├── market.py            # 市场配置（HK/US/A）
+├── universe.py         # 股票列表获取（AKShare/Futu）
+├── kline_fetcher.py    # K 线获取（AKShare/YFinance/Futu）
+├── sector_fetcher.py   # 板块信息获取
+├── strategy.py         # EMA 突破策略
+├── filters.py          # 筛选器架构
+├── universe_filter.py  # 股票池缩减器
+├── requirements.txt    # 依赖
+├── Dockerfile         # Docker 镜像
+├── deploy.sh          # Podman 部署脚本
+├── cache/             # 本地缓存
+│   ├── kline_data/    # K 线 parquet/csv
+│   └── *_sectors.json # 板块缓存
+├── logs/              # 同步日志
 │   └── daily_sync.jsonl
-└── .gitignore          # Git忽略文件
+└── output/            # 输出目录
 ```
+
+---
+
+## 数据源说明
+
+| 数据 | 主数据源 | 备用 |
+|------|----------|------|
+| 股票列表 | AKShare | Futu OpenD |
+| K 线 | AKShare | YFinance → Futu |
+| 板块信息 | AKShare | Futu |
+
+- **AKShare**：免费，无需登录，需网络访问东方财富等
+- **Futu OpenD**：需安装富途牛牛并开启 OpenD，有额度限制
+
+---
+
+## 常见问题
+
+### 1. 连接 MySQL 失败
+
+- 确认 MySQL 已启动：`mysql -u root -p -e "SELECT 1"`
+- 检查防火墙、端口、用户名密码
+- MySQL 8.0 需支持 `caching_sha2_password`（已包含 `cryptography` 依赖）
+
+### 2. AKShare 获取失败
+
+- 检查网络（需访问 cn 数据源）
+- 可尝试 `--use-futu` 使用 Futu 作为备用
+
+### 3. 首次同步较慢
+
+- 全市场股票较多，建议先用 `--limit 50` 验证
+- 数据会写入 MySQL 和本地缓存，后续为增量同步
+
+### 4. 无 GUI 环境
+
+- 使用 `main.py --cli` 或 `screen_with_filters.py` 命令行模式
+
+### 5. Docker 中连接宿主机 MySQL
+
+- Linux: `MYSQL_HOST=172.17.0.1` 或 `--network host`
+- macOS/Windows: `MYSQL_HOST=host.docker.internal`
+
+---
+
+## 许可证
+
+请参考项目根目录的 LICENSE 文件。
