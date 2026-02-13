@@ -15,7 +15,8 @@ MYSQL_PORT="${MYSQL_PORT:-3306}"
 MYSQL_USER="${MYSQL_USER:-root}"
 MYSQL_PASSWORD="${MYSQL_PASSWORD:-123456}"
 MYSQL_DATABASE="${MYSQL_DATABASE:-market_data}"
-MARKETS="${MARKETS:-HK,US}"
+MARKETS="${MARKETS:-HK,US,A}"
+TIMEFRAME="${TIMEFRAME:-1d}"
 LOOP="${LOOP:-true}"
 INTERVAL_HOURS="${INTERVAL_HOURS:-24}"
 
@@ -51,6 +52,7 @@ run() {
             "$IMAGE_NAME:latest" \
             python daily_job.py \
                 --markets "$MARKETS" \
+                --timeframe "$TIMEFRAME" \
                 --mysql-host "$MYSQL_HOST" \
                 --mysql-port "$MYSQL_PORT" \
                 --mysql-user "$MYSQL_USER" \
@@ -71,6 +73,7 @@ run() {
             "$IMAGE_NAME:latest" \
             python daily_job.py \
                 --markets "$MARKETS" \
+                --timeframe "$TIMEFRAME" \
                 --mysql-host "$MYSQL_HOST" \
                 --mysql-port "$MYSQL_PORT" \
                 --mysql-user "$MYSQL_USER" \
@@ -132,7 +135,8 @@ case "${1:-}" in
         echo "  MYSQL_USER       - MySQL 用户名（默认: root）"
         echo "  MYSQL_PASSWORD  - MySQL 密码（必需）"
         echo "  MYSQL_DATABASE  - MySQL 数据库名（默认: market_data）"
-        echo "  MARKETS          - 市场列表（默认: HK,US）"
+        echo "  MARKETS          - 市场列表（默认: HK,US,A）"
+        echo "  TIMEFRAME        - K线周期（默认: 1d）"
         echo "  LOOP             - 是否循环执行（默认: true）"
         echo "  INTERVAL_HOURS   - 循环间隔小时（默认: 24）"
         echo ""

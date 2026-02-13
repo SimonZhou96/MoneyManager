@@ -2,6 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 股票筛选器 - EMA10向上突破EMA150筛选（支持港股/美股）
+
+TODO: 本文件（GUI 模式）仍依赖已删除的 KlineDataManager。
+      需要将 K 线获取改为使用 KlineFetcherFactory + timeframe 参数。
+      当前仅保留代码不做大改，运行 GUI 时可能会报错。
+      推荐使用 daily_job.py 或 screen_with_filters.py 替代。
 """
 
 import argparse
@@ -13,7 +18,14 @@ from datetime import date
 import pandas as pd
 import pandas_ta as ta
 
-from kline_fetcher import KlineDataManager
+# TODO: KlineDataManager 已删除，改为使用 KlineFetcherFactory
+try:
+    from kline_fetcher import KlineFetcherFactory
+    KlineDataManager = None  # 标记已不可用
+except ImportError:
+    KlineFetcherFactory = None
+    KlineDataManager = None
+
 from market import MARKET_CONFIG, market_label, normalize_market
 from universe import fetch_stock_list_akshare, fetch_stock_list_futu
 
@@ -96,7 +108,8 @@ class StockScreener:
         self.root = None
         self.market = normalize_market(market)
         self.rate_limiter = RateLimiter()  # 限流器
-        self.kline_manager = KlineDataManager()  # K线数据管理器
+        # TODO: KlineDataManager 已删除，需改为 KlineFetcherFactory
+        self.kline_manager = None
         
         # 创建缓存目录
         if not os.path.exists(CACHE_DIR):

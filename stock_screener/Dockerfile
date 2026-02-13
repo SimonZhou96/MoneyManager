@@ -40,5 +40,5 @@ USER appuser
 HEALTHCHECK --interval=30m --timeout=10s --start-period=5m --retries=3 \
     CMD python -c "import sys; sys.exit(0)" || exit 1
 
-# 默认命令
-CMD ["python", "daily_job.py", "--markets", "HK,US", "--log", "logs/daily_sync.jsonl", "--loop"]
+# 默认命令（可通过环境变量 TIMEFRAME 覆盖，默认 1d）
+CMD ["python", "daily_job.py", "--markets", "HK,US,A", "--timeframe", "1d", "--log", "logs/daily_sync.jsonl", "--loop"]

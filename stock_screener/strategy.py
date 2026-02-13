@@ -131,21 +131,21 @@ def _prepare_kline_data(df: pd.DataFrame) -> pd.DataFrame:
 
 def check_ema_breakout(
     df: pd.DataFrame,
-    check_date: date,
+    check_date: date | None = None,
     ema_short: int = 10,
     ema_long: int = 150,
 ) -> Tuple[EMABreakoutResult, Optional[date], Optional[float], Optional[float]]:
     """
     检查 EMA 向上突破条件
-    
+
     判断逻辑：
-    1. 计算 EMA10 和 EMA150
-    2. 检查最近两个交易日内是否发生向上突破（仅接受 T-1 或 T-2）
-    3. 向上突破定义：前一天 EMA10 <= EMA150，当天 EMA10 > EMA150
-    
+    1. 计算 EMA_short 和 EMA_long
+    2. 取最近 3 根 K 线，检查是否发生向上突破（T-1 或 T-2）
+    3. 向上突破定义：前一根 EMA_short <= EMA_long，当根 EMA_short > EMA_long
+
     Args:
-        df: K线数据 DataFrame，需包含 'date' 和 'close' 列
-        check_date: 检查日期（一般是今天）
+        df: K 线 DataFrame，需包含 'date' 和 'close' 列（支持日线和分钟线）
+        check_date: 截止日期（可选，None 则使用全部数据）
         ema_short: 短期 EMA 周期，默认 10
         ema_long: 长期 EMA 周期，默认 150
     Returns:
@@ -155,22 +155,22 @@ def check_ema_breakout(
     is_valid, error_msg = _validate_kline_data(df)
     if not is_valid:
         return EMABreakoutResult.INVALID_DATA, None, None, None
-    
+
     # 预处理数据
     df = _prepare_kline_data(df)
-    
-    # 需要至少 ema_long 个数据点才能计算有意义的 EMA150
-    # 同时需要最近 3 个交易日来判断 T-1 / T-2 的突破
+
+    # 需要至少 ema_long 个数据点 + 2 根回溯
     min_required = ema_long + 2
     if len(df) < min_required:
         return EMABreakoutResult.INSUFFICIENT_DATA, None, None, None
-    
+
     # 计算 EMA
     df["ema_short"] = calculate_ema(df["close"], ema_short)
     df["ema_long"] = calculate_ema(df["close"], ema_long)
-    
-    # 获取最近的数据点（按 check_date 筛选）
-    df = df[df["date"].dt.date <= check_date]
+
+    # 按 check_date 截断（兼容分钟线 datetime 和日线 date）
+    if check_date is not None:
+        df = df[df["date"].dt.date <= check_date]
     if len(df) < 3:
         return EMABreakoutResult.INSUFFICIENT_DATA, None, None, None
 
@@ -198,20 +198,27 @@ def analyze_stock_ema_breakout(
     market: str,
     code: str,
     df: pd.DataFrame,
-    check_date: date,
+    check_date: date | None = None,
 ) -> EMABreakoutSignal:
     """
     分析单只股票的 EMA 突破情况
-    
+
     Args:
-        market: 市场（HK/US）
+        market: 市场（HK/US/A）
         code: 股票代码
-        df: K线数据
-        check_date: 检查日期
-        
+        df: K 线数据（日线或分钟线均可）
+        check_date: 截止日期（None 则使用 K 线中最新日期）
+
     Returns:
         EMABreakoutSignal 对象
     """
+    # 自动推断 check_date
+    if check_date is None:
+        if df is not None and not df.empty and "date" in df.columns:
+            check_date = pd.to_datetime(df["date"]).dt.date.max()
+        else:
+            check_date = date.today()
+
     result, breakout_date, ema10, ema150 = check_ema_breakout(
         df=df,
         check_date=check_date,

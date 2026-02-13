@@ -19,6 +19,7 @@
 
 import argparse
 import os
+import time
 from datetime import date
 
 from db import MarketDatabase, MySqlConfig
@@ -37,8 +38,9 @@ from filters import (
     FilterResult,
     stocks_to_stock_infos,
 )
-from sector_fetcher import SectorDataManager
+from kline_fetcher import KlineFetcherFactory
 from market import normalize_market, market_label
+from timeframe import parse_timeframe
 from universe_filter import UniverseFilterFactory
 
 
@@ -119,6 +121,7 @@ def run_screening(
     mysql: MySqlConfig,
     market: str,
     filter_chain: FilterChain,
+    timeframe: str = "1d",
     limit: int = None,
     verbose: bool = True,
     save_to_db: bool = True,
@@ -126,44 +129,63 @@ def run_screening(
 ):
     """
     执行股票筛选
-    
+
     Args:
         mysql: MySQL 配置
         market: 市场
         filter_chain: 筛选器链
+        timeframe: K 线周期
         limit: 限制股票数量
         verbose: 是否输出详细日志
         save_to_db: 是否将筛选结果存储到 MySQL
-        universe_reducer: 股票池缩减器（可选），在筛选链前快速缩小待遍历数量
+        universe_reducer: 股票池缩减器（可选）
     """
     db = MarketDatabase(mysql)
-    db.init_schema()
-    
-    # 获取股票列表（包含基本面数据）
+    db.init_schema(timeframe)
+
+    # 获取股票列表
     stocks = db.get_stocks(market, include_fundamentals=True)
     if not stocks:
         print(f"✗ 未获取到{market_label(market)}股票列表")
         db.close()
         return []
-    
+
     if limit:
         stocks = stocks[:limit]
-    
+
     print(f"\n{'='*60}")
-    print(f"开始筛选 {len(stocks)} 只{market_label(market)}股票")
+    print(f"开始筛选 {len(stocks)} 只{market_label(market)}股票 (timeframe={timeframe})")
     print(f"筛选器: {', '.join(filter_chain.list_filters())}")
     print(f"{'='*60}\n")
-    
+
     # 转换为 StockInfo 列表
     stock_infos = stocks_to_stock_infos(stocks, market, db)
 
-    # 股票池缩减（短期方案：在筛选链前快速缩小待遍历数量）
+    # 股票池缩减
     if universe_reducer is not None:
         before = len(stock_infos)
         stock_infos = universe_reducer.reduce(stock_infos)
         if verbose and before > len(stock_infos):
             print(f"股票池缩减: {before} -> {len(stock_infos)} ({universe_reducer.get_name()})")
-    
+
+    # 预获取 K 线数据到 stock.kline_df（EMABreakoutFilter 依赖此数据）
+    fetchers = KlineFetcherFactory.create_fetcher_chain()
+    if fetchers and any(isinstance(f, EMABreakoutFilter) for f in filter_chain._filters):
+        print(f"预获取 K 线数据 ({len(stock_infos)} 只)...")
+        for i, si in enumerate(stock_infos, 1):
+            for fetcher in fetchers:
+                try:
+                    df = fetcher.fetch(si.code, market=si.market, timeframe=timeframe)
+                    if df is not None and not df.empty:
+                        si.kline_df = df
+                        break
+                except Exception:
+                    continue
+            if verbose and i % 50 == 0:
+                print(f"  已获取 {i}/{len(stock_infos)}")
+            time.sleep(0.2)
+        print(f"  K 线获取完成")
+
     # 创建筛选器上下文
     context = FilterContext(
         check_date=date.today(),
@@ -171,7 +193,7 @@ def run_screening(
         db=db,
         verbose=verbose,
     )
-    
+
     # 执行筛选
     results = filter_chain.execute(stock_infos, context)
     
@@ -253,6 +275,8 @@ def main():
     
     # 市场和通用选项
     parser.add_argument("--market", default="HK", help="市场: HK、US 或 A")
+    parser.add_argument("--timeframe", default="1d",
+                        help="K 线周期: 1m,5m,15m,30m,60m,1h,1d,5d,1wk,1mo,3mo")
     parser.add_argument("--limit", type=int, default=None, help="限制股票数量")
     parser.add_argument("--verbose", action="store_true", default=True, help="输出详细日志")
     parser.add_argument("--early-stop", action="store_true", default=False, help="遇到第一个失败就停止")
@@ -319,11 +343,14 @@ def main():
         exclude_sectors=args.universe_exclude_sectors.split(",") if args.universe_exclude_sectors else None,
     )
 
+    timeframe = parse_timeframe(args.timeframe)
+
     # 执行筛选
     run_screening(
         mysql=mysql,
         market=normalize_market(args.market),
         filter_chain=filter_chain,
+        timeframe=timeframe,
         limit=args.limit,
         verbose=args.verbose,
         save_to_db=not args.no_save_to_db,

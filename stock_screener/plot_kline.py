@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 K线图绘制工具 - 从数据库查询并绘制股票K线图
+
+TODO: 当前仍从旧的 db.get_klines 获取日线数据。
+      需改为使用 KlineFetcherFactory 直接从 API 获取 K 线，并支持 --timeframe 参数。
 """
 
 import argparse

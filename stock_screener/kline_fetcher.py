@@ -1,572 +1,344 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-K线数据获取器 - 支持多数据源fallback和缓存
-使用工厂模式抽象数据源，优先AKShare，失败时使用FutuOpenAPI
+K 线数据获取器 - 工厂模式，支持多 timeframe、多数据源 fallback
+数据在内存中使用，不做本地缓存和数据库存储。
 """
 
 import pandas as pd
-import os
-import json
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from abc import ABC, abstractmethod
-from typing import Optional, List, Dict
+from typing import Optional, List
 import time
 import random
 
+from timeframe import (
+    parse_timeframe, is_intraday,
+    get_yf_period, get_akshare_min_period,
+)
+
+
+# ---------------------------------------------------------------------------
+# 基类
+# ---------------------------------------------------------------------------
 
 class KlineFetcherBase(ABC):
-    """K线数据获取器基类"""
-    
+    """K 线数据获取器基类"""
+
     @abstractmethod
-    def fetch(self, stock_code: str, market: str = "HK", start_date: Optional[str] = None, 
-              end_date: Optional[str] = None, max_count: int = 800) -> Optional[pd.DataFrame]:
+    def fetch(
+        self,
+        stock_code: str,
+        market: str = "HK",
+        timeframe: str = "1d",
+        max_count: int = 2000,
+    ) -> Optional[pd.DataFrame]:
         """
-        获取K线数据
-        
+        获取 K 线数据（内存 DataFrame）
+
         Args:
-            stock_code: 股票代码
-            market: 市场（HK/US）
-            start_date: 开始日期 (str, format: 'YYYY-MM-DD')
-            end_date: 结束日期 (str, format: 'YYYY-MM-DD')
-            max_count: 最大数据量
-            
+            stock_code: 股票代码（内部格式，如 HK.00700、000001.SZ）
+            market: 市场 HK / US / A
+            timeframe: 时间周期 1m~3mo
+            max_count: 最大返回行数
+
         Returns:
-            pd.DataFrame or None
+            DataFrame(date, open, high, low, close, volume, ...) 或 None
         """
         pass
-    
+
     @abstractmethod
     def get_name(self) -> str:
         """返回数据源名称"""
         pass
 
 
-class AKShareKlineFetcher(KlineFetcherBase):
-    """AKShare K线数据获取器 - 支持多个接口兜底"""
-    
-    def __init__(self):
-        try:
-            import akshare as ak
-            self.ak = ak
-        except ImportError:
-            raise ImportError("请安装AKShare: pip install akshare")
-    
-    def get_name(self) -> str:
-        return "AKShare"
-    
-    def _convert_hk_code(self, stock_code: str) -> str:
-        """转换股票代码格式：HK.00700 -> 00700"""
-        if stock_code.startswith('HK.'):
-            stock_code = stock_code[3:]
-        stock_code = str(stock_code)
-        if stock_code.isdigit():
-            return stock_code.zfill(5)
-        return stock_code
+# ---------------------------------------------------------------------------
+# 通用标准化
+# ---------------------------------------------------------------------------
 
-    def _convert_us_code(self, stock_code: str) -> str:
-        """转换美股代码格式：US.AAPL -> AAPL"""
-        code = str(stock_code).strip()
-        if code.upper().startswith('US.'):
-            return code[3:]
-        return code
-
-    def _convert_a_code(self, stock_code: str) -> str:
-        """转换 A 股代码格式：000001.SZ / 600000.SS -> 000001 / 600000（6 位纯数字）"""
-        code = str(stock_code).strip()
-        if "." in code:
-            code = code.split(".")[0]
-        if code.isdigit() and len(code) == 6:
-            return code
-        return code.zfill(6) if code.isdigit() else code
-
-    def _try_a_methods(self, a_code: str, start_date: str, end_date: str, max_retries: int = 2) -> Optional[pd.DataFrame]:
-        """A 股 K 线获取，使用 stock_zh_a_hist"""
-        if not hasattr(self.ak, "stock_zh_a_hist"):
-            return None
-        for retry in range(max_retries):
-            try:
-                if retry > 0:
-                    time.sleep(1 + random.uniform(0, 1))
-                data = self.ak.stock_zh_a_hist(
-                    symbol=a_code,
-                    period="daily",
-                    start_date=start_date,
-                    end_date=end_date,
-                    adjust="qfq",
-                )
-                if data is not None and len(data) > 0:
-                    normalized = self._normalize_dataframe(data, start_date, end_date)
-                    if normalized is not None and len(normalized) > 0:
-                        return normalized
-            except Exception as e:
-                if retry == max_retries - 1:
-                    print(f"✗ 获取A股{a_code}失败: {str(e)[:80]}")
-                continue
+def _normalize_dataframe(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """将各数据源返回的 DataFrame 标准化为统一格式"""
+    if df is None or df.empty:
         return None
 
-    def _normalize_date_format(self, date_str: Optional[str]) -> Optional[str]:
-        """转换日期格式：YYYY-MM-DD -> YYYYMMDD"""
-        if date_str is None:
-            return None
-        try:
-            return pd.to_datetime(date_str).strftime('%Y%m%d')
-        except Exception:
-            return date_str.replace('-', '')
-    
-    def _normalize_dataframe(self, df: pd.DataFrame, start_date: Optional[str] = None, 
-                             end_date: Optional[str] = None) -> Optional[pd.DataFrame]:
-        """标准化DataFrame格式"""
-        if df is None or df.empty:
-            return None
-        
-        # 统一列名映射（更全面的映射）
-        column_mapping = {
-            '日期': 'date', '时间': 'date', 'time_key': 'date', 'time': 'date',
-            '开盘': 'open', '收盘': 'close', '最高': 'high', '最低': 'low',
-            '开盘价': 'open', '收盘价': 'close', '最高价': 'high', '最低价': 'low',
-            '成交量': 'volume', '成交额': 'turnover', '换手率': 'turnover_rate',
-            '涨跌幅': 'change_rate', '振幅': 'amplitude',
-            '成交额(元)': 'turnover', '成交额(港元)': 'turnover',
-        }
-        
-        # 重命名列
-        for old_col, new_col in column_mapping.items():
-            if old_col in df.columns:
-                df = df.rename(columns={old_col: new_col})
-        
-        # 找到日期列（更全面的搜索）
-        date_col = None
-        for col in df.columns:
-            col_lower = str(col).lower()
-            if ('date' in col_lower or '日期' in str(col) or '时间' in str(col) or 
-                col_lower == 'day' or col_lower == 'time' or col_lower == 'datetime'):
-                date_col = col
-                break
-        
-        if date_col and date_col != 'date':
-            df = df.rename(columns={date_col: 'date'})
-        
-        if 'date' not in df.columns:
-            return None
-        
-        # 确保date是datetime类型
-        try:
-            df['date'] = pd.to_datetime(df['date'], errors='coerce')
-            # 删除无效日期
-            df = df[df['date'].notna()]
-            if df.empty:
-                return None
-        except Exception:
-            return None
-        
-        # 过滤日期范围
-        if start_date or end_date:
-            try:
-                start_dt = pd.to_datetime(start_date) if start_date else None
-                end_dt = pd.to_datetime(end_date) if end_date else None
-                
-                if start_dt is not None:
-                    df = df[df['date'] >= start_dt]
-                if end_dt is not None:
-                    df = df[df['date'] <= end_dt]
-            except Exception:
-                pass
-        
-        # 确保有必要的OHLC列
-        required_cols = ['open', 'high', 'low', 'close']
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        if missing_cols:
-            return None
-        
-        # 排序并重置索引
-        df = df.sort_values('date').reset_index(drop=True)
-        
-        return df
-    
-    def _try_hk_methods(self, hk_code: str, start_date: str, end_date: str, max_retries: int = 2) -> Optional[pd.DataFrame]:
-        """尝试多个港股接口，带重试机制"""
-        methods = [
-            # 方法1: stock_hk_daily (Sina，稳定)
-            {
-                'name': 'stock_hk_daily',
-                'func': lambda: self.ak.stock_hk_daily(symbol=hk_code, adjust="qfq"),
-                'needs_filter': True,
-                'retry_delay': 1,
-            },
-            # 方法2: stock_hk_hist (东方财富)
-            {
-                'name': 'stock_hk_hist',
-                'func': lambda: self.ak.stock_hk_hist(
-                    symbol=hk_code, period="daily", start_date=start_date, 
-                    end_date=end_date, adjust="qfq"
-                ),
-                'needs_filter': False,
-                'retry_delay': 2,
-            },
-            # 方法3: stock_hk_hist_em (东方财富，另一个接口)
-            {
-                'name': 'stock_hk_hist_em',
-                'func': lambda: self.ak.stock_hk_hist_em(
-                    symbol=hk_code, start_date=start_date.replace('-', ''), 
-                    end_date=end_date.replace('-', ''), adjust="qfq"
-                ) if hasattr(self.ak, 'stock_hk_hist_em') else None,
-                'needs_filter': False,
-                'retry_delay': 2,
-            },
-            # 方法4: stock_zh_ah_daily (A+H股) - 修复列名问题
-            {
-                'name': 'stock_zh_ah_daily',
-                'func': lambda: self.ak.stock_zh_ah_daily(
-                    symbol=hk_code,
-                    start_year=str(pd.to_datetime(start_date).year),
-                    end_year=str(pd.to_datetime(end_date).year),
-                    adjust="qfq"
-                ),
-                'needs_filter': False,
-                'retry_delay': 2,
-            },
-            # 方法5: stock_hk_spot_em (东方财富实时行情，可能包含历史)
-            {
-                'name': 'stock_hk_spot_em',
-                'func': lambda: self.ak.stock_hk_spot_em(),
-                'needs_filter': True,
-                'retry_delay': 1,
-            },
-            # 方法6: stock_hk_hist_min_em (分钟线，作为最后兜底)
-            {
-                'name': 'stock_hk_hist_min_em',
-                'func': lambda: self.ak.stock_hk_hist_min_em(
-                    symbol=hk_code, period="1", adjust="qfq", start_date=start_date, end_date=end_date
-                ) if hasattr(self.ak, 'stock_hk_hist_min_em') else None,
-                'needs_filter': False,
-                'retry_delay': 3,
-            },
-        ]
-        
-        for method in methods:
-            if not hasattr(self.ak, method['name']):
-                continue
-            
-            # 重试机制
-            for retry in range(max_retries):
-                try:
-                    # 添加随机延迟，避免频繁请求
-                    if retry > 0:
-                        delay = method.get('retry_delay', 1) + random.uniform(0, 1)
-                        time.sleep(delay)
-                    
-                    data = method['func']()
-                    if data is not None and len(data) > 0:
-                        # 如果是spot接口，需要过滤特定股票
-                        if method['name'] == 'stock_hk_spot_em':
-                            code_col = None
-                            for col in data.columns:
-                                if '代码' in col or 'code' in col.lower() or 'symbol' in col.lower():
-                                    code_col = col
-                                    break
-                            if code_col:
-                                data = data[data[code_col].astype(str).str.zfill(5) == hk_code.zfill(5)]
-                                if data.empty:
-                                    continue
-                        
-                        normalized = self._normalize_dataframe(data, start_date, end_date)
-                        if normalized is not None and len(normalized) > 0:
-                            return normalized
-                    
-                    # 如果成功但没有数据，不重试
-                    break
-                    
-                except Exception as e:
-                    error_msg = str(e)
-                    # 如果是最后一次重试，打印错误
-                    if retry == max_retries - 1:
-                        print(f"✗ 获取{hk_code}失败，method:{method['name']}, error:{error_msg[:100]}")
-                    # 如果是连接错误，继续重试
-                    if 'Connection' in error_msg or 'Remote' in error_msg or 'timeout' in error_msg.lower():
-                        continue
-                    # 其他错误，不重试
-                    break
-            
-            # 方法之间添加延迟，避免频繁请求
-            time.sleep(0.5 + random.uniform(0, 0.5))
-        
-        return None
-    
-    def _try_us_methods(self, us_code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
-        """尝试多个美股接口"""
-        methods = [
-            # 方法1: stock_us_daily (Sina)
-            {
-                'name': 'stock_us_daily',
-                'func': lambda: self.ak.stock_us_daily(symbol=us_code, adjust="qfq"),
-                'needs_filter': True,
-            },
-            # 方法2: stock_us_hist (东方财富)
-            {
-                'name': 'stock_us_hist',
-                'func': lambda: self.ak.stock_us_hist(
-                    symbol=us_code, period="daily", start_date=start_date,
-                    end_date=end_date, adjust="qfq"
-                ),
-                'needs_filter': False,
-            },
-            # 方法3: stock_us_spot_em (东方财富实时行情)
-            {
-                'name': 'stock_us_spot_em',
-                'func': lambda: self.ak.stock_us_spot_em(),
-                'needs_filter': True,
-            },
-        ]
-        
-        for method in methods:
-            if not hasattr(self.ak, method['name']):
-                continue
-            
-            try:
-                data = method['func']()
-                if data is not None and len(data) > 0:
-                    # 如果是spot接口，需要过滤特定股票
-                    if method['name'] == 'stock_us_spot_em':
-                        code_col = None
-                        for col in data.columns:
-                            if '代码' in col or 'code' in col.lower() or 'symbol' in col.lower():
-                                code_col = col
-                                break
-                        if code_col:
-                            data = data[data[code_col].astype(str).str.upper() == us_code.upper()]
-                            if data.empty:
-                                continue
-                    
-                    normalized = self._normalize_dataframe(data, start_date, end_date)
-                    if normalized is not None and len(normalized) > 0:
-                        return normalized
-            except Exception as e:
-                continue
-        
-        return None
-    
-    def fetch(self, stock_code: str, market: str = "HK", start_date: Optional[str] = None,
-              end_date: Optional[str] = None, max_count: int = 800) -> Optional[pd.DataFrame]:
-        """使用AKShare获取K线数据，支持多个接口兜底"""
-        try:
-            market = str(market).upper()
-            
-            # 转换日期格式
-            start_date_str = self._normalize_date_format(start_date)
-            end_date_str = self._normalize_date_format(end_date)
-            
-            # 如果没有指定日期，使用默认值
-            if end_date_str is None:
-                end_date_str = date.today().strftime('%Y%m%d')
-            if start_date_str is None:
-                start_date_str = (date.today() - timedelta(days=800)).strftime('%Y%m%d')
-            
-            data = None
-            
-            if market == "HK":
-                hk_code = self._convert_hk_code(stock_code)
-                data = self._try_hk_methods(hk_code, start_date_str, end_date_str)
-            elif market == "A":
-                a_code = self._convert_a_code(stock_code)
-                data = self._try_a_methods(a_code, start_date_str, end_date_str)
-            else:
-                us_code = self._convert_us_code(stock_code)
-                data = self._try_us_methods(us_code, start_date_str, end_date_str)
-            
-            if data is None or data.empty:
-                return None
-            
-            # 限制数据量
-            if len(data) > max_count:
-                data = data.tail(max_count).reset_index(drop=True)
-            
-            return data
-            
-        except Exception as e:
-            return None
+    # 列名映射
+    col_map = {
+        "日期": "date", "时间": "date", "time_key": "date", "time": "date",
+        "datetime": "date", "Datetime": "date",
+        "开盘": "open", "收盘": "close", "最高": "high", "最低": "low",
+        "开盘价": "open", "收盘价": "close", "最高价": "high", "最低价": "low",
+        "成交量": "volume", "成交额": "turnover", "换手率": "turnover_rate",
+        "涨跌幅": "change_rate",
+    }
+    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
 
+    # 尝试从 index 获取 date
+    if "date" not in df.columns:
+        if isinstance(df.index, pd.DatetimeIndex):
+            df = df.reset_index()
+            df = df.rename(columns={df.columns[0]: "date"})
+        elif "Date" in df.columns:
+            df = df.rename(columns={"Date": "date"})
+
+    if "date" not in df.columns:
+        return None
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df[df["date"].notna()]
+
+    required = ["open", "high", "low", "close"]
+    if any(c not in df.columns for c in required):
+        return None
+
+    return df.sort_values("date").reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# YFinance
+# ---------------------------------------------------------------------------
 
 class YFinanceKlineFetcher(KlineFetcherBase):
-    """YFinance K线数据获取器 - 支持港股、美股、A股"""
-    
+    """YFinance K 线获取器 - 支持全 timeframe、港股 / 美股 / A 股"""
+
     def __init__(self):
         try:
             import yfinance as yf
             self.yf = yf
         except ImportError:
-            raise ImportError("请安装yfinance: pip install yfinance")
-    
+            raise ImportError("请安装 yfinance: pip install yfinance")
+
     def get_name(self) -> str:
         return "YFinance"
-    
-    def _convert_hk_code(self, stock_code: str) -> str:
-        """转换港股代码格式：HK.00700 -> 00700.HK"""
-        if stock_code.startswith('HK.'):
-            stock_code = stock_code[3:]
-        stock_code = str(stock_code).zfill(5)
-        return f"{stock_code}.HK"
-    
-    def _convert_us_code(self, stock_code: str) -> str:
-        """转换美股代码格式：US.AAPL -> AAPL"""
-        if stock_code.upper().startswith('US.'):
-            return stock_code[3:]
-        return stock_code
 
-    def _convert_a_code(self, stock_code: str) -> str:
-        """转换 A 股代码格式：000001.SZ / 600000.SS（yfinance 直接使用此格式）"""
+    @staticmethod
+    def _to_yf_code(stock_code: str, market: str) -> str:
+        market = market.upper()
         code = str(stock_code).strip()
-        if "." in code:
-            return code  # 已有后缀
-        if code.isdigit() and len(code) == 6:
-            return f"{code}.SS" if code.startswith("6") else f"{code}.SZ"
+        if market == "HK":
+            if code.startswith("HK."):
+                code = code[3:]
+            return f"{code.zfill(5)}.HK"
+        if market == "A":
+            if "." in code:
+                return code  # 600000.SS / 000001.SZ
+            if code.isdigit() and len(code) == 6:
+                return f"{code}.SS" if code.startswith("6") else f"{code}.SZ"
+            return code
+        # US
+        if code.upper().startswith("US."):
+            return code[3:]
         return code
-    
-    def fetch(self, stock_code: str, market: str = "HK", start_date: Optional[str] = None,
-              end_date: Optional[str] = None, max_count: int = 800) -> Optional[pd.DataFrame]:
-        """使用YFinance获取K线数据"""
+
+    def fetch(
+        self,
+        stock_code: str,
+        market: str = "HK",
+        timeframe: str = "1d",
+        max_count: int = 2000,
+    ) -> Optional[pd.DataFrame]:
         try:
-            market = str(market).upper()
-            
-            # 转换股票代码
-            if market == "HK":
-                yf_code = self._convert_hk_code(stock_code)
-            elif market == "A":
-                yf_code = self._convert_a_code(stock_code)
-            else:
-                yf_code = self._convert_us_code(stock_code)
-            
-            # 创建ticker对象
-            ticker = self.yf.Ticker(yf_code)
-            
-            # 获取历史数据
-            # YFinance的period参数：1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max
-            # 如果指定了日期范围，使用start和end参数
-            try:
-                if start_date and end_date:
-                    data = ticker.history(start=start_date, end=end_date, auto_adjust=True)
-                elif start_date:
-                    data = ticker.history(start=start_date, auto_adjust=True)
-                else:
-                    # 默认获取最近的数据
-                    data = ticker.history(period="5y", auto_adjust=True)
-            except Exception:
-                # 如果失败，尝试不使用auto_adjust
-                if start_date and end_date:
-                    data = ticker.history(start=start_date, end=end_date)
-                elif start_date:
-                    data = ticker.history(start=start_date)
-                else:
-                    data = ticker.history(period="5y")
-            
+            yf_code = self._to_yf_code(stock_code, market)
+            period = get_yf_period(timeframe)
+            data = self.yf.download(
+                yf_code,
+                period=period,
+                interval=timeframe,
+                auto_adjust=True,
+                progress=False,
+            )
             if data is None or data.empty:
                 return None
-            
-            # YFinance返回的列名：Open, High, Low, Close, Volume
-            # 转换为小写
-            data = data.reset_index()
-            data.columns = [col.lower() if isinstance(col, str) else col for col in data.columns]
-            
-            # 重命名列
-            column_mapping = {
-                'date': 'date',
-                'open': 'open',
-                'high': 'high',
-                'low': 'low',
-                'close': 'close',
-                'volume': 'volume',
-            }
-            
-            for old_col, new_col in column_mapping.items():
-                if old_col in data.columns:
-                    data = data.rename(columns={old_col: new_col})
-            
-            # 确保有date列
-            if 'date' not in data.columns and len(data) > 0:
-                # YFinance通常使用index作为日期
-                if data.index.name == 'Date' or isinstance(data.index, pd.DatetimeIndex):
-                    data = data.reset_index()
-                    if 'Date' in data.columns:
-                        data = data.rename(columns={'Date': 'date'})
-            
-            # 标准化
-            normalized = self._normalize_dataframe(data, start_date, end_date)
-            if normalized is None or normalized.empty:
-                return None
-            
-            # 限制数据量
-            if len(normalized) > max_count:
-                normalized = normalized.tail(max_count).reset_index(drop=True)
-            
-            return normalized
-            
-        except Exception as e:
-            return None
-    
-    def _normalize_dataframe(self, df: pd.DataFrame, start_date: Optional[str] = None,
-                             end_date: Optional[str] = None) -> Optional[pd.DataFrame]:
-        """标准化DataFrame格式（复用AKShare的逻辑）"""
-        if df is None or df.empty:
-            return None
-        
-        # 确保date是datetime类型
-        if 'date' in df.columns:
-            try:
-                df['date'] = pd.to_datetime(df['date'], errors='coerce')
-                df = df[df['date'].notna()]
-                if df.empty:
-                    return None
-            except Exception:
-                return None
-        else:
-            # 如果没有date列，尝试从index获取
-            if isinstance(df.index, pd.DatetimeIndex):
-                df = df.reset_index()
-                if 'Date' in df.columns:
-                    df = df.rename(columns={'Date': 'date'})
-                elif df.index.name == 'Date':
-                    df['date'] = df.index
-                    df = df.reset_index(drop=True)
-        
-        # 确保有必要的OHLC列
-        required_cols = ['open', 'high', 'low', 'close']
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        if missing_cols:
-            return None
-        
-        # 过滤日期范围
-        if start_date or end_date:
-            try:
-                start_dt = pd.to_datetime(start_date) if start_date else None
-                end_dt = pd.to_datetime(end_date) if end_date else None
-                
-                if start_dt is not None:
-                    df = df[df['date'] >= start_dt]
-                if end_dt is not None:
-                    df = df[df['date'] <= end_dt]
-            except Exception:
-                pass
-        
-        # 排序并重置索引
-        df = df.sort_values('date').reset_index(drop=True)
-        
-        return df
 
+            # yfinance >= 0.2.31 returns MultiIndex columns: (Price, Ticker)
+            # Flatten to single level, keeping only the price name
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = [c[0] if isinstance(c, tuple) else c for c in data.columns]
+
+            data = data.reset_index()
+            data.columns = [str(c).lower() for c in data.columns]
+
+            df = _normalize_dataframe(data)
+            if df is None:
+                return None
+            return df.tail(max_count).reset_index(drop=True)
+        except Exception:
+            return None
+
+
+# ---------------------------------------------------------------------------
+# AKShare
+# ---------------------------------------------------------------------------
+
+class AKShareKlineFetcher(KlineFetcherBase):
+    """AKShare K 线获取器 - 港股 / 美股日线 + A 股日线 / 分钟线"""
+
+    def __init__(self):
+        try:
+            import akshare as ak
+            self.ak = ak
+        except ImportError:
+            raise ImportError("请安装 AKShare: pip install akshare")
+
+    def get_name(self) -> str:
+        return "AKShare"
+
+    # -- 代码转换 --
+
+    @staticmethod
+    def _hk_code(stock_code: str) -> str:
+        code = stock_code[3:] if stock_code.startswith("HK.") else stock_code
+        return code.zfill(5) if code.isdigit() else code
+
+    @staticmethod
+    def _us_code(stock_code: str) -> str:
+        code = stock_code.strip()
+        return code[3:] if code.upper().startswith("US.") else code
+
+    @staticmethod
+    def _a_code(stock_code: str) -> str:
+        code = stock_code.strip()
+        if "." in code:
+            code = code.split(".")[0]
+        return code.zfill(6) if code.isdigit() else code
+
+    # -- 日线 --
+
+    def _fetch_a_daily(self, code: str, start: str, end: str) -> Optional[pd.DataFrame]:
+        if not hasattr(self.ak, "stock_zh_a_hist"):
+            return None
+        try:
+            df = self.ak.stock_zh_a_hist(
+                symbol=code, period="daily",
+                start_date=start, end_date=end, adjust="qfq",
+            )
+            return _normalize_dataframe(df)
+        except Exception:
+            return None
+
+    def _fetch_hk_daily(self, code: str, start: str, end: str) -> Optional[pd.DataFrame]:
+        for method_name in ("stock_hk_daily", "stock_hk_hist"):
+            if not hasattr(self.ak, method_name):
+                continue
+            try:
+                if method_name == "stock_hk_daily":
+                    df = self.ak.stock_hk_daily(symbol=code, adjust="qfq")
+                else:
+                    df = self.ak.stock_hk_hist(
+                        symbol=code, period="daily",
+                        start_date=start, end_date=end, adjust="qfq",
+                    )
+                result = _normalize_dataframe(df)
+                if result is not None and len(result) > 0:
+                    return result
+            except Exception:
+                continue
+            time.sleep(0.5 + random.uniform(0, 0.5))
+        return None
+
+    def _fetch_us_daily(self, code: str, start: str, end: str) -> Optional[pd.DataFrame]:
+        for method_name in ("stock_us_daily", "stock_us_hist"):
+            if not hasattr(self.ak, method_name):
+                continue
+            try:
+                if method_name == "stock_us_daily":
+                    df = self.ak.stock_us_daily(symbol=code, adjust="qfq")
+                else:
+                    df = self.ak.stock_us_hist(
+                        symbol=code, period="daily",
+                        start_date=start, end_date=end, adjust="qfq",
+                    )
+                result = _normalize_dataframe(df)
+                if result is not None and len(result) > 0:
+                    return result
+            except Exception:
+                continue
+        return None
+
+    # -- A 股分钟线 --
+
+    def _fetch_a_min(self, code: str, ak_period: str) -> Optional[pd.DataFrame]:
+        """使用 stock_zh_a_hist_min_em 获取 A 股分钟线"""
+        if not hasattr(self.ak, "stock_zh_a_hist_min_em"):
+            return None
+        try:
+            df = self.ak.stock_zh_a_hist_min_em(
+                symbol=code, period=ak_period, adjust="qfq",
+            )
+            return _normalize_dataframe(df)
+        except Exception:
+            return None
+
+    # -- 公共入口 --
+
+    def fetch(
+        self,
+        stock_code: str,
+        market: str = "HK",
+        timeframe: str = "1d",
+        max_count: int = 2000,
+    ) -> Optional[pd.DataFrame]:
+        market = market.upper()
+        end_str = date.today().strftime("%Y%m%d")
+        start_str = (date.today() - timedelta(days=365 * 5)).strftime("%Y%m%d")
+
+        # A 股分钟线
+        ak_min = get_akshare_min_period(timeframe)
+        if market == "A" and ak_min is not None:
+            code = self._a_code(stock_code)
+            df = self._fetch_a_min(code, ak_min)
+            if df is not None:
+                return df.tail(max_count).reset_index(drop=True)
+            return None
+
+        # 非日线 + 非 A 股分钟 -> AKShare 不支持，返回 None 让 fallback 处理
+        if timeframe != "1d":
+            # TODO: AKShare 港股/美股分钟线支持有限，暂不实现
+            return None
+
+        # 日线
+        if market == "A":
+            code = self._a_code(stock_code)
+            df = self._fetch_a_daily(code, start_str, end_str)
+        elif market == "HK":
+            code = self._hk_code(stock_code)
+            df = self._fetch_hk_daily(code, start_str, end_str)
+        else:
+            code = self._us_code(stock_code)
+            df = self._fetch_us_daily(code, start_str, end_str)
+
+        if df is None:
+            return None
+        return df.tail(max_count).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Futu
+# ---------------------------------------------------------------------------
 
 class FutuKlineFetcher(KlineFetcherBase):
-    """富途API K线数据获取器"""
-    
+    """富途 OpenAPI K 线获取器"""
+
+    # timeframe -> futu KLType 枚举名
+    _KL_MAP = {
+        "1m": "K_1M", "3m": "K_3M", "5m": "K_5M",
+        "15m": "K_15M", "30m": "K_30M", "60m": "K_60M",
+        "1h": "K_60M",
+        "1d": "K_DAY", "1wk": "K_WEEK", "1mo": "K_MON",
+        "3mo": "K_QUARTER",
+    }
+
     def __init__(self, quote_ctx, rate_limiter=None):
         self.quote_ctx = quote_ctx
         self.rate_limiter = rate_limiter
-    
+
     def get_name(self) -> str:
         return "FutuOpenAPI"
-    
-    def _normalize_futu_code(self, stock_code: str, market: str) -> str:
-        """标准化富途股票代码格式"""
-        market = str(market).upper()
-        code = str(stock_code).strip()
+
+    @staticmethod
+    def _to_futu_code(stock_code: str, market: str) -> str:
+        market = market.upper()
+        code = stock_code.strip()
         if market == "HK":
             if code.startswith("HK."):
                 return code
@@ -577,7 +349,6 @@ class FutuKlineFetcher(KlineFetcherBase):
                 return code
             return f"US.{code}"
         elif market == "A":
-            # 富途 A 股: SH.600000 / SZ.000001
             if code.endswith(".SS"):
                 return f"SH.{code[:-3]}"
             if code.endswith(".SZ"):
@@ -586,253 +357,82 @@ class FutuKlineFetcher(KlineFetcherBase):
                 return f"SH.{code}" if code.startswith("6") else f"SZ.{code}"
         return code
 
-    def fetch(self, stock_code: str, market: str = "HK", start_date: Optional[str] = None,
-              end_date: Optional[str] = None, max_count: int = 800) -> Optional[pd.DataFrame]:
-        """使用富途API获取K线数据"""
+    def _get_kl_type(self, timeframe: str):
         import futu as ft
-        
+        name = self._KL_MAP.get(timeframe)
+        if name is None:
+            return ft.KLType.K_DAY
+        return getattr(ft.KLType, name, ft.KLType.K_DAY)
+
+    def fetch(
+        self,
+        stock_code: str,
+        market: str = "HK",
+        timeframe: str = "1d",
+        max_count: int = 2000,
+    ) -> Optional[pd.DataFrame]:
+        import futu as ft
+
         if self.rate_limiter:
             self.rate_limiter.wait_if_needed()
-        
+
         try:
-            code = self._normalize_futu_code(stock_code, market)
-            
-            # 尝试获取历史K线
-            ret, data, page_req_key = self.quote_ctx.request_history_kline(
+            code = self._to_futu_code(stock_code, market)
+            kl_type = self._get_kl_type(timeframe)
+
+            ret, data, _ = self.quote_ctx.request_history_kline(
                 code=code,
-                ktype=ft.KLType.K_DAY,
+                ktype=kl_type,
                 max_count=max_count,
-                autype=ft.AuType.QFQ  # 前复权
+                autype=ft.AuType.QFQ,
             )
-            
-            if ret == ft.RET_OK and data is not None and len(data) > 0:
-                # 统一列名
-                if 'time_key' in data.columns:
-                    data = data.rename(columns={'time_key': 'date'})
-                
-                # 确保date是datetime类型
-                if 'date' in data.columns:
-                    data['date'] = pd.to_datetime(data['date'])
-                    data = data.sort_values('date').reset_index(drop=True)
-                    
-                    # 过滤日期范围
-                    if start_date:
-                        start_dt = pd.to_datetime(start_date)
-                        data = data[data['date'] >= start_dt]
-                    if end_date:
-                        end_dt = pd.to_datetime(end_date)
-                        data = data[data['date'] <= end_dt]
-                    
-                    return data
-            
-            return None
-            
-        except Exception as e:
-            error_msg = str(e)
-            # 检查是否是额度用尽或其他错误
-            if 'quota' in error_msg.lower() or '额度' in error_msg or 'too frequent' in error_msg.lower():
-                raise Exception(f"Futu API quota exhausted or rate limited: {error_msg}")
+            if ret != ft.RET_OK or data is None or data.empty:
+                return None
+
+            if "time_key" in data.columns:
+                data = data.rename(columns={"time_key": "date"})
+            data["date"] = pd.to_datetime(data["date"])
+            data = data.sort_values("date").reset_index(drop=True)
+            return data
+        except Exception:
             return None
 
+
+# ---------------------------------------------------------------------------
+# 工厂
+# ---------------------------------------------------------------------------
 
 class KlineFetcherFactory:
-    """K线数据获取器工厂类"""
-    
-    @staticmethod
-    def create_akshare_fetcher() -> Optional[AKShareKlineFetcher]:
-        """创建AKShare获取器"""
-        try:
-            return AKShareKlineFetcher()
-        except ImportError:
-            return None
-    
-    @staticmethod
-    def create_yfinance_fetcher() -> Optional[YFinanceKlineFetcher]:
-        """创建YFinance获取器"""
-        try:
-            return YFinanceKlineFetcher()
-        except ImportError:
-            return None
-    
-    @staticmethod
-    def create_futu_fetcher(quote_ctx, rate_limiter=None) -> Optional[FutuKlineFetcher]:
-        """创建富途API获取器"""
-        if quote_ctx is None:
-            return None
-        try:
-            return FutuKlineFetcher(quote_ctx, rate_limiter)
-        except Exception:
-            return None
-    
-    @staticmethod
-    def create_fetcher_chain(quote_ctx=None, rate_limiter=None) -> List[KlineFetcherBase]:
-        """
-        创建获取器链，按优先级排序
-        优先级：AKShare > YFinance > FutuOpenAPI
-        """
-        fetchers = []
-        
-        # 1. 优先使用AKShare
-        ak_fetcher = KlineFetcherFactory.create_akshare_fetcher()
-        if ak_fetcher:
-            fetchers.append(ak_fetcher)
-        
-        # 2. Fallback到YFinance
-        yf_fetcher = KlineFetcherFactory.create_yfinance_fetcher()
-        if yf_fetcher:
-            fetchers.append(yf_fetcher)
-        
-        # 3. Fallback到富途API
-        futu_fetcher = KlineFetcherFactory.create_futu_fetcher(quote_ctx, rate_limiter)
-        if futu_fetcher:
-            fetchers.append(futu_fetcher)
-        
-        return fetchers
+    """K 线获取器工厂 - 按优先级创建 fetcher 链"""
 
+    @staticmethod
+    def create_fetcher_chain(
+        quote_ctx=None,
+        rate_limiter=None,
+    ) -> List[KlineFetcherBase]:
+        """
+        创建获取器链，优先级：YFinance > AKShare > Futu
+        （YFinance 对全 timeframe 支持最好，放首位）
+        """
+        fetchers: List[KlineFetcherBase] = []
 
-class KlineDataManager:
-    """K线数据管理器 - 支持多数据源fallback和文件缓存"""
-    
-    def __init__(self, cache_dir='cache/kline_data', quote_ctx=None, rate_limiter=None):
-        self.cache_dir = cache_dir
-        self.fetchers = KlineFetcherFactory.create_fetcher_chain(quote_ctx, rate_limiter)
-        
-        # 创建缓存目录
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
-    
-    def set_futu_context(self, quote_ctx, rate_limiter=None):
-        """设置富途API上下文（用于动态更新）"""
-        self.fetchers = KlineFetcherFactory.create_fetcher_chain(quote_ctx, rate_limiter)
-    
-    def _get_cache_file_path(self, stock_code: str, market: str) -> str:
-        """获取缓存文件路径"""
-        safe_code = stock_code.replace('.', '_').replace('/', '_')
-        market_tag = str(market).upper()
-        return os.path.join(self.cache_dir, f"{market_tag}_{safe_code}.parquet")
-    
-    def _load_from_cache(self, stock_code: str, market: str) -> Optional[pd.DataFrame]:
-        """从缓存加载K线数据"""
-        cache_file = self._get_cache_file_path(stock_code, market)
-        csv_file = cache_file.replace('.parquet', '.csv')
-        
-        file_to_load = None
-        if os.path.exists(cache_file):
-            file_to_load = cache_file
-        elif os.path.exists(csv_file):
-            file_to_load = csv_file
-        
-        if file_to_load is None:
-            return None
-        
+        # 1. YFinance（全 timeframe）
         try:
-            if file_to_load.endswith('.parquet'):
-                try:
-                    data = pd.read_parquet(file_to_load)
-                except Exception:
-                    if os.path.exists(csv_file):
-                        data = pd.read_csv(csv_file, encoding='utf-8')
-                    else:
-                        return None
-            else:
-                data = pd.read_csv(file_to_load, encoding='utf-8')
-            
-            # 检查缓存日期
-            if 'date' in data.columns:
-                data['date'] = pd.to_datetime(data['date'])
-                latest_date = data['date'].max()
-                today = date.today()
-                
-                # 如果最新数据是今天或昨天，使用缓存
-                if latest_date.date() >= today - timedelta(days=1):
-                    return data
-            
-            return data
-        except Exception as e:
-            return None
-    
-    def _save_to_cache(self, stock_code: str, market: str, data: pd.DataFrame):
-        """保存K线数据到缓存"""
-        if data is None or len(data) == 0:
-            return
-        
-        cache_file = self._get_cache_file_path(stock_code, market)
-        
-        try:
-            if 'date' in data.columns:
-                data['date'] = pd.to_datetime(data['date'])
-            
-            # 尝试保存为parquet格式
-            try:
-                data.to_parquet(cache_file, index=False)
-            except Exception:
-                # 如果parquet失败，使用CSV
-                csv_file = cache_file.replace('.parquet', '.csv')
-                data.to_csv(csv_file, index=False, encoding='utf-8')
-        except Exception:
+            fetchers.append(YFinanceKlineFetcher())
+        except ImportError:
             pass
-    
-    def get_kline_data(self, stock_code: str, market: str = "HK", start_date: Optional[str] = None,
-                       end_date: Optional[str] = None, max_count: int = 800,
-                       use_cache: bool = True, verbose: bool = False) -> Optional[pd.DataFrame]:
-        """
-        获取K线数据（带缓存和多数据源fallback）
-        
-        Args:
-            stock_code: 股票代码
-            market: 市场（HK/US）
-            start_date: 开始日期
-            end_date: 结束日期
-            max_count: 最大数据量
-            use_cache: 是否使用缓存
-            verbose: 是否输出详细信息
-            
-        Returns:
-            pd.DataFrame or None
-        """
-        # 1. 尝试从缓存加载
-        if use_cache:
-            cached_data = self._load_from_cache(stock_code, market)
-            if cached_data is not None:
-                if verbose:
-                    latest_date = cached_data['date'].max().strftime('%Y-%m-%d')
-                    print(f"  ✓ {stock_code} 从缓存加载: {len(cached_data)} 条 (最新: {latest_date})")
-                return cached_data
-        
-        # 2. 按优先级尝试各个数据源
-        last_error = None
-        for fetcher in self.fetchers:
+
+        # 2. AKShare（日线 + A 股分钟线）
+        try:
+            fetchers.append(AKShareKlineFetcher())
+        except ImportError:
+            pass
+
+        # 3. Futu（需要 OpenD）
+        if quote_ctx is not None:
             try:
-                if verbose:
-                    print(f"  📡 {stock_code} 使用{fetcher.get_name()}获取...")
-                
-                data = fetcher.fetch(
-                    stock_code, market=market, start_date=start_date,
-                    end_date=end_date, max_count=max_count
-                )
-                
-                if data is not None and len(data) > 0:
-                    if verbose:
-                        latest_date = data['date'].max().strftime('%Y-%m-%d')
-                        oldest_date = data['date'].min().strftime('%Y-%m-%d')
-                        print(f"  ✓ {stock_code} {fetcher.get_name()}获取成功: {len(data)} 条 ({oldest_date} ~ {latest_date})")
-                    
-                    # 保存到缓存
-                    self._save_to_cache(stock_code, market, data)
-                    return data
-                else:
-                    if verbose:
-                        print(f"  ✗ {stock_code} {fetcher.get_name()}返回空数据")
-            except Exception as e:
-                last_error = e
-                if verbose:
-                    print(f"  ✗ {stock_code} {fetcher.get_name()}获取失败: {e}")
-                continue
-        
-        # 3. 如果都失败了
-        if verbose:
-            print(f"  ✗ {stock_code} 所有数据源均失败")
-            if last_error:
-                print(f"    最后错误: {last_error}")
-        
-        return None
+                fetchers.append(FutuKlineFetcher(quote_ctx, rate_limiter))
+            except Exception:
+                pass
+
+        return fetchers

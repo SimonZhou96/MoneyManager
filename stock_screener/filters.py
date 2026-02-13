@@ -367,22 +367,12 @@ class EMABreakoutFilter(Filter):
         self.lookback_days = lookback_days
     
     def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
-        """应用 EMA 突破检查"""
+        """应用 EMA 突破检查（要求调用方预先通过 KlineFetcher 注入 stock.kline_df）"""
         from strategy import check_ema_breakout, EMABreakoutResult
-        
-        # 获取 K 线数据
+
         df = stock.kline_df
         if df is None or df.empty:
-            # 尝试从数据库获取
-            if context.db is not None:
-                from datetime import timedelta
-                start_date = (context.check_date - timedelta(days=365)).strftime("%Y-%m-%d")
-                end_date = context.check_date.strftime("%Y-%m-%d")
-                df = context.db.get_klines(stock.market, stock.code, start_date, end_date)
-                stock.kline_df = df  # 缓存到 stock 对象
-        
-        if df is None or df.empty:
-            return self._skip("K线数据不足")
+            return self._skip("K线数据不足（需由调用方预注入 stock.kline_df）")
         
         # 执行 EMA 突破检查
         result, breakout_date, ema_short_val, ema_long_val = check_ema_breakout(
