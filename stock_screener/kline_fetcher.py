@@ -11,6 +11,9 @@ from abc import ABC, abstractmethod
 from typing import Optional, List
 import time
 import random
+import warnings
+import sys
+import os
 
 from timeframe import (
     parse_timeframe, is_intraday,
@@ -110,6 +113,19 @@ class YFinanceKlineFetcher(KlineFetcherBase):
 
     def get_name(self) -> str:
         return "YFinance"
+    
+    @staticmethod
+    def _suppress_yfinance_warnings():
+        """抑制 yfinance 的警告信息"""
+        warnings.filterwarnings('ignore', category=FutureWarning)
+        warnings.filterwarnings('ignore', message='.*possibly delisted.*')
+        # 重定向 stderr 到 devnull
+        class DevNull:
+            def write(self, msg):
+                pass
+            def flush(self):
+                pass
+        return DevNull()
 
     @staticmethod
     def _to_yf_code(stock_code: str, market: str) -> str:
@@ -140,13 +156,24 @@ class YFinanceKlineFetcher(KlineFetcherBase):
         try:
             yf_code = self._to_yf_code(stock_code, market)
             period = get_yf_period(timeframe)
-            data = self.yf.download(
-                yf_code,
-                period=period,
-                interval=timeframe,
-                auto_adjust=True,
-                progress=False,
-            )
+            
+            # 抑制 yfinance 的警告信息
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                old_stderr = sys.stderr
+                sys.stderr = self._suppress_yfinance_warnings()
+                
+                try:
+                    data = self.yf.download(
+                        yf_code,
+                        period=period,
+                        interval=timeframe,
+                        auto_adjust=True,
+                        progress=False,
+                    )
+                finally:
+                    sys.stderr = old_stderr
+            
             if data is None or data.empty:
                 return None
 

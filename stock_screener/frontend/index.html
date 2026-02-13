@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>选股器</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 选股器</h1>
+            <p class="subtitle">智能股票筛选工具</p>
+        </header>
+
+        <main>
+            <!-- 筛选表单 -->
+            <section class="filter-section card">
+                <h2>筛选条件</h2>
+                
+                <form id="filterForm">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="market">市场</label>
+                            <select id="market" name="market" required>
+                                <option value="">加载中...</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="timeframe">时间周期</label>
+                            <select id="timeframe" name="timeframe" required>
+                                <option value="">加载中...</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="marketCapMin">市值（最小）</label>
+                            <input type="text" id="marketCapMin" name="market_cap_min" 
+                                   placeholder="例如：50亿 或 5000000000">
+                            <small>支持：50亿、50億、5e9</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="marketCapMax">市值（最大）</label>
+                            <input type="text" id="marketCapMax" name="market_cap_max" 
+                                   placeholder="可选">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="avgVolumeMin">每日平均交易量（最小）</label>
+                            <input type="text" id="avgVolumeMin" name="avg_daily_volume_min" 
+                                   placeholder="例如：2000万 或 20000000">
+                            <small>支持：2000万、2000萬、2e7</small>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="priceMin">股票价格（最小）</label>
+                            <input type="number" id="priceMin" name="price_min" 
+                                   placeholder="例如：5" step="0.01">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="priceMax">股票价格（最大）</label>
+                            <input type="number" id="priceMax" name="price_max" 
+                                   placeholder="例如：1000" step="0.01">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="peMin">市盈率（最小）</label>
+                            <input type="number" id="peMin" name="pe_min" 
+                                   placeholder="例如：10" step="0.1">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="peMax">市盈率（最大）</label>
+                            <input type="number" id="peMax" name="pe_max" 
+                                   placeholder="例如：100" step="0.1">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group checkbox-group">
+                            <label>
+                                <input type="checkbox" id="useEmaBreakout" name="use_ema_breakout" checked>
+                                <span>启用 EMA 突破策略（EMA10 突破 EMA150）</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group checkbox-group">
+                            <label>
+                                <input type="checkbox" id="requireProfitable" name="require_profitable" checked>
+                                <span>公司有盈利</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" id="resetBtn" class="btn btn-secondary">重置</button>
+                        <button type="submit" id="submitBtn" class="btn btn-primary">开始筛选</button>
+                    </div>
+                </form>
+            </section>
+
+            <!-- 进度区 -->
+            <section id="progressSection" class="progress-section card" style="display: none;">
+                <h2>筛选进度</h2>
+                
+                <div class="current-stock">
+                    <div class="label">当前处理：</div>
+                    <div id="currentStock" class="value">-</div>
+                </div>
+                
+                <div class="progress-bar-container">
+                    <div class="progress-bar">
+                        <div id="progressBar" class="progress-fill"></div>
+                    </div>
+                    <div id="progressText" class="progress-text">0 / 0</div>
+                </div>
+
+                <div class="progress-status">
+                    <span id="statusText">准备中...</span>
+                </div>
+
+                <!-- 满足条件的股票实时列表 -->
+                <div class="passed-stocks-section">
+                    <h3>✅ 满足条件的股票 (<span id="passedCount">0</span>)</h3>
+                    <div id="passedStocksList" class="passed-stocks-list">
+                        <div class="empty-message">暂无满足条件的股票</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 结果区 -->
+            <section id="resultsSection" class="results-section card" style="display: none;">
+                <h2>筛选结果</h2>
+                
+                <div class="results-summary">
+                    <span id="resultsSummary">共找到 0 只符合条件的股票</span>
+                </div>
+
+                <div class="results-table-container">
+                    <table id="resultsTable" class="results-table">
+                        <thead>
+                            <tr>
+                                <th>代码</th>
+                                <th>名称</th>
+                                <th>板块</th>
+                                <th>市值</th>
+                                <th>价格</th>
+                                <th>市盈率</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsBody">
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>© 2026 选股器 - 高内聚、低耦合的股票筛选系统</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

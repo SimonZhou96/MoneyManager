@@ -690,6 +690,182 @@ class VolumeFilter(Filter):
         )
 
 
+class PriceFilter(Filter):
+    """股票价格筛选器
+    
+    根据股票价格范围筛选，价格从 K 线 close 获取
+    """
+    
+    def __init__(
+        self,
+        min_price: Optional[float] = None,  # 最小价格
+        max_price: Optional[float] = None,  # 最大价格
+        name: str = "PriceFilter",
+        enabled: bool = True,
+    ):
+        super().__init__(name=name, enabled=enabled)
+        self.min_price = min_price
+        self.max_price = max_price
+    
+    def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
+        """应用价格筛选"""
+        # 从 K 线数据获取最新收盘价
+        if stock.kline_df is None or stock.kline_df.empty:
+            return self._skip("K线数据缺失")
+        
+        if "close" not in stock.kline_df.columns:
+            return self._skip("K线数据无收盘价")
+        
+        try:
+            price = float(stock.kline_df["close"].iloc[-1])
+        except (ValueError, TypeError, IndexError):
+            return self._skip("无法获取收盘价")
+        
+        if self.min_price is not None and price < self.min_price:
+            return self._fail(
+                reason=f"股票价格 {price:.2f} < 最小值 {self.min_price:.2f}",
+                price=price,
+                min_price=self.min_price
+            )
+        
+        if self.max_price is not None and price > self.max_price:
+            return self._fail(
+                reason=f"股票价格 {price:.2f} > 最大值 {self.max_price:.2f}",
+                price=price,
+                max_price=self.max_price
+            )
+        
+        return self._pass(
+            reason=f"股票价格 {price:.2f} 在范围内",
+            price=price
+        )
+
+
+class AvgDailyVolumeFilter(Filter):
+    """每日平均交易量筛选器
+    
+    根据每日平均交易量范围筛选，从 K 线数据计算
+    """
+    
+    def __init__(
+        self,
+        min_volume: Optional[float] = None,  # 最小每日平均交易量
+        max_volume: Optional[float] = None,  # 最大每日平均交易量
+        name: str = "AvgDailyVolumeFilter",
+        enabled: bool = True,
+    ):
+        super().__init__(name=name, enabled=enabled)
+        self.min_volume = min_volume
+        self.max_volume = max_volume
+    
+    def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
+        """应用每日平均交易量筛选"""
+        # 从 K 线数据计算每日平均交易量
+        if stock.kline_df is None or stock.kline_df.empty:
+            return self._skip("K线数据缺失")
+        
+        if "volume" not in stock.kline_df.columns:
+            return self._skip("K线数据无成交量")
+        
+        # 计算每日平均成交量
+        try:
+            from timeframe import is_intraday
+            # 获取 timeframe（从 context 或默认为日线）
+            timeframe = getattr(context, "timeframe", "1d")
+            
+            df = stock.kline_df
+            if is_intraday(timeframe):
+                # 日内：按日期聚合后取均值
+                if isinstance(df.index, pd.DatetimeIndex):
+                    daily = df["volume"].groupby(df.index.date).sum()
+                elif "date" in df.columns:
+                    dt = pd.to_datetime(df["date"])
+                    daily = df["volume"].groupby(dt.dt.date).sum()
+                else:
+                    avg_volume = float(df["volume"].mean())
+                    daily = None
+                
+                if daily is not None and len(daily) > 0:
+                    avg_volume = float(daily.mean())
+                else:
+                    avg_volume = float(df["volume"].mean()) if len(df) > 0 else None
+            else:
+                # 日线及以上：直接取均值
+                avg_volume = float(df["volume"].mean()) if len(df) > 0 else None
+            
+            if avg_volume is None:
+                return self._skip("无法计算每日平均交易量")
+        except Exception as e:
+            return self._skip(f"计算每日平均交易量失败: {str(e)}")
+        
+        if self.min_volume is not None and avg_volume < self.min_volume:
+            return self._fail(
+                reason=f"每日平均交易量 {avg_volume:.0f} < 最小值 {self.min_volume:.0f}",
+                avg_daily_volume=avg_volume,
+                min_volume=self.min_volume
+            )
+        
+        if self.max_volume is not None and avg_volume > self.max_volume:
+            return self._fail(
+                reason=f"每日平均交易量 {avg_volume:.0f} > 最大值 {self.max_volume:.0f}",
+                avg_daily_volume=avg_volume,
+                max_volume=self.max_volume
+            )
+        
+        return self._pass(
+            reason=f"每日平均交易量 {avg_volume:.0f} 在范围内",
+            avg_daily_volume=avg_volume
+        )
+
+
+class ProfitabilityFilter(Filter):
+    """公司盈利筛选器
+    
+    根据公司是否有盈利筛选（PE > 0 且有限）
+    """
+    
+    def __init__(
+        self,
+        require_profitable: bool = True,
+        name: str = "ProfitabilityFilter",
+        enabled: bool = True,
+    ):
+        super().__init__(name=name, enabled=enabled)
+        self.require_profitable = require_profitable
+    
+    def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
+        """应用盈利筛选"""
+        pe = stock.pe_ratio
+        
+        if pe is None:
+            return self._skip("PE数据缺失")
+        
+        try:
+            is_profitable = pe > 0 and abs(pe) != float("inf")
+        except (TypeError, ValueError):
+            return self._skip("PE数据异常")
+        
+        if self.require_profitable:
+            if not is_profitable:
+                return self._fail(
+                    reason=f"公司无盈利 (PE={pe:.2f})",
+                    pe=pe,
+                    is_profitable=False
+                )
+            return self._pass(
+                reason=f"公司有盈利 (PE={pe:.2f})",
+                pe=pe,
+                is_profitable=True
+            )
+        else:
+            # 不要求盈利，直接通过
+            return self._pass(
+                reason="不要求盈利",
+                pe=pe,
+                is_profitable=is_profitable
+            )
+
+
 class CustomFilter(Filter):
     """自定义筛选器
     

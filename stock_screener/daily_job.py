@@ -270,21 +270,13 @@ def run_once(
             if result:
                 result["timestamp"] = datetime.utcnow().isoformat()
                 log_records.append(result)
-
+                print(f"输出结果:\n{result}\n")
             # 简单限速
             time.sleep(0.3)
 
     if futu_ctx:
         futu_ctx.close()
     db.close()
-
-    # 3) 写日志
-    if log_path and log_records:
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        with open(log_path, "w", encoding="utf-8") as f:
-            for rec in log_records:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        print(f"\n✓ 日志已保存: {log_path}")
 
     satisfied = [r for r in log_records if r.get("is_satisfied")]
     print(f"\n扫描完成：共 {len(log_records)} 只，突破 {len(satisfied)} 只")

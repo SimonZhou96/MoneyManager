@@ -140,6 +140,32 @@ class MarketDatabase:
                 """
             )
 
+            # screening_tasks 表
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS screening_tasks (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    task_id VARCHAR(36) NOT NULL,
+                    market VARCHAR(8) NOT NULL,
+                    timeframe VARCHAR(8) NOT NULL,
+                    status VARCHAR(16) NOT NULL DEFAULT 'running',
+                    total_count INT NOT NULL DEFAULT 0,
+                    completed_count INT NOT NULL DEFAULT 0,
+                    current_stock_code VARCHAR(32) NULL,
+                    current_stock_name VARCHAR(255) NULL,
+                    params_json JSON NULL,
+                    check_date DATE NOT NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_tasks_task_id (task_id),
+                    KEY idx_tasks_status (status),
+                    KEY idx_tasks_market_date (market, check_date),
+                    KEY idx_tasks_created_at (created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
     def _ema_table_name(self, timeframe: str) -> str:
         """获取 EMA 信号表名：ema_breakout_signals_{timeframe}"""
         suffix = _safe_table_suffix(timeframe)
@@ -435,6 +461,88 @@ class MarketDatabase:
         """
         with self.conn.cursor() as cursor:
             cursor.executemany(sql, rows)
+
+    # ------------------------------------------------------------------
+    # screening_tasks
+    # ------------------------------------------------------------------
+
+    def create_screening_task(
+        self,
+        task_id: str,
+        market: str,
+        timeframe: str,
+        total_count: int,
+        params_json: Optional[dict] = None,
+        check_date: Optional[date] = None,
+    ) -> int:
+        """创建筛选任务"""
+        if check_date is None:
+            check_date = date.today()
+        params_str = json.dumps(params_json, ensure_ascii=False) if params_json else None
+        sql = """
+            INSERT INTO screening_tasks
+                (task_id, market, timeframe, status, total_count, completed_count, params_json, check_date)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (task_id, market, timeframe, "running", total_count, 0, params_str, check_date))
+            return cursor.lastrowid
+
+    def update_task_progress(
+        self,
+        task_id: str,
+        completed_count: int,
+        current_stock_code: Optional[str] = None,
+        current_stock_name: Optional[str] = None,
+    ):
+        """更新任务进度"""
+        sql = """
+            UPDATE screening_tasks
+            SET completed_count=%s, current_stock_code=%s, current_stock_name=%s
+            WHERE task_id=%s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (completed_count, current_stock_code, current_stock_name, task_id))
+
+    def update_task_status(self, task_id: str, status: str):
+        """更新任务状态"""
+        sql = "UPDATE screening_tasks SET status=%s WHERE task_id=%s"
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (status, task_id))
+
+    def get_task_by_id(self, task_id: str) -> Optional[dict]:
+        """根据 task_id 获取任务"""
+        sql = """
+            SELECT task_id, market, timeframe, status, total_count, completed_count,
+                   current_stock_code, current_stock_name, params_json, check_date,
+                   created_at, updated_at
+            FROM screening_tasks WHERE task_id=%s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (task_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            params = None
+            if row[8]:
+                try:
+                    params = json.loads(row[8])
+                except Exception:
+                    params = None
+            return {
+                "task_id": row[0],
+                "market": row[1],
+                "timeframe": row[2],
+                "status": row[3],
+                "total_count": row[4],
+                "completed_count": row[5],
+                "current_stock_code": row[6],
+                "current_stock_name": row[7],
+                "params_json": params,
+                "check_date": row[9],
+                "created_at": row[10],
+                "updated_at": row[11],
+            }
 
     # ------------------------------------------------------------------
     # 迁移（保留兼容）
