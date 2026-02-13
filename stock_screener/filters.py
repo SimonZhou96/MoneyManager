@@ -367,12 +367,16 @@ class EMABreakoutFilter(Filter):
         self.lookback_days = lookback_days
     
     def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
-        """应用 EMA 突破检查（要求调用方预先通过 KlineFetcher 注入 stock.kline_df）"""
+        """应用 EMA 突破检查（要求调用方预先通过 KlineFetcher 注入 stock.kline_df）。
+        K 线数据不足时强校验不通过，该股票不可能满足突破条件。"""
         from strategy import check_ema_breakout, EMABreakoutResult
 
         df = stock.kline_df
         if df is None or df.empty:
-            return self._skip("K线数据不足（需由调用方预注入 stock.kline_df）")
+            return self._fail(
+                reason="K线数据不足，无法判断突破（需由调用方预注入 stock.kline_df）",
+                kline_available=False,
+            )
         
         # 执行 EMA 突破检查
         result, breakout_date, ema_short_val, ema_long_val = check_ema_breakout(
@@ -419,11 +423,11 @@ class MarketCapFilter(Filter):
         self.max_cap = max_cap
     
     def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
-        """应用市值筛选"""
+        """应用市值筛选。数据缺失时兜底视为通过，不阻断后续流程。"""
         market_cap = stock.market_cap
         
         if market_cap is None:
-            return self._skip("市值数据缺失")
+            return self._pass("市值数据缺失，兜底视为通过", market_cap=None)
         
         if self.min_cap is not None and market_cap < self.min_cap:
             return self._fail(
@@ -465,11 +469,11 @@ class PEFilter(Filter):
         self.allow_negative = allow_negative
     
     def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
-        """应用 PE 筛选"""
+        """应用 PE 筛选。数据缺失时兜底视为通过，不阻断后续流程。"""
         pe = stock.pe_ratio
         
         if pe is None:
-            return self._skip("PE数据缺失")
+            return self._pass("PE数据缺失，兜底视为通过", pe=None)
         
         if not self.allow_negative and pe < 0:
             return self._fail(
@@ -515,11 +519,11 @@ class PBFilter(Filter):
         self.max_pb = max_pb
     
     def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
-        """应用 PB 筛选"""
+        """应用 PB 筛选。数据缺失时兜底视为通过，不阻断后续流程。"""
         pb = stock.pb_ratio
         
         if pb is None:
-            return self._skip("PB数据缺失")
+            return self._pass("PB数据缺失，兜底视为通过", pb=None)
         
         if self.min_pb is not None and pb < self.min_pb:
             return self._fail(
@@ -620,11 +624,11 @@ class TurnoverRateFilter(Filter):
         self.max_rate = max_rate
     
     def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
-        """应用换手率筛选"""
+        """应用换手率筛选。数据缺失时兜底视为通过，不阻断后续流程。"""
         rate = stock.turnover_rate
         
         if rate is None:
-            return self._skip("换手率数据缺失")
+            return self._pass("换手率数据缺失，兜底视为通过", turnover_rate=None)
         
         if self.min_rate is not None and rate < self.min_rate:
             return self._fail(
@@ -664,11 +668,11 @@ class VolumeFilter(Filter):
         self.max_volume = max_volume
     
     def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
-        """应用成交量筛选"""
+        """应用成交量筛选。数据缺失时兜底视为通过，不阻断后续流程。"""
         volume = stock.volume
         
         if volume is None:
-            return self._skip("成交量数据缺失")
+            return self._pass("成交量数据缺失，兜底视为通过", volume=None)
         
         if self.min_volume is not None and volume < self.min_volume:
             return self._fail(
@@ -834,11 +838,11 @@ class ProfitabilityFilter(Filter):
         self.require_profitable = require_profitable
     
     def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
-        """应用盈利筛选"""
+        """应用盈利筛选。数据缺失时兜底视为通过，不阻断后续流程。"""
         pe = stock.pe_ratio
         
         if pe is None:
-            return self._skip("PE数据缺失")
+            return self._pass("PE数据缺失，兜底视为通过", pe=None, is_profitable=None)
         
         try:
             is_profitable = pe > 0 and abs(pe) != float("inf")
