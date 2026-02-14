@@ -19,11 +19,12 @@ from datetime import date, datetime
 import pandas as pd
 
 from db import MarketDatabase, MySqlConfig
+from fundamental_fetcher import FundamentalFetcherFactory
 from kline_fetcher import KlineFetcherFactory
 from market import market_label, parse_markets, normalize_market
 from strategy import analyze_stock_ema_breakout
 from timeframe import is_intraday, parse_timeframe
-from universe import fetch_stock_list_akshare, fetch_stock_list_futu
+from universe import fetch_stock_list
 
 
 # ------------------------------------------------------------------
@@ -66,14 +67,31 @@ def _scan_single_stock(
     code: str,
     timeframe: str,
     stock_info: dict | None = None,
+    fundamental_fetchers=None,
     verbose: bool = True,
 ) -> dict | None:
     """
-    扫描单只股票：拉 K 线 -> 内存计算 -> 写入 DB
+    扫描单只股票：基本面补全 -> 拉 K 线 -> 内存计算 -> 写入 DB
 
     Returns:
         结果 dict 或 None（获取失败）
     """
+    # 0) 基本面补全（HK/US/A 且缺失 market_cap/pe_ratio/sector/industry 时）
+    if stock_info and fundamental_fetchers and market.upper() in ("HK", "US", "A"):
+        need_fundamental = (
+            stock_info.get("market_cap") is None
+            or stock_info.get("pe_ratio") is None
+            or stock_info.get("sector") is None
+            or stock_info.get("industry") is None
+        )
+        if need_fundamental:
+            for fund_fetcher in fundamental_fetchers:
+                try:
+                    if fund_fetcher.enrich(stock_info, market, code=code):
+                        break
+                except Exception:
+                    continue
+
     # 1) 用 fetcher 链获取 K 线
     df = None
     source = None
@@ -234,18 +252,15 @@ def run_once(
         futu_ctx, _ = _init_futu_context(futu_host, futu_port)
 
     fetchers = KlineFetcherFactory.create_fetcher_chain(quote_ctx=futu_ctx)
+    fundamental_fetchers = FundamentalFetcherFactory.create_chain(sleep_seconds=0.2)
     log_records: list[dict] = []
 
     for market in markets:
         market = normalize_market(market)
 
-        # 1) 拉取 / 补充股票列表
+        # 1) 拉取 / 补充股票列表（含 yfinance 补全港股/美股市值、PE）
         if db.stock_count(market) == 0:
-            stocks = fetch_stock_list_akshare(market)
-            src = "AKShare"
-            if not stocks and futu_ctx:
-                stocks = fetch_stock_list_futu(futu_ctx, market)
-                src = "Futu"
+            stocks, src = fetch_stock_list(market, quote_ctx=futu_ctx)
             if stocks:
                 db.upsert_stocks(market, stocks, source=src)
                 print(f"✓ {market_label(market)}股票列表入库 ({len(stocks)} 只)")
@@ -265,7 +280,9 @@ def run_once(
             print(f"[{i}/{len(stocks)}] {code}", end=" ")
             result = _scan_single_stock(
                 db, fetchers, market, code, timeframe,
-                stock_info=stock, verbose=True,
+                stock_info=stock,
+                fundamental_fetchers=fundamental_fetchers,
+                verbose=True,
             )
             if result:
                 result["timestamp"] = datetime.utcnow().isoformat()

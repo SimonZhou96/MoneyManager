@@ -40,6 +40,7 @@ from filters import (
     FilterResult,
     stocks_to_stock_infos,
 )
+from fundamental_fetcher import FundamentalFetcherFactory
 from kline_fetcher import KlineFetcherFactory
 from market import normalize_market, market_label
 from timeframe import parse_timeframe
@@ -170,6 +171,22 @@ def run_screening(
         stock_infos = universe_reducer.reduce(stock_infos)
         if verbose and before > len(stock_infos):
             print(f"股票池缩减: {before} -> {len(stock_infos)} ({universe_reducer.get_name()})")
+
+    # 基本面补全（HK/US/A 且缺失 market_cap/pe_ratio/sector/industry 时）
+    fundamental_fetchers = FundamentalFetcherFactory.create_chain(sleep_seconds=0.2)
+    for si in stock_infos:
+        if fundamental_fetchers and si.market.upper() in ("HK", "US", "A"):
+            need_fundamental = (
+                si.market_cap is None or si.pe_ratio is None
+                or si.sector is None or si.industry is None
+            )
+            if need_fundamental:
+                for fund_fetcher in fundamental_fetchers:
+                    try:
+                        if fund_fetcher.enrich(si, si.market, code=si.code):
+                            break
+                    except Exception:
+                        continue
 
     # 预获取 K 线数据到 stock.kline_df（EMABreakoutFilter 依赖此数据）
     fetchers = KlineFetcherFactory.create_fetcher_chain()

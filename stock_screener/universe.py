@@ -1,6 +1,34 @@
-from typing import Iterable, List, Optional
+import time
+from typing import Iterable, List, Optional, Tuple
 
 from market import normalize_market
+
+
+def _to_yf_symbol(code: str, market: str) -> Optional[str]:
+    """
+    将内部股票代码转为 yfinance 所需格式。
+    - 港股: HK.00700 / 00700 -> 0700.HK
+    - 美股: US.AAPL / AAPL -> AAPL
+    """
+    market = market.upper()
+    code = str(code).strip()
+    if not code:
+        return None
+    if market == "HK":
+        if code.startswith("HK."):
+            code = code[3:]
+        if code.isdigit():
+            return f"{code.zfill(5)}.HK"
+        return None
+    if market == "US":
+        if code.upper().startswith("US."):
+            code = code[3:]
+        if "." in code:
+            suffix = code.split(".")[-1]
+            if suffix.isalpha():
+                code = suffix
+        return code.upper() if code else None
+    return None
 
 
 def _find_column(columns: Iterable[str], keywords: Iterable[str]) -> Optional[str]:
@@ -159,3 +187,89 @@ def fetch_stock_list_futu(quote_ctx, market: str) -> List[dict]:
             elif raw.startswith("SZ."):
                 r["code"] = raw[3:] + ".SZ"
     return records
+
+
+def _enrich_with_yfinance(
+    stocks: List[dict],
+    market: str,
+    sleep_seconds: float = 0.2,
+    enrich_max_count: Optional[int] = None,
+) -> None:
+    """
+    用 yfinance 补全港股/美股市值、PE。
+    仅对 market_cap 或 pe_ratio 为 None 的股票补全，已有值不覆盖。
+    """
+    market = normalize_market(market)
+    if market not in ("HK", "US"):
+        return
+    try:
+        import yfinance as yf
+    except ImportError:
+        return
+
+    need_enrich = [
+        i
+        for i, item in enumerate(stocks)
+        if item.get("market_cap") is None or item.get("pe_ratio") is None
+    ]
+    if enrich_max_count is not None and len(need_enrich) > enrich_max_count:
+        need_enrich = need_enrich[:enrich_max_count]
+
+    for i in need_enrich:
+        item = stocks[i]
+        if item.get("market_cap") is not None and item.get("pe_ratio") is not None:
+            continue
+        yf_symbol = _to_yf_symbol(item.get("code", ""), market)
+        if not yf_symbol:
+            continue
+        try:
+            info = yf.Ticker(yf_symbol).info
+            if info and isinstance(info, dict):
+                if item.get("market_cap") is None:
+                    mc = info.get("marketCap")
+                    if mc is not None and isinstance(mc, (int, float)):
+                        val = float(mc)
+                        if val == val and abs(val) != float("inf"):
+                            item["market_cap"] = val
+                if item.get("pe_ratio") is None:
+                    pe = info.get("trailingPE") or info.get("forwardPE")
+                    if pe is not None and isinstance(pe, (int, float)):
+                        val = float(pe)
+                        if val == val and abs(val) != float("inf"):
+                            item["pe_ratio"] = val
+        except Exception:
+            pass
+        time.sleep(sleep_seconds)
+
+
+def fetch_stock_list(
+    market: str,
+    quote_ctx=None,
+    enrich_fundamentals: bool = True,
+    enrich_sleep_seconds: float = 0.2,
+    enrich_max_count: Optional[int] = None,
+) -> Tuple[List[dict], str]:
+    """
+    获取股票列表（统一入口）。
+    - 先 AKShare，失败则 Futu 兜底（需 quote_ctx）
+    - 对 HK/US 且 enrich_fundamentals=True 时，用 yfinance 补全市值、PE
+
+    Returns:
+        (stocks, source): source 为 "AKShare" 或 "Futu"，表示列表来源
+    """
+    market = normalize_market(market)
+    stocks = fetch_stock_list_akshare(market)
+    source = "AKShare"
+    if not stocks and quote_ctx:
+        stocks = fetch_stock_list_futu(quote_ctx, market)
+        source = "Futu"
+    if not stocks:
+        return [], ""
+    if enrich_fundamentals and market in ("HK", "US"):
+        _enrich_with_yfinance(
+            stocks,
+            market,
+            sleep_seconds=enrich_sleep_seconds,
+            enrich_max_count=enrich_max_count,
+        )
+    return stocks, source

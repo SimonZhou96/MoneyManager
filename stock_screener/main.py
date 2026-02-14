@@ -27,7 +27,7 @@ except ImportError:
     KlineDataManager = None
 
 from market import MARKET_CONFIG, market_label, normalize_market
-from universe import fetch_stock_list_akshare, fetch_stock_list_futu
+from universe import fetch_stock_list
 
 try:
     import futu as ft
@@ -173,23 +173,15 @@ class StockScreener:
             except Exception as e:
                 print(f"读取缓存失败: {e}，重新获取")
         
-        # 优先使用 AKShare 获取
-        stocks = fetch_stock_list_akshare(self.market)
-
+        # 使用统一入口获取（AKShare → Futu 兜底，港股/美股自动 yfinance 补全市值、PE）
+        stocks, source = fetch_stock_list(
+            self.market,
+            quote_ctx=self.quote_ctx if (self.quote_ctx and FUTU_AVAILABLE) else None,
+        )
         if stocks:
-            print(f"✓ AKShare 获取到 {len(stocks)} 只{market_label(self.market)}")
+            print(f"✓ {source or 'API'} 获取到 {len(stocks)} 只{market_label(self.market)}")
         else:
-            # AKShare失败时才尝试 Futu
-            if self.quote_ctx and FUTU_AVAILABLE:
-                try:
-                    stocks = fetch_stock_list_futu(self.quote_ctx, self.market)
-                    if stocks:
-                        print(f"✓ Futu 获取到 {len(stocks)} 只{market_label(self.market)}")
-                    else:
-                        print("✗ 获取股票列表失败: Futu 返回空数据")
-                except Exception as e:
-                    print(f"✗ 获取股票列表异常: {e}")
-                    stocks = []
+            print("✗ 获取股票列表失败")
 
         if not stocks:
             return []
