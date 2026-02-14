@@ -32,6 +32,7 @@ from strategizers import (
     RSIOverboughtStrategizer,
 )
 from timeframe import parse_timeframe
+from universe import fetch_stock_list_akshare
 from universe_filter import UniverseFilterFactory
 
 
@@ -168,10 +169,27 @@ def run_screening_task(
             except Exception:
                 pass
         else:
-            stocks = db.get_stocks(market, include_fundamentals=True)
+            # 全量股票兜底：优先从 API 拉取并写入 DB，API 无数据则用 DB，都没有再报错
+            stocks = []
+            try:
+                stocks = db.get_stocks(market, include_fundamentals=True)
+                if not stocks or len(stocks) == 0:
+                    api_stocks = fetch_stock_list_akshare(market)
+                    db.upsert_stocks(market, api_stocks, source="AKShare")
+                    stocks = api_stocks
+                    if verbose:
+                        print(f"✓ 从 API 获取{market_label(market)}股票 {len(api_stocks)} 只并已更新至 DB")
+
+            except Exception as e:
+                if verbose:
+                    print(f"⚠ API 获取股票失败: {e}，尝试使用 DB 数据")
+            if not stocks:
+                stocks = db.get_stocks(market, include_fundamentals=True)
+                if stocks and verbose:
+                    print(f"✓ 使用 DB 中{market_label(market)}股票 {len(stocks)} 只")
             if not stocks:
                 if verbose:
-                    print(f"✗ 未获取到{market_label(market)}股票列表")
+                    print(f"✗ 未获取到{market_label(market)}股票列表（API 与 DB 均无数据）")
                 db.update_task_status(task_id, "failed")
                 return
 
