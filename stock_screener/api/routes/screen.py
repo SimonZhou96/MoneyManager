@@ -7,7 +7,7 @@
 import os
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 
 from db import MarketDatabase, MySqlConfig
 from market import normalize_market
@@ -34,6 +34,7 @@ class ScreenRequest(BaseModel):
     pe_min: Optional[float] = None
     pe_max: Optional[float] = None
     require_profitable: Optional[bool] = None
+    watchlist: Optional[List[dict]] = None  # 自选股列表 [{code, name}, ...]，非空时仅筛选此列表
 
 
 def get_mysql_config() -> MySqlConfig:
@@ -83,12 +84,18 @@ async def start_screening(request: ScreenRequest, background_tasks: BackgroundTa
         # 获取 MySQL 配置
         mysql_config = get_mysql_config()
         
+        # 自选股列表：非空且长度>0 时仅筛选该列表
+        watchlist = getattr(request, "watchlist", None)
+        if watchlist is not None and (not isinstance(watchlist, list) or len(watchlist) == 0):
+            watchlist = None
+
         # 创建并启动筛选任务
         task_id = create_and_start_screening_task(
             mysql_config=mysql_config,
             market=market,
             timeframe=timeframe,
             params=parsed_params,
+            watchlist=watchlist,
             background_runner=background_tasks.add_task,
         )
         
@@ -132,19 +139,15 @@ async def get_progress(task_id: str):
             db.close()
             raise HTTPException(status_code=404, detail="任务不存在")
         
-        # 查询当前已通过筛选的股票
-        check_date = task["check_date"]
-        market = task["market"]
-        
+        # 按 task_id 查询已通过筛选的股票（避免同一天多任务结果混淆）
         sql = """
             SELECT code, name
             FROM screening_results
-            WHERE market=%s AND check_date=%s AND is_passed=1
+            WHERE task_id=%s AND is_passed=1
             ORDER BY code
         """
-        
         with db.conn.cursor() as cursor:
-            cursor.execute(sql, (market, check_date))
+            cursor.execute(sql, (task["task_id"],))
             rows = cursor.fetchall() or []
         
         db.close()
@@ -198,28 +201,19 @@ async def get_results(task_id: str, passed_only: bool = True):
             db.close()
             raise HTTPException(status_code=404, detail="任务不存在")
         
-        # 获取筛选结果（从 screening_results 表）
-        # TODO: 这里需要在 db.py 中添加按 task_id 查询的方法
-        # 目前按 check_date + market 查询
-        check_date = task["check_date"]
-        market = task["market"]
-        
-        # 简化版：直接查询 screening_results 表
+        # 按 task_id 查询筛选结果（避免同一天多任务结果混淆）
         sql = """
             SELECT code, name, is_passed, filter_summary, sector, industry,
                    market_cap, pe_ratio, close_price
             FROM screening_results
-            WHERE market=%s AND check_date=%s
+            WHERE task_id=%s
         """
-        params = [market, check_date]
-        
         if passed_only:
             sql += " AND is_passed=1"
-        
         sql += " ORDER BY code"
-        
+
         with db.conn.cursor() as cursor:
-            cursor.execute(sql, params)
+            cursor.execute(sql, (task["task_id"],))
             rows = cursor.fetchall() or []
         
         db.close()

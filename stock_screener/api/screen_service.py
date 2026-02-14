@@ -113,10 +113,11 @@ def run_screening_task(
     timeframe: str,
     params: dict,
     verbose: bool = False,
+    watchlist: Optional[list] = None,
 ):
     """
     执行筛选任务（后台运行）
-    
+
     Args:
         mysql_config: MySQL 配置
         task_id: 任务ID
@@ -124,20 +125,56 @@ def run_screening_task(
         timeframe: 时间周期
         params: 筛选参数
         verbose: 是否输出详细日志
+        watchlist: 自选股列表 [{"code", "name", ...}]，非空时仅筛选此列表不查 DB
     """
     db = None
     try:
         db = MarketDatabase(mysql_config)
         db.init_schema(timeframe)
-        
-        # 获取股票列表
-        stocks = db.get_stocks(market, include_fundamentals=True)
-        if not stocks:
-            if verbose:
-                print(f"✗ 未获取到{market_label(market)}股票列表")
-            db.update_task_status(task_id, "failed")
-            return
-        
+
+        # 股票列表：自选股非空则直接用，否则从 DB 拉取
+        if watchlist and len(watchlist) > 0:
+            stocks = []
+            for item in watchlist:
+                code = (item.get("code") or "").strip()
+                if not code:
+                    continue
+                stocks.append({
+                    "code": code,
+                    "name": item.get("name") or code,
+                    "sector": item.get("sector"),
+                    "industry": item.get("industry"),
+                    "market_cap": item.get("market_cap"),
+                    "pe_ratio": item.get("pe_ratio"),
+                    "pb_ratio": item.get("pb_ratio"),
+                })
+            if not stocks:
+                if verbose:
+                    print("✗ 自选股列表无有效股票")
+                db.update_task_status(task_id, "failed")
+                return
+            # 自选股补全基本面（从 stocks 表按 code 查）
+            try:
+                fund_list = db.get_stocks_by_codes(market, [s["code"] for s in stocks], include_fundamentals=True)
+                fund_by_code = {r["code"]: r for r in fund_list}
+                for s in stocks:
+                    f = fund_by_code.get(s["code"])
+                    if f:
+                        s["sector"] = s["sector"] or f.get("sector")
+                        s["industry"] = s["industry"] or f.get("industry")
+                        s["market_cap"] = s["market_cap"] if s.get("market_cap") is not None else f.get("market_cap")
+                        s["pe_ratio"] = s["pe_ratio"] if s.get("pe_ratio") is not None else f.get("pe_ratio")
+                        s["pb_ratio"] = s["pb_ratio"] if s.get("pb_ratio") is not None else f.get("pb_ratio")
+            except Exception:
+                pass
+        else:
+            stocks = db.get_stocks(market, include_fundamentals=True)
+            if not stocks:
+                if verbose:
+                    print(f"✗ 未获取到{market_label(market)}股票列表")
+                db.update_task_status(task_id, "failed")
+                return
+
         total_count = len(stocks)
         
         # 更新任务总数
@@ -331,6 +368,7 @@ def run_screening_task(
                 })
             
             db_record = {
+                "task_id": task_id,
                 "market": market,
                 "code": stock.code,
                 "name": stock.name or "",
@@ -383,30 +421,32 @@ def create_and_start_screening_task(
     timeframe: str,
     params: dict,
     background_runner: Callable[[Callable], None],
+    watchlist: Optional[list] = None,
 ) -> str:
     """
     创建并启动筛选任务
-    
+
     Args:
         mysql_config: MySQL 配置
         market: 市场
         timeframe: 时间周期
         params: 筛选参数
         background_runner: 后台运行函数（接收一个可调用对象）
-        
+        watchlist: 自选股列表 [{"code": "...", "name": "..."}, ...]，非空时仅筛选此列表
+
     Returns:
         task_id: 任务ID
     """
-    # 生成任务ID
     task_id = str(uuid.uuid4())
-    
-    # 创建数据库连接，获取股票总数
+
     db = MarketDatabase(mysql_config)
     db.init_schema(timeframe)
-    
-    total_count = db.stock_count(market)
-    
-    # 创建任务记录
+
+    if watchlist and len(watchlist) > 0:
+        total_count = len(watchlist)
+    else:
+        total_count = db.stock_count(market)
+
     db.create_screening_task(
         task_id=task_id,
         market=market,
@@ -415,10 +455,9 @@ def create_and_start_screening_task(
         params_json=params,
         check_date=date.today(),
     )
-    
+
     db.close()
-    
-    # 启动后台任务
+
     background_runner(
         lambda: run_screening_task(
             mysql_config=mysql_config,
@@ -426,8 +465,9 @@ def create_and_start_screening_task(
             market=market,
             timeframe=timeframe,
             params=params,
+            watchlist=watchlist,
             verbose=True,
         )
     )
-    
+
     return task_id

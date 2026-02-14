@@ -4,6 +4,8 @@ const API_BASE = '/api';
 // 全局变量
 let currentTaskId = null;
 let progressInterval = null;
+let watchlistByMarket = { HK: [], A: [], US: [] };
+let currentWatchlistTab = 'HK';
 
 // 工具函数：解析带单位的数值
 function parseNumberWithUnit(value) {
@@ -53,9 +55,22 @@ function formatLargeNumber(num) {
 
 // 初始化页面
 async function init() {
-    await loadMarkets();
-    await loadTimeframes();
     setupEventListeners();
+    try {
+        await loadMarkets();
+    } catch (e) {
+        console.error('loadMarkets failed', e);
+    }
+    try {
+        await loadTimeframes();
+    } catch (e) {
+        console.error('loadTimeframes failed', e);
+    }
+    try {
+        await loadAllWatchlists();
+    } catch (e) {
+        console.error('loadAllWatchlists failed', e);
+    }
 }
 
 // 加载市场列表
@@ -79,6 +94,66 @@ async function loadMarkets() {
     } catch (error) {
         console.error('加载市场列表失败:', error);
         showError('加载市场列表失败');
+    }
+}
+
+// 加载自选股（单市场）
+async function loadWatchlist(market, forceRefresh = false) {
+    const wrap = document.getElementById('watchlistTableWrap');
+    const emptyEl = document.getElementById('watchlistEmpty');
+    const loadingEl = document.querySelector('.watchlist-content .watchlist-loading');
+    const sourceEl = document.getElementById('watchlistSource');
+    if (loadingEl) loadingEl.style.display = 'block';
+    if (wrap) wrap.style.display = 'none';
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (sourceEl) sourceEl.textContent = '';
+    try {
+        const url = `${API_BASE}/watchlist?market=${encodeURIComponent(market)}`;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('获取自选股失败');
+        const data = await response.json();
+        const stocks = Array.isArray(data.stocks) ? data.stocks : (data.markets && data.markets[market] && data.markets[market].stocks) || [];
+        watchlistByMarket[market] = stocks;
+        if (sourceEl && data.from_cache) sourceEl.textContent = '（来自缓存）';
+        if (market === currentWatchlistTab) renderWatchlist(market);
+    } catch (err) {
+        console.error('加载自选股失败:', err);
+        watchlistByMarket[market] = [];
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (wrap) wrap.style.display = 'none';
+        if (emptyEl) { emptyEl.style.display = 'block'; emptyEl.textContent = '加载失败，请检查 Futu OpenD 或稍后重试'; }
+        if (sourceEl) sourceEl.textContent = '';
+    }
+}
+
+async function loadAllWatchlists() {
+    for (const m of ['HK', 'A', 'US']) {
+        await loadWatchlist(m);
+    }
+    renderWatchlist(currentWatchlistTab);
+}
+
+function renderWatchlist(market) {
+    const loadingEl = document.querySelector('.watchlist-content .watchlist-loading');
+    const wrap = document.getElementById('watchlistTableWrap');
+    const emptyEl = document.getElementById('watchlistEmpty');
+    const tbody = document.getElementById('watchlistBody');
+    const list = watchlistByMarket[market] || [];
+    if (loadingEl) loadingEl.style.display = 'none';
+    if (list.length === 0) {
+        if (wrap) wrap.style.display = 'none';
+        if (emptyEl) { emptyEl.style.display = 'block'; emptyEl.textContent = '暂无自选股数据'; }
+        return;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (wrap) wrap.style.display = 'block';
+    if (tbody) {
+        tbody.innerHTML = '';
+        list.forEach(s => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${s.code || '-'}</td><td>${s.name || s.code || '-'}</td>`;
+            tbody.appendChild(tr);
+        });
     }
 }
 
@@ -110,9 +185,28 @@ async function loadTimeframes() {
 function setupEventListeners() {
     const form = document.getElementById('filterForm');
     const resetBtn = document.getElementById('resetBtn');
+    const marketSelect = document.getElementById('market');
     
     form.addEventListener('submit', handleSubmit);
     resetBtn.addEventListener('click', handleReset);
+
+    document.querySelectorAll('.watchlist-tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.watchlist-tab').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentWatchlistTab = btn.getAttribute('data-market');
+            renderWatchlist(currentWatchlistTab);
+        });
+    });
+    document.getElementById('watchlistRefreshBtn').addEventListener('click', () => {
+        loadWatchlist(currentWatchlistTab, true);
+    });
+    marketSelect.addEventListener('change', () => {
+        const m = marketSelect.value;
+        if (m && watchlistByMarket[m] && watchlistByMarket[m].length === 0) {
+            loadWatchlist(m);
+        }
+    });
 }
 
 // 处理表单提交
@@ -170,6 +264,19 @@ async function handleSubmit(e) {
         if (peMax) {
             params.pe_max = parseFloat(peMax);
         }
+
+        const screenWatchlistOnly = document.getElementById('screenWatchlistOnly').checked;
+        if (screenWatchlistOnly) {
+            const market = params.market;
+            const list = watchlistByMarket[market] || [];
+            if (list.length === 0) {
+                showError('当前市场自选股为空，请先刷新自选股或取消勾选「仅筛选自选股」');
+                submitBtn.disabled = false;
+                submitBtn.textContent = '开始筛选';
+                return;
+            }
+            params.watchlist = list;
+        }
         
         // 发起筛选请求
         const response = await fetch(`${API_BASE}/screen`, {
@@ -213,7 +320,8 @@ function handleReset() {
     document.getElementById('timeframe').value = '1d';
     document.getElementById('useEmaBreakout').checked = true;
     document.getElementById('requireProfitable').checked = true;
-    
+    document.getElementById('screenWatchlistOnly').checked = false;
+
     // 隐藏进度和结果区
     hideProgressSection();
     hideResultsSection();

@@ -46,7 +46,7 @@ class EMABreakoutResult(Enum):
             EMABreakoutResult.BREAKOUT_T1: "前一个交易日EMA10向上突破EMA150",
             EMABreakoutResult.BREAKOUT_T2: "前两个交易日EMA10向上突破EMA150",
             EMABreakoutResult.NO_BREAKOUT_BELOW: "EMA10仍在EMA150下方，未发生突破",
-            EMABreakoutResult.NO_BREAKOUT_ALREADY_ABOVE: "EMA10早已在EMA150上方（超过2个交易日）",
+            EMABreakoutResult.NO_BREAKOUT_ALREADY_ABOVE: "EMA10早已在EMA150上方（超过2个K线柱）",
             EMABreakoutResult.INSUFFICIENT_DATA: "K线数据不足，无法计算EMA",
             EMABreakoutResult.INVALID_DATA: "K线数据异常",
         }

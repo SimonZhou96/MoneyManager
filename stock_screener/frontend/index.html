@@ -14,6 +14,34 @@
         </header>
 
         <main>
+            <!-- 自选股模块 -->
+            <section class="watchlist-section card">
+                <h2>自选股</h2>
+                <p class="watchlist-hint">选择市场查看自选股列表；勾选「仅筛选自选股」后点击开始筛选将只筛选当前市场的自选股。</p>
+                <div class="watchlist-tabs">
+                    <button type="button" class="watchlist-tab active" data-market="HK">港股</button>
+                    <button type="button" class="watchlist-tab" data-market="A">A股</button>
+                    <button type="button" class="watchlist-tab" data-market="US">美股</button>
+
+                </div>
+                <div class="watchlist-toolbar">
+                    <button type="button" id="watchlistRefreshBtn" class="btn btn-secondary btn-sm">刷新自选股</button>
+                    <span id="watchlistSource" class="watchlist-source"></span>
+                </div>
+                <div id="watchlistContent" class="watchlist-content">
+                    <div class="watchlist-loading">加载中...</div>
+                    <div id="watchlistTableWrap" class="watchlist-table-wrap" style="display: none;">
+                        <table class="watchlist-table">
+                            <thead>
+                                <tr><th>代码</th><th>名称</th></tr>
+                            </thead>
+                            <tbody id="watchlistBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="watchlistEmpty" class="watchlist-empty" style="display: none;">暂无自选股数据</div>
+                </div>
+            </section>
+
             <!-- 筛选表单 -->
             <section class="filter-section card">
                 <h2>筛选条件</h2>
@@ -105,6 +133,16 @@
                         </div>
                     </div>
 
+                    <div class="form-row">
+                        <div class="form-group checkbox-group">
+                            <label>
+                                <input type="checkbox" id="screenWatchlistOnly" name="screen_watchlist_only">
+                                <span>仅筛选自选股</span>
+                            </label>
+                            <small id="watchlistOnlyHint" class="watchlist-only-hint">勾选后仅对当前市场自选股列表进行筛选</small>
+                        </div>
+                    </div>
+
                     <div class="form-actions">
                         <button type="button" id="resetBtn" class="btn btn-secondary">重置</button>
                         <button type="submit" id="submitBtn" class="btn btn-primary">开始筛选</button>
@@ -173,6 +211,6 @@
         </footer>
     </div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=1"></script>
 </body>
 </html>

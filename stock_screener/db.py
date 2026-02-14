@@ -112,11 +112,12 @@ class MarketDatabase:
             # 按 timeframe 创建 EMA 信号表
             self._ensure_ema_table(timeframe)
 
-            # screening_results 表
+            # screening_results 表（含 task_id 关联任务，新表创建时包含；已存在的表若缺列需用户自行 ALTER 添加）
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS screening_results (
                     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    task_id VARCHAR(36) NULL,
                     market VARCHAR(8) NOT NULL,
                     code VARCHAR(32) NOT NULL,
                     name VARCHAR(255) NULL,
@@ -133,9 +134,26 @@ class MarketDatabase:
                     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
                     PRIMARY KEY (id),
                     UNIQUE KEY uk_screening_market_code_date (market, code, check_date),
+                    KEY idx_screening_task_id (task_id),
                     KEY idx_screening_check_date (check_date),
                     KEY idx_screening_is_passed (is_passed),
                     KEY idx_screening_market_date (market, check_date)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
+            # watchlist_cache 表（自选股缓存，Futu 失败时兜底）
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS watchlist_cache (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    market VARCHAR(8) NOT NULL,
+                    code VARCHAR(32) NOT NULL,
+                    name VARCHAR(255) NULL,
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_watchlist_market_code (market, code),
+                    KEY idx_watchlist_market (market)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
@@ -303,6 +321,39 @@ class MarketDatabase:
                 rows = cursor.fetchall() or []
                 return [{"code": r[0], "name": r[1], "sector": r[2], "industry": r[3]} for r in rows]
 
+    def get_stocks_by_codes(self, market: str, codes: List[str], include_fundamentals: bool = True) -> List[dict]:
+        """按 code 列表查询股票，用于自选股补全基本面"""
+        if not codes:
+            return []
+        codes = [str(c).strip() for c in codes if str(c).strip()]
+        if not codes:
+            return []
+        placeholders = ",".join(["%s"] * len(codes))
+        with self.conn.cursor() as cursor:
+            if include_fundamentals:
+                cursor.execute(
+                    f"""SELECT code, name, sector, sector_code, industry, industry_code,
+                               market_cap, pe_ratio, pb_ratio
+                        FROM stocks WHERE market=%s AND code IN ({placeholders})""",
+                    [market] + codes,
+                )
+            else:
+                cursor.execute(
+                    f"SELECT code, name, sector, industry FROM stocks WHERE market=%s AND code IN ({placeholders})",
+                    [market] + codes,
+                )
+            rows = cursor.fetchall() or []
+            if include_fundamentals:
+                return [
+                    {"code": r[0], "name": r[1], "sector": r[2], "sector_code": r[3],
+                     "industry": r[4], "industry_code": r[5],
+                     "market_cap": float(r[6]) if r[6] else None,
+                     "pe_ratio": float(r[7]) if r[7] else None,
+                     "pb_ratio": float(r[8]) if r[8] else None}
+                    for r in rows
+                ]
+            return [{"code": r[0], "name": r[1], "sector": r[2], "industry": r[3]} for r in rows]
+
     def update_stock_sector(self, market, code, sector=None, sector_code=None, industry=None, industry_code=None):
         sql = """UPDATE stocks SET
                     sector=COALESCE(%s,sector), sector_code=COALESCE(%s,sector_code),
@@ -437,22 +488,25 @@ class MarketDatabase:
         for item in results:
             fd = item.get("filter_details")
             fd_str = json.dumps(fd, ensure_ascii=False) if isinstance(fd, (dict, list)) else fd
+            task_id = item.get("task_id")
             rows.append((
+                task_id,
                 item.get("market"), str(item.get("code") or "").strip(), item.get("name"),
                 check_date, 1 if item.get("is_passed") else 0,
                 item.get("filter_summary"), fd_str,
                 item.get("sector"), item.get("industry"),
                 item.get("market_cap"), item.get("pe_ratio"), item.get("close_price"),
             ))
-        rows = [r for r in rows if r[1]]
+        rows = [r for r in rows if r[2]]  # code at index 2
         if not rows:
             return
         sql = """
             INSERT INTO screening_results
-                (market, code, name, check_date, is_passed, filter_summary, filter_details,
+                (task_id, market, code, name, check_date, is_passed, filter_summary, filter_details,
                  sector, industry, market_cap, pe_ratio, close_price)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
+                task_id=VALUES(task_id),
                 name=VALUES(name), is_passed=VALUES(is_passed),
                 filter_summary=VALUES(filter_summary), filter_details=VALUES(filter_details),
                 sector=VALUES(sector), industry=VALUES(industry),
@@ -461,6 +515,38 @@ class MarketDatabase:
         """
         with self.conn.cursor() as cursor:
             cursor.executemany(sql, rows)
+
+    # ------------------------------------------------------------------
+    # watchlist_cache
+    # ------------------------------------------------------------------
+
+    def upsert_watchlist_cache(self, market: str, stocks: List[dict]) -> None:
+        """按市场全量写入自选股缓存（先删后插）"""
+        with self.conn.cursor() as cursor:
+            cursor.execute("DELETE FROM watchlist_cache WHERE market=%s", (market,))
+            if not stocks:
+                return
+            rows = [
+                (market, str(s.get("code") or "").strip(), (s.get("name") or "").strip()[:255])
+                for s in stocks
+                if str(s.get("code") or "").strip()
+            ]
+            if not rows:
+                return
+            cursor.executemany(
+                "INSERT INTO watchlist_cache (market, code, name) VALUES (%s,%s,%s)",
+                rows,
+            )
+
+    def get_watchlist_cache(self, market: str) -> List[dict]:
+        """从缓存读取自选股列表"""
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT code, name FROM watchlist_cache WHERE market=%s ORDER BY code",
+                (market,),
+            )
+            rows = cursor.fetchall() or []
+            return [{"code": r[0], "name": r[1] or r[0]} for r in rows]
 
     # ------------------------------------------------------------------
     # screening_tasks
