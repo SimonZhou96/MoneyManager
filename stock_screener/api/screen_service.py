@@ -10,6 +10,7 @@ from datetime import date
 from typing import Callable, Optional
 
 from db import MarketDatabase, MySqlConfig
+from fundamental_fetcher import FundamentalFetcherFactory
 from filters import (
     FilterChain,
     FilterContext,
@@ -227,6 +228,8 @@ def run_screening_task(
         
         # 创建 K 线获取器
         fetchers = KlineFetcherFactory.create_fetcher_chain() if needs_kline else None
+        # 创建基本面补全器
+        fundamental_fetchers = FundamentalFetcherFactory.create_chain(sleep_seconds=0.2)
         
         # 创建筛选器上下文
         context = FilterContext(
@@ -249,7 +252,7 @@ def run_screening_task(
         if verbose:
             print(f"\n{'='*80}")
             print(f"开始逐个处理 {len(stock_infos)} 只股票")
-            print(f"流程: 获取K线 → 筛选判断 → 打印日志 → 写入数据库")
+            print(f"流程: 基本面补全 → 获取K线 → 筛选判断 → 打印日志 → 写入数据库")
             print(f"{'='*80}\n")
         
         for i, si in enumerate(stock_infos, 1):
@@ -260,6 +263,22 @@ def run_screening_task(
                 current_stock_code=si.code,
                 current_stock_name=si.name or si.code
             )
+            
+            # 步骤0: 基本面补全（HK/US/A 且缺失 market_cap/pe_ratio/sector/industry 时）
+            if fundamental_fetchers and si.market.upper() in ("HK", "US", "A"):
+                need_fundamental = (
+                    si.market_cap is None
+                    or si.pe_ratio is None
+                    or si.sector is None
+                    or si.industry is None
+                )
+                if need_fundamental:
+                    for fund_fetcher in fundamental_fetchers:
+                        try:
+                            if fund_fetcher.enrich(si, si.market, code=si.code):
+                                break
+                        except Exception:
+                            continue
             
             # 步骤1: 获取 K 线数据（如果需要）
             kline_fetched = False
