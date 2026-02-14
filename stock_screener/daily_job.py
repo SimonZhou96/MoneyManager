@@ -23,7 +23,7 @@ from kline_fetcher import KlineFetcherFactory
 from market import market_label, parse_markets, normalize_market
 from strategy import analyze_stock_ema_breakout
 from timeframe import is_intraday, parse_timeframe
-from universe import fetch_stock_list_akshare, fetch_stock_list_futu
+from universe import fetch_stock_list
 
 
 # ------------------------------------------------------------------
@@ -239,13 +239,9 @@ def run_once(
     for market in markets:
         market = normalize_market(market)
 
-        # 1) 拉取 / 补充股票列表
+        # 1) 拉取 / 补充股票列表（含 yfinance 补全港股/美股市值、PE）
         if db.stock_count(market) == 0:
-            stocks = fetch_stock_list_akshare(market)
-            src = "AKShare"
-            if not stocks and futu_ctx:
-                stocks = fetch_stock_list_futu(futu_ctx, market)
-                src = "Futu"
+            stocks, src = fetch_stock_list(market, quote_ctx=futu_ctx)
             if stocks:
                 db.upsert_stocks(market, stocks, source=src)
                 print(f"✓ {market_label(market)}股票列表入库 ({len(stocks)} 只)")

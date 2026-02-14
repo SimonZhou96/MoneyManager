@@ -32,7 +32,7 @@ from strategizers import (
     RSIOverboughtStrategizer,
 )
 from timeframe import parse_timeframe
-from universe import fetch_stock_list_akshare
+from universe import fetch_stock_list
 from universe_filter import UniverseFilterFactory
 
 
@@ -174,10 +174,11 @@ def run_screening_task(
             try:
                 stocks = db.get_stocks(market, include_fundamentals=True)
                 if not stocks or len(stocks) == 0:
-                    api_stocks = fetch_stock_list_akshare(market)
-                    db.upsert_stocks(market, api_stocks, source="AKShare")
-                    stocks = api_stocks
-                    if verbose:
+                    api_stocks, api_source = fetch_stock_list(market, quote_ctx=None)
+                    if api_stocks:
+                        db.upsert_stocks(market, api_stocks, source=api_source or "AKShare")
+                        stocks = api_stocks
+                    if verbose and api_stocks:
                         print(f"✓ 从 API 获取{market_label(market)}股票 {len(api_stocks)} 只并已更新至 DB")
 
             except Exception as e:
