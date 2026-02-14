@@ -6,6 +6,9 @@ let currentTaskId = null;
 let progressInterval = null;
 let watchlistByMarket = { HK: [], A: [], US: [] };
 let currentWatchlistTab = 'HK';
+let currentMarket = 'HK';
+let currentTimeframe = '1d';
+let chartInstance = null;
 
 // 工具函数：解析带单位的数值
 function parseNumberWithUnit(value) {
@@ -294,6 +297,8 @@ async function handleSubmit(e) {
         
         const data = await response.json();
         currentTaskId = data.task_id;
+        currentMarket = params.market || 'HK';
+        currentTimeframe = params.timeframe || '1d';
         
         // 显示进度区
         showProgressSection();
@@ -396,10 +401,17 @@ function updatePassedStocksList(passedStocks, passedCount) {
     passedStocks.forEach(stock => {
         const item = document.createElement('div');
         item.className = 'passed-stock-item';
-        item.innerHTML = `
-            <span class="stock-code">${stock.code}</span>
-            <span class="stock-name">${stock.name}</span>
-        `;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'stock-code-btn';
+        btn.textContent = stock.code;
+        btn.title = '点击查看 K 线图';
+        btn.addEventListener('click', () => showStockChart(stock.code, stock.name));
+        item.appendChild(btn);
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'stock-name';
+        nameSpan.textContent = ` ${stock.name || ''}`;
+        item.appendChild(nameSpan);
         listElem.appendChild(item);
     });
 }
@@ -442,6 +454,9 @@ async function pollProgress() {
         const currentStock = data.current_stock_code 
             ? `${data.current_stock_code} (${data.current_stock_name || ''})`
             : '-';
+        
+        if (data.market) currentMarket = data.market;
+        if (data.timeframe) currentTimeframe = data.timeframe;
         
         updateProgress(
             data.completed_count, 
@@ -489,6 +504,8 @@ async function loadResults(taskId) {
         }
         
         const data = await response.json();
+        if (data.market) currentMarket = data.market;
+        if (data.timeframe) currentTimeframe = data.timeframe;
         
         // 显示结果
         displayResults(data.results);
@@ -516,15 +533,22 @@ function displayResults(results) {
     
     results.forEach(stock => {
         const row = document.createElement('tr');
+        const codeBtn = document.createElement('button');
+        codeBtn.type = 'button';
+        codeBtn.className = 'stock-code-btn';
+        codeBtn.textContent = stock.code;
+        codeBtn.title = '点击查看 K 线图';
+        codeBtn.addEventListener('click', () => showStockChart(stock.code, stock.name));
         
         row.innerHTML = `
-            <td>${stock.code}</td>
+            <td></td>
             <td>${stock.name || '-'}</td>
             <td>${stock.sector || stock.industry || '-'}</td>
             <td>${formatLargeNumber(stock.market_cap)}</td>
             <td>${formatNumber(stock.close_price)}</td>
             <td>${formatNumber(stock.pe_ratio)}</td>
         `;
+        row.querySelector('td:first-child').appendChild(codeBtn);
         
         tbody.appendChild(row);
     });
@@ -535,5 +559,136 @@ function showError(message) {
     alert(`错误: ${message}`);
 }
 
+// 解析股票代码（去掉市场前缀，如 HK.00700 -> 00700）
+function parseStockCodeForApi(code) {
+    if (!code || typeof code !== 'string') return code;
+    const s = code.trim();
+    if (s.toUpperCase().startsWith('HK.')) return s.slice(3);
+    if (s.toUpperCase().startsWith('US.')) return s.slice(3);
+    if (s.includes('.') && /^[0-9]+\.[A-Z]{2}$/i.test(s)) return s.split('.')[0];
+    return s;
+}
+
+// 显示股票 K 线图
+async function showStockChart(code, name) {
+    const modal = document.getElementById('chartModal');
+    const titleEl = document.getElementById('chartModalTitle');
+    const rsiBadge = document.getElementById('chartRsiBadge');
+    const chartContainer = document.getElementById('chartContainer');
+    
+    const apiCode = parseStockCodeForApi(code);
+    const market = currentMarket || 'HK';
+    const timeframe = currentTimeframe || '1d';
+    
+    modal.style.display = 'flex';
+    titleEl.textContent = `${name || code} - 加载中...`;
+    rsiBadge.textContent = 'RSI: -';
+    chartContainer.innerHTML = '<div class="loading" style="margin: 40px auto;"></div>';
+    
+    try {
+        const params = new URLSearchParams({ code: apiCode, market, timeframe });
+        if (name) params.set('name', name);
+        const response = await fetch(`${API_BASE}/chart?${params}`);
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.detail || '获取图表数据失败');
+        }
+        const data = await response.json();
+        
+        titleEl.textContent = `${data.name} (${timeframe})`;
+        rsiBadge.textContent = `RSI: ${data.latest_rsi != null ? data.latest_rsi : '-'}`;
+        
+        chartContainer.innerHTML = '';
+        
+        if (!window.LightweightCharts) {
+            throw new Error('图表库未加载');
+        }
+        
+        const chartDiv = document.createElement('div');
+        chartDiv.style.width = '100%';
+        chartDiv.style.height = '450px';
+        chartContainer.appendChild(chartDiv);
+        
+        if (chartInstance) {
+            chartInstance.remove();
+            chartInstance = null;
+        }
+        
+        const chartWidget = window.LightweightCharts.createChart(chartDiv, {
+            layout: { textColor: '#64748b', background: { type: 'solid', color: '#ffffff' } },
+            grid: { vertLines: { color: '#e2e8f0' }, horzLines: { color: '#e2e8f0' } },
+            width: chartDiv.clientWidth,
+            height: 450,
+            rightPriceScale: { borderColor: '#e2e8f0' },
+            leftPriceScale: { borderColor: '#e2e8f0', scaleMargins: { top: 0.9, bottom: 0 } },
+            timeScale: { borderColor: '#e2e8f0', timeVisible: true, secondsVisible: false },
+        });
+        
+        chartInstance = chartWidget;
+        
+        const ohlc = data.data.map(d => ({
+            time: d.time,
+            open: d.open,
+            high: d.high,
+            low: d.low,
+            close: d.close,
+        }));
+        const ema10Data = data.data.filter(d => d.ema10 != null).map(d => ({ time: d.time, value: d.ema10 }));
+        const ema150Data = data.data.filter(d => d.ema150 != null).map(d => ({ time: d.time, value: d.ema150 }));
+        const rsiData = data.data.filter(d => d.rsi != null).map(d => ({ time: d.time, value: d.rsi }));
+        
+        const candlestickSeries = chartWidget.addCandlestickSeries({
+            upColor: '#ef4444',
+            downColor: '#10b981',
+            borderUpColor: '#ef4444',
+            borderDownColor: '#10b981',
+        });
+        candlestickSeries.setData(ohlc);
+        
+        const ema10Series = chartWidget.addLineSeries({ color: '#2563eb', lineWidth: 2, title: 'EMA10' });
+        ema10Series.setData(ema10Data);
+        
+        const ema150Series = chartWidget.addLineSeries({ color: '#f59e0b', lineWidth: 2, title: 'EMA150' });
+        ema150Series.setData(ema150Data);
+        
+        const rsiSeries = chartWidget.addLineSeries({
+            color: '#8b5cf6',
+            lineWidth: 2,
+            title: 'RSI',
+            priceScaleId: 'left',
+        });
+        rsiSeries.setData(rsiData);
+        chartWidget.priceScale('left').applyOptions({ scaleMargins: { top: 0.9, bottom: 0 } });
+        
+        chartWidget.timeScale().fitContent();
+        
+        const resizeHandler = () => chartWidget.applyOptions({ width: chartDiv.clientWidth });
+        window.addEventListener('resize', resizeHandler);
+        chartInstance._resizeHandler = resizeHandler;
+        
+    } catch (err) {
+        console.error('加载图表失败:', err);
+        chartContainer.innerHTML = `<div class="empty-message" style="padding: 40px;">加载失败: ${err.message}</div>`;
+    }
+}
+
+// 关闭图表弹窗
+function closeChartModal() {
+    document.getElementById('chartModal').style.display = 'none';
+    if (chartInstance) {
+        try {
+            if (chartInstance._resizeHandler) {
+                window.removeEventListener('resize', chartInstance._resizeHandler);
+            }
+            chartInstance.remove();
+        } catch (e) {}
+        chartInstance = null;
+    }
+}
+
 // 页面加载完成后初始化
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', () => {
+    init();
+    document.getElementById('chartModalClose').addEventListener('click', closeChartModal);
+    document.querySelector('.chart-modal-backdrop').addEventListener('click', closeChartModal);
+});

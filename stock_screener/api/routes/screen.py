@@ -236,6 +236,8 @@ async def get_results(task_id: str, passed_only: bool = True):
             "task_id": task_id,
             "results": results,
             "total": len(results),
+            "market": task.get("market"),
+            "timeframe": task.get("timeframe", "1d"),
         }
     
     except HTTPException:

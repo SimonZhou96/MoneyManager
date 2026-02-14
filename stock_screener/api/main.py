@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from api.routes import markets, timeframes, screen, watchlist
+from api.routes import markets, timeframes, screen, watchlist, chart
 
 # 创建 FastAPI 应用
 app = FastAPI(
@@ -33,6 +33,7 @@ app.include_router(markets.router, prefix="/api", tags=["markets"])
 app.include_router(timeframes.router, prefix="/api", tags=["timeframes"])
 app.include_router(screen.router, prefix="/api", tags=["screen"])
 app.include_router(watchlist.router, prefix="/api", tags=["watchlist"])
+app.include_router(chart.router, prefix="/api", tags=["chart"])
 
 # 挂载静态文件（前端）
 frontend_dir = Path(__file__).parent.parent / "frontend"

@@ -211,6 +211,20 @@
         </footer>
     </div>
 
-    <script src="app.js?v=1"></script>
+    <!-- 图表弹窗 -->
+    <div id="chartModal" class="chart-modal" style="display: none;">
+        <div class="chart-modal-backdrop"></div>
+        <div class="chart-modal-content">
+            <div class="chart-modal-header">
+                <h3 id="chartModalTitle">K 线图</h3>
+                <div class="chart-rsi-badge" id="chartRsiBadge">RSI: -</div>
+                <button type="button" class="chart-modal-close" id="chartModalClose">&times;</button>
+            </div>
+            <div id="chartContainer" class="chart-container"></div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="app.js?v=2"></script>
 </body>
 </html>
