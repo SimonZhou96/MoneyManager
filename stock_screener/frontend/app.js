@@ -4,6 +4,9 @@ const API_BASE = '/api';
 // 全局变量
 const taskIdByPanel = { watchlist: null, filter: null };
 const progressIntervalByPanel = { watchlist: null, filter: null };
+// 每个 panel 当前结果/进度对应的市场与时间周期，用于点击股票时请求图表使用正确参数
+const lastResultMarketByPanel = { watchlist: null, filter: null };
+const lastResultTimeframeByPanel = { watchlist: null, filter: null };
 let watchlistByMarket = { HK: [], A: [], US: [] };
 let currentWatchlistTab = 'HK';
 let currentMarket = 'HK';
@@ -182,24 +185,34 @@ function renderWatchlist(market) {
     }
 }
 
-// 加载 timeframe 列表
+// 加载 timeframe 列表（筛选条件 + 自选股两处共用）
 async function loadTimeframes() {
     try {
         const response = await fetch(`${API_BASE}/timeframes`);
         const data = await response.json();
         
         const select = document.getElementById('timeframe');
-        select.innerHTML = '';
-        
-        data.timeframes.forEach(tf => {
-            const option = document.createElement('option');
-            option.value = tf.value;
-            option.textContent = tf.label;
-            select.appendChild(option);
-        });
-        
-        // 默认选择日线
-        select.value = '1d';
+        const selectWatchlist = document.getElementById('timeframeWatchlist');
+        if (select) {
+            select.innerHTML = '';
+            data.timeframes.forEach(tf => {
+                const option = document.createElement('option');
+                option.value = tf.value;
+                option.textContent = tf.label;
+                select.appendChild(option);
+            });
+            select.value = '1d';
+        }
+        if (selectWatchlist) {
+            selectWatchlist.innerHTML = '';
+            data.timeframes.forEach(tf => {
+                const option = document.createElement('option');
+                option.value = tf.value;
+                option.textContent = tf.label;
+                selectWatchlist.appendChild(option);
+            });
+            selectWatchlist.value = '1d';
+        }
     } catch (error) {
         console.error('加载 timeframe 列表失败:', error);
         showError('加载 timeframe 列表失败');
@@ -266,13 +279,16 @@ function setupEventListeners() {
     });
 }
 
-// 从筛选条件表单构建请求参数；marketOverride 有值时用作 market（自选股 Tab 用当前自选股市场）
+// 从筛选条件表单构建请求参数；marketOverride 有值时用作 market（自选股 Tab 用当前自选股市场 + 自选股时间周期）
 function buildScreenParamsFromForm(marketOverride) {
     const form = document.getElementById('filterForm');
     const formData = new FormData(form);
+    const timeframeEl = marketOverride !== undefined
+        ? document.getElementById('timeframeWatchlist')
+        : document.getElementById('timeframe');
     const params = {
         market: marketOverride !== undefined ? marketOverride : formData.get('market'),
-        timeframe: formData.get('timeframe'),
+        timeframe: (timeframeEl && timeframeEl.value) ? timeframeEl.value : formData.get('timeframe'),
         use_ema_breakout: document.getElementById('useEmaBreakout').checked,
         ema_short: 10,
         ema_long: 150,
@@ -321,6 +337,8 @@ async function runScreeningWithParams(params, submitBtn, panel) {
         taskIdByPanel[panel] = data.task_id;
         currentMarket = params.market || 'HK';
         currentTimeframe = params.timeframe || '1d';
+        lastResultMarketByPanel[panel] = params.market || 'HK';
+        lastResultTimeframeByPanel[panel] = params.timeframe || '1d';
         showProgressSection(panel);
         startProgressPolling(panel);
     } catch (error) {
@@ -444,7 +462,9 @@ function updatePassedStocksList(panel, passedStocks, passedCount) {
         btn.className = 'stock-code-btn';
         btn.textContent = stock.code;
         btn.title = '点击查看 K 线图';
-        btn.addEventListener('click', () => showStockChart(stock.code, stock.name));
+        const market = lastResultMarketByPanel[panel];
+        const timeframe = lastResultTimeframeByPanel[panel];
+        btn.addEventListener('click', () => showStockChart(stock.code, stock.name, { market, timeframe }));
         item.appendChild(btn);
         const nameSpan = document.createElement('span');
         nameSpan.className = 'stock-name';
@@ -483,8 +503,14 @@ async function pollProgress(panel) {
         const currentStock = data.current_stock_code
             ? `${data.current_stock_code} (${data.current_stock_name || ''})`
             : '-';
-        if (data.market) currentMarket = data.market;
-        if (data.timeframe) currentTimeframe = data.timeframe;
+        if (data.market) {
+            currentMarket = data.market;
+            lastResultMarketByPanel[panel] = data.market;
+        }
+        if (data.timeframe) {
+            currentTimeframe = data.timeframe;
+            lastResultTimeframeByPanel[panel] = data.timeframe;
+        }
         updateProgress(
             panel,
             data.completed_count,
@@ -520,8 +546,14 @@ async function loadResults(taskId, panel) {
         if (!response.ok) throw new Error('获取结果失败');
         const data = await response.json();
         taskIdByPanel[panel] = taskId;
-        if (data.market) currentMarket = data.market;
-        if (data.timeframe) currentTimeframe = data.timeframe;
+        if (data.market) {
+            currentMarket = data.market;
+            lastResultMarketByPanel[panel] = data.market;
+        }
+        if (data.timeframe) {
+            currentTimeframe = data.timeframe;
+            lastResultTimeframeByPanel[panel] = data.timeframe;
+        }
         displayResults(data.results, panel);
     } catch (error) {
         console.error('加载结果失败:', error);
@@ -610,6 +642,8 @@ function displayResults(results, panel) {
         tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 40px; color: var(--text-secondary);">未找到符合条件的股票</td></tr>';
         return;
     }
+    const chartMarket = lastResultMarketByPanel[panel];
+    const chartTimeframe = lastResultTimeframeByPanel[panel];
     results.forEach(stock => {
         const row = document.createElement('tr');
         const codeBtn = document.createElement('button');
@@ -617,7 +651,7 @@ function displayResults(results, panel) {
         codeBtn.className = 'stock-code-btn';
         codeBtn.textContent = stock.code;
         codeBtn.title = '点击查看 K 线图';
-        codeBtn.addEventListener('click', () => showStockChart(stock.code, stock.name));
+        codeBtn.addEventListener('click', () => showStockChart(stock.code, stock.name, { market: chartMarket, timeframe: chartTimeframe }));
         const reasonTagsHtml = renderReasonTags(stock.filter_details);
         row.innerHTML = `
             <td></td>
@@ -648,16 +682,16 @@ function parseStockCodeForApi(code) {
     return s;
 }
 
-// 显示股票 K 线图
-async function showStockChart(code, name) {
+// 显示股票 K 线图；可选第三参数 { market, timeframe } 为点击来源对应的市场与周期，避免双 Tab 错用
+async function showStockChart(code, name, options) {
     const modal = document.getElementById('chartModal');
     const titleEl = document.getElementById('chartModalTitle');
     const rsiBadge = document.getElementById('chartRsiBadge');
     const chartContainer = document.getElementById('chartContainer');
     
     const apiCode = parseStockCodeForApi(code);
-    const market = currentMarket || 'HK';
-    const timeframe = currentTimeframe || '1d';
+    const market = (options && options.market) || currentMarket || 'HK';
+    const timeframe = (options && options.timeframe) || currentTimeframe || '1d';
     
     modal.style.display = 'flex';
     titleEl.textContent = `${name || code} - 加载中...`;
@@ -685,8 +719,11 @@ async function showStockChart(code, name) {
         
         const chartDiv = document.createElement('div');
         chartDiv.style.width = '100%';
+        chartDiv.style.minWidth = '400px';
         chartDiv.style.height = '450px';
         chartContainer.appendChild(chartDiv);
+        // 使用容器宽度，避免刚 append 时 clientWidth 为 0 导致图表不绘制
+        const chartWidth = Math.max(chartDiv.clientWidth, chartContainer.clientWidth, 400);
         
         if (chartInstance) {
             chartInstance.remove();
@@ -696,7 +733,7 @@ async function showStockChart(code, name) {
         const chartWidget = window.LightweightCharts.createChart(chartDiv, {
             layout: { textColor: '#64748b', background: { type: 'solid', color: '#ffffff' } },
             grid: { vertLines: { color: '#e2e8f0' }, horzLines: { color: '#e2e8f0' } },
-            width: chartDiv.clientWidth,
+            width: chartWidth,
             height: 450,
             rightPriceScale: { borderColor: '#e2e8f0' },
             leftPriceScale: { borderColor: '#e2e8f0', scaleMargins: { top: 0.9, bottom: 0 } },
@@ -705,16 +742,26 @@ async function showStockChart(code, name) {
         
         chartInstance = chartWidget;
         
+        // 统一 time 格式：LightweightCharts 日线用 'yyyy-MM-dd'，带 T 的用 UTC 秒
+        function chartTime(t) {
+            if (t == null) return t;
+            if (typeof t === 'string' && t.indexOf('T') !== -1) {
+                const ms = new Date(t).getTime();
+                return isNaN(ms) ? t : Math.floor(ms / 1000);
+            }
+            return t;
+        }
+        
         const ohlc = data.data.map(d => ({
-            time: d.time,
+            time: chartTime(d.time),
             open: d.open,
             high: d.high,
             low: d.low,
             close: d.close,
         }));
-        const ema10Data = data.data.filter(d => d.ema10 != null).map(d => ({ time: d.time, value: d.ema10 }));
-        const ema150Data = data.data.filter(d => d.ema150 != null).map(d => ({ time: d.time, value: d.ema150 }));
-        const rsiData = data.data.filter(d => d.rsi != null).map(d => ({ time: d.time, value: d.rsi }));
+        const ema10Data = data.data.filter(d => d.ema10 != null).map(d => ({ time: chartTime(d.time), value: d.ema10 }));
+        const ema150Data = data.data.filter(d => d.ema150 != null).map(d => ({ time: chartTime(d.time), value: d.ema150 }));
+        const rsiData = data.data.filter(d => d.rsi != null).map(d => ({ time: chartTime(d.time), value: d.rsi }));
         
         const candlestickSeries = chartWidget.addCandlestickSeries({
             upColor: '#ef4444',
@@ -741,9 +788,13 @@ async function showStockChart(code, name) {
         
         chartWidget.timeScale().fitContent();
         
-        const resizeHandler = () => chartWidget.applyOptions({ width: chartDiv.clientWidth });
+        const resizeHandler = () => {
+            const w = Math.max(chartDiv.clientWidth, chartContainer.clientWidth, 400);
+            chartWidget.applyOptions({ width: w });
+        };
         window.addEventListener('resize', resizeHandler);
         chartInstance._resizeHandler = resizeHandler;
+        requestAnimationFrame(resizeHandler);
         
     } catch (err) {
         console.error('加载图表失败:', err);
