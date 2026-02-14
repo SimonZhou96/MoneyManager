@@ -210,9 +210,11 @@ def run_screening_task(
         filter_chain = create_filter_chain_from_params(params)
         strategy_chain = create_strategizer_chain_from_params(params)
 
-        if not filter_chain.list_filters():
+        has_filters = len(filter_chain.list_filters()) > 0
+        has_strategizers = len(strategy_chain.list_strategizers()) > 0
+        if not has_filters and not has_strategizers:
             if verbose:
-                print("警告：没有启用任何筛选器")
+                print("警告：没有启用任何筛选器或策略器")
             db.update_task_status(task_id, "completed")
             return
 

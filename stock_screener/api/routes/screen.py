@@ -4,6 +4,7 @@
 筛选和进度 API
 """
 
+import json
 import os
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
@@ -11,7 +12,7 @@ from typing import List, Optional
 
 from db import MarketDatabase, MySqlConfig
 from market import normalize_market
-from param_parser import parse_filter_params, get_default_params
+from param_parser import parse_filter_params
 from timeframe import parse_timeframe
 from api.screen_service import create_and_start_screening_task
 
@@ -65,14 +66,8 @@ async def start_screening(request: ScreenRequest, background_tasks: BackgroundTa
         market = normalize_market(request.market)
         timeframe = parse_timeframe(request.timeframe)
         
-        # 解析筛选参数（应用默认值）
+        # 解析筛选参数（不再注入默认值，仅对用户填写的条件生效）
         params = request.dict()
-        
-        # 如果没有提供任何筛选参数，使用默认值
-        defaults = get_default_params()
-        for key in ["market_cap_min", "avg_daily_volume_min", "price_min", "price_max", "pe_min", "pe_max", "require_profitable"]:
-            if params.get(key) is None and key in defaults:
-                params[key] = defaults[key]
         
         # EMA 突破策略默认启用
         if params.get("use_ema_breakout") is None:
@@ -176,20 +171,48 @@ async def get_progress(task_id: str):
         raise HTTPException(status_code=500, detail=f"获取进度失败: {str(e)}")
 
 
-@router.get("/results/{task_id}")
-async def get_results(task_id: str, passed_only: bool = True):
+@router.get("/last-result")
+async def get_last_result():
     """
-    获取筛选结果
+    获取最近一次已完成的筛选任务摘要，用于页面刷新后恢复结果。
+    无则返回 204 或 task_id 为 null。
+    """
+    try:
+        mysql_config = get_mysql_config()
+        db = MarketDatabase(mysql_config)
+        task = db.get_latest_completed_task()
+        db.close()
+        if not task:
+            return {"task_id": None}
+        return {
+            "task_id": task["task_id"],
+            "market": task.get("market"),
+            "timeframe": task.get("timeframe", "1d"),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取上次结果失败: {str(e)}")
+
+
+@router.get("/results/{task_id}")
+async def get_results(
+    task_id: str,
+    passed_only: bool = True,
+    sector: Optional[str] = None,
+    industry: Optional[str] = None,
+    market_cap_min: Optional[float] = None,
+    market_cap_max: Optional[float] = None,
+    pe_min: Optional[float] = None,
+    pe_max: Optional[float] = None,
+    close_price_min: Optional[float] = None,
+    close_price_max: Optional[float] = None,
+):
+    """
+    获取筛选结果，支持可选条件下钻过滤。
     
     Args:
         task_id: 任务ID
         passed_only: 是否只返回通过筛选的股票（默认 true）
-        
-    Returns:
-        {
-            "task_id": "xxx",
-            "results": [...]
-        }
+        sector, industry, market_cap_min/max, pe_min/max, close_price_min/max: 可选，对结果集再过滤
     """
     try:
         mysql_config = get_mysql_config()
@@ -201,35 +224,68 @@ async def get_results(task_id: str, passed_only: bool = True):
             db.close()
             raise HTTPException(status_code=404, detail="任务不存在")
         
-        # 按 task_id 查询筛选结果（避免同一天多任务结果混淆）
+        # 按 task_id 查询筛选结果，并应用可选过滤条件
         sql = """
-            SELECT code, name, is_passed, filter_summary, sector, industry,
+            SELECT code, name, is_passed, filter_summary, filter_details, sector, industry,
                    market_cap, pe_ratio, close_price
             FROM screening_results
             WHERE task_id=%s
         """
+        args = [task["task_id"]]
         if passed_only:
             sql += " AND is_passed=1"
+        if sector is not None and sector.strip():
+            sql += " AND sector=%s"
+            args.append(sector.strip())
+        if industry is not None and industry.strip():
+            sql += " AND industry=%s"
+            args.append(industry.strip())
+        if market_cap_min is not None:
+            sql += " AND market_cap>=%s"
+            args.append(market_cap_min)
+        if market_cap_max is not None:
+            sql += " AND market_cap<=%s"
+            args.append(market_cap_max)
+        if pe_min is not None:
+            sql += " AND pe_ratio>=%s"
+            args.append(pe_min)
+        if pe_max is not None:
+            sql += " AND pe_ratio<=%s"
+            args.append(pe_max)
+        if close_price_min is not None:
+            sql += " AND close_price>=%s"
+            args.append(close_price_min)
+        if close_price_max is not None:
+            sql += " AND close_price<=%s"
+            args.append(close_price_max)
         sql += " ORDER BY code"
 
         with db.conn.cursor() as cursor:
-            cursor.execute(sql, (task["task_id"],))
+            cursor.execute(sql, tuple(args))
             rows = cursor.fetchall() or []
         
         db.close()
         
         results = []
         for row in rows:
+            filter_details_raw = row[4]
+            filter_details = None
+            if filter_details_raw:
+                try:
+                    filter_details = json.loads(filter_details_raw) if isinstance(filter_details_raw, str) else filter_details_raw
+                except Exception:
+                    filter_details = None
             results.append({
                 "code": row[0],
                 "name": row[1],
                 "is_passed": bool(row[2]),
                 "filter_summary": row[3],
-                "sector": row[4],
-                "industry": row[5],
-                "market_cap": float(row[6]) if row[6] else None,
-                "pe_ratio": float(row[7]) if row[7] else None,
-                "close_price": float(row[8]) if row[8] else None,
+                "filter_details": filter_details,
+                "sector": row[5],
+                "industry": row[6],
+                "market_cap": float(row[7]) if row[7] else None,
+                "pe_ratio": float(row[8]) if row[8] else None,
+                "close_price": float(row[9]) if row[9] else None,
             })
         
         return {

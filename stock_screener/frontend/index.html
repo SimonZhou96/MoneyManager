@@ -14,6 +14,11 @@
         </header>
 
         <main>
+            <div class="main-tabs" role="tablist">
+                <button type="button" class="main-tab active" role="tab" aria-selected="true" data-panel="watchlist">自选股</button>
+                <button type="button" class="main-tab" role="tab" aria-selected="false" data-panel="filter">筛选条件</button>
+            </div>
+            <div id="panelWatchlist" class="main-tab-panel active" role="tabpanel">
             <!-- 自选股模块 -->
             <section class="watchlist-section card">
                 <h2>自选股</h2>
@@ -40,8 +45,98 @@
                     </div>
                     <div id="watchlistEmpty" class="watchlist-empty" style="display: none;">暂无自选股数据</div>
                 </div>
+                <div class="form-actions">
+                        <button type="submit" id="selfSubmitBtn" class="btn btn-primary">开始筛选</button>
+                    </div>
             </section>
-
+            <!-- 自选股 Tab 进度区 -->
+            <section id="progressSectionWatchlist" class="progress-section card" style="display: none;">
+                <h2>筛选进度</h2>
+                <div class="current-stock">
+                    <div class="label">当前处理：</div>
+                    <div id="currentStockWatchlist" class="value">-</div>
+                </div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar">
+                        <div id="progressBarWatchlist" class="progress-fill"></div>
+                    </div>
+                    <div id="progressTextWatchlist" class="progress-text">0 / 0</div>
+                </div>
+                <div class="progress-status">
+                    <span id="statusTextWatchlist">准备中...</span>
+                </div>
+                <div class="passed-stocks-section">
+                    <h3>✅ 满足条件的股票 (<span id="passedCountWatchlist">0</span>)</h3>
+                    <div id="passedStocksListWatchlist" class="passed-stocks-list">
+                        <div class="empty-message">暂无满足条件的股票</div>
+                    </div>
+                </div>
+            </section>
+            <!-- 自选股 Tab 结果区 -->
+            <section id="resultsSectionWatchlist" class="results-section card" style="display: none;">
+                <h2>筛选结果</h2>
+                <div class="results-summary">
+                    <span id="resultsSummaryWatchlist">共找到 0 只符合条件的股票</span>
+                </div>
+                <details class="result-filter">
+                    <summary>结果筛选（可选）</summary>
+                    <div class="result-filter-inner">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="resultFilterSectorWatchlist">板块</label>
+                                <input type="text" id="resultFilterSectorWatchlist" placeholder="可选">
+                            </div>
+                            <div class="form-group">
+                                <label for="resultFilterIndustryWatchlist">行业</label>
+                                <input type="text" id="resultFilterIndustryWatchlist" placeholder="可选">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="resultFilterMarketCapMinWatchlist">市值最小</label>
+                                <input type="text" id="resultFilterMarketCapMinWatchlist" placeholder="如 50亿">
+                            </div>
+                            <div class="form-group">
+                                <label for="resultFilterMarketCapMaxWatchlist">市值最大</label>
+                                <input type="text" id="resultFilterMarketCapMaxWatchlist" placeholder="可选">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="resultFilterPeMinWatchlist">市盈率最小</label>
+                                <input type="number" id="resultFilterPeMinWatchlist" placeholder="可选" step="0.1">
+                            </div>
+                            <div class="form-group">
+                                <label for="resultFilterPeMaxWatchlist">市盈率最大</label>
+                                <input type="number" id="resultFilterPeMaxWatchlist" placeholder="可选" step="0.1">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="resultFilterPriceMinWatchlist">价格最小</label>
+                                <input type="number" id="resultFilterPriceMinWatchlist" placeholder="可选" step="0.01">
+                            </div>
+                            <div class="form-group">
+                                <label for="resultFilterPriceMaxWatchlist">价格最大</label>
+                                <input type="number" id="resultFilterPriceMaxWatchlist" placeholder="可选" step="0.01">
+                            </div>
+                        </div>
+                        <button type="button" id="resultFilterApplyBtnWatchlist" class="btn btn-secondary btn-sm">应用</button>
+                    </div>
+                </details>
+                <div class="results-table-container">
+                    <table id="resultsTableWatchlist" class="results-table">
+                        <thead>
+                            <tr>
+                                <th>代码</th><th>名称</th><th>板块</th><th>市值</th><th>价格</th><th>市盈率</th><th>选中原因</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsBodyWatchlist"></tbody>
+                    </table>
+                </div>
+            </section>
+            </div>
+            <div id="panelFilter" class="main-tab-panel" role="tabpanel">
             <!-- 筛选表单 -->
             <section class="filter-section card">
                 <h2>筛选条件</h2>
@@ -63,85 +158,90 @@
                         </div>
                     </div>
 
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="marketCapMin">市值（最小）</label>
-                            <input type="text" id="marketCapMin" name="market_cap_min" 
-                                   placeholder="例如：50亿 或 5000000000">
-                            <small>支持：50亿、50億、5e9</small>
-                        </div>
-                        
-                        <div class="form-group">
-                            <label for="marketCapMax">市值（最大）</label>
-                            <input type="text" id="marketCapMax" name="market_cap_max" 
-                                   placeholder="可选">
-                        </div>
-                    </div>
+                    <details class="filter-optional">
+                        <summary>更多筛选条件（可选）</summary>
+                        <div class="filter-optional-inner">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="marketCapMin">市值（最小）</label>
+                                    <input type="text" id="marketCapMin" name="market_cap_min" 
+                                           placeholder="例如：50亿 或 5000000000">
+                                    <small>支持：50亿、50億、5e9</small>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="marketCapMax">市值（最大）</label>
+                                    <input type="text" id="marketCapMax" name="market_cap_max" 
+                                           placeholder="可选">
+                                </div>
+                            </div>
 
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="avgVolumeMin">每日平均交易量（最小）</label>
-                            <input type="text" id="avgVolumeMin" name="avg_daily_volume_min" 
-                                   placeholder="例如：2000万 或 20000000">
-                            <small>支持：2000万、2000萬、2e7</small>
-                        </div>
-                    </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="avgVolumeMin">每日平均交易量（最小）</label>
+                                    <input type="text" id="avgVolumeMin" name="avg_daily_volume_min" 
+                                           placeholder="例如：2000万 或 20000000">
+                                    <small>支持：2000万、2000萬、2e7</small>
+                                </div>
+                            </div>
 
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="priceMin">股票价格（最小）</label>
-                            <input type="number" id="priceMin" name="price_min" 
-                                   placeholder="例如：5" step="0.01">
-                        </div>
-                        
-                        <div class="form-group">
-                            <label for="priceMax">股票价格（最大）</label>
-                            <input type="number" id="priceMax" name="price_max" 
-                                   placeholder="例如：1000" step="0.01">
-                        </div>
-                    </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="priceMin">股票价格（最小）</label>
+                                    <input type="number" id="priceMin" name="price_min" 
+                                           placeholder="例如：5" step="0.01">
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="priceMax">股票价格（最大）</label>
+                                    <input type="number" id="priceMax" name="price_max" 
+                                           placeholder="例如：1000" step="0.01">
+                                </div>
+                            </div>
 
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="peMin">市盈率（最小）</label>
-                            <input type="number" id="peMin" name="pe_min" 
-                                   placeholder="例如：10" step="0.1">
-                        </div>
-                        
-                        <div class="form-group">
-                            <label for="peMax">市盈率（最大）</label>
-                            <input type="number" id="peMax" name="pe_max" 
-                                   placeholder="例如：100" step="0.1">
-                        </div>
-                    </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="peMin">市盈率（最小）</label>
+                                    <input type="number" id="peMin" name="pe_min" 
+                                           placeholder="例如：10" step="0.1">
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="peMax">市盈率（最大）</label>
+                                    <input type="number" id="peMax" name="pe_max" 
+                                           placeholder="例如：100" step="0.1">
+                                </div>
+                            </div>
 
-                    <div class="form-row">
-                        <div class="form-group checkbox-group">
-                            <label>
-                                <input type="checkbox" id="useEmaBreakout" name="use_ema_breakout" checked>
-                                <span>启用 EMA 突破策略（EMA10 突破 EMA150）</span>
-                            </label>
-                        </div>
-                    </div>
+                            <div class="form-row">
+                                <div class="form-group checkbox-group">
+                                    <label>
+                                        <input type="checkbox" id="useEmaBreakout" name="use_ema_breakout" checked>
+                                        <span>启用 EMA 突破策略（EMA10 突破 EMA150）</span>
+                                    </label>
+                                </div>
+                            </div>
 
-                    <div class="form-row">
-                        <div class="form-group checkbox-group">
-                            <label>
-                                <input type="checkbox" id="requireProfitable" name="require_profitable" checked>
-                                <span>公司有盈利</span>
-                            </label>
-                        </div>
-                    </div>
+                            <div class="form-row">
+                                <div class="form-group checkbox-group">
+                                    <label>
+                                        <input type="checkbox" id="requireProfitable" name="require_profitable" checked>
+                                        <span>公司有盈利</span>
+                                    </label>
+                                </div>
+                            </div>
 
-                    <div class="form-row">
-                        <div class="form-group checkbox-group">
-                            <label>
-                                <input type="checkbox" id="screenWatchlistOnly" name="screen_watchlist_only">
-                                <span>仅筛选自选股</span>
-                            </label>
-                            <small id="watchlistOnlyHint" class="watchlist-only-hint">勾选后仅对当前市场自选股列表进行筛选</small>
+                            <div class="form-row">
+                                <div class="form-group checkbox-group">
+                                    <label>
+                                        <input type="checkbox" id="screenWatchlistOnly" name="screen_watchlist_only">
+                                        <span>仅筛选自选股</span>
+                                    </label>
+                                    <small id="watchlistOnlyHint" class="watchlist-only-hint">勾选后仅对当前市场自选股列表进行筛选</small>
+                                </div>
+                            </div>
                         </div>
-                    </div>
+                    </details>
 
                     <div class="form-actions">
                         <button type="button" id="resetBtn" class="btn btn-secondary">重置</button>
@@ -149,61 +249,93 @@
                     </div>
                 </form>
             </section>
-
-            <!-- 进度区 -->
-            <section id="progressSection" class="progress-section card" style="display: none;">
+            <!-- 筛选条件 Tab 进度区 -->
+            <section id="progressSectionFilter" class="progress-section card" style="display: none;">
                 <h2>筛选进度</h2>
-                
                 <div class="current-stock">
                     <div class="label">当前处理：</div>
-                    <div id="currentStock" class="value">-</div>
+                    <div id="currentStockFilter" class="value">-</div>
                 </div>
-                
                 <div class="progress-bar-container">
                     <div class="progress-bar">
-                        <div id="progressBar" class="progress-fill"></div>
+                        <div id="progressBarFilter" class="progress-fill"></div>
                     </div>
-                    <div id="progressText" class="progress-text">0 / 0</div>
+                    <div id="progressTextFilter" class="progress-text">0 / 0</div>
                 </div>
-
                 <div class="progress-status">
-                    <span id="statusText">准备中...</span>
+                    <span id="statusTextFilter">准备中...</span>
                 </div>
-
-                <!-- 满足条件的股票实时列表 -->
                 <div class="passed-stocks-section">
-                    <h3>✅ 满足条件的股票 (<span id="passedCount">0</span>)</h3>
-                    <div id="passedStocksList" class="passed-stocks-list">
+                    <h3>✅ 满足条件的股票 (<span id="passedCountFilter">0</span>)</h3>
+                    <div id="passedStocksListFilter" class="passed-stocks-list">
                         <div class="empty-message">暂无满足条件的股票</div>
                     </div>
                 </div>
             </section>
-
-            <!-- 结果区 -->
-            <section id="resultsSection" class="results-section card" style="display: none;">
+            <!-- 筛选条件 Tab 结果区 -->
+            <section id="resultsSectionFilter" class="results-section card" style="display: none;">
                 <h2>筛选结果</h2>
-                
                 <div class="results-summary">
-                    <span id="resultsSummary">共找到 0 只符合条件的股票</span>
+                    <span id="resultsSummaryFilter">共找到 0 只符合条件的股票</span>
                 </div>
-
+                <details class="result-filter">
+                    <summary>结果筛选（可选）</summary>
+                    <div class="result-filter-inner">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="resultFilterSectorFilter">板块</label>
+                                <input type="text" id="resultFilterSectorFilter" placeholder="可选">
+                            </div>
+                            <div class="form-group">
+                                <label for="resultFilterIndustryFilter">行业</label>
+                                <input type="text" id="resultFilterIndustryFilter" placeholder="可选">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="resultFilterMarketCapMinFilter">市值最小</label>
+                                <input type="text" id="resultFilterMarketCapMinFilter" placeholder="如 50亿">
+                            </div>
+                            <div class="form-group">
+                                <label for="resultFilterMarketCapMaxFilter">市值最大</label>
+                                <input type="text" id="resultFilterMarketCapMaxFilter" placeholder="可选">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="resultFilterPeMinFilter">市盈率最小</label>
+                                <input type="number" id="resultFilterPeMinFilter" placeholder="可选" step="0.1">
+                            </div>
+                            <div class="form-group">
+                                <label for="resultFilterPeMaxFilter">市盈率最大</label>
+                                <input type="number" id="resultFilterPeMaxFilter" placeholder="可选" step="0.1">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="resultFilterPriceMinFilter">价格最小</label>
+                                <input type="number" id="resultFilterPriceMinFilter" placeholder="可选" step="0.01">
+                            </div>
+                            <div class="form-group">
+                                <label for="resultFilterPriceMaxFilter">价格最大</label>
+                                <input type="number" id="resultFilterPriceMaxFilter" placeholder="可选" step="0.01">
+                            </div>
+                        </div>
+                        <button type="button" id="resultFilterApplyBtnFilter" class="btn btn-secondary btn-sm">应用</button>
+                    </div>
+                </details>
                 <div class="results-table-container">
-                    <table id="resultsTable" class="results-table">
+                    <table id="resultsTableFilter" class="results-table">
                         <thead>
                             <tr>
-                                <th>代码</th>
-                                <th>名称</th>
-                                <th>板块</th>
-                                <th>市值</th>
-                                <th>价格</th>
-                                <th>市盈率</th>
+                                <th>代码</th><th>名称</th><th>板块</th><th>市值</th><th>价格</th><th>市盈率</th><th>选中原因</th>
                             </tr>
                         </thead>
-                        <tbody id="resultsBody">
-                        </tbody>
+                        <tbody id="resultsBodyFilter"></tbody>
                     </table>
                 </div>
             </section>
+            </div>
         </main>
 
         <footer>

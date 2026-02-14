@@ -2,13 +2,18 @@
 const API_BASE = '/api';
 
 // 全局变量
-let currentTaskId = null;
-let progressInterval = null;
+const taskIdByPanel = { watchlist: null, filter: null };
+const progressIntervalByPanel = { watchlist: null, filter: null };
 let watchlistByMarket = { HK: [], A: [], US: [] };
 let currentWatchlistTab = 'HK';
 let currentMarket = 'HK';
 let currentTimeframe = '1d';
 let chartInstance = null;
+
+// panel 对应 DOM ID 后缀：'watchlist' | 'filter' -> 'Watchlist' | 'Filter'
+function panelSuffix(panel) {
+    return panel === 'watchlist' ? 'Watchlist' : 'Filter';
+}
 
 // 工具函数：解析带单位的数值
 function parseNumberWithUnit(value) {
@@ -73,6 +78,23 @@ async function init() {
         await loadAllWatchlists();
     } catch (e) {
         console.error('loadAllWatchlists failed', e);
+    }
+    try {
+        const response = await fetch(`${API_BASE}/last-result`);
+        if (!response.ok) return;
+        const data = await response.json();
+        if (data.task_id) {
+            currentMarket = data.market || currentMarket;
+            currentTimeframe = data.timeframe || currentTimeframe;
+            const marketEl = document.getElementById('market');
+            const timeframeEl = document.getElementById('timeframe');
+            if (marketEl && data.market) marketEl.value = data.market;
+            if (timeframeEl && data.timeframe) timeframeEl.value = data.timeframe;
+            taskIdByPanel.filter = data.task_id;
+            await loadResults(data.task_id, 'filter');
+        }
+    } catch (e) {
+        console.error('load last result failed', e);
     }
 }
 
@@ -193,6 +215,38 @@ function setupEventListeners() {
     form.addEventListener('submit', handleSubmit);
     resetBtn.addEventListener('click', handleReset);
 
+    document.querySelectorAll('.main-tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const panelId = btn.getAttribute('data-panel') === 'watchlist' ? 'panelWatchlist' : 'panelFilter';
+            document.querySelectorAll('.main-tab').forEach(b => {
+                b.classList.remove('active');
+                b.setAttribute('aria-selected', 'false');
+            });
+            btn.classList.add('active');
+            btn.setAttribute('aria-selected', 'true');
+            document.querySelectorAll('.main-tab-panel').forEach(p => p.classList.remove('active'));
+            const panel = document.getElementById(panelId);
+            if (panel) panel.classList.add('active');
+        });
+    });
+
+    const resultFilterApplyBtnWatchlist = document.getElementById('resultFilterApplyBtnWatchlist');
+    if (resultFilterApplyBtnWatchlist) {
+        resultFilterApplyBtnWatchlist.addEventListener('click', () => applyResultFilter('watchlist'));
+    }
+    const resultFilterApplyBtnFilter = document.getElementById('resultFilterApplyBtnFilter');
+    if (resultFilterApplyBtnFilter) {
+        resultFilterApplyBtnFilter.addEventListener('click', () => applyResultFilter('filter'));
+    }
+
+    const selfSubmitBtn = document.getElementById('selfSubmitBtn');
+    if (selfSubmitBtn) {
+        selfSubmitBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            handleSelfSubmit();
+        });
+    }
+
     document.querySelectorAll('.watchlist-tab').forEach(btn => {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.watchlist-tab').forEach(b => b.classList.remove('active'));
@@ -212,192 +266,176 @@ function setupEventListeners() {
     });
 }
 
-// 处理表单提交
-async function handleSubmit(e) {
-    e.preventDefault();
-    
-    const submitBtn = document.getElementById('submitBtn');
-    submitBtn.disabled = true;
-    submitBtn.textContent = '启动中...';
-    
-    try {
-        // 收集表单数据
-        const formData = new FormData(e.target);
-        const params = {
-            market: formData.get('market'),
-            timeframe: formData.get('timeframe'),
-            use_ema_breakout: document.getElementById('useEmaBreakout').checked,
-            ema_short: 10,  // 默认值
-            ema_long: 150,  // 默认值
-            require_profitable: document.getElementById('requireProfitable').checked,
-        };
-        
-        // 解析数值参数
-        const marketCapMin = formData.get('market_cap_min');
-        if (marketCapMin) {
-            params.market_cap_min = parseNumberWithUnit(marketCapMin);
-        }
-        
-        const marketCapMax = formData.get('market_cap_max');
-        if (marketCapMax) {
-            params.market_cap_max = parseNumberWithUnit(marketCapMax);
-        }
-        
-        const avgVolumeMin = formData.get('avg_daily_volume_min');
-        if (avgVolumeMin) {
-            params.avg_daily_volume_min = parseNumberWithUnit(avgVolumeMin);
-        }
-        
-        const priceMin = formData.get('price_min');
-        if (priceMin) {
-            params.price_min = parseFloat(priceMin);
-        }
-        
-        const priceMax = formData.get('price_max');
-        if (priceMax) {
-            params.price_max = parseFloat(priceMax);
-        }
-        
-        const peMin = formData.get('pe_min');
-        if (peMin) {
-            params.pe_min = parseFloat(peMin);
-        }
-        
-        const peMax = formData.get('pe_max');
-        if (peMax) {
-            params.pe_max = parseFloat(peMax);
-        }
+// 从筛选条件表单构建请求参数；marketOverride 有值时用作 market（自选股 Tab 用当前自选股市场）
+function buildScreenParamsFromForm(marketOverride) {
+    const form = document.getElementById('filterForm');
+    const formData = new FormData(form);
+    const params = {
+        market: marketOverride !== undefined ? marketOverride : formData.get('market'),
+        timeframe: formData.get('timeframe'),
+        use_ema_breakout: document.getElementById('useEmaBreakout').checked,
+        ema_short: 10,
+        ema_long: 150,
+        require_profitable: document.getElementById('requireProfitable').checked,
+    };
+    const marketCapMin = formData.get('market_cap_min');
+    if (marketCapMin) params.market_cap_min = parseNumberWithUnit(marketCapMin);
+    const marketCapMax = formData.get('market_cap_max');
+    if (marketCapMax) params.market_cap_max = parseNumberWithUnit(marketCapMax);
+    const avgVolumeMin = formData.get('avg_daily_volume_min');
+    if (avgVolumeMin) params.avg_daily_volume_min = parseNumberWithUnit(avgVolumeMin);
+    const priceMin = formData.get('price_min');
+    if (priceMin) params.price_min = parseFloat(priceMin);
+    const priceMax = formData.get('price_max');
+    if (priceMax) params.price_max = parseFloat(priceMax);
+    const peMin = formData.get('pe_min');
+    if (peMin) params.pe_min = parseFloat(peMin);
+    const peMax = formData.get('pe_max');
+    if (peMax) params.pe_max = parseFloat(peMax);
+    const screenWatchlistOnly = document.getElementById('screenWatchlistOnly').checked;
+    if (screenWatchlistOnly) {
+        const market = params.market;
+        const list = watchlistByMarket[market] || [];
+        if (list.length === 0) return { params: null, error: '当前市场自选股为空，请先刷新自选股或取消勾选「仅筛选自选股」' };
+        params.watchlist = list;
+    }
+    return { params, error: null };
+}
 
-        const screenWatchlistOnly = document.getElementById('screenWatchlistOnly').checked;
-        if (screenWatchlistOnly) {
-            const market = params.market;
-            const list = watchlistByMarket[market] || [];
-            if (list.length === 0) {
-                showError('当前市场自选股为空，请先刷新自选股或取消勾选「仅筛选自选股」');
-                submitBtn.disabled = false;
-                submitBtn.textContent = '开始筛选';
-                return;
-            }
-            params.watchlist = list;
-        }
-        
-        // 发起筛选请求
+// 使用已构建的 params 发起筛选请求并进入进度轮询；panel 为 'watchlist' 或 'filter'
+async function runScreeningWithParams(params, submitBtn, panel) {
+    submitBtn.disabled = true;
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = '启动中...';
+    try {
         const response = await fetch(`${API_BASE}/screen`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(params),
         });
-        
         if (!response.ok) {
             const error = await response.json();
             throw new Error(error.detail || '启动筛选失败');
         }
-        
         const data = await response.json();
-        currentTaskId = data.task_id;
+        taskIdByPanel[panel] = data.task_id;
         currentMarket = params.market || 'HK';
         currentTimeframe = params.timeframe || '1d';
-        
-        // 显示进度区
-        showProgressSection();
-        
-        // 开始轮询进度
-        startProgressPolling();
-        
+        showProgressSection(panel);
+        startProgressPolling(panel);
     } catch (error) {
         console.error('启动筛选失败:', error);
         showError(error.message || '启动筛选失败');
     } finally {
         submitBtn.disabled = false;
-        submitBtn.textContent = '开始筛选';
+        submitBtn.textContent = originalText;
     }
 }
 
-// 处理重置
+// 处理筛选条件 Tab 表单提交
+async function handleSubmit(e) {
+    e.preventDefault();
+    const { params, error } = buildScreenParamsFromForm();
+    if (error) {
+        showError(error);
+        return;
+    }
+    await runScreeningWithParams(params, document.getElementById('submitBtn'), 'filter');
+}
+
+// 自选股 Tab「开始筛选」：使用当前自选股市场 + 强制只筛当前自选股列表（不依赖「仅筛选自选股」勾选）
+async function handleSelfSubmit() {
+    const { params, error } = buildScreenParamsFromForm(currentWatchlistTab);
+    if (error) {
+        showError(error);
+        return;
+    }
+    const list = watchlistByMarket[params.market] || [];
+    if (list.length === 0) {
+        showError('当前市场自选股为空，请先刷新自选股');
+        return;
+    }
+    params.watchlist = list;
+    await runScreeningWithParams(params, document.getElementById('selfSubmitBtn'), 'watchlist');
+}
+
+// 处理重置（仅影响筛选条件 Tab）
 function handleReset() {
     const form = document.getElementById('filterForm');
     form.reset();
     
-    // 恢复默认值
     document.getElementById('market').value = 'HK';
     document.getElementById('timeframe').value = '1d';
     document.getElementById('useEmaBreakout').checked = true;
     document.getElementById('requireProfitable').checked = true;
     document.getElementById('screenWatchlistOnly').checked = false;
 
-    // 隐藏进度和结果区
-    hideProgressSection();
-    hideResultsSection();
+    hideProgressSection('filter');
+    hideResultsSection('filter');
+    stopProgressPolling('filter');
 }
 
-// 显示进度区
-function showProgressSection() {
-    const section = document.getElementById('progressSection');
-    section.style.display = 'block';
-    
-    // 重置进度
-    updateProgress(0, 0, '-', [], 0);
-    
-    const statusText = document.getElementById('statusText');
-    statusText.textContent = '准备中...';
-    statusText.className = 'progress-status';
-    
-    // 隐藏结果区
-    hideResultsSection();
+// 显示进度区（按 panel）
+function showProgressSection(panel) {
+    const suffix = panelSuffix(panel);
+    const section = document.getElementById('progressSection' + suffix);
+    if (section) section.style.display = 'block';
+    updateProgress(panel, 0, 0, '-', [], 0);
+    const statusText = document.getElementById('statusText' + suffix);
+    if (statusText) {
+        statusText.textContent = '准备中...';
+        statusText.className = 'progress-status';
+    }
+    hideResultsSection(panel);
 }
 
-// 隐藏进度区
-function hideProgressSection() {
-    const section = document.getElementById('progressSection');
-    section.style.display = 'none';
-    
-    // 停止轮询
-    stopProgressPolling();
+// 隐藏进度区（按 panel）
+function hideProgressSection(panel) {
+    const suffix = panelSuffix(panel);
+    const section = document.getElementById('progressSection' + suffix);
+    if (section) section.style.display = 'none';
+    stopProgressPolling(panel);
 }
 
-// 显示结果区
-function showResultsSection() {
-    const section = document.getElementById('resultsSection');
-    section.style.display = 'block';
+// 显示结果区（按 panel）
+function showResultsSection(panel) {
+    const suffix = panelSuffix(panel);
+    const section = document.getElementById('resultsSection' + suffix);
+    if (section) section.style.display = 'block';
 }
 
-// 隐藏结果区
-function hideResultsSection() {
-    const section = document.getElementById('resultsSection');
-    section.style.display = 'none';
+// 隐藏结果区（按 panel）
+function hideResultsSection(panel) {
+    const suffix = panelSuffix(panel);
+    const section = document.getElementById('resultsSection' + suffix);
+    if (section) section.style.display = 'none';
 }
 
-// 更新进度
-function updateProgress(completed, total, currentStock, passedStocks, passedCount) {
-    const progressBar = document.getElementById('progressBar');
-    const progressText = document.getElementById('progressText');
-    const currentStockElem = document.getElementById('currentStock');
-    
+// 更新进度（按 panel）
+function updateProgress(panel, completed, total, currentStock, passedStocks, passedCount) {
+    const suffix = panelSuffix(panel);
+    const progressBar = document.getElementById('progressBar' + suffix);
+    const progressText = document.getElementById('progressText' + suffix);
+    const currentStockElem = document.getElementById('currentStock' + suffix);
     const percentage = total > 0 ? (completed / total) * 100 : 0;
-    progressBar.style.width = `${percentage}%`;
-    progressText.textContent = `${completed} / ${total}`;
-    currentStockElem.textContent = currentStock || '-';
-    
-    // 更新满足条件的股票列表
-    updatePassedStocksList(passedStocks || [], passedCount || 0);
+    if (progressBar) progressBar.style.width = `${percentage}%`;
+    if (progressText) progressText.textContent = `${completed} / ${total}`;
+    if (currentStockElem) currentStockElem.textContent = currentStock || '-';
+    updatePassedStocksList(panel, passedStocks || [], passedCount || 0);
 }
 
-// 更新满足条件的股票列表
-function updatePassedStocksList(passedStocks, passedCount) {
-    const countElem = document.getElementById('passedCount');
-    const listElem = document.getElementById('passedStocksList');
-    
-    countElem.textContent = passedCount;
-    
+// 更新满足条件的股票列表（按 panel）
+function updatePassedStocksList(panel, passedStocks, passedCount) {
+    const suffix = panelSuffix(panel);
+    const countElem = document.getElementById('passedCount' + suffix);
+    const listElem = document.getElementById('passedStocksList' + suffix);
+    if (countElem) countElem.textContent = passedCount;
+    if (!listElem) return;
     if (!passedStocks || passedStocks.length === 0) {
         listElem.innerHTML = '<div class="empty-message">暂无满足条件的股票</div>';
         return;
     }
-    
     listElem.innerHTML = '';
-    
     passedStocks.forEach(stock => {
         const item = document.createElement('div');
         item.className = 'passed-stock-item';
@@ -416,121 +454,162 @@ function updatePassedStocksList(passedStocks, passedCount) {
     });
 }
 
-// 开始轮询进度
-function startProgressPolling() {
-    if (progressInterval) {
-        clearInterval(progressInterval);
+// 开始轮询进度（按 panel）
+function startProgressPolling(panel) {
+    if (progressIntervalByPanel[panel]) {
+        clearInterval(progressIntervalByPanel[panel]);
     }
-    
-    // 立即执行一次
-    pollProgress();
-    
-    // 每 5 秒轮询一次
-    progressInterval = setInterval(pollProgress, 5000);
+    pollProgress(panel);
+    progressIntervalByPanel[panel] = setInterval(() => pollProgress(panel), 5000);
 }
 
-// 停止轮询进度
-function stopProgressPolling() {
-    if (progressInterval) {
-        clearInterval(progressInterval);
-        progressInterval = null;
+// 停止轮询进度（按 panel）
+function stopProgressPolling(panel) {
+    if (progressIntervalByPanel[panel]) {
+        clearInterval(progressIntervalByPanel[panel]);
+        progressIntervalByPanel[panel] = null;
     }
 }
 
-// 轮询进度
-async function pollProgress() {
-    if (!currentTaskId) return;
-    
+// 轮询进度（按 panel）
+async function pollProgress(panel) {
+    const taskId = taskIdByPanel[panel];
+    if (!taskId) return;
+    const suffix = panelSuffix(panel);
     try {
-        const response = await fetch(`${API_BASE}/progress/${currentTaskId}`);
-        
-        if (!response.ok) {
-            throw new Error('获取进度失败');
-        }
-        
+        const response = await fetch(`${API_BASE}/progress/${taskId}`);
+        if (!response.ok) throw new Error('获取进度失败');
         const data = await response.json();
-        
-        // 更新进度
-        const currentStock = data.current_stock_code 
+        const currentStock = data.current_stock_code
             ? `${data.current_stock_code} (${data.current_stock_name || ''})`
             : '-';
-        
         if (data.market) currentMarket = data.market;
         if (data.timeframe) currentTimeframe = data.timeframe;
-        
         updateProgress(
-            data.completed_count, 
-            data.total_count, 
+            panel,
+            data.completed_count,
+            data.total_count,
             currentStock,
             data.passed_stocks || [],
             data.passed_count || 0
         );
-        
-        const statusText = document.getElementById('statusText');
-        
+        const statusText = document.getElementById('statusText' + suffix);
+        if (!statusText) return;
         if (data.status === 'completed') {
-            // 筛选完成
-            stopProgressPolling();
+            stopProgressPolling(panel);
             statusText.textContent = `✓ 筛选完成！共找到 ${data.passed_count || 0} 只符合条件的股票`;
             statusText.className = 'progress-status success';
-            
-            // 加载结果
-            await loadResults(currentTaskId);
-            
+            await loadResults(taskId, panel);
         } else if (data.status === 'failed') {
-            // 筛选失败
-            stopProgressPolling();
+            stopProgressPolling(panel);
             statusText.textContent = '✗ 筛选失败';
             statusText.className = 'progress-status error';
-            
         } else {
-            // 运行中
             statusText.textContent = `筛选进行中... 已找到 ${data.passed_count || 0} 只符合条件的股票`;
             statusText.className = 'progress-status';
         }
-        
     } catch (error) {
         console.error('轮询进度失败:', error);
     }
 }
 
-// 加载结果
-async function loadResults(taskId) {
+// 加载结果（按 panel 展示）
+async function loadResults(taskId, panel) {
     try {
         const response = await fetch(`${API_BASE}/results/${taskId}?passed_only=true`);
-        
-        if (!response.ok) {
-            throw new Error('获取结果失败');
-        }
-        
+        if (!response.ok) throw new Error('获取结果失败');
         const data = await response.json();
+        taskIdByPanel[panel] = taskId;
         if (data.market) currentMarket = data.market;
         if (data.timeframe) currentTimeframe = data.timeframe;
-        
-        // 显示结果
-        displayResults(data.results);
-        
+        displayResults(data.results, panel);
     } catch (error) {
         console.error('加载结果失败:', error);
         showError('加载结果失败');
     }
 }
 
-// 显示结果
-function displayResults(results) {
-    showResultsSection();
-    
-    const summary = document.getElementById('resultsSummary');
-    summary.textContent = `共找到 ${results.length} 只符合条件的股票`;
-    
-    const tbody = document.getElementById('resultsBody');
-    tbody.innerHTML = '';
-    
-    if (results.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 40px; color: var(--text-secondary);">未找到符合条件的股票</td></tr>';
+// filter_name 到简短中文标签的映射（选中原因）
+const FILTER_NAME_LABELS = {
+    EMABreakoutStrategizer: 'EMA突破',
+    RSIOversoldStrategizer: 'RSI超卖',
+    RSIOverboughtStrategizer: 'RSI超买',
+    MarketCapFilter: '市值',
+    PEFilter: '市盈率',
+    PriceFilter: '价格',
+    AvgDailyVolumeFilter: '日均量',
+    ProfitabilityFilter: '盈利',
+};
+
+function getReasonLabel(filterName) {
+    return FILTER_NAME_LABELS[filterName] || filterName || '';
+}
+
+function renderReasonTags(filterDetails) {
+    if (!Array.isArray(filterDetails)) return '';
+    const passed = filterDetails.filter(d => d && d.result === 'pass');
+    if (passed.length === 0) return '-';
+    return passed
+        .map(d => {
+            const label = getReasonLabel(d.filter_name);
+            if (!label) return '';
+            return `<span class="reason-tag">${label}</span>`;
+        })
+        .filter(Boolean)
+        .join('');
+}
+
+// 应用结果筛选（下钻，按 panel）
+async function applyResultFilter(panel) {
+    const taskId = taskIdByPanel[panel];
+    if (!taskId) {
+        showError('暂无筛选结果，请先完成一次筛选');
         return;
     }
-    
+    const suffix = panelSuffix(panel);
+    const params = new URLSearchParams({ passed_only: 'true' });
+    const sector = document.getElementById('resultFilterSector' + suffix)?.value?.trim();
+    const industry = document.getElementById('resultFilterIndustry' + suffix)?.value?.trim();
+    const marketCapMin = document.getElementById('resultFilterMarketCapMin' + suffix)?.value?.trim();
+    const marketCapMax = document.getElementById('resultFilterMarketCapMax' + suffix)?.value?.trim();
+    const peMin = document.getElementById('resultFilterPeMin' + suffix)?.value?.trim();
+    const peMax = document.getElementById('resultFilterPeMax' + suffix)?.value?.trim();
+    const priceMin = document.getElementById('resultFilterPriceMin' + suffix)?.value?.trim();
+    const priceMax = document.getElementById('resultFilterPriceMax' + suffix)?.value?.trim();
+    if (sector) params.set('sector', sector);
+    if (industry) params.set('industry', industry);
+    const capMinNum = marketCapMin ? parseNumberWithUnit(marketCapMin) : null;
+    const capMaxNum = marketCapMax ? parseNumberWithUnit(marketCapMax) : null;
+    if (capMinNum != null) params.set('market_cap_min', String(capMinNum));
+    if (capMaxNum != null) params.set('market_cap_max', String(capMaxNum));
+    if (peMin) params.set('pe_min', peMin);
+    if (peMax) params.set('pe_max', peMax);
+    if (priceMin) params.set('close_price_min', priceMin);
+    if (priceMax) params.set('close_price_max', priceMax);
+    try {
+        const response = await fetch(`${API_BASE}/results/${taskId}?${params}`);
+        if (!response.ok) throw new Error('获取结果失败');
+        const data = await response.json();
+        displayResults(data.results, panel);
+    } catch (err) {
+        console.error('结果筛选失败:', err);
+        showError(err.message || '结果筛选失败');
+    }
+}
+
+// 显示结果（按 panel）
+function displayResults(results, panel) {
+    showResultsSection(panel);
+    const suffix = panelSuffix(panel);
+    const summary = document.getElementById('resultsSummary' + suffix);
+    const tbody = document.getElementById('resultsBody' + suffix);
+    if (summary) summary.textContent = `共找到 ${results.length} 只符合条件的股票`;
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    if (results.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 40px; color: var(--text-secondary);">未找到符合条件的股票</td></tr>';
+        return;
+    }
     results.forEach(stock => {
         const row = document.createElement('tr');
         const codeBtn = document.createElement('button');
@@ -539,7 +618,7 @@ function displayResults(results) {
         codeBtn.textContent = stock.code;
         codeBtn.title = '点击查看 K 线图';
         codeBtn.addEventListener('click', () => showStockChart(stock.code, stock.name));
-        
+        const reasonTagsHtml = renderReasonTags(stock.filter_details);
         row.innerHTML = `
             <td></td>
             <td>${stock.name || '-'}</td>
@@ -547,9 +626,9 @@ function displayResults(results) {
             <td>${formatLargeNumber(stock.market_cap)}</td>
             <td>${formatNumber(stock.close_price)}</td>
             <td>${formatNumber(stock.pe_ratio)}</td>
+            <td class="reason-tags-cell">${reasonTagsHtml}</td>
         `;
         row.querySelector('td:first-child').appendChild(codeBtn);
-        
         tbody.appendChild(row);
     });
 }

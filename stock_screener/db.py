@@ -630,6 +630,43 @@ class MarketDatabase:
                 "updated_at": row[11],
             }
 
+    def get_latest_completed_task(self) -> Optional[dict]:
+        """获取最近一次已完成的筛选任务（按 created_at 降序取一条）"""
+        sql = """
+            SELECT task_id, market, timeframe, status, total_count, completed_count,
+                   current_stock_code, current_stock_name, params_json, check_date,
+                   created_at, updated_at
+            FROM screening_tasks
+            WHERE status = 'completed'
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql)
+            row = cursor.fetchone()
+            if not row:
+                return None
+            params = None
+            if row[8]:
+                try:
+                    params = json.loads(row[8])
+                except Exception:
+                    params = None
+            return {
+                "task_id": row[0],
+                "market": row[1],
+                "timeframe": row[2],
+                "status": row[3],
+                "total_count": row[4],
+                "completed_count": row[5],
+                "current_stock_code": row[6],
+                "current_stock_name": row[7],
+                "params_json": params,
+                "check_date": row[9],
+                "created_at": row[10],
+                "updated_at": row[11],
+            }
+
     # ------------------------------------------------------------------
     # 迁移（保留兼容）
     # ------------------------------------------------------------------
