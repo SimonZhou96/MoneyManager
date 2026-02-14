@@ -13,8 +13,9 @@ from db import MarketDatabase, MySqlConfig
 from filters import (
     FilterChain,
     FilterContext,
+    FilterOutput,
+    FilterResult,
     StockInfo,
-    EMABreakoutFilter,
     MarketCapFilter,
     PEFilter,
     PriceFilter,
@@ -24,30 +25,22 @@ from filters import (
 )
 from kline_fetcher import KlineFetcherFactory
 from market import normalize_market, market_label
+from strategizers import (
+    StrategizerChain,
+    EMABreakoutStrategizer,
+    RSIOversoldStrategizer,
+    RSIOverboughtStrategizer,
+)
 from timeframe import parse_timeframe
 from universe_filter import UniverseFilterFactory
 
 
 def create_filter_chain_from_params(params: dict) -> FilterChain:
     """
-    根据参数创建筛选器链
-    
-    Args:
-        params: 筛选参数字典
-        
-    Returns:
-        FilterChain: 配置好的筛选器链
+    根据参数创建筛选器链（不含策略逻辑，EMA 突破已迁移到策略器）
     """
     chain = FilterChain(mode="all", early_stop=False)
-    
-    # EMA 突破筛选器（核心策略，默认启用）
-    use_ema = params.get("use_ema_breakout", True)  # 默认启用
-    if use_ema:
-        chain.add_filter(EMABreakoutFilter(
-            ema_short=params.get("ema_short", 10),
-            ema_long=params.get("ema_long", 150),
-        ))
-    
+
     # 市值筛选器
     if params.get("market_cap_min") is not None or params.get("market_cap_max") is not None:
         chain.add_filter(MarketCapFilter(
@@ -80,7 +73,36 @@ def create_filter_chain_from_params(params: dict) -> FilterChain:
     # 公司盈利筛选器
     if params.get("require_profitable") is True:
         chain.add_filter(ProfitabilityFilter(require_profitable=True))
-    
+
+    return chain
+
+
+def create_strategizer_chain_from_params(params: dict) -> StrategizerChain:
+    """
+    根据参数创建策略器链。任意一个策略器满足即视为股票满足策略条件。
+    """
+    chain = StrategizerChain()
+
+    # EMA 向上突破策略器
+    use_ema = params.get("use_ema_breakout", True)
+    if use_ema:
+        chain.add_strategizer(EMABreakoutStrategizer(
+            ema_short=params.get("ema_short", 10),
+            ema_long=params.get("ema_long", 150),
+        ))
+
+    # RSI(14) <= 30 超卖策略器
+    chain.add_strategizer(RSIOversoldStrategizer(
+        period=params.get("rsi_period", 14),
+        threshold=params.get("rsi_oversold_threshold", 30.0),
+    ))
+
+    # RSI(14) >= 70 超买策略器
+    chain.add_strategizer(RSIOverboughtStrategizer(
+        period=params.get("rsi_period", 14),
+        threshold=params.get("rsi_overbought_threshold", 70.0),
+    ))
+
     return chain
 
 
@@ -129,20 +151,21 @@ def run_screening_task(
         # 转换为 StockInfo 列表
         stock_infos = stocks_to_stock_infos(stocks, market, db)
         
-        # 创建筛选器链
+        # 创建筛选器链与策略器链
         filter_chain = create_filter_chain_from_params(params)
-        
+        strategy_chain = create_strategizer_chain_from_params(params)
+
         if not filter_chain.list_filters():
             if verbose:
                 print("警告：没有启用任何筛选器")
             db.update_task_status(task_id, "completed")
             return
-        
-        # 检查是否需要 K 线数据
+
+        # 检查是否需要 K 线：筛选器或策略器任一需要则拉取
         needs_kline = any(
-            f.__class__.__name__ in ["PriceFilter", "AvgDailyVolumeFilter", "EMABreakoutFilter"]
+            f.__class__.__name__ in ["PriceFilter", "AvgDailyVolumeFilter"]
             for f in filter_chain._filters if f.enabled
-        )
+        ) or len(strategy_chain.list_strategizers()) > 0
         
         # 创建 K 线获取器
         fetchers = KlineFetcherFactory.create_fetcher_chain() if needs_kline else None
@@ -201,10 +224,19 @@ def run_screening_task(
                 # 限速
                 time.sleep(0.2)
             
-            # 步骤2: 应用筛选器链（判断是否满足条件）
+            # 步骤2: 筛选器 -> 策略器；合并为单一 result（filter_outputs 含筛选器+策略器，passed=筛选通过且任意策略满足）
             result = filter_chain.apply(si, context)
+            strategy_result = strategy_chain.apply(si, context)
+            for out in strategy_result.outputs:
+                result.add_output(FilterOutput(
+                    filter_name=out.name,
+                    result=FilterResult.PASS if out.satisfied else FilterResult.FAIL,
+                    reason=out.reason or "",
+                    details=dict(out.details) if out.details else {},
+                ))
+            result.passed = result.passed and strategy_result.any_satisfied
             results.append(result)
-            
+
             # 步骤3: 详细日志输出（所有股票都打印，不论是否满足条件）
             if verbose:
                 status = "✅" if result.passed else "❌"
@@ -229,7 +261,7 @@ def run_screening_task(
                 else:
                     print(f"K线数据: {len(si.kline_df)} 根")
                 
-                # 打印每个筛选器的结果
+                # 打印每个输出（筛选器 + 策略器，已合并到 result.filter_outputs）
                 for output in result.filter_outputs:
                     result_icon = {
                         "pass": "✅",
@@ -272,13 +304,13 @@ def run_screening_task(
             # 步骤4: 立即写入筛选结果到数据库（每只股票处理后立即写入）
             stock = result.stock
             close_price = None
-            # 从筛选器输出中提取 close_price
+            # 从输出中提取 close_price（PriceFilter 或策略器可能提供）
             for output in result.filter_outputs:
                 if output.filter_name == "PriceFilter" and output.details:
                     close_price = output.details.get("price")
                     break
             
-            # 构建 filter_details
+            # 构建 filter_details（筛选器 + 策略器已合并到 result.filter_outputs）
             filter_details = []
             for o in result.filter_outputs:
                 details = {}

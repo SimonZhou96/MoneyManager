@@ -246,3 +246,55 @@ def analyze_stock_ema_breakout(
         close_price=close_price,
         data_rows=data_rows,
     )
+
+
+def calculate_rsi(close: pd.Series, period: int = 14) -> pd.Series:
+    """
+    计算 RSI（相对强弱指数），使用 Wilder 平滑。
+
+    Args:
+        close: 收盘价序列
+        period: RSI 周期，默认 14
+
+    Returns:
+        pd.Series: RSI 值序列，范围 [0, 100]
+    """
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = (-delta).where(delta < 0, 0.0)
+    # Wilder 平滑: alpha = 1/period
+    avg_gain = gain.ewm(alpha=1.0 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / period, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    # avg_loss==0 时 RSI=100
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    return rsi
+
+
+def get_latest_rsi(df: pd.DataFrame, period: int = 14, check_date: date | None = None) -> Optional[float]:
+    """
+    从 K 线数据计算最新一根 K 线的 RSI(period)。
+
+    Args:
+        df: K 线 DataFrame，需包含 'close'、'date' 列
+        period: RSI 周期，默认 14
+        check_date: 截止日期（None 则用全部数据取最后一根）
+
+    Returns:
+        最新 RSI 值，数据不足或无效时返回 None
+    """
+    if df is None or df.empty or "close" not in df.columns:
+        return None
+    df = df.copy()
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        if check_date is not None:
+            df = df[df["date"].dt.date <= check_date]
+    if len(df) < period + 1:
+        return None
+    close = df["close"].astype(float)
+    rsi_series = calculate_rsi(close, period=period)
+    last_val = rsi_series.iloc[-1]
+    if pd.isna(last_val):
+        return None
+    return float(last_val)

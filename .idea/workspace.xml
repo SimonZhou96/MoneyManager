@@ -5,8 +5,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="ee62eec3-1180-4c03-b094-d1a5438df4b2" name="更改" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/MoneyManager.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/MoneyManager.iml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/filters.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/filters.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/EMA_STRATEGY_FIX.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/FEATURE_UPDATE.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/api/screen_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/api/screen_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/strategy.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/strategy.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -197,7 +202,7 @@
       <workItem from="1769872799412" duration="6534000" />
       <workItem from="1770269529116" duration="222000" />
       <workItem from="1770799420848" duration="7519000" />
-      <workItem from="1770974629310" duration="9737000" />
+      <workItem from="1770974629310" duration="15087000" />
     </task>
     <servers />
   </component>
