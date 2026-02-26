@@ -757,3 +757,41 @@ footer {
     min-height: 480px;
     padding: 16px;
 }
+
+/* 股票池多选样式 */
+.checkbox-group-vertical {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+    background: var(--bg-color);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    padding: 8px 12px;
+    border-radius: 6px;
+    transition: background-color 0.2s;
+}
+
+.checkbox-label:hover {
+    background: rgba(37, 99, 235, 0.05);
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    margin-right: 10px;
+    cursor: pointer;
+    accent-color: var(--primary-color);
+}
+
+.checkbox-label span {
+    font-size: 0.95rem;
+    color: var(--text-primary);
+    user-select: none;
+}

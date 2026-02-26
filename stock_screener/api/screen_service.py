@@ -223,9 +223,24 @@ def run_screening_task(
             f.__class__.__name__ in ["PriceFilter", "AvgDailyVolumeFilter"]
             for f in filter_chain._filters if f.enabled
         ) or len(strategy_chain.list_strategizers()) > 0
-        
-        # 创建 K 线获取器
-        fetchers = KlineFetcherFactory.create_fetcher_chain() if needs_kline else None
+
+        # 创建 K 线获取器（尝试连接 Futu OpenD）
+        fetchers = None
+        quote_ctx = None
+        if needs_kline:
+            # 尝试连接 Futu OpenD
+            try:
+                from futu import OpenQuoteContext
+                quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+                if verbose:
+                    print("✓ 已连接 Futu OpenD")
+            except Exception as e:
+                if verbose:
+                    print(f"⚠️  无法连接 Futu OpenD: {e}，将使用其他数据源")
+                quote_ctx = None
+
+            # 创建获取器链（传入 quote_ctx，如果可用）
+            fetchers = KlineFetcherFactory.create_fetcher_chain(quote_ctx=quote_ctx)
         
         # 创建筛选器上下文
         context = FilterContext(
@@ -431,6 +446,14 @@ def run_screening_task(
             except Exception:
                 pass
     finally:
+        # 关闭 Futu quote_ctx
+        if 'quote_ctx' in locals() and quote_ctx is not None:
+            try:
+                quote_ctx.close()
+            except Exception:
+                pass
+
+        # 关闭数据库连接
         if db:
             db.close()
 

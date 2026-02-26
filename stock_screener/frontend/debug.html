@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>调试测试</title>
+</head>
+<body>
+    <h1>股票池筛选调试</h1>
+
+    <div>
+        <h2>1. 测试加载股票池</h2>
+        <button onclick="testLoadStockPool()">测试加载</button>
+        <div id="loadResult"></div>
+    </div>
+
+    <div style="margin-top: 20px;">
+        <h2>2. 测试开始筛选</h2>
+        <button onclick="testStartScreening()">测试筛选</button>
+        <div id="screenResult"></div>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+
+        async function testLoadStockPool() {
+            const resultDiv = document.getElementById('loadResult');
+            resultDiv.innerHTML = '测试中...';
+
+            try {
+                // 测试获取最好股票池
+                const response = await fetch(`${API_BASE}/stock-pools?market=HK&pool_type=best`);
+                console.log('Response status:', response.status);
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '加载失败');
+                }
+
+                const data = await response.json();
+                console.log('Data:', data);
+
+                resultDiv.innerHTML = `
+                    <p style="color: green;">✓ 加载成功</p>
+                    <p>股票数量: ${data.stocks.length}</p>
+                    <p>总数: ${data.total}</p>
+                    <p>更新时间: ${data.last_update.update_time}</p>
+                `;
+            } catch (error) {
+                console.error('Error:', error);
+                resultDiv.innerHTML = `<p style="color: red;">✗ 失败: ${error.message}</p>`;
+            }
+        }
+
+        async function testStartScreening() {
+            const resultDiv = document.getElementById('screenResult');
+            resultDiv.innerHTML = '测试中...';
+
+            try {
+                // 构建测试数据
+                const watchlist = [
+                    { code: 'HK.00700', name: '腾讯' },
+                    { code: 'HK.09988', name: '阿里巴巴' }
+                ];
+
+                console.log('Sending request:', {
+                    market: 'HK',
+                    timeframe: '1d',
+                    watchlist: watchlist,
+                    use_ema_breakout: true,
+                    ema_short: 10,
+                    ema_long: 150
+                });
+
+                const response = await fetch(`${API_BASE}/screen`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        market: 'HK',
+                        timeframe: '1d',
+                        watchlist: watchlist,
+                        use_ema_breakout: true,
+                        ema_short: 10,
+                        ema_long: 150
+                    })
+                });
+
+                console.log('Response status:', response.status);
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '提交失败');
+                }
+
+                const data = await response.json();
+                console.log('Response data:', data);
+
+                resultDiv.innerHTML = `
+                    <p style="color: green;">✓ 提交成功</p>
+                    <p>Task ID: ${data.task_id}</p>
+                `;
+            } catch (error) {
+                console.error('Error:', error);
+                resultDiv.innerHTML = `<p style="color: red;">✗ 失败: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

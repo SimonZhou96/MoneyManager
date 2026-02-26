@@ -691,3 +691,223 @@ class MarketDatabase:
                         cursor.execute(alter_sql)
                     except Exception:
                         pass
+
+    # ------------------------------------------------------------------
+    # Stock Pool Tables
+    # ------------------------------------------------------------------
+
+    def init_stock_pool_schema(self):
+        """初始化股票池表结构"""
+        with self.conn.cursor() as cursor:
+            # 股票池主表
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS stock_pools (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    market VARCHAR(8) NOT NULL COMMENT '市场: HK/US/A',
+                    pool_type VARCHAR(32) NOT NULL COMMENT '池类型: best/index/industry/ipo/etf',
+                    code VARCHAR(32) NOT NULL COMMENT '股票代码',
+                    name VARCHAR(255) NULL COMMENT '股票名称',
+                    market_cap DECIMAL(28,2) NULL COMMENT '市值',
+                    price DECIMAL(20,6) NULL COMMENT '价格',
+                    pe_ratio DECIMAL(20,6) NULL COMMENT '市盈率',
+                    turnover DECIMAL(28,2) NULL COMMENT '成交额',
+                    volume BIGINT NULL COMMENT '成交量',
+                    listing_date DATE NULL COMMENT '上市日期',
+                    days_since_listing INT NULL COMMENT '上市天数',
+                    index_code VARCHAR(32) NULL COMMENT '所属指数代码',
+                    index_name VARCHAR(255) NULL COMMENT '所属指数名称',
+                    industry_code VARCHAR(64) NULL COMMENT '所属行业代码',
+                    industry_name VARCHAR(128) NULL COMMENT '所属行业名称',
+                    rank_in_industry INT NULL COMMENT '行业内排名',
+                    extra_data JSON NULL COMMENT '额外数据',
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_pool_market_type_code (market, pool_type, code),
+                    KEY idx_pool_market (market),
+                    KEY idx_pool_type (pool_type),
+                    KEY idx_pool_market_cap (market_cap),
+                    KEY idx_pool_listing_date (listing_date),
+                    KEY idx_pool_industry (industry_code),
+                    KEY idx_pool_index (index_code)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='股票池数据表'
+                """
+            )
+
+            # 股票池更新记录表
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS stock_pool_updates (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    market VARCHAR(8) NOT NULL COMMENT '市场',
+                    pool_type VARCHAR(32) NOT NULL COMMENT '池类型',
+                    update_time DATETIME(6) NOT NULL COMMENT '更新时间',
+                    stock_count INT NOT NULL DEFAULT 0 COMMENT '股票数量',
+                    status VARCHAR(16) NOT NULL DEFAULT 'success' COMMENT '状态: success/failed',
+                    error_msg TEXT NULL COMMENT '错误信息',
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    KEY idx_updates_market_type (market, pool_type),
+                    KEY idx_updates_time (update_time)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='股票池更新记录'
+                """
+            )
+
+    # ------------------------------------------------------------------
+    # Stock Pool Operations
+    # ------------------------------------------------------------------
+
+    def upsert_stock_pool(self, market: str, pool_type: str, stocks: List[dict]):
+        """
+        插入或更新股票池数据
+
+        Args:
+            market: HK/US/A
+            pool_type: best/index/industry/ipo/etf
+            stocks: 股票列表
+        """
+        if not stocks:
+            return
+
+        rows = []
+        for item in stocks:
+            rows.append(
+                (
+                    market,
+                    pool_type,
+                    str(item.get("code") or "").strip(),
+                    item.get("name"),
+                    item.get("market_cap"),
+                    item.get("price"),
+                    item.get("pe_ratio"),
+                    item.get("turnover"),
+                    item.get("volume"),
+                    item.get("listing_date"),
+                    item.get("days_since_listing"),
+                    item.get("index_code"),
+                    item.get("index_name"),
+                    item.get("industry_code"),
+                    item.get("industry_name"),
+                    item.get("rank") or item.get("rank_in_industry"),
+                    json.dumps(item.get("extra_data")) if item.get("extra_data") else None,
+                )
+            )
+
+        rows = [r for r in rows if r[2]]  # 过滤空代码
+        if not rows:
+            return
+
+        sql = """
+            INSERT INTO stock_pools
+                (market, pool_type, code, name, market_cap, price, pe_ratio,
+                 turnover, volume, listing_date, days_since_listing,
+                 index_code, index_name, industry_code, industry_name,
+                 rank_in_industry, extra_data)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                name=VALUES(name),
+                market_cap=VALUES(market_cap),
+                price=VALUES(price),
+                pe_ratio=VALUES(pe_ratio),
+                turnover=VALUES(turnover),
+                volume=VALUES(volume),
+                listing_date=VALUES(listing_date),
+                days_since_listing=VALUES(days_since_listing),
+                index_code=VALUES(index_code),
+                index_name=VALUES(index_name),
+                industry_code=VALUES(industry_code),
+                industry_name=VALUES(industry_name),
+                rank_in_industry=VALUES(rank_in_industry),
+                extra_data=VALUES(extra_data)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.executemany(sql, rows)
+
+    def get_stock_pool(
+        self, market: str, pool_type: str, limit: Optional[int] = None
+    ) -> List[dict]:
+        """
+        获取股票池数据
+
+        Args:
+            market: HK/US/A
+            pool_type: best/index/industry/ipo/etf
+            limit: 限制返回数量
+
+        Returns:
+            股票列表
+        """
+        sql = """
+            SELECT code, name, market_cap, price, pe_ratio, turnover, volume,
+                   listing_date, days_since_listing, index_code, index_name,
+                   industry_code, industry_name, rank_in_industry, extra_data,
+                   created_at, updated_at
+            FROM stock_pools
+            WHERE market=%s AND pool_type=%s
+            ORDER BY market_cap DESC
+        """
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (market, pool_type))
+            rows = cursor.fetchall()
+
+        result = []
+        for row in rows:
+            result.append({
+                "code": row[0],
+                "name": row[1],
+                "market_cap": float(row[2]) if row[2] else None,
+                "price": float(row[3]) if row[3] else None,
+                "pe_ratio": float(row[4]) if row[4] else None,
+                "turnover": float(row[5]) if row[5] else None,
+                "volume": int(row[6]) if row[6] else None,
+                "listing_date": str(row[7]) if row[7] else None,
+                "days_since_listing": int(row[8]) if row[8] else None,
+                "index_code": row[9],
+                "index_name": row[10],
+                "industry_code": row[11],
+                "industry_name": row[12],
+                "rank_in_industry": int(row[13]) if row[13] else None,
+                "extra_data": json.loads(row[14]) if row[14] else None,
+                "created_at": str(row[15]) if row[15] else None,
+                "updated_at": str(row[16]) if row[16] else None,
+            })
+
+        return result
+
+    def record_pool_update(
+        self, market: str, pool_type: str, stock_count: int, status: str = "success", error_msg: Optional[str] = None
+    ):
+        """记录股票池更新"""
+        sql = """
+            INSERT INTO stock_pool_updates
+                (market, pool_type, update_time, stock_count, status, error_msg)
+            VALUES (%s, %s, NOW(), %s, %s, %s)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (market, pool_type, stock_count, status, error_msg))
+
+    def get_pool_last_update(self, market: str, pool_type: str) -> Optional[dict]:
+        """获取股票池最后更新时间"""
+        sql = """
+            SELECT update_time, stock_count, status
+            FROM stock_pool_updates
+            WHERE market=%s AND pool_type=%s
+            ORDER BY update_time DESC
+            LIMIT 1
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (market, pool_type))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "update_time": str(row[0]),
+                    "stock_count": int(row[1]),
+                    "status": row[2],
+                }
+        return None

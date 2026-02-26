@@ -16,6 +16,7 @@
         <main>
             <div class="main-tabs" role="tablist">
                 <button type="button" class="main-tab active" role="tab" aria-selected="true" data-panel="watchlist">自选股</button>
+                <button type="button" class="main-tab" role="tab" aria-selected="false" data-panel="stockpool">股票池</button>
                 <button type="button" class="main-tab" role="tab" aria-selected="false" data-panel="filter">筛选条件</button>
             </div>
             <div id="panelWatchlist" class="main-tab-panel active" role="tabpanel">
@@ -144,6 +145,170 @@
                 </div>
             </section>
             </div>
+
+            <!-- 股票池筛选 Tab -->
+            <div id="panelStockpool" class="main-tab-panel" role="tabpanel">
+                <section class="stockpool-section card">
+                    <h2>股票池筛选</h2>
+                    <p class="stockpool-hint">选择市场和股票池类型，将股票池中的股票投入选股器进行策略筛选。</p>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="stockpoolMarket">市场</label>
+                            <select id="stockpoolMarket" name="market" required>
+                                <option value="HK">港股</option>
+                                <option value="US">美股</option>
+                                <option value="A">A股</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>股票池类型（可多选）</label>
+                        <div class="checkbox-group-vertical">
+                            <label class="checkbox-label">
+                                <input type="checkbox" class="stockpool-type-checkbox" value="best" checked>
+                                <span>最好股票</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" class="stockpool-type-checkbox" value="index">
+                                <span>指数成份股</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" class="stockpool-type-checkbox" value="industry">
+                                <span>行业龙头</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" class="stockpool-type-checkbox" value="ipo">
+                                <span>新股</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" class="stockpool-type-checkbox" value="etf">
+                                <span>ETF列表</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="timeframeStockpool">时间周期</label>
+                            <select id="timeframeStockpool" name="timeframe">
+                                <option value="">加载中...</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="stockpool-toolbar">
+                        <button type="button" id="stockpoolLoadBtn" class="btn btn-secondary btn-sm">加载股票池</button>
+                        <span id="stockpoolInfo" class="stockpool-info"></span>
+                    </div>
+
+                    <div id="stockpoolContent" class="stockpool-content">
+                        <div class="stockpool-empty">请先选择市场和股票池类型，然后点击"加载股票池"</div>
+                        <div id="stockpoolTableWrap" class="stockpool-table-wrap" style="display: none;">
+                            <table class="stockpool-table">
+                                <thead>
+                                    <tr><th>代码</th><th>名称</th><th>市值</th><th>价格</th><th>PE</th></tr>
+                                </thead>
+                                <tbody id="stockpoolBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" id="stockpoolSubmitBtn" class="btn btn-primary" disabled>开始筛选</button>
+                    </div>
+                </section>
+
+                <!-- 股票池 Tab 进度区 -->
+                <section id="progressSectionStockpool" class="progress-section card" style="display: none;">
+                    <h2>筛选进度</h2>
+                    <div class="current-stock">
+                        <div class="label">当前处理：</div>
+                        <div id="currentStockStockpool" class="value">-</div>
+                    </div>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar">
+                            <div id="progressBarStockpool" class="progress-fill"></div>
+                        </div>
+                        <div id="progressTextStockpool" class="progress-text">0 / 0</div>
+                    </div>
+                    <div class="progress-status">
+                        <span id="statusTextStockpool">准备中...</span>
+                    </div>
+                    <div class="passed-stocks-section">
+                        <h3>✅ 满足条件的股票 (<span id="passedCountStockpool">0</span>)</h3>
+                        <div id="passedStocksListStockpool" class="passed-stocks-list">
+                            <div class="empty-message">暂无满足条件的股票</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 股票池 Tab 结果区 -->
+                <section id="resultsSectionStockpool" class="results-section card" style="display: none;">
+                    <h2>筛选结果</h2>
+                    <div class="results-summary">
+                        <span id="resultsSummaryStockpool">共找到 0 只符合条件的股票</span>
+                    </div>
+                    <details class="result-filter">
+                        <summary>结果筛选（可选）</summary>
+                        <div class="result-filter-inner">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="resultFilterSectorStockpool">板块</label>
+                                    <input type="text" id="resultFilterSectorStockpool" placeholder="可选">
+                                </div>
+                                <div class="form-group">
+                                    <label for="resultFilterIndustryStockpool">行业</label>
+                                    <input type="text" id="resultFilterIndustryStockpool" placeholder="可选">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="resultFilterMarketCapMinStockpool">市值最小</label>
+                                    <input type="text" id="resultFilterMarketCapMinStockpool" placeholder="如 50亿">
+                                </div>
+                                <div class="form-group">
+                                    <label for="resultFilterMarketCapMaxStockpool">市值最大</label>
+                                    <input type="text" id="resultFilterMarketCapMaxStockpool" placeholder="可选">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="resultFilterPeMinStockpool">市盈率最小</label>
+                                    <input type="number" id="resultFilterPeMinStockpool" placeholder="可选" step="0.1">
+                                </div>
+                                <div class="form-group">
+                                    <label for="resultFilterPeMaxStockpool">市盈率最大</label>
+                                    <input type="number" id="resultFilterPeMaxStockpool" placeholder="可选" step="0.1">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="resultFilterPriceMinStockpool">价格最小</label>
+                                    <input type="number" id="resultFilterPriceMinStockpool" placeholder="可选" step="0.01">
+                                </div>
+                                <div class="form-group">
+                                    <label for="resultFilterPriceMaxStockpool">价格最大</label>
+                                    <input type="number" id="resultFilterPriceMaxStockpool" placeholder="可选" step="0.01">
+                                </div>
+                            </div>
+                            <button type="button" id="resultFilterApplyBtnStockpool" class="btn btn-secondary btn-sm">应用</button>
+                        </div>
+                    </details>
+                    <div class="results-table-container">
+                        <table id="resultsTableStockpool" class="results-table">
+                            <thead>
+                                <tr>
+                                    <th>代码</th><th>名称</th><th>板块</th><th>市值</th><th>价格</th><th>市盈率</th><th>选中原因</th>
+                                </tr>
+                            </thead>
+                            <tbody id="resultsBodyStockpool"></tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+
             <div id="panelFilter" class="main-tab-panel" role="tabpanel">
             <!-- 筛选表单 -->
             <section class="filter-section card">
