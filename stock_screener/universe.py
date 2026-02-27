@@ -100,8 +100,12 @@ def fetch_stock_list_akshare(market: str) -> List[dict]:
 
     code_col = _find_column(data.columns, ["代码", "code", "symbol", "ticker"])
     name_col = _find_column(data.columns, ["名称", "name", "中文名称", "英文名称"])
-    market_cap_col = _find_column(data.columns, ["总市值", "流通市值", "market_cap", "市值"])
-    pe_col = _find_column(data.columns, ["市盈率", "市盈率-动态", "pe", "pe_ratio"])
+    sector_col = _find_column(data.columns, ["板块", "sector", "所属板块", "行业板块", "一级行业"])
+    industry_col = _find_column(data.columns, ["行业", "industry", "所属行业", "细分行业", "二级行业"])
+    market_cap_col = _find_column(data.columns, ["总市值", "流通市值", "market_cap", "市值", "总市值(元)", "总市值(亿)"])
+    pe_col = _find_column(data.columns, ["市盈率", "市盈率-动态", "pe", "pe_ratio", "市盈率(动态)", "动态市盈率"])
+    pb_col = _find_column(data.columns, ["市净率", "pb", "pb_ratio", "市净率(动态)"])
+    price_col = _find_column(data.columns, ["最新价", "现价", "price", "close", "收盘价", "最新"])
     if code_col is None:
         return []
 
@@ -129,10 +133,46 @@ def fetch_stock_list_akshare(market: str) -> List[dict]:
             continue
         name = str(row[name_col]).strip() if name_col else code
         item = {"code": code, "name": name}
+
+        # 添加板块信息
+        if sector_col and sector_col in row:
+            sector = str(row[sector_col]).strip()
+            if sector and sector not in ['-', '--', 'nan', 'None', '']:
+                item["sector"] = sector
+
+        # 添加行业信息
+        if industry_col and industry_col in row:
+            industry = str(row[industry_col]).strip()
+            if industry and industry not in ['-', '--', 'nan', 'None', '']:
+                item["industry"] = industry
+
+        # 添加市值
         if market_cap_col and market_cap_col in row:
-            item["market_cap"] = _safe_float(row[market_cap_col])
+            market_cap = _safe_float(row[market_cap_col])
+            if market_cap is not None:
+                # 如果市值单位是亿，转换为元
+                if market_cap_col and "亿" in market_cap_col:
+                    market_cap = market_cap * 1e8
+                item["market_cap"] = market_cap
+
+        # 添加市盈率
         if pe_col and pe_col in row:
-            item["pe_ratio"] = _safe_float(row[pe_col])
+            pe_ratio = _safe_float(row[pe_col])
+            if pe_ratio is not None:
+                item["pe_ratio"] = pe_ratio
+
+        # 添加市净率
+        if pb_col and pb_col in row:
+            pb_ratio = _safe_float(row[pb_col])
+            if pb_ratio is not None:
+                item["pb_ratio"] = pb_ratio
+
+        # 添加价格
+        if price_col and price_col in row:
+            price = _safe_float(row[price_col])
+            if price is not None:
+                item["price"] = price
+
         stocks.append(item)
     return stocks
 

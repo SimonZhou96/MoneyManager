@@ -53,19 +53,36 @@ async def get_chart_data(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # 获取 K 线数据
-    fetchers = KlineFetcherFactory.create_fetcher_chain()
-    df = None
-    for fetcher in fetchers:
-        try:
-            df = fetcher.fetch(code, market=market, timeframe=timeframe)
-            if df is not None and not df.empty:
-                break
-        except Exception:
-            continue
+    # 尝试连接 Futu OpenD（用于获取 K 线数据）
+    quote_ctx = None
+    try:
+        from futu import OpenQuoteContext
+        quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+    except Exception:
+        # Futu 不可用时静默失败，使用其他数据源
+        pass
 
-    if df is None or df.empty:
-        raise HTTPException(status_code=404, detail=f"无法获取 {code} 的 K 线数据")
+    try:
+        # 获取 K 线数据（传入 quote_ctx 以支持 Futu 获取器）
+        fetchers = KlineFetcherFactory.create_fetcher_chain(quote_ctx=quote_ctx)
+        df = None
+        for fetcher in fetchers:
+            try:
+                df = fetcher.fetch(code, market=market, timeframe=timeframe)
+                if df is not None and not df.empty:
+                    break
+            except Exception:
+                continue
+
+        if df is None or df.empty:
+            raise HTTPException(status_code=404, detail=f"无法获取 {code} 的 K 线数据")
+    finally:
+        # 关闭 Futu 连接
+        if quote_ctx is not None:
+            try:
+                quote_ctx.close()
+            except Exception:
+                pass
 
     # 标准化日期格式（日线 YYYY-MM-DD，分钟线 YYYY-MM-DD HH:mm）
     df = df.copy()

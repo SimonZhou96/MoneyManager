@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>策略标签测试</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            padding: 40px;
+            background: #f8fafc;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #1e293b;
+            margin-bottom: 20px;
+        }
+        .passed-stocks-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .passed-stock-item {
+            padding: 12px;
+            background: #f8fafc;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+        }
+        .stock-code-btn {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 4px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        .stock-code-btn:hover {
+            background: #1d4ed8;
+        }
+        .stock-name {
+            color: #64748b;
+            margin-left: 8px;
+        }
+        .strategy-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 8px;
+        }
+        .strategy-tag {
+            display: inline-block;
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: rgba(16, 185, 129, 0.1);
+            color: #059669;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 策略标签显示测试</h1>
+        <p>测试满足条件的股票列表中显示策略标签</p>
+
+        <div class="passed-stocks-list" id="stocksList"></div>
+    </div>
+
+    <script>
+        // 模拟数据
+        const testStocks = [
+            {
+                code: "HK.00700",
+                name: "腾讯控股",
+                satisfied_strategies: ["EMA突破"]
+            },
+            {
+                code: "HK.09988",
+                name: "阿里巴巴",
+                satisfied_strategies: ["EMA突破", "RSI超卖"]
+            },
+            {
+                code: "HK.00699",
+                name: "JOYSON ELEC",
+                satisfied_strategies: ["EMA突破"]
+            },
+            {
+                code: "HK.01234",
+                name: "测试股票",
+                satisfied_strategies: ["RSI超买"]
+            },
+            {
+                code: "HK.05678",
+                name: "全满足",
+                satisfied_strategies: ["EMA突破", "RSI超卖", "RSI超买"]
+            }
+        ];
+
+        // 渲染股票列表
+        const listElem = document.getElementById('stocksList');
+
+        testStocks.forEach(stock => {
+            const item = document.createElement('div');
+            item.className = 'passed-stock-item';
+
+            // 股票代码按钮
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'stock-code-btn';
+            btn.textContent = stock.code;
+            btn.onclick = () => alert(`查看 ${stock.name} 的K线图`);
+            item.appendChild(btn);
+
+            // 股票名称
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'stock-name';
+            nameSpan.textContent = stock.name;
+            item.appendChild(nameSpan);
+
+            // 满足的策略标签
+            if (stock.satisfied_strategies && stock.satisfied_strategies.length > 0) {
+                const tagsContainer = document.createElement('div');
+                tagsContainer.className = 'strategy-tags';
+
+                stock.satisfied_strategies.forEach(strategy => {
+                    const tag = document.createElement('span');
+                    tag.className = 'strategy-tag';
+                    tag.textContent = strategy;
+                    tagsContainer.appendChild(tag);
+                });
+
+                item.appendChild(tagsContainer);
+            }
+
+            listElem.appendChild(item);
+        });
+    </script>
+</body>
+</html>

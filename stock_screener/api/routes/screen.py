@@ -136,7 +136,7 @@ async def get_progress(task_id: str):
         
         # 按 task_id 查询已通过筛选的股票（避免同一天多任务结果混淆）
         sql = """
-            SELECT code, name
+            SELECT code, name, filter_details
             FROM screening_results
             WHERE task_id=%s AND is_passed=1
             ORDER BY code
@@ -144,13 +144,39 @@ async def get_progress(task_id: str):
         with db.conn.cursor() as cursor:
             cursor.execute(sql, (task["task_id"],))
             rows = cursor.fetchall() or []
-        
+
         db.close()
-        
-        passed_stocks = [
-            {"code": row[0], "name": row[1] or row[0]}
-            for row in rows
-        ]
+
+        # 提取满足的策略
+        strategy_name_map = {
+            'EMABreakoutStrategizer': 'EMA突破',
+            'RSIOversoldStrategizer': 'RSI超卖',
+            'RSIOverboughtStrategizer': 'RSI超买',
+        }
+
+        passed_stocks = []
+        for row in rows:
+            code = row[0]
+            name = row[1] or code
+            filter_details_raw = row[2]
+
+            # 解析 filter_details 提取满足的策略
+            satisfied_strategies = []
+            if filter_details_raw:
+                try:
+                    filter_details = json.loads(filter_details_raw) if isinstance(filter_details_raw, str) else filter_details_raw
+                    if isinstance(filter_details, list):
+                        for detail in filter_details:
+                            if detail.get('result') == 'pass' and detail.get('filter_name') in strategy_name_map:
+                                satisfied_strategies.append(strategy_name_map[detail['filter_name']])
+                except Exception:
+                    pass
+
+            passed_stocks.append({
+                "code": code,
+                "name": name,
+                "satisfied_strategies": satisfied_strategies
+            })
         
         return {
             "task_id": task["task_id"],

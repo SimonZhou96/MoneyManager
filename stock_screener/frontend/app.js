@@ -2,11 +2,11 @@
 const API_BASE = '/api';
 
 // 全局变量
-const taskIdByPanel = { watchlist: null, filter: null, stockpool: null };
-const progressIntervalByPanel = { watchlist: null, filter: null, stockpool: null };
+const taskIdByPanel = { watchlist: null, filter: null, stockpool: null, search: null };
+const progressIntervalByPanel = { watchlist: null, filter: null, stockpool: null, search: null };
 // 每个 panel 当前结果/进度对应的市场与时间周期，用于点击股票时请求图表使用正确参数
-const lastResultMarketByPanel = { watchlist: null, filter: null, stockpool: null };
-const lastResultTimeframeByPanel = { watchlist: null, filter: null, stockpool: null };
+const lastResultMarketByPanel = { watchlist: null, filter: null, stockpool: null, search: null };
+const lastResultTimeframeByPanel = { watchlist: null, filter: null, stockpool: null, search: null };
 let watchlistByMarket = { HK: [], A: [], US: [] };
 let stockpoolData = []; // 当前加载的股票池数据
 let currentWatchlistTab = 'HK';
@@ -14,10 +14,16 @@ let currentMarket = 'HK';
 let currentTimeframe = '1d';
 let chartInstance = null;
 
-// panel 对应 DOM ID 后缀：'watchlist' | 'filter' | 'stockpool' -> 'Watchlist' | 'Filter' | 'Stockpool'
+// 股票池分页相关
+let stockpoolCurrentPage = 1;
+let stockpoolPageSize = 50;
+let stockpoolTotalPages = 1;
+
+// panel 对应 DOM ID 后缀：'watchlist' | 'filter' | 'stockpool' | 'search' -> 'Watchlist' | 'Filter' | 'Stockpool' | 'Search'
 function panelSuffix(panel) {
     if (panel === 'watchlist') return 'Watchlist';
     if (panel === 'stockpool') return 'Stockpool';
+    if (panel === 'search') return 'Search';
     return 'Filter';
 }
 
@@ -188,7 +194,7 @@ function renderWatchlist(market) {
     }
 }
 
-// 加载 timeframe 列表（筛选条件 + 自选股 + 股票池三处共用）
+// 加载 timeframe 列表（筛选条件 + 自选股 + 股票池 + 搜索四处共用）
 async function loadTimeframes() {
     try {
         const response = await fetch(`${API_BASE}/timeframes`);
@@ -197,6 +203,7 @@ async function loadTimeframes() {
         const select = document.getElementById('timeframe');
         const selectWatchlist = document.getElementById('timeframeWatchlist');
         const selectStockpool = document.getElementById('timeframeStockpool');
+        const selectSearch = document.getElementById('timeframeSearch');
         if (select) {
             select.innerHTML = '';
             data.timeframes.forEach(tf => {
@@ -227,6 +234,16 @@ async function loadTimeframes() {
             });
             selectStockpool.value = '1d';
         }
+        if (selectSearch) {
+            selectSearch.innerHTML = '';
+            data.timeframes.forEach(tf => {
+                const option = document.createElement('option');
+                option.value = tf.value;
+                option.textContent = tf.label;
+                selectSearch.appendChild(option);
+            });
+            selectSearch.value = '1d';
+        }
     } catch (error) {
         console.error('加载 timeframe 列表失败:', error);
         showError('加载 timeframe 列表失败');
@@ -248,6 +265,7 @@ function setupEventListeners() {
             let panelId;
             if (panelName === 'watchlist') panelId = 'panelWatchlist';
             else if (panelName === 'stockpool') panelId = 'panelStockpool';
+            else if (panelName === 'search') panelId = 'panelSearch';
             else panelId = 'panelFilter';
 
             document.querySelectorAll('.main-tab').forEach(b => {
@@ -293,6 +311,35 @@ function setupEventListeners() {
         stockpoolSubmitBtn.addEventListener('click', (e) => {
             e.preventDefault();
             startStockPoolScreening();
+        });
+    }
+
+    // 股票池分页事件
+    const stockpoolPrevBtn = document.getElementById('stockpoolPrevBtn');
+    if (stockpoolPrevBtn) {
+        stockpoolPrevBtn.addEventListener('click', () => {
+            if (stockpoolCurrentPage > 1) {
+                stockpoolCurrentPage--;
+                renderStockPoolTable();
+            }
+        });
+    }
+    const stockpoolNextBtn = document.getElementById('stockpoolNextBtn');
+    if (stockpoolNextBtn) {
+        stockpoolNextBtn.addEventListener('click', () => {
+            if (stockpoolCurrentPage < stockpoolTotalPages) {
+                stockpoolCurrentPage++;
+                renderStockPoolTable();
+            }
+        });
+    }
+
+    // 搜索相关事件
+    const searchSubmitBtn = document.getElementById('searchSubmitBtn');
+    if (searchSubmitBtn) {
+        searchSubmitBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            handleSearchSubmit();
         });
     }
 
@@ -493,6 +540,8 @@ function updatePassedStocksList(panel, passedStocks, passedCount) {
     passedStocks.forEach(stock => {
         const item = document.createElement('div');
         item.className = 'passed-stock-item';
+
+        // 股票代码按钮
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'stock-code-btn';
@@ -502,10 +551,28 @@ function updatePassedStocksList(panel, passedStocks, passedCount) {
         const timeframe = lastResultTimeframeByPanel[panel];
         btn.addEventListener('click', () => showStockChart(stock.code, stock.name, { market, timeframe }));
         item.appendChild(btn);
+
+        // 股票名称
         const nameSpan = document.createElement('span');
         nameSpan.className = 'stock-name';
         nameSpan.textContent = ` ${stock.name || ''}`;
         item.appendChild(nameSpan);
+
+        // 满足的策略标签
+        if (stock.satisfied_strategies && stock.satisfied_strategies.length > 0) {
+            const tagsContainer = document.createElement('div');
+            tagsContainer.className = 'strategy-tags';
+
+            stock.satisfied_strategies.forEach(strategy => {
+                const tag = document.createElement('span');
+                tag.className = 'strategy-tag';
+                tag.textContent = strategy;
+                tagsContainer.appendChild(tag);
+            });
+
+            item.appendChild(tagsContainer);
+        }
+
         listElem.appendChild(item);
     });
 }
@@ -938,12 +1005,27 @@ async function loadStockPool() {
     }
 }
 
-// 渲染股票池表格
+// 渲染股票池表格（支持分页）
 function renderStockPoolTable() {
     const tbody = document.getElementById('stockpoolBody');
     tbody.innerHTML = '';
 
-    stockpoolData.forEach(stock => {
+    // 计算分页
+    const totalCount = stockpoolData.length;
+    stockpoolTotalPages = Math.ceil(totalCount / stockpoolPageSize);
+
+    // 确保当前页在有效范围内
+    if (stockpoolCurrentPage > stockpoolTotalPages) {
+        stockpoolCurrentPage = stockpoolTotalPages || 1;
+    }
+
+    // 计算当前页的数据范围
+    const startIndex = (stockpoolCurrentPage - 1) * stockpoolPageSize;
+    const endIndex = Math.min(startIndex + stockpoolPageSize, totalCount);
+    const pageData = stockpoolData.slice(startIndex, endIndex);
+
+    // 渲染当前页数据
+    pageData.forEach(stock => {
         const row = document.createElement('tr');
         row.innerHTML = `
             <td>${stock.code || '-'}</td>
@@ -954,6 +1036,19 @@ function renderStockPoolTable() {
         `;
         tbody.appendChild(row);
     });
+
+    // 更新分页信息
+    const currentPageEl = document.getElementById('stockpoolCurrentPage');
+    const totalPagesEl = document.getElementById('stockpoolTotalPages');
+    const totalCountEl = document.getElementById('stockpoolTotalCount');
+    const prevBtn = document.getElementById('stockpoolPrevBtn');
+    const nextBtn = document.getElementById('stockpoolNextBtn');
+
+    if (currentPageEl) currentPageEl.textContent = stockpoolCurrentPage;
+    if (totalPagesEl) totalPagesEl.textContent = stockpoolTotalPages;
+    if (totalCountEl) totalCountEl.textContent = totalCount;
+    if (prevBtn) prevBtn.disabled = stockpoolCurrentPage <= 1;
+    if (nextBtn) nextBtn.disabled = stockpoolCurrentPage >= stockpoolTotalPages;
 }
 
 // 开始股票池筛选
@@ -1018,6 +1113,91 @@ async function startStockPoolScreening() {
         console.error('提交筛选失败:', error);
         showError(`提交失败: ${error.message}`);
         progressSection.style.display = 'none';
+    }
+}
+
+// 处理搜索 TAB 提交
+async function handleSearchSubmit() {
+    const codeInput = document.getElementById('searchStockCode');
+    const timeframeSelect = document.getElementById('timeframeSearch');
+    const submitBtn = document.getElementById('searchSubmitBtn');
+
+    const code = codeInput.value.trim();
+    const timeframe = timeframeSelect.value;
+
+    if (!code) {
+        showError('请输入股票代码');
+        return;
+    }
+
+    if (!timeframe) {
+        showError('请选择时间周期');
+        return;
+    }
+
+    // 解析市场（从股票代码推断）
+    let market = 'HK';
+    if (code.toUpperCase().startsWith('HK.')) {
+        market = 'HK';
+    } else if (code.toUpperCase().startsWith('US.')) {
+        market = 'US';
+    } else if (/^\d{6}$/.test(code)) {
+        market = 'A';
+    }
+
+    // 构建 watchlist（只包含搜索的股票）
+    const watchlist = [{
+        code: code,
+        name: code
+    }];
+
+    // 隐藏结果区，显示进度区
+    const progressSection = document.getElementById('progressSectionSearch');
+    const resultsSection = document.getElementById('resultsSectionSearch');
+    progressSection.style.display = 'block';
+    resultsSection.style.display = 'none';
+
+    // 重置进度
+    updateProgress('search', 0, 0, '-', [], 0);
+
+    submitBtn.disabled = true;
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = '搜索中...';
+
+    try {
+        const response = await fetch(`${API_BASE}/screen`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                market: market,
+                timeframe: timeframe,
+                watchlist: watchlist,
+                use_ema_breakout: true,
+                ema_short: 10,
+                ema_long: 150
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || '提交失败');
+        }
+
+        const data = await response.json();
+        taskIdByPanel.search = data.task_id;
+        lastResultMarketByPanel.search = market;
+        lastResultTimeframeByPanel.search = timeframe;
+
+        // 开始轮询进度
+        startProgressPolling('search');
+
+    } catch (error) {
+        console.error('搜索失败:', error);
+        showError(`搜索失败: ${error.message}`);
+        progressSection.style.display = 'none';
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalText;
     }
 }
 

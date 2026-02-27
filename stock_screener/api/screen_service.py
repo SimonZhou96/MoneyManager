@@ -166,7 +166,11 @@ def run_screening_task(
                         s["market_cap"] = s["market_cap"] if s.get("market_cap") is not None else f.get("market_cap")
                         s["pe_ratio"] = s["pe_ratio"] if s.get("pe_ratio") is not None else f.get("pe_ratio")
                         s["pb_ratio"] = s["pb_ratio"] if s.get("pb_ratio") is not None else f.get("pb_ratio")
-            except Exception:
+                if verbose:
+                    print(f"✓ 已从数据库补全 {len([s for s in stocks if s.get('market_cap')])} 只股票的基本面数据")
+            except Exception as e:
+                if verbose:
+                    print(f"⚠️  补全基本面数据失败: {e}")
                 pass
         else:
             # 全量股票兜底：优先从 API 拉取并写入 DB，API 无数据则用 DB，都没有再报错
@@ -355,7 +359,24 @@ def run_screening_task(
                 
                 if result.passed:
                     print(f"🎉 满足所有条件！")
-                    passed_stocks.append({"code": si.code, "name": si.name or si.code})
+
+                    # 提取满足的策略
+                    satisfied_strategies = []
+                    strategy_name_map = {
+                        'EMABreakoutStrategizer': 'EMA突破',
+                        'RSIOversoldStrategizer': 'RSI超卖',
+                        'RSIOverboughtStrategizer': 'RSI超买',
+                    }
+
+                    for output in result.filter_outputs:
+                        if output.result.value == "pass" and output.filter_name in strategy_name_map:
+                            satisfied_strategies.append(strategy_name_map[output.filter_name])
+
+                    passed_stocks.append({
+                        "code": si.code,
+                        "name": si.name or si.code,
+                        "satisfied_strategies": satisfied_strategies
+                    })
                 else:
                     failed_filters = result.get_failed_filters()
                     skipped_filters = [o for o in result.filter_outputs if o.result.value == "skip"]

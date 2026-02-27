@@ -566,6 +566,25 @@ header h1 {
     display: none;
 }
 
+/* 满足条件的股票列表中的策略标签 */
+.strategy-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.strategy-tag {
+    display: inline-block;
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(16, 185, 129, 0.1);
+    color: #059669;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    font-weight: 500;
+}
+
 /* 结果筛选折叠 */
 .result-filter {
     margin: 16px 0;
@@ -794,4 +813,55 @@ footer {
     font-size: 0.95rem;
     color: var(--text-primary);
     user-select: none;
+}
+
+/* 分页样式 */
+.pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 16px;
+    margin-top: 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+.pagination-btn {
+    padding: 8px 16px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: white;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.pagination-btn:hover:not(:disabled) {
+    background: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+
+.pagination-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.pagination-info {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.pagination-info span {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* 搜索提示样式 */
+.search-hint {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
 }

@@ -283,7 +283,10 @@ class FilterChain:
                     break
         
         # 计算最终结果
-        if self._mode == "all":
+        if not result.filter_outputs:
+            # 没有筛选器 = 默认通过
+            result.passed = True
+        elif self._mode == "all":
             # 全部通过模式：所有筛选器都必须通过或跳过
             result.passed = all(
                 o.result in (FilterResult.PASS, FilterResult.SKIP)

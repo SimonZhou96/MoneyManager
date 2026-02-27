@@ -17,6 +17,7 @@
             <div class="main-tabs" role="tablist">
                 <button type="button" class="main-tab active" role="tab" aria-selected="true" data-panel="watchlist">自选股</button>
                 <button type="button" class="main-tab" role="tab" aria-selected="false" data-panel="stockpool">股票池</button>
+                <button type="button" class="main-tab" role="tab" aria-selected="false" data-panel="search">搜索</button>
                 <button type="button" class="main-tab" role="tab" aria-selected="false" data-panel="filter">筛选条件</button>
             </div>
             <div id="panelWatchlist" class="main-tab-panel active" role="tabpanel">
@@ -212,6 +213,15 @@
                                 </thead>
                                 <tbody id="stockpoolBody"></tbody>
                             </table>
+                            <!-- 分页控件 -->
+                            <div class="pagination" id="stockpoolPagination">
+                                <button type="button" class="pagination-btn" id="stockpoolPrevBtn" disabled>上一页</button>
+                                <span class="pagination-info">
+                                    第 <span id="stockpoolCurrentPage">1</span> 页 / 共 <span id="stockpoolTotalPages">1</span> 页
+                                    （共 <span id="stockpoolTotalCount">0</span> 条）
+                                </span>
+                                <button type="button" class="pagination-btn" id="stockpoolNextBtn" disabled>下一页</button>
+                            </div>
                         </div>
                     </div>
 
@@ -508,6 +518,75 @@
                     </table>
                 </div>
             </section>
+            </div>
+
+            <!-- 搜索 TAB -->
+            <div id="panelSearch" class="main-tab-panel" role="tabpanel">
+                <!-- 搜索表单 -->
+                <section class="search-section card">
+                    <h2>股票搜索</h2>
+                    <p class="search-hint">输入股票代码（如 HK.09961）进行精确搜索，查看该股票是否满足突破策略</p>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="searchStockCode">股票代码 *</label>
+                            <input type="text" id="searchStockCode" placeholder="例如：HK.09961" required>
+                            <small>支持格式：HK.00700、000001、AAPL</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="timeframeSearch">时间周期</label>
+                            <select id="timeframeSearch" name="timeframe">
+                                <option value="">加载中...</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" id="searchSubmitBtn" class="btn btn-primary">开始筛选</button>
+                    </div>
+                </section>
+
+                <!-- 搜索 Tab 进度区 -->
+                <section id="progressSectionSearch" class="progress-section card" style="display: none;">
+                    <h2>筛选进度</h2>
+                    <div class="current-stock">
+                        <div class="label">当前处理：</div>
+                        <div id="currentStockSearch" class="value">-</div>
+                    </div>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar">
+                            <div id="progressBarSearch" class="progress-fill"></div>
+                        </div>
+                        <div id="progressTextSearch" class="progress-text">0 / 0</div>
+                    </div>
+                    <div class="progress-status">
+                        <span id="statusTextSearch">准备中...</span>
+                    </div>
+                    <div class="passed-stocks-section">
+                        <h3>✅ 满足条件的股票 (<span id="passedCountSearch">0</span>)</h3>
+                        <div id="passedStocksListSearch" class="passed-stocks-list">
+                            <div class="empty-message">暂无满足条件的股票</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 搜索 Tab 结果区 -->
+                <section id="resultsSectionSearch" class="results-section card" style="display: none;">
+                    <h2>筛选结果</h2>
+                    <div class="results-summary">
+                        <span id="resultsSummarySearch">共找到 0 只符合条件的股票</span>
+                    </div>
+                    <div class="results-table-container">
+                        <table id="resultsTableSearch" class="results-table">
+                            <thead>
+                                <tr>
+                                    <th>代码</th><th>名称</th><th>板块</th><th>市值</th><th>价格</th><th>市盈率</th><th>选中原因</th>
+                                </tr>
+                            </thead>
+                            <tbody id="resultsBodySearch"></tbody>
+                        </table>
+                    </div>
+                </section>
             </div>
         </main>
 
