@@ -1,4 +1,5 @@
 futu-api>=6.0.0
+requests>=2.28.0  # 飞书 Webhook 发送
 pandas>=1.5.0
 numpy>=1.23.0
 pandas-ta>=0.3.14b
