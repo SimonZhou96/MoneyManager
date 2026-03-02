@@ -14,6 +14,7 @@ import random
 import warnings
 import sys
 import os
+import traceback
 
 from timeframe import (
     parse_timeframe, is_intraday,
@@ -136,8 +137,13 @@ class YFinanceKlineFetcher(KlineFetcherBase):
                 code = code[3:]
             return f"{code.zfill(5)}.HK"
         if market == "A":
-            if "." in code:
-                return code  # 600000.SS / 000001.SZ
+            # Futu 格式 SH.601398 / SZ.000001 -> 601398.SS / 000001.SZ
+            if code.upper().startswith("SH."):
+                return f"{code[3:]}.SS"
+            if code.upper().startswith("SZ."):
+                return f"{code[3:]}.SZ"
+            if "." in code and code.endswith((".SS", ".SZ")):
+                return code  # 已是 600000.SS / 000001.SZ
             if code.isdigit() and len(code) == 6:
                 return f"{code}.SS" if code.startswith("6") else f"{code}.SZ"
             return code
@@ -189,7 +195,9 @@ class YFinanceKlineFetcher(KlineFetcherBase):
             if df is None:
                 return None
             return df.tail(max_count).reset_index(drop=True)
-        except Exception:
+        except Exception as e:
+            print(f"[YFinance] fetch failed: code={stock_code} market={market} timeframe={timeframe} error={e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             return None
 
 
@@ -224,9 +232,12 @@ class AKShareKlineFetcher(KlineFetcherBase):
 
     @staticmethod
     def _a_code(stock_code: str) -> str:
+        """Futu SH.601398/SZ.000001 -> 601398；600000.SS -> 600000"""
         code = stock_code.strip()
-        if "." in code:
-            code = code.split(".")[0]
+        if code.upper().startswith(("SH.", "SZ.")):
+            code = code[3:]  # SH.601398 -> 601398
+        elif "." in code:
+            code = code.split(".")[0]  # 600000.SS -> 600000
         return code.zfill(6) if code.isdigit() else code
 
     # -- 日线 --
@@ -240,7 +251,9 @@ class AKShareKlineFetcher(KlineFetcherBase):
                 start_date=start, end_date=end, adjust="qfq",
             )
             return _normalize_dataframe(df)
-        except Exception:
+        except Exception as e:
+            print(f"[AKShare] _fetch_a_daily failed: code={code} error={e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             return None
 
     def _fetch_hk_daily(self, code: str, start: str, end: str) -> Optional[pd.DataFrame]:
@@ -258,7 +271,9 @@ class AKShareKlineFetcher(KlineFetcherBase):
                 result = _normalize_dataframe(df)
                 if result is not None and len(result) > 0:
                     return result
-            except Exception:
+            except Exception as e:
+                print(f"[AKShare] _fetch_hk_daily {method_name} failed: code={code} error={e}", file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
                 continue
             time.sleep(0.5 + random.uniform(0, 0.5))
         return None
@@ -278,7 +293,9 @@ class AKShareKlineFetcher(KlineFetcherBase):
                 result = _normalize_dataframe(df)
                 if result is not None and len(result) > 0:
                     return result
-            except Exception:
+            except Exception as e:
+                print(f"[AKShare] _fetch_us_daily {method_name} failed: code={code} error={e}", file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
                 continue
         return None
 
@@ -293,7 +310,9 @@ class AKShareKlineFetcher(KlineFetcherBase):
                 symbol=code, period=ak_period, adjust="qfq",
             )
             return _normalize_dataframe(df)
-        except Exception:
+        except Exception as e:
+            print(f"[AKShare] _fetch_a_min failed: code={code} period={ak_period} error={e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             return None
 
     # -- 公共入口 --
@@ -305,38 +324,42 @@ class AKShareKlineFetcher(KlineFetcherBase):
         timeframe: str = "1d",
         max_count: int = 2000,
     ) -> Optional[pd.DataFrame]:
-        market = market.upper()
-        end_str = date.today().strftime("%Y%m%d")
-        start_str = (date.today() - timedelta(days=365 * 5)).strftime("%Y%m%d")
+        try:
+            market = market.upper()
+            end_str = date.today().strftime("%Y%m%d")
+            start_str = (date.today() - timedelta(days=365 * 5)).strftime("%Y%m%d")
 
-        # A 股分钟线
-        ak_min = get_akshare_min_period(timeframe)
-        if market == "A" and ak_min is not None:
-            code = self._a_code(stock_code)
-            df = self._fetch_a_min(code, ak_min)
-            if df is not None:
-                return df.tail(max_count).reset_index(drop=True)
+            # A 股分钟线
+            ak_min = get_akshare_min_period(timeframe)
+            if market == "A" and ak_min is not None:
+                code = self._a_code(stock_code)
+                df = self._fetch_a_min(code, ak_period=ak_min)
+                if df is not None:
+                    return df.tail(max_count).reset_index(drop=True)
+                return None
+
+            # 非日线 + 非 A 股分钟 -> AKShare 不支持，返回 None 让 fallback 处理
+            if timeframe != "1d":
+                return None
+
+            # 日线
+            if market == "A":
+                code = self._a_code(stock_code)
+                df = self._fetch_a_daily(code, start_str, end_str)
+            elif market == "HK":
+                code = self._hk_code(stock_code)
+                df = self._fetch_hk_daily(code, start_str, end_str)
+            else:
+                code = self._us_code(stock_code)
+                df = self._fetch_us_daily(code, start_str, end_str)
+
+            if df is None:
+                return None
+            return df.tail(max_count).reset_index(drop=True)
+        except Exception as e:
+            print(f"[AKShare] fetch failed: code={stock_code} market={market} timeframe={timeframe} error={e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             return None
-
-        # 非日线 + 非 A 股分钟 -> AKShare 不支持，返回 None 让 fallback 处理
-        if timeframe != "1d":
-            # TODO: AKShare 港股/美股分钟线支持有限，暂不实现
-            return None
-
-        # 日线
-        if market == "A":
-            code = self._a_code(stock_code)
-            df = self._fetch_a_daily(code, start_str, end_str)
-        elif market == "HK":
-            code = self._hk_code(stock_code)
-            df = self._fetch_hk_daily(code, start_str, end_str)
-        else:
-            code = self._us_code(stock_code)
-            df = self._fetch_us_daily(code, start_str, end_str)
-
-        if df is None:
-            return None
-        return df.tail(max_count).reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +399,8 @@ class FutuKlineFetcher(KlineFetcherBase):
                 return code
             return f"US.{code}"
         elif market == "A":
+            if code.upper().startswith(("SH.", "SZ.")):
+                return code  # 已是 Futu 格式
             if code.endswith(".SS"):
                 return f"SH.{code[:-3]}"
             if code.endswith(".SZ"):
@@ -464,7 +489,9 @@ class FutuKlineFetcher(KlineFetcherBase):
             data["date"] = pd.to_datetime(data["date"])
             data = data.sort_values("date").drop_duplicates(subset=["date"]).reset_index(drop=True)
             return data.tail(max_count).reset_index(drop=True)
-        except Exception:
+        except Exception as e:
+            print(f"[FutuOpenAPI] fetch failed: code={stock_code} market={market} timeframe={timeframe} error={e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             return None
 
 

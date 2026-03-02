@@ -6,7 +6,6 @@
   <component name="ChangeListManager">
     <list default="true" id="ee62eec3-1180-4c03-b094-d1a5438df4b2" name="更改" comment="抽象出策略器">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/api/routes/stockpool.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/api/routes/stockpool.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/kline_fetcher.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/kline_fetcher.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -227,6 +226,7 @@
       <workItem from="1770799420848" duration="7519000" />
       <workItem from="1770974629310" duration="26563000" />
       <workItem from="1771827697307" duration="45989000" />
+      <workItem from="1772444834381" duration="2530000" />
     </task>
     <task id="LOCAL-00001" summary="抽象出策略器">
       <option name="closed" value="true" />
@@ -272,12 +272,12 @@
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/stock_screener/kline_fetcher.py</url>
-          <line>439</line>
+          <line>464</line>
           <option name="timeStamp" value="24" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/stock_screener/kline_fetcher.py</url>
-          <line>428</line>
+          <line>453</line>
           <option name="timeStamp" value="25" />
         </line-breakpoint>
       </breakpoints>
