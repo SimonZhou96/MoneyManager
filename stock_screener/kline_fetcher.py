@@ -391,14 +391,35 @@ class FutuKlineFetcher(KlineFetcherBase):
             return ft.KLType.K_DAY
         return getattr(ft.KLType, name, ft.KLType.K_DAY)
 
+    @staticmethod
+    def _estimate_days_back(timeframe: str, max_count: int) -> int:
+        """估算 max_count 根 K 线需要的自然日（含节假日余量），用于限制 start 减少分页量"""
+        if timeframe in ("1m", "3m", "5m"):
+            bars_per_day = 240 if timeframe == "1m" else 80 if timeframe == "3m" else 48
+        elif timeframe in ("15m", "30m"):
+            bars_per_day = 16 if timeframe == "15m" else 8
+        elif timeframe in ("60m", "1h"):
+            bars_per_day = 4
+        elif timeframe == "1d":
+            bars_per_day = 1
+        elif timeframe == "1wk":
+            return int(max_count * 5 * 1.2) + 30  # 每周 1 根
+        elif timeframe in ("1mo", "3mo"):
+            return int(max_count * 22 * 1.2) + 60  # 每月约 22 交易日
+        else:
+            bars_per_day = 1
+        days = int(max_count / bars_per_day * 1.25) + 10  # 25% 余量
+        return max(60, min(days, 365 * 5))  # 至少 60 天，最多 5 年
+
     def fetch(
         self,
         stock_code: str,
         market: str = "HK",
         timeframe: str = "1d",
-        max_count: int = 2000,
+        max_count: int = 500,
     ) -> Optional[pd.DataFrame]:
         import futu as ft
+        from datetime import datetime, timedelta
 
         if self.rate_limiter:
             self.rate_limiter.wait_if_needed()
@@ -406,21 +427,43 @@ class FutuKlineFetcher(KlineFetcherBase):
         try:
             code = self._to_futu_code(stock_code, market)
             kl_type = self._get_kl_type(timeframe)
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            days_back = self._estimate_days_back(timeframe, max_count)
+            start_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
 
-            ret, data, _ = self.quote_ctx.request_history_kline(
-                code=code,
-                ktype=kl_type,
-                max_count=max_count,
-                autype=ft.AuType.QFQ,
-            )
-            if ret != ft.RET_OK or data is None or data.empty:
+            # 分页获取：显式 start 限制范围，减少分页次数；分页拉全量后取最新 max_count 条
+            # 参考 https://github.com/FutunnOpen/py-futu-api/issues/145
+            page_size = 1000
+            all_data: List[pd.DataFrame] = []
+            page_req_key = None
+
+            while True:
+                ret, data, page_req_key = self.quote_ctx.request_history_kline(
+                    code=code,
+                    start=start_date,
+                    end=end_date,
+                    ktype=kl_type,
+                    max_count=page_size,
+                    page_req_key=page_req_key,
+                    autype=ft.AuType.QFQ,
+                )
+                if ret != ft.RET_OK or data is None:
+                    break
+                if data.empty:
+                    break
+                all_data.append(data)
+                if page_req_key is None or len(data) < page_size:
+                    break
+
+            if not all_data:
                 return None
 
+            data = pd.concat(all_data, ignore_index=True)
             if "time_key" in data.columns:
                 data = data.rename(columns={"time_key": "date"})
             data["date"] = pd.to_datetime(data["date"])
-            data = data.sort_values("date").reset_index(drop=True)
-            return data
+            data = data.sort_values("date").drop_duplicates(subset=["date"]).reset_index(drop=True)
+            return data.tail(max_count).reset_index(drop=True)
         except Exception:
             return None
 

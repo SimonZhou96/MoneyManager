@@ -6,14 +6,8 @@
   <component name="ChangeListManager">
     <list default="true" id="ee62eec3-1180-4c03-b094-d1a5438df4b2" name="更改" comment="抽象出策略器">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/api/routes/chart.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/api/routes/chart.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/api/routes/screen.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/api/routes/screen.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/api/screen_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/api/screen_service.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/filters.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/filters.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/frontend/app.js" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/frontend/app.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/frontend/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/frontend/index.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/frontend/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/frontend/styles.css" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/universe.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/universe.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/api/routes/stockpool.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/api/routes/stockpool.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/kline_fetcher.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/kline_fetcher.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -59,6 +53,7 @@
     &quot;Python.daily_job.executor&quot;: &quot;Debug&quot;,
     &quot;Python.main.executor&quot;: &quot;Run&quot;,
     &quot;Python.plot_kline.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.test_kline_fix.executor&quot;: &quot;Debug&quot;,
     &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
@@ -81,7 +76,7 @@
     ]
   }
 }</component>
-  <component name="RunManager" selected="Python.daily_job">
+  <component name="RunManager" selected="Python.test_kline_fix">
     <configuration name="daily_job" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="MoneyManager" />
       <option name="ENV_FILES" value="" />
@@ -155,6 +150,30 @@
       <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
+    <configuration name="test_kline_fix" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="MoneyManager" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/stock_screener" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="RUN_TOOL" value="" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/stock_screener/test_kline_fix.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
     <configuration default="true" type="docker-deploy" factoryName="dockerfile" temporary="true">
       <deployment type="dockerfile">
         <settings />
@@ -172,12 +191,14 @@
     </configuration>
     <list>
       <item itemvalue="Docker.stock_screener/Dockerfile" />
+      <item itemvalue="Python.test_kline_fix" />
       <item itemvalue="Python.plot_kline" />
       <item itemvalue="Python.daily_job" />
       <item itemvalue="Python.main" />
     </list>
     <recent_temporary>
       <list>
+        <item itemvalue="Python.test_kline_fix" />
         <item itemvalue="Python.daily_job" />
         <item itemvalue="Python.plot_kline" />
         <item itemvalue="Docker.stock_screener/Dockerfile" />
@@ -205,7 +226,7 @@
       <workItem from="1770269529116" duration="222000" />
       <workItem from="1770799420848" duration="7519000" />
       <workItem from="1770974629310" duration="26563000" />
-      <workItem from="1771827697307" duration="24234000" />
+      <workItem from="1771827697307" duration="45989000" />
     </task>
     <task id="LOCAL-00001" summary="抽象出策略器">
       <option name="closed" value="true" />
@@ -244,6 +265,21 @@
           <line>241</line>
           <option name="timeStamp" value="15" />
         </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/stock_screener/test_kline_fix.py</url>
+          <line>41</line>
+          <option name="timeStamp" value="23" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/stock_screener/kline_fetcher.py</url>
+          <line>439</line>
+          <option name="timeStamp" value="24" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/stock_screener/kline_fetcher.py</url>
+          <line>428</line>
+          <option name="timeStamp" value="25" />
+        </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>
   </component>
@@ -251,5 +287,6 @@
     <SUITE FILE_PATH="coverage/MoneyManager$daily_job.coverage" NAME="daily_job 覆盖结果" MODIFIED="1770949456139" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/stock_screener" />
     <SUITE FILE_PATH="coverage/MoneyManager$plot_kline.coverage" NAME="plot_kline 覆盖结果" MODIFIED="1770289010503" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/stock_screener" />
     <SUITE FILE_PATH="coverage/MoneyManager$main.coverage" NAME="main 覆盖结果" MODIFIED="1770281324101" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/stock_screener" />
+    <SUITE FILE_PATH="coverage/MoneyManager$test_kline_fix.coverage" NAME="test_kline_fix 覆盖结果" MODIFIED="1772172396506" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/stock_screener" />
   </component>
 </project>

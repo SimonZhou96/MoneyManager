@@ -55,10 +55,12 @@ async def get_stock_pools(market: str, pool_type: str, limit: Optional[int] = No
         last_update = db.get_pool_last_update(market, pool_type)
 
         if not last_update:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Stock pool not found for market={market}, pool_type={pool_type}. Please run fetch_stock_pools.py first."
-            )
+            # 无数据时返回 200 + 空数组，便于前端展示友好提示
+            return {
+                "stocks": [],
+                "total": 0,
+                "last_update": None
+            }
 
         # 获取股票池数据
         stocks = db.get_stock_pool(market, pool_type, limit=limit)
