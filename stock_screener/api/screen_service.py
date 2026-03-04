@@ -115,6 +115,7 @@ def run_screening_task(
     params: dict,
     verbose: bool = False,
     watchlist: Optional[list] = None,
+    progress_log: bool = False,
 ):
     """
     执行筛选任务（后台运行）
@@ -127,6 +128,7 @@ def run_screening_task(
         params: 筛选参数
         verbose: 是否输出详细日志
         watchlist: 自选股列表 [{"code", "name", ...}]，非空时仅筛选此列表不查 DB
+        progress_log: 是否输出进度日志（当前处理到哪只股票）
     """
     db = None
     try:
@@ -271,6 +273,8 @@ def run_screening_task(
             print(f"{'='*80}\n")
         
         for i, si in enumerate(stock_infos, 1):
+            if progress_log:
+                print(f"[{i}/{total_count}] 处理中: {si.code} - {si.name or si.code}")
             # 更新进度
             db.update_task_progress(
                 task_id,

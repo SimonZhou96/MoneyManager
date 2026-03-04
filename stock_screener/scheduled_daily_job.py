@@ -29,13 +29,25 @@ import os
 import sys
 import uuid
 from datetime import date, datetime
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 # 添加项目根目录到 path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+
+def _load_dotenv():
+    """加载同目录 .env"""
+    env_path = Path(__file__).parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
 from db import MarketDatabase, MySqlConfig
-from feishu_notifier import send_screening_result
+from feishu_notifier import send_feishu_text, send_screening_result
 from fetch_stock_pools import (
     fetch_and_save_best_stocks,
     fetch_and_save_etf_list,
@@ -155,6 +167,7 @@ def run_screening_for_market(
         params=default_params,
         verbose=verbose,
         watchlist=watchlist,
+        progress_log=True,
     )
 
     # 查询通过筛选的股票
@@ -254,13 +267,14 @@ def get_default_screening_params() -> dict:
 
 
 def main():
+    _load_dotenv()
     parser = argparse.ArgumentParser(description="定时任务 - 捞池+筛选+CSV+飞书")
     parser.add_argument("--no-fetch", action="store_true", help="跳过股票池捞取")
     parser.add_argument("--no-feishu", action="store_true", help="不发送飞书消息")
     parser.add_argument("--markets", default="HK,A,US", help="市场列表，逗号分隔")
     parser.add_argument("--pools", default="best,index,industry,ipo,etf", help="股票池类型")
     parser.add_argument("--timeframe", default="1d", help="K线周期")
-    parser.add_argument("--csv", default="logs/screening_result.csv", help="CSV 输出路径")
+    parser.add_argument("--csv", default="logs/screening_result.csv", help="CSV 输出路径（会按日期+市场拆分为 screening_result_2026-02-27_HK.csv 等）")
     parser.add_argument("--futu-host", default="127.0.0.1", help="Futu OpenD 主机")
     parser.add_argument("--futu-port", type=int, default=11111, help="Futu OpenD 端口")
     args = parser.parse_args()
@@ -292,10 +306,19 @@ def main():
     else:
         print("跳过捞取，使用已有股票池数据")
 
-    # 2. 对每个市场筛选
-    all_passed = []
+    # 2. 对每个市场筛选 + 分市场导出 CSV + 分市场发送飞书
     params = get_default_screening_params()
+    webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
+
+    # 解析 CSV 输出路径：logs/screening_result.csv -> logs/screening_result
+    # 命名格式：{base}_{date}_{market}.csv，区分不同天、不同市场
+    csv_base = args.csv
+    if csv_base.endswith(".csv"):
+        csv_base = csv_base[:-4]
+    today_str = date.today().strftime("%Y-%m-%d")
+
     for market in markets:
+        print(f"\n--- 开始筛选 {market_label(market)} ---")
         _, passed = run_screening_for_market(
             mysql_config=mysql_config,
             market=market,
@@ -303,37 +326,32 @@ def main():
             default_params=params,
             verbose=False,
         )
-        all_passed.extend(passed)
         print(f"  {market_label(market)}: {len(passed)} 只通过")
+
+        # 3. 导出该市场 CSV（含日期，避免天级运行时互相覆盖）
+        csv_path = f"{csv_base}_{today_str}_{market}.csv"
+        if passed:
+            write_screening_csv(passed, csv_path)
+            print(f"✓ CSV 已导出: {csv_path}")
+        else:
+            print(f"  {market_label(market)} 无满足条件的股票，不生成 CSV")
+
+        # 4. 发送该市场飞书消息
+        if not args.no_feishu and webhook_url:
+            summary_lines = [
+                f"【定时筛选】{date.today()} - {market_label(market)}",
+                f"通过: {len(passed)} 只",
+            ]
+            if passed:
+                summary_lines.append(f"CSV: {csv_path}")
+                send_screening_result(webhook_url, "\n".join(summary_lines), csv_path)
+            else:
+                send_feishu_text(webhook_url, "\n".join(summary_lines))
+            print(f"✓ 已发送 {market_label(market)} 飞书消息")
 
     db.close()
 
-    # 3. 导出 CSV
-    if all_passed:
-        write_screening_csv(all_passed, args.csv)
-        print(f"✓ CSV 已导出: {args.csv}")
-    else:
-        print("无满足条件的股票，不生成 CSV")
-
-    # 4. 飞书
-    webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
-    if not args.no_feishu and webhook_url:
-        summary_lines = [
-            f"【定时筛选】{date.today()}",
-            f"市场: {', '.join(market_label(m) for m in markets)}",
-            f"通过: {len(all_passed)} 只",
-        ]
-        for m in markets:
-            cnt = sum(1 for p in all_passed if p.get("market") == m)
-            summary_lines.append(f"  - {market_label(m)}: {cnt} 只")
-        summary = "\n".join(summary_lines)
-        if all_passed:
-            send_screening_result(webhook_url, summary, args.csv)
-        else:
-            from feishu_notifier import send_feishu_text
-            send_feishu_text(webhook_url, summary)
-        print("✓ 已发送飞书消息")
-    elif not args.no_feishu and not webhook_url:
+    if not args.no_feishu and not webhook_url:
         print("未配置 FEISHU_WEBHOOK_URL，跳过飞书发送")
 
     print(f"[{datetime.now()}] 定时任务结束")
