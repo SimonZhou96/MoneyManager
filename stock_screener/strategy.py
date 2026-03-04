@@ -151,6 +151,9 @@ def check_ema_breakout(
     Returns:
         (result, breakout_date, ema_short_value, ema_long_value)
     """
+    # 兼容 time_key 列名（与 kline_fetcher 一致）
+    if df is not None and not df.empty and "date" not in df.columns and "time_key" in df.columns:
+        df = df.rename(columns={"time_key": "date"})
     # 验证数据
     is_valid, error_msg = _validate_kline_data(df)
     if not is_valid:
@@ -159,8 +162,8 @@ def check_ema_breakout(
     # 预处理数据
     df = _prepare_kline_data(df)
 
-    # 需要至少 ema_long 个数据点 + 2 根回溯
-    min_required = ema_long + 2
+    # 需要至少 ema_long 个数据点 + 3 根回溯（取最近 4 根检查 T1/T2）
+    min_required = ema_long + 3
     if len(df) < min_required:
         return EMABreakoutResult.INSUFFICIENT_DATA, None, None, None
 
@@ -171,11 +174,12 @@ def check_ema_breakout(
     # 按 check_date 截断（兼容分钟线 datetime 和日线 date）
     if check_date is not None:
         df = df[df["date"].dt.date <= check_date]
-    if len(df) < 3:
+    if len(df) < 4:
         return EMABreakoutResult.INSUFFICIENT_DATA, None, None, None
 
-    recent = df.tail(3).reset_index(drop=True)  # t-2, t-1, t
-    t2, t1, t0 = recent.iloc[0], recent.iloc[1], recent.iloc[2]
+    # 取最近 4 根 K 线：t3, t2, t1, t0（t0 为最新）
+    recent = df.tail(4).reset_index(drop=True)
+    t3, t2, t1, t0 = recent.iloc[0], recent.iloc[1], recent.iloc[2], recent.iloc[3]
 
     ema_short_val = float(t0["ema_short"])
     ema_long_val = float(t0["ema_long"])
@@ -183,10 +187,12 @@ def check_ema_breakout(
     def _crossed_up(prev, curr) -> bool:
         return prev["ema_short"] <= prev["ema_long"] and curr["ema_short"] > curr["ema_long"]
 
-    if _crossed_up(t1, t0):
-        return EMABreakoutResult.BREAKOUT_T1, t0["date"].date(), ema_short_val, ema_long_val
+    # T1 = 前一个交易日（t1）发生突破；T2 = 前两个交易日（t2）发生突破
+    # 注意：t1->t0 为当天突破，不纳入「前一天/前两天」的满足条件
     if _crossed_up(t2, t1):
-        return EMABreakoutResult.BREAKOUT_T2, t1["date"].date(), ema_short_val, ema_long_val
+        return EMABreakoutResult.BREAKOUT_T1, t1["date"].date(), ema_short_val, ema_long_val
+    if _crossed_up(t3, t2):
+        return EMABreakoutResult.BREAKOUT_T2, t2["date"].date(), ema_short_val, ema_long_val
 
     if ema_short_val >= ema_long_val:
         return EMABreakoutResult.NO_BREAKOUT_ALREADY_ABOVE, None, ema_short_val, ema_long_val

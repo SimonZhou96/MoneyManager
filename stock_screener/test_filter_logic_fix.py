@@ -4,12 +4,13 @@
 测试筛选器逻辑修复
 """
 
+import os
 import sys
-sys.path.insert(0, '/Users/simon/Documents/GitHub/MoneyManager/stock_screener')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from filters import FilterChain, FilterContext, StockInfo
 from strategizers import StrategizerChain, EMABreakoutStrategizer
-from datetime import date
+from datetime import date, timedelta
 import pandas as pd
 
 print("=" * 60)
@@ -23,17 +24,19 @@ stock = StockInfo(
     market="HK"
 )
 
-# 创建测试 K 线数据（模拟 EMA10 突破 EMA150）
+# 创建测试 K 线数据（模拟 T1 突破：前一个交易日 t1 发生 EMA10 上穿 EMA150）
+# 策略要求：t2 时 ema10<=ema150，t1 时 ema10>ema150
+# 构造：前 155 根平缓，最后几根先下落后急涨，使 t1 发生突破
+import pandas as pd
+from datetime import date, timedelta
+base_dates = pd.date_range(end=date.today(), periods=200, freq="B")
 kline_data = []
-for i in range(200):
-    kline_data.append({
-        'time_key': f'2026-02-{i+1:02d}',
-        'open': 17.0 + i * 0.01,
-        'high': 17.5 + i * 0.01,
-        'low': 16.5 + i * 0.01,
-        'close': 17.0 + i * 0.01,
-        'volume': 1000000,
-    })
+for i in range(156):
+    kline_data.append({"date": base_dates[i], "open": 100., "high": 101., "low": 99., "close": 100., "volume": 1e6})
+for i in range(156, 158):  # t3, t2
+    kline_data.append({"date": base_dates[i], "open": 98., "high": 99., "low": 97., "close": 98. - (i - 156), "volume": 1e6})
+kline_data.append({"date": base_dates[158], "open": 95., "high": 115., "low": 94., "close": 112., "volume": 2e6})  # t1 急涨
+kline_data.append({"date": base_dates[159], "open": 111., "high": 113., "low": 110., "close": 111., "volume": 1e6})  # t0
 
 stock.kline_df = pd.DataFrame(kline_data)
 
@@ -74,18 +77,8 @@ print("\n" + "=" * 60)
 print("测试2: 空筛选器链 + EMA 不满足")
 print("-" * 60)
 
-# 创建不满足 EMA 的 K 线数据
-kline_data_fail = []
-for i in range(200):
-    kline_data_fail.append({
-        'time_key': f'2026-02-{i+1:02d}',
-        'open': 17.0,
-        'high': 17.5,
-        'low': 16.5,
-        'close': 17.0,  # 价格不变，不会突破
-        'volume': 1000000,
-    })
-
+# 创建不满足 EMA 的 K 线数据（价格恒定，EMA 平行无突破）
+kline_data_fail = [{"date": base_dates[i], "open": 100., "high": 100., "low": 100., "close": 100., "volume": 1e6} for i in range(200)]
 stock2 = StockInfo(code="HK.00001", name="TEST", market="HK")
 stock2.kline_df = pd.DataFrame(kline_data_fail)
 
