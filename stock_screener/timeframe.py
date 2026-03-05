@@ -44,8 +44,8 @@ _AKSHARE_MIN_PERIOD_MAP = {
     "60m": "60",
 }
 
-# EMA 策略需要的最少 K 线根数（EMA150 + 3 根回溯，用于检查 T1/T2 突破）
-MIN_BARS_FOR_EMA = 153
+# EMA 策略需要的最少 K 线根数（EMA150 + 2 根回溯）
+MIN_BARS_FOR_EMA = 152
 
 
 def parse_timeframe(s: str) -> str:
