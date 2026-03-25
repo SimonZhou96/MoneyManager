@@ -9,6 +9,8 @@ Timeframe 配置模块
 - 日级及以上：1d, 5d, 1wk, 1mo, 3mo
 """
 
+from __future__ import annotations
+
 # 所有支持的 timeframe
 VALID_TIMEFRAMES = {
     "1m", "2m", "5m", "15m", "30m", "60m", "90m",

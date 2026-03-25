@@ -1,0 +1,13 @@
+---
+description: MoneyManager 仓库约定（数据库、禁止大改、测试、熵管理）
+globs: "**/*"
+alwaysApply: true
+---
+
+# MoneyManager
+
+- 主流程：**Web 选股器**（`stock_screener/api` + `frontend`）与 **定时任务**（`jobs/scheduled_daily_job.py`）。运维脚本在仓库根目录 `scripts/`。
+- 数据库环境变量：`MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASSWORD`（默认常与本机开发一致如 `123456`）、`MYSQL_DATABASE`（默认 `market_data`）。勿把生产密钥写入仓库。
+- 不要做大范围无关重构、不要删无关注释与逻辑；改动保持简洁、高内聚、低耦合，风格对齐现有 `stock_screener` 代码。
+- **熵管理**：动到的文件内顺手去掉明显死代码/重复；不把坏模式复制到新文件；大清理分小 PR。本地可跑 `./scripts/check_entropy.sh`；细节见 `AGENTS.md`「熵管理」。
+- 集成测试：`PYTHONPATH=stock_screener pytest tests/test_screen_pipeline_integration.py -m integration`（需 MySQL + 外网）。详见根目录 `AGENTS.md`。

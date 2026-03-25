@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ruff
+        run: pip install -r requirements-dev.txt
+      - name: Ruff format (tests + scripts)
+        run: python -m ruff format --check tests scripts
+      - name: Ruff lint (tests + scripts)
+        run: python -m ruff check tests scripts
+      - name: Ruff critical (stock_screener, entropy baseline)
+        run: python -m ruff check stock_screener --select F821,F822,F823,E9,F63
+
+  integration-screen:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: "123456"
+          MYSQL_DATABASE: market_data
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p123456"
+          --health-interval=8s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: "3306"
+      MYSQL_USER: root
+      MYSQL_PASSWORD: "123456"
+      MYSQL_DATABASE: market_data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          pip install -r stock_screener/requirements.txt -r requirements-dev.txt
+      - name: Integration tests (screen pipeline)
+        run: python -m pytest tests/test_screen_pipeline_integration.py -v --tb=short -m integration

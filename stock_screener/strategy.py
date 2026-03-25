@@ -5,6 +5,8 @@
 支持判断 EMA10 向上突破 EMA150 的策略
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum

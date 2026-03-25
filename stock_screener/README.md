@@ -71,18 +71,24 @@ CREATE DATABASE market_data CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 表结构由程序自动创建（`stocks`、`ema_breakout_signals_{timeframe}`、`screening_results`）。
 
-### 第五步：首次运行
+### 第五步：启动 Web 选股器（主交互）
 
 ```bash
-# 日线扫描港股（限制 10 只测试）
-python daily_job.py --markets HK --timeframe 1d --limit 10 --mysql-password your_password
-
-# 1 小时线扫描美股
-python daily_job.py --markets US --timeframe 1h --limit 10 --mysql-password your_password
-
-# 5 分钟线扫描 A 股
-python daily_job.py --markets A --timeframe 5m --limit 10 --mysql-password your_password
+./start_api.sh
+# 浏览器打开 http://localhost:8000
 ```
+
+### 定时任务（捞股票池 + 全池筛选 + CSV + 飞书）
+
+与前端独立，在 `stock_screener` 目录执行：
+
+```bash
+python3 scheduled_daily_job.py
+python3 scheduled_daily_job.py --no-fetch   # 仅筛选（不捞池）
+python3 scheduled_daily_job.py --no-feishu  # 不发飞书
+```
+
+实现代码位于 `jobs/scheduled_daily_job.py`，根目录 `scheduled_daily_job.py` 为薄入口。
 
 ---
 
@@ -98,16 +104,13 @@ python daily_job.py --markets A --timeframe 5m --limit 10 --mysql-password your_
 | `MYSQL_PASSWORD` | 123456 | MySQL 密码 |
 | `MYSQL_DATABASE` | market_data | 数据库名 |
 
-### 命令行参数（daily_job.py）
+### 辅助 CLI（仓库根目录 `scripts/`）
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--markets` | US | 市场列表：HK,US,A |
-| `--timeframe` | 1d | K 线周期：1m,5m,1h,1d,1wk,1mo 等 |
-| `--limit` | 无 | 限制股票数量（测试用） |
-| `--loop` | 否 | 是否循环执行 |
-| `--interval-hours` | 24 | 循环间隔（小时） |
-| `--use-futu` | 否 | 启用 Futu OpenD 作为备用数据源 |
+| 脚本 | 说明 |
+|------|------|
+| `scripts/query_stock_pools.py` | 查询已入库的股票池 |
+| `scripts/update_fundamentals.py` | 用 Futu 更新 `stocks` 基本面 |
+| `scripts/test_feishu_webhook.py` | 测试飞书 Webhook |
 
 ### 支持的 Timeframe
 
@@ -132,25 +135,9 @@ python daily_job.py --markets A --timeframe 5m --limit 10 --mysql-password your_
 
 ## 使用方式
 
-### 1. 扫描任务（daily_job.py）
-
-```bash
-# 单次执行
-python daily_job.py --markets HK,US,A --timeframe 1d --mysql-password your_password
-
-# 循环执行
-python daily_job.py --markets HK,US --timeframe 1h --loop --interval-hours 1
-```
-
-### 2. 筛选器（screen_with_filters.py）
-
-```bash
-# EMA 突破 + 日线
-python screen_with_filters.py --market HK --timeframe 1d --use-ema
-
-# EMA + PE 过滤 + 1h 线
-python screen_with_filters.py --market A --timeframe 1h --use-ema --min-pe 0 --max-pe 50
-```
+- **日常选股**：`./start_api.sh`，使用前端 + `/api/*`。
+- **定时批处理**：`python3 scheduled_daily_job.py`（见上文）。
+- **运维脚本**：见 `../scripts/`（需在仓库根目录执行，已自动加入 `stock_screener` 到 `PYTHONPATH`）。
 
 ---
 
@@ -172,27 +159,23 @@ TIMEFRAME=1h MYSQL_PASSWORD=your_password ./deploy.sh run
 
 ---
 
-## 文件结构
+## 文件结构（核心）
 
 ```
 stock_screener/
-├── daily_job.py         # 主扫描任务（简化版：API K线 -> 内存计算 -> 写结果）
-├── screen_with_filters.py  # 多维度筛选器链
-├── timeframe.py         # Timeframe 配置与校验
-├── kline_fetcher.py     # K 线获取器（工厂模式：YFinance/AKShare/Futu）
-├── strategy.py          # EMA 突破策略
-├── db.py                # MySQL 存储（stocks + ema信号分表 + 筛选结果）
-├── market.py            # 市场配置（HK/US/A）
-├── universe.py          # 股票列表获取
-├── filters.py           # 筛选器架构
-├── universe_filter.py   # 股票池缩减器
-├── sector_fetcher.py    # 板块信息获取
-├── main.py              # GUI 模式（TODO: 待适配）
-├── plot_kline.py        # K 线绘图（TODO: 待适配）
-├── requirements.txt     # 依赖
-├── Dockerfile           # Docker 镜像
-├── deploy.sh            # Podman 部署脚本
-└── logs/                # 日志
+├── api/                 # FastAPI（screen、chart、stockpool、watchlist…）
+├── frontend/            # 选股器静态页面
+├── jobs/                # scheduled_daily_job 实现（定时捞池+筛选+导出+飞书）
+├── scheduled_daily_job.py   # 定时任务薄入口（转发 jobs）
+├── db.py / filters.py / strategizers.py / strategy.py
+├── kline_fetcher.py / timeframe.py / market.py / universe*.py
+├── fetch_stock_pools.py / stock_pool.py / feishu_*.py
+├── requirements.txt / Dockerfile / deploy.sh / start_api.sh
+└── logs/
+
+# 仓库根目录
+../scripts/              # 运维 CLI（查股票池、更新基本面、飞书测试、smoke）
+../tests/                # pytest 集成测试
 ```
 
 ---

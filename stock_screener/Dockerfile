@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 # 设置元数据
 LABEL maintainer="MoneyManager"
-LABEL description="股票筛选器 - 每日数据入库任务"
+LABEL description="股票筛选器 - 定时选股任务（捞池+筛选+CSV+飞书）"
 LABEL version="1.0"
 
 # 设置环境变量
@@ -41,4 +41,4 @@ HEALTHCHECK --interval=30m --timeout=10s --start-period=5m --retries=3 \
     CMD python -c "import sys; sys.exit(0)" || exit 1
 
 # 默认命令（可通过环境变量 TIMEFRAME 覆盖，默认 1d）
-CMD ["python", "daily_job.py", "--markets", "HK,US,A", "--timeframe", "1d", "--log", "logs/daily_sync.jsonl", "--loop"]
+CMD ["python", "scheduled_daily_job.py", "--markets", "HK,US,A", "--timeframe", "1d"]
