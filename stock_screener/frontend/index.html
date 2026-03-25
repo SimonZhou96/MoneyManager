@@ -408,6 +408,27 @@
                             <div class="form-row">
                                 <div class="form-group checkbox-group">
                                     <label>
+                                        <input type="checkbox" id="useVolumeSpikePrior3" name="use_volume_spike_vs_prior3" checked>
+                                        <span>当日成交量 &gt; 前三日最大单日成交量（任一策略满足即可入选）</span>
+                                    </label>
+                                </div>
+                                <div class="form-group checkbox-group">
+                                    <label>
+                                        <input type="checkbox" id="useDailyDropBand" name="use_daily_drop_band" checked>
+                                        <span>当天下跌 6%～6.5%（含边界）</span>
+                                    </label>
+                                </div>
+                                <div class="form-group checkbox-group">
+                                    <label>
+                                        <input type="checkbox" id="useDailyRiseBand" name="use_daily_rise_band" checked>
+                                        <span>当天上涨 4%～4.5%（含边界）</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group checkbox-group">
+                                    <label>
                                         <input type="checkbox" id="requireProfitable" name="require_profitable" checked>
                                         <span>公司有盈利</span>
                                     </label>

@@ -375,6 +375,9 @@ function buildScreenParamsFromForm(marketOverride) {
         use_ema_breakout: document.getElementById('useEmaBreakout').checked,
         ema_short: 10,
         ema_long: 150,
+        use_volume_spike_vs_prior3: document.getElementById('useVolumeSpikePrior3').checked,
+        use_daily_drop_band: document.getElementById('useDailyDropBand').checked,
+        use_daily_rise_band: document.getElementById('useDailyRiseBand').checked,
         require_profitable: document.getElementById('requireProfitable').checked,
     };
     const marketCapMin = formData.get('market_cap_min');
@@ -468,6 +471,9 @@ function handleReset() {
     document.getElementById('market').value = 'HK';
     document.getElementById('timeframe').value = '1d';
     document.getElementById('useEmaBreakout').checked = true;
+    document.getElementById('useVolumeSpikePrior3').checked = true;
+    document.getElementById('useDailyDropBand').checked = true;
+    document.getElementById('useDailyRiseBand').checked = true;
     document.getElementById('requireProfitable').checked = true;
     document.getElementById('screenWatchlistOnly').checked = false;
 
@@ -1092,7 +1098,10 @@ async function startStockPoolScreening() {
                 watchlist: watchlist,
                 use_ema_breakout: true,
                 ema_short: 10,
-                ema_long: 150
+                ema_long: 150,
+                use_volume_spike_vs_prior3: true,
+                use_daily_drop_band: true,
+                use_daily_rise_band: true,
             })
         });
 
@@ -1174,7 +1183,10 @@ async function handleSearchSubmit() {
                 watchlist: watchlist,
                 use_ema_breakout: true,
                 ema_short: 10,
-                ema_long: 150
+                ema_long: 150,
+                use_volume_spike_vs_prior3: true,
+                use_daily_drop_band: true,
+                use_daily_rise_band: true,
             })
         });
 
