@@ -233,7 +233,22 @@ def parse_filter_params(params: dict) -> dict:
     # 公司有盈利
     if "require_profitable" in params:
         result["require_profitable"] = bool(params["require_profitable"])
-    
+
+    # 策略与其它 API 字段（parse_filter_params 原先未透传，会导致策略开关丢失）
+    for key in (
+        "use_ema_breakout",
+        "ema_short",
+        "ema_long",
+        "rsi_period",
+        "rsi_oversold_threshold",
+        "rsi_overbought_threshold",
+        "use_volume_spike_vs_prior3",
+        "use_daily_drop_band",
+        "use_daily_rise_band",
+    ):
+        if key in params:
+            result[key] = params[key]
+
     return result
 
 

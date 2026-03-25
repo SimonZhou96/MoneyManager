@@ -30,6 +30,8 @@ from strategizers import (
     EMABreakoutStrategizer,
     RSIOversoldStrategizer,
     RSIOverboughtStrategizer,
+    TodayVolumeExceedsPrior3MaxStrategizer,
+    DailyPctChangeBandStrategizer,
 )
 from timeframe import parse_timeframe
 from universe import fetch_stock_list_akshare
@@ -103,6 +105,22 @@ def create_strategizer_chain_from_params(params: dict) -> StrategizerChain:
         period=params.get("rsi_period", 14),
         threshold=params.get("rsi_overbought_threshold", 70.0),
     ))
+
+    # 量价/涨跌幅：与 EMA、RSI 并列，任一满足即可（StrategizerChain）
+    if params.get("use_volume_spike_vs_prior3", True):
+        chain.add_strategizer(TodayVolumeExceedsPrior3MaxStrategizer())
+    if params.get("use_daily_drop_band", True):
+        chain.add_strategizer(DailyPctChangeBandStrategizer(
+            pct_min=-6.5,
+            pct_max=-6.0,
+            name="DailyDrop6To65Strategizer",
+        ))
+    if params.get("use_daily_rise_band", True):
+        chain.add_strategizer(DailyPctChangeBandStrategizer(
+            pct_min=4.0,
+            pct_max=4.5,
+            name="DailyRise4To45Strategizer",
+        ))
 
     return chain
 
@@ -370,6 +388,9 @@ def run_screening_task(
                         'EMABreakoutStrategizer': 'EMA突破',
                         'RSIOversoldStrategizer': 'RSI超卖',
                         'RSIOverboughtStrategizer': 'RSI超买',
+                        'TodayVolumeExceedsPrior3MaxStrategizer': '放量超前三日',
+                        'DailyDrop6To65Strategizer': '当日跌6%~6.5%',
+                        'DailyRise4To45Strategizer': '当日涨4%~4.5%',
                     }
 
                     for output in result.filter_outputs:

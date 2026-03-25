@@ -271,6 +271,61 @@ def calculate_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     return rsi
 
 
+def compute_daily_volume_vs_prior3_and_pct_change(
+    df: pd.DataFrame,
+    check_date: date | None = None,
+) -> Tuple[
+    Optional[float],
+    Optional[float],
+    Optional[float],
+    Optional[float],
+    Optional[float],
+]:
+    """
+    基于日线 K 线（最后一根视为当日）计算：
+    - 当日成交量 vs 前三日成交量最大值
+    - 当日涨跌幅（相对前一日收盘，百分比）
+
+    Returns:
+        (today_vol, max_vol_prior3, pct_change, prev_close, today_close)
+        任一步数据不足则对应为 None；pct_change 为百分数如 -6.2 表示跌 6.2%。
+    """
+    if df is None or df.empty:
+        return None, None, None, None, None
+    if "close" not in df.columns:
+        return None, None, None, None, None
+    if "volume" not in df.columns:
+        return None, None, None, None, None
+
+    is_valid, _ = _validate_kline_data(df)
+    if not is_valid:
+        return None, None, None, None, None
+
+    work = _prepare_kline_data(df)
+    if check_date is not None:
+        work = work[work["date"].dt.date <= check_date]
+    if len(work) < 4:
+        return None, None, None, None, None
+
+    try:
+        vol_series = work["volume"].astype(float)
+        close_series = work["close"].astype(float)
+    except (ValueError, TypeError):
+        return None, None, None, None, None
+
+    prior3_vol = vol_series.iloc[-4:-1].values
+    today_vol_raw = float(vol_series.iloc[-1])
+    prev_close = float(close_series.iloc[-2])
+    today_close = float(close_series.iloc[-1])
+
+    if today_vol_raw <= 0 or any(v <= 0 for v in prior3_vol):
+        return None, None, None, prev_close, today_close
+
+    max_prior3 = float(max(prior3_vol))
+    pct_change = (today_close - prev_close) / prev_close * 100.0 if prev_close > 0 else None
+    return today_vol_raw, max_prior3, pct_change, prev_close, today_close
+
+
 def get_latest_rsi(df: pd.DataFrame, period: int = 14, check_date: date | None = None) -> Optional[float]:
     """
     从 K 线数据计算最新一根 K 线的 RSI(period)。

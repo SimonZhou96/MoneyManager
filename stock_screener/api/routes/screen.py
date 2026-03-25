@@ -35,6 +35,9 @@ class ScreenRequest(BaseModel):
     pe_min: Optional[float] = None
     pe_max: Optional[float] = None
     require_profitable: Optional[bool] = None
+    use_volume_spike_vs_prior3: Optional[bool] = True
+    use_daily_drop_band: Optional[bool] = True
+    use_daily_rise_band: Optional[bool] = True
     watchlist: Optional[List[dict]] = None  # 自选股列表 [{code, name}, ...]，非空时仅筛选此列表
 
 
@@ -152,6 +155,9 @@ async def get_progress(task_id: str):
             'EMABreakoutStrategizer': 'EMA突破',
             'RSIOversoldStrategizer': 'RSI超卖',
             'RSIOverboughtStrategizer': 'RSI超买',
+            'TodayVolumeExceedsPrior3MaxStrategizer': '放量超前三日',
+            'DailyDrop6To65Strategizer': '当日跌6%~6.5%',
+            'DailyRise4To45Strategizer': '当日涨4%~4.5%',
         }
 
         passed_stocks = []

@@ -18,7 +18,12 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from filters import FilterContext, StockInfo
-from strategy import check_ema_breakout, EMABreakoutResult, get_latest_rsi
+from strategy import (
+    check_ema_breakout,
+    EMABreakoutResult,
+    compute_daily_volume_vs_prior3_and_pct_change,
+    get_latest_rsi,
+)
 
 
 @dataclass
@@ -195,6 +200,85 @@ class RSIOversoldStrategizer(Strategizer):
             satisfied=satisfied,
             reason=f"RSI({self.period})={rsi:.2f} {'<=' if satisfied else '>'} {self.threshold}",
             details={"rsi": rsi, "period": self.period, "threshold": self.threshold},
+        )
+
+
+class TodayVolumeExceedsPrior3MaxStrategizer(Strategizer):
+    """当日成交量大于前三日（不含当日）单日最大成交量则满足。"""
+
+    def __init__(
+        self,
+        name: str = "TodayVolumeExceedsPrior3MaxStrategizer",
+        enabled: bool = True,
+    ):
+        super().__init__(name=name, enabled=enabled)
+
+    def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
+        today_v, max_prior3, _, _, _ = compute_daily_volume_vs_prior3_and_pct_change(
+            stock.kline_df, check_date=context.check_date
+        )
+        if today_v is None or max_prior3 is None:
+            return StrategizerOutput(
+                name=self.name,
+                satisfied=False,
+                reason="K线或成交量不足（需至少4根日线）",
+                details={"today_volume": today_v, "max_volume_prior3": max_prior3},
+            )
+        satisfied = today_v > max_prior3
+        return StrategizerOutput(
+            name=self.name,
+            satisfied=satisfied,
+            reason=(
+                f"当日成交量 {today_v:.0f} {'>' if satisfied else '<='} "
+                f"前三日最大 {max_prior3:.0f}"
+            ),
+            details={
+                "today_volume": today_v,
+                "max_volume_prior3": max_prior3,
+            },
+        )
+
+
+class DailyPctChangeBandStrategizer(Strategizer):
+    """当日涨跌幅落在 [pct_min, pct_max]（闭区间，单位：%）则满足。"""
+
+    def __init__(
+        self,
+        pct_min: float,
+        pct_max: float,
+        name: str,
+        enabled: bool = True,
+    ):
+        super().__init__(name=name, enabled=enabled)
+        self.pct_min = pct_min
+        self.pct_max = pct_max
+
+    def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
+        _, _, pct, prev_c, today_c = compute_daily_volume_vs_prior3_and_pct_change(
+            stock.kline_df, check_date=context.check_date
+        )
+        if pct is None:
+            return StrategizerOutput(
+                name=self.name,
+                satisfied=False,
+                reason="无法计算当日涨跌幅",
+                details={"pct_change": None, "prev_close": prev_c, "close": today_c},
+            )
+        satisfied = self.pct_min <= pct <= self.pct_max
+        return StrategizerOutput(
+            name=self.name,
+            satisfied=satisfied,
+            reason=(
+                f"当日涨跌 {pct:.2f}% {'在' if satisfied else '不在'} "
+                f"[{self.pct_min}%, {self.pct_max}%]"
+            ),
+            details={
+                "pct_change": pct,
+                "prev_close": prev_c,
+                "close": today_c,
+                "band_min": self.pct_min,
+                "band_max": self.pct_max,
+            },
         )
 
 
