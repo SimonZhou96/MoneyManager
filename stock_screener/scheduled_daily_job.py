@@ -6,13 +6,14 @@
 流程：
 1. 捞取港股、A股、美股股票池数据，写入数据库
 2. 对每个市场的股票池分别执行筛选逻辑
-3. 将满足条件的股票导出为 CSV（code、市场、名称、pe、市值、所属板块、满足的条件）
+3. 将满足条件的股票导出为 CSV，并额外拆分非 ETF / ETF 两份 CSV
 4. 通过飞书 Webhook 发送结果
 
 用法:
     python3 scheduled_daily_job.py
     python3 scheduled_daily_job.py --no-fetch   # 跳过捞取，仅筛选+导出+飞书
     python3 scheduled_daily_job.py --no-feishu  # 不发送飞书
+    python3 scheduled_daily_job.py --require-fresh-pools  # 抓池失败时直接退出，不回退旧池数据
 
 cron 示例（每天 18:00 执行，收盘后）:
     0 18 * * * cd /path/to/stock_screener && python3 scheduled_daily_job.py
@@ -127,6 +128,20 @@ def get_merged_pool_stocks(db: MarketDatabase, market: str) -> List[dict]:
     return result
 
 
+def has_merged_pool_stocks(db: MarketDatabase, market: str) -> bool:
+    """检查指定市场是否存在可用于筛选的合并股票池数据。"""
+    return len(get_merged_pool_stocks(db, market)) > 0
+
+
+def get_etf_codes(db: MarketDatabase, market: str) -> set[str]:
+    """获取指定市场 ETF 股票池中的代码集合，用于导出拆分。"""
+    return {
+        (s.get("code") or "").strip()
+        for s in db.get_stock_pool(market, "etf", limit=None)
+        if (s.get("code") or "").strip()
+    }
+
+
 def run_screening_for_market(
     mysql_config: MySqlConfig,
     market: str,
@@ -219,8 +234,6 @@ def write_screening_csv(records: List[dict], csv_path: str) -> None:
     将满足条件的股票写入 CSV。
     列：code, 市场, 名称, pe, 市值, 所属板块, 满足的条件
     """
-    if not records:
-        return
     os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
     columns = [
         ("股票代码", "code"),
@@ -249,6 +262,26 @@ def write_screening_csv(records: List[dict], csv_path: str) -> None:
             w.writerow(row)
 
 
+def write_split_screening_csvs(records: List[dict], csv_base_path: str, etf_codes: set[str]) -> Tuple[str, str]:
+    """
+    按 ETF 归属拆分写入两份 CSV。
+
+    Returns:
+        (no_etf_csv_path, etf_only_csv_path)
+    """
+    no_etf_records = [r for r in records if (r.get("code") or "").strip() not in etf_codes]
+    etf_records = [r for r in records if (r.get("code") or "").strip() in etf_codes]
+
+    if csv_base_path.endswith(".csv"):
+        csv_base_path = csv_base_path[:-4]
+    no_etf_path = f"{csv_base_path}_no_etf.csv"
+    etf_only_path = f"{csv_base_path}_etf_only.csv"
+
+    write_screening_csv(no_etf_records, no_etf_path)
+    write_screening_csv(etf_records, etf_only_path)
+    return no_etf_path, etf_only_path
+
+
 # ------------------------------------------------------------------
 # 4. 主流程
 # ------------------------------------------------------------------
@@ -271,10 +304,15 @@ def main():
     parser = argparse.ArgumentParser(description="定时任务 - 捞池+筛选+CSV+飞书")
     parser.add_argument("--no-fetch", action="store_true", help="跳过股票池捞取")
     parser.add_argument("--no-feishu", action="store_true", help="不发送飞书消息")
+    parser.add_argument(
+        "--require-fresh-pools",
+        action="store_true",
+        help="抓池失败时直接退出；默认会回退使用数据库中的已有股票池数据",
+    )
     parser.add_argument("--markets", default="HK,A,US", help="市场列表，逗号分隔")
     parser.add_argument("--pools", default="best,index,industry,ipo,etf", help="股票池类型")
     parser.add_argument("--timeframe", default="1d", help="K线周期")
-    parser.add_argument("--csv", default="logs/screening_result.csv", help="CSV 输出路径（会按日期+市场拆分为 screening_result_2026-02-27_HK.csv 等）")
+    parser.add_argument("--csv", default="logs/screening_result.csv", help="CSV 输出路径（会按日期+市场拆分为 screening_result_2026-02-27_HK.csv，并额外生成 _no_etf/_etf_only 两份）")
     parser.add_argument("--futu-host", default="127.0.0.1", help="Futu OpenD 主机")
     parser.add_argument("--futu-port", type=int, default=11111, help="Futu OpenD 端口")
     args = parser.parse_args()
@@ -291,6 +329,8 @@ def main():
     print(f"[{datetime.now()}] 定时任务开始 | 市场: {markets} | 股票池: {pools}")
 
     # 1. 捞取股票池（可选）
+    using_stale_pools = bool(args.no_fetch)
+    fetch_failed = False
     if not args.no_fetch:
         try:
             import futu as ft
@@ -300,9 +340,13 @@ def main():
             fetch_all_markets_pools(db, fetcher, markets, pools)
             quote_ctx.close()
         except Exception as e:
+            fetch_failed = True
             print(f"捞取股票池失败: {e}")
-            db.close()
-            return 1
+            if args.require_fresh_pools:
+                db.close()
+                return 1
+            print("继续使用数据库中已有股票池数据")
+            using_stale_pools = True
     else:
         print("跳过捞取，使用已有股票池数据")
 
@@ -316,16 +360,29 @@ def main():
     if csv_base.endswith(".csv"):
         csv_base = csv_base[:-4]
     today_str = date.today().strftime("%Y-%m-%d")
+    processed_markets: List[str] = []
+    skipped_markets: List[str] = []
 
     for market in markets:
         print(f"\n--- 开始筛选 {market_label(market)} ---")
-        _, passed = run_screening_for_market(
+        if not has_merged_pool_stocks(db, market):
+            skipped_markets.append(market)
+            print(f"  {market_label(market)} 无可用股票池数据，跳过")
+            continue
+
+        task_id, passed = run_screening_for_market(
             mysql_config=mysql_config,
             market=market,
             timeframe=timeframe,
             default_params=params,
             verbose=False,
         )
+        if not task_id:
+            skipped_markets.append(market)
+            print(f"  {market_label(market)} 未创建筛选任务，跳过")
+            continue
+
+        processed_markets.append(market)
         print(f"  {market_label(market)}: {len(passed)} 只通过")
 
         # 3. 导出该市场 CSV（含日期，避免天级运行时互相覆盖）
@@ -333,6 +390,13 @@ def main():
         if passed:
             write_screening_csv(passed, csv_path)
             print(f"✓ CSV 已导出: {csv_path}")
+            no_etf_path, etf_only_path = write_split_screening_csvs(
+                records=passed,
+                csv_base_path=csv_path,
+                etf_codes=get_etf_codes(db, market),
+            )
+            print(f"✓ 非 ETF CSV 已导出: {no_etf_path}")
+            print(f"✓ ETF CSV 已导出: {etf_only_path}")
         else:
             print(f"  {market_label(market)} 无满足条件的股票，不生成 CSV")
 
@@ -353,6 +417,17 @@ def main():
 
     if not args.no_feishu and not webhook_url:
         print("未配置 FEISHU_WEBHOOK_URL，跳过飞书发送")
+
+    if skipped_markets:
+        skipped_labels = ", ".join(market_label(m) for m in skipped_markets)
+        print(f"跳过的市场: {skipped_labels}")
+
+    if fetch_failed and using_stale_pools:
+        print("本次任务在抓池失败后回退使用了数据库中的已有股票池数据")
+
+    if not processed_markets:
+        print("没有任何市场完成筛选，任务失败")
+        return 1
 
     print(f"[{datetime.now()}] 定时任务结束")
     return 0

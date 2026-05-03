@@ -98,6 +98,11 @@ def _normalize_dataframe(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     return df.sort_values("date").reset_index(drop=True)
 
 
+def _log_fetch_warning(source: str, action: str, error: Exception) -> None:
+    """对预期网络失败输出简短日志，避免刷整屏 traceback。"""
+    print(f"[{source}] {action} failed: {error}", file=sys.stderr)
+
+
 # ---------------------------------------------------------------------------
 # YFinance
 # ---------------------------------------------------------------------------
@@ -252,8 +257,7 @@ class AKShareKlineFetcher(KlineFetcherBase):
             )
             return _normalize_dataframe(df)
         except Exception as e:
-            print(f"[AKShare] _fetch_a_daily failed: code={code} error={e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
+            _log_fetch_warning("AKShare", f"_fetch_a_daily code={code}", e)
             return None
 
     def _fetch_hk_daily(self, code: str, start: str, end: str) -> Optional[pd.DataFrame]:
@@ -272,8 +276,7 @@ class AKShareKlineFetcher(KlineFetcherBase):
                 if result is not None and len(result) > 0:
                     return result
             except Exception as e:
-                print(f"[AKShare] _fetch_hk_daily {method_name} failed: code={code} error={e}", file=sys.stderr)
-                traceback.print_exc(file=sys.stderr)
+                _log_fetch_warning("AKShare", f"_fetch_hk_daily {method_name} code={code}", e)
                 continue
             time.sleep(0.5 + random.uniform(0, 0.5))
         return None
@@ -294,8 +297,7 @@ class AKShareKlineFetcher(KlineFetcherBase):
                 if result is not None and len(result) > 0:
                     return result
             except Exception as e:
-                print(f"[AKShare] _fetch_us_daily {method_name} failed: code={code} error={e}", file=sys.stderr)
-                traceback.print_exc(file=sys.stderr)
+                _log_fetch_warning("AKShare", f"_fetch_us_daily {method_name} code={code}", e)
                 continue
         return None
 
@@ -311,8 +313,7 @@ class AKShareKlineFetcher(KlineFetcherBase):
             )
             return _normalize_dataframe(df)
         except Exception as e:
-            print(f"[AKShare] _fetch_a_min failed: code={code} period={ak_period} error={e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
+            _log_fetch_warning("AKShare", f"_fetch_a_min code={code} period={ak_period}", e)
             return None
 
     # -- 公共入口 --
@@ -357,8 +358,7 @@ class AKShareKlineFetcher(KlineFetcherBase):
                 return None
             return df.tail(max_count).reset_index(drop=True)
         except Exception as e:
-            print(f"[AKShare] fetch failed: code={stock_code} market={market} timeframe={timeframe} error={e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
+            _log_fetch_warning("AKShare", f"fetch code={stock_code} market={market} timeframe={timeframe}", e)
             return None
 
 
@@ -508,8 +508,12 @@ class KlineFetcherFactory:
         rate_limiter=None,
     ) -> List[KlineFetcherBase]:
         """
-        创建获取器链，优先级：YFinance > AKShare > Futu
-        （YFinance 对全 timeframe 支持最好，放首位）
+        创建获取器链。
+        默认优先级：
+        - 有 OpenD: YFinance > Futu > AKShare
+        - 无 OpenD: YFinance > AKShare
+
+        这样可以优先使用本地 OpenD，减少 AKShare 外部站点波动对任务稳定性的影响。
         """
         fetchers: List[KlineFetcherBase] = []
 
@@ -519,17 +523,17 @@ class KlineFetcherFactory:
         except ImportError:
             pass
 
-        # 2. AKShare（日线 + A 股分钟线）
-        try:
-            fetchers.append(AKShareKlineFetcher())
-        except ImportError:
-            pass
-
-        # 3. Futu（需要 OpenD）
+        # 2. Futu（需要 OpenD，本地依赖稳定性通常高于 AKShare 外站）
         if quote_ctx is not None:
             try:
                 fetchers.append(FutuKlineFetcher(quote_ctx, rate_limiter))
             except Exception:
                 pass
+
+        # 3. AKShare（日线 + A 股分钟线）
+        try:
+            fetchers.append(AKShareKlineFetcher())
+        except ImportError:
+            pass
 
         return fetchers

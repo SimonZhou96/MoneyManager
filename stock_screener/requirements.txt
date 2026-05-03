@@ -1,17 +1,9 @@
 futu-api>=6.0.0
-requests>=2.28.0  # 飞书 Webhook 发送
+requests>=2.28.0
 pandas>=1.5.0
-numpy>=1.23.0
-pandas-ta>=0.3.14b
-matplotlib>=3.6.0
 yfinance>=0.2.0
 akshare>=1.12.0
-pyarrow>=10.0.0
 PyMySQL>=1.0.0
 # cryptography 用于支持 MySQL 8.0+ 的 sha256_password 和 caching_sha2_password 认证方法
 # MySQL 5.7 使用 mysql_native_password，不需要此包，但保留以兼容所有版本
 cryptography>=3.4.8
-# FastAPI 及相关依赖
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-pydantic>=2.0.0
