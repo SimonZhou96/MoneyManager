@@ -67,6 +67,9 @@ STRATEGY_NAME_MAP = {
     "EMABreakoutStrategizer": "EMA突破",
     "RSIOversoldStrategizer": "RSI超卖",
     "RSIOverboughtStrategizer": "RSI超买",
+    "TodayVolumeExceedsPrior3MaxStrategizer": "放量超前三日",
+    "DailyDrop6To65Strategizer": "当日跌6%~6.5%",
+    "DailyRise4To45Strategizer": "当日涨4%~4.5%",
 }
 
 
@@ -387,14 +390,17 @@ def main():
 
         # 3. 导出该市场 CSV（含日期，避免天级运行时互相覆盖）
         csv_path = f"{csv_base}_{today_str}_{market}.csv"
+        csv_paths: List[str] = []
         if passed:
             write_screening_csv(passed, csv_path)
+            csv_paths.append(csv_path)
             print(f"✓ CSV 已导出: {csv_path}")
             no_etf_path, etf_only_path = write_split_screening_csvs(
                 records=passed,
                 csv_base_path=csv_path,
                 etf_codes=get_etf_codes(db, market),
             )
+            csv_paths.extend([no_etf_path, etf_only_path])
             print(f"✓ 非 ETF CSV 已导出: {no_etf_path}")
             print(f"✓ ETF CSV 已导出: {etf_only_path}")
         else:
@@ -407,8 +413,8 @@ def main():
                 f"通过: {len(passed)} 只",
             ]
             if passed:
-                summary_lines.append(f"CSV: {csv_path}")
-                send_screening_result(webhook_url, "\n".join(summary_lines), csv_path)
+                summary_lines.extend(["CSV 文件:", *csv_paths])
+                send_screening_result(webhook_url, "\n".join(summary_lines), csv_paths)
             else:
                 send_feishu_text(webhook_url, "\n".join(summary_lines))
             print(f"✓ 已发送 {market_label(market)} 飞书消息")

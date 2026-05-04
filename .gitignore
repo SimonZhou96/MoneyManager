@@ -1,7 +1,6 @@
-.idea
-.env
-/cache/
-/stock_screener/output/
-/stock_screener/data/
-/stock_screener/logs/
-*.db
+stock_screener/.env
+stock_screener/.venv/
+stock_screener/.runtime_home/
+stock_screener/logs/
+stock_screener/__pycache__/
+stock_screener/api/__pycache__/

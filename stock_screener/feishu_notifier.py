@@ -9,7 +9,7 @@
 
 import json
 import os
-from typing import Optional
+from typing import List, Sequence, Union
 
 # requests 为常见依赖，若无则静默跳过
 try:
@@ -52,55 +52,56 @@ def send_feishu_text(webhook_url: str, text: str) -> bool:
         return False
 
 
-def send_screening_result(webhook_url: str, summary: str, csv_path: str) -> bool:
-    """
-    发送筛选结果到飞书：先发摘要，再以文件形式发送 CSV（无论大小）
+def _normalize_csv_paths(csv_paths: Union[str, Sequence[str]]) -> List[str]:
+    if isinstance(csv_paths, str):
+        return [csv_paths]
+    return [p for p in csv_paths if p]
 
-    优先使用飞书应用 API 发送文件；若未配置应用则回退为 Webhook 文本。
+
+def send_screening_result(webhook_url: str, summary: str, csv_paths: Union[str, Sequence[str]]) -> bool:
+    """
+    发送筛选结果到飞书：先发摘要，再以文件形式发送 CSV。
+
+    Webhook 不能直接发送文件，所以 CSV 只走飞书应用 API。
+    每个文件都会在标准输出打印上传成功/失败，便于定时任务日志排查。
     """
     ok = send_feishu_text(webhook_url, summary)
     if not ok:
+        print("[Feishu] 摘要发送失败")
         return False
 
-    abs_path = os.path.abspath(csv_path)
-    if not os.path.exists(abs_path):
-        send_feishu_text(webhook_url, f"CSV 文件不存在: {abs_path}")
+    paths = _normalize_csv_paths(csv_paths)
+    if not paths:
+        print("[Feishu] 未提供 CSV 文件路径")
         return True
 
-    # 优先用应用 API 发送 CSV 文件（支持任意大小，≤30MB）
     try:
         from feishu_app_client import send_file_to_chat
-        if send_file_to_chat(abs_path):
-            return True
-    except Exception:
-        pass
-
-    # 未配置应用或发送失败：回退为 Webhook 文本
-    try:
-        with open(abs_path, "r", encoding="utf-8-sig") as f:
-            body = f.read()
-        if not body:
-            send_feishu_text(webhook_url, f"CSV 为空，完整文件: {abs_path}")
-            return True
-        content_limit = FEISHU_TEXT_LIMIT - 200
-        if len(body) <= content_limit:
-            send_feishu_text(webhook_url, "--- CSV 内容 ---\n" + body)
-        else:
-            lines = body.splitlines()
-            header = lines[0] if lines else ""
-            data_lines = lines[1:] if len(lines) > 1 else []
-            prefix = "--- CSV 内容 ---\n"
-            chunk = [header]
-            for line in data_lines:
-                trial = "\n".join(chunk + [line])
-                if len(prefix) + len(trial) > content_limit and len(chunk) >= 1:
-                    send_feishu_text(webhook_url, prefix + "\n".join(chunk))
-                    chunk = [header, line]
-                else:
-                    chunk.append(line)
-            if chunk:
-                send_feishu_text(webhook_url, prefix + "\n".join(chunk))
-            send_feishu_text(webhook_url, f"完整 CSV 已保存至: {abs_path}")
     except Exception as e:
-        send_feishu_text(webhook_url, f"读取 CSV 失败: {e}\n完整 CSV 已保存至: {abs_path}")
-    return True
+        print(f"[Feishu] 文件发送模块加载失败: {e}")
+        send_feishu_text(webhook_url, f"CSV 文件发送失败: 文件发送模块加载失败。")
+        return True
+
+    all_ok = True
+    for csv_path in paths:
+        abs_path = os.path.abspath(csv_path)
+        if not os.path.exists(abs_path):
+            all_ok = False
+            print(f"[Feishu] 文件上传失败: {abs_path} | 文件不存在")
+            send_feishu_text(webhook_url, f"CSV 文件不存在: {abs_path}")
+            continue
+
+        try:
+            file_ok = send_file_to_chat(abs_path)
+        except Exception as e:
+            file_ok = False
+            print(f"[Feishu] 文件上传失败: {abs_path} | {e}")
+
+        if file_ok:
+            print(f"[Feishu] 文件上传成功: {abs_path}")
+        else:
+            all_ok = False
+            print(f"[Feishu] 文件上传失败: {abs_path}")
+            send_feishu_text(webhook_url, f"CSV 文件发送失败: {abs_path}")
+
+    return all_ok
