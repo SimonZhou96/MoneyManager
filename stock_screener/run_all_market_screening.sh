@@ -11,7 +11,17 @@ if [[ -f ".env" ]]; then
   set +a
 fi
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+RUNTIME_HOME="${RUNTIME_HOME:-$SCRIPT_DIR/.runtime_home}"
+mkdir -p "$RUNTIME_HOME"
+export HOME="$RUNTIME_HOME"
+
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+  if [[ -x ".venv/bin/python" ]]; then
+    PYTHON_BIN=".venv/bin/python"
+  else
+    PYTHON_BIN="python3"
+  fi
+fi
 MARKETS="${MARKETS:-HK,US,A}"
 TIMEFRAME="${TIMEFRAME:-1d}"
 CSV_PATH="${CSV_PATH:-logs/screening_result.csv}"

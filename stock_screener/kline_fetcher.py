@@ -503,6 +503,13 @@ class KlineFetcherFactory:
     """K 线获取器工厂 - 按优先级创建 fetcher 链"""
 
     @staticmethod
+    def _env_enabled(name: str, default: bool = False) -> bool:
+        value = os.getenv(name)
+        if value is None:
+            return default
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
     def create_fetcher_chain(
         quote_ctx=None,
         rate_limiter=None,
@@ -510,30 +517,32 @@ class KlineFetcherFactory:
         """
         创建获取器链。
         默认优先级：
-        - 有 OpenD: YFinance > Futu > AKShare
+        - 有 OpenD: Futu > YFinance > AKShare
         - 无 OpenD: YFinance > AKShare
 
         这样可以优先使用本地 OpenD，减少 AKShare 外部站点波动对任务稳定性的影响。
         """
         fetchers: List[KlineFetcherBase] = []
+        disable_akshare = KlineFetcherFactory._env_enabled("KLINE_DISABLE_AKSHARE", default=False)
 
-        # 1. YFinance（全 timeframe）
-        try:
-            fetchers.append(YFinanceKlineFetcher())
-        except ImportError:
-            pass
-
-        # 2. Futu（需要 OpenD，本地依赖稳定性通常高于 AKShare 外站）
+        # 1. Futu（需要 OpenD，本地依赖稳定性通常高于外部公网数据源）
         if quote_ctx is not None:
             try:
                 fetchers.append(FutuKlineFetcher(quote_ctx, rate_limiter))
             except Exception:
                 pass
 
-        # 3. AKShare（日线 + A 股分钟线）
+        # 2. YFinance（全 timeframe）
         try:
-            fetchers.append(AKShareKlineFetcher())
+            fetchers.append(YFinanceKlineFetcher())
         except ImportError:
             pass
+
+        # 3. AKShare（日线 + A 股分钟线）。可通过 .env 禁用，避免 DNS/外站问题刷屏。
+        if not disable_akshare:
+            try:
+                fetchers.append(AKShareKlineFetcher())
+            except ImportError:
+                pass
 
         return fetchers
