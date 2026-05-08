@@ -20,6 +20,7 @@ import pandas as pd
 from filters import FilterContext, StockInfo
 from strategy import (
     check_ema_breakout,
+    check_zuoyi_strategy,
     EMABreakoutResult,
     compute_daily_volume_vs_prior3_and_pct_change,
     get_latest_rsi,
@@ -115,6 +116,57 @@ class StrategizerChain:
 # =============================================================================
 # 具体策略器实现
 # =============================================================================
+
+
+class ZuoYiStrategizer(Strategizer):
+    """左一战法策略器：当前周期内筛选看涨突破与看跌跌破信号。"""
+
+    def __init__(
+        self,
+        signal_window: int = 3,
+        include_bullish: bool = True,
+        include_bearish: bool = True,
+        name: str = "ZuoYiStrategizer",
+        enabled: bool = True,
+    ):
+        super().__init__(name=name, enabled=enabled)
+        self.signal_window = signal_window
+        self.include_bullish = include_bullish
+        self.include_bearish = include_bearish
+
+    def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
+        df = stock.kline_df
+        if df is None or df.empty:
+            return StrategizerOutput(
+                name=self.name,
+                satisfied=False,
+                reason="K线数据不足，无法判断左一战法",
+                details={"kline_available": False},
+            )
+
+        analysis = check_zuoyi_strategy(
+            df=df,
+            check_date=context.check_date,
+            signal_window=self.signal_window,
+            include_bullish=self.include_bullish,
+            include_bearish=self.include_bearish,
+        )
+        signals = [s.to_dict() for s in analysis.signals]
+        directions = [s["direction"] for s in signals]
+        details = {
+            "result_type": analysis.result_type,
+            "direction": "|".join(directions) if directions else None,
+            "signals": signals,
+            "signal_window": self.signal_window,
+            "data_rows": analysis.data_rows,
+            "latest_close": analysis.latest_close,
+        }
+        return StrategizerOutput(
+            name=self.name,
+            satisfied=analysis.satisfied,
+            reason=analysis.reason,
+            details=details,
+        )
 
 
 class EMABreakoutStrategizer(Strategizer):

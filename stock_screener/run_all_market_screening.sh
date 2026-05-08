@@ -25,6 +25,7 @@ fi
 MARKETS="${MARKETS:-HK,US,A}"
 TIMEFRAME="${TIMEFRAME:-1d}"
 CSV_PATH="${CSV_PATH:-logs/screening_result.csv}"
+MARKET_WORKERS="${MARKET_WORKERS:-3}"
 FUTU_HOST="${FUTU_HOST:-127.0.0.1}"
 FUTU_PORT="${FUTU_PORT:-11111}"
 NO_FETCH="${NO_FETCH:-0}"
@@ -36,6 +37,7 @@ args=(
   "--markets" "$MARKETS"
   "--timeframe" "$TIMEFRAME"
   "--csv" "$CSV_PATH"
+  "--market-workers" "$MARKET_WORKERS"
   "--futu-host" "$FUTU_HOST"
   "--futu-port" "$FUTU_PORT"
 )

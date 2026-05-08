@@ -68,21 +68,20 @@ def send_screening_result(webhook_url: str, summary: str, csv_paths: Union[str, 
     ok = send_feishu_text(webhook_url, summary)
     if not ok:
         print("[Feishu] 摘要发送失败")
-        return False
 
     paths = _normalize_csv_paths(csv_paths)
     if not paths:
         print("[Feishu] 未提供 CSV 文件路径")
-        return True
+        return ok
 
     try:
         from feishu_app_client import send_file_to_chat
     except Exception as e:
         print(f"[Feishu] 文件发送模块加载失败: {e}")
         send_feishu_text(webhook_url, f"CSV 文件发送失败: 文件发送模块加载失败。")
-        return True
+        return ok
 
-    all_ok = True
+    all_ok = ok
     for csv_path in paths:
         abs_path = os.path.abspath(csv_path)
         if not os.path.exists(abs_path):

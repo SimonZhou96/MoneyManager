@@ -5,10 +5,10 @@
 支持判断 EMA10 向上突破 EMA150 的策略
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import pandas as pd
 
@@ -65,6 +65,49 @@ class EMABreakoutSignal:
     ema150: Optional[float] = None  # 最新的 EMA150 值
     close_price: Optional[float] = None  # 最新收盘价
     data_rows: int = 0  # 用于计算的数据行数
+
+
+@dataclass
+class ZuoYiSignal:
+    """左一战法单个方向信号"""
+    direction: str  # bullish / bearish
+    left_one_date: date
+    median_date: date
+    breakout_date: date
+    bars_to_breakout: int
+    left_one_high: float
+    left_one_low: float
+    median_high: float
+    median_low: float
+    breakout_close: float
+    latest_close: float
+
+    def to_dict(self) -> dict:
+        """转换为可 JSON 序列化的字典"""
+        return {
+            "direction": self.direction,
+            "left_one_date": self.left_one_date.isoformat(),
+            "median_date": self.median_date.isoformat(),
+            "breakout_date": self.breakout_date.isoformat(),
+            "bars_to_breakout": self.bars_to_breakout,
+            "left_one_high": self.left_one_high,
+            "left_one_low": self.left_one_low,
+            "median_high": self.median_high,
+            "median_low": self.median_low,
+            "breakout_close": self.breakout_close,
+            "latest_close": self.latest_close,
+        }
+
+
+@dataclass
+class ZuoYiAnalysis:
+    """左一战法分析结果"""
+    satisfied: bool
+    result_type: str
+    reason: str
+    signals: List[ZuoYiSignal] = field(default_factory=list)
+    data_rows: int = 0
+    latest_close: Optional[float] = None
 
 
 def calculate_ema(prices: pd.Series, period: int) -> pd.Series:
@@ -245,6 +288,275 @@ def analyze_stock_ema_breakout(
         ema150=ema150,
         close_price=close_price,
         data_rows=data_rows,
+    )
+
+
+def _prepare_zuoyi_kline_data(df: pd.DataFrame) -> Tuple[Optional[pd.DataFrame], str]:
+    """
+    预处理左一战法所需 K 线数据。
+
+    左一战法依赖 high / low / close 的区间关系和收盘突破，不能只验证 close。
+    """
+    if df is None or df.empty:
+        return None, "K线数据为空"
+
+    required_columns = ["date", "high", "low", "close"]
+    missing = [c for c in required_columns if c not in df.columns]
+    if missing:
+        return None, f"缺少字段: {', '.join(missing)}"
+
+    work = df.copy()
+    work["date"] = pd.to_datetime(work["date"], errors="coerce")
+    for col in ["high", "low", "close"]:
+        work[col] = pd.to_numeric(work[col], errors="coerce")
+
+    valid = (
+        work["date"].notna()
+        & work["high"].notna()
+        & work["low"].notna()
+        & work["close"].notna()
+        & (work["high"] > 0)
+        & (work["low"] > 0)
+        & (work["close"] > 0)
+        & (work["high"] >= work["low"])
+    )
+    work = work[valid].sort_values("date").reset_index(drop=True)
+    if work.empty:
+        return None, "无有效 high/low/close K线"
+
+    return work, ""
+
+
+def _has_kline_containment(left: pd.Series, right: pd.Series) -> bool:
+    """判断两根 K 线是否存在包含关系。"""
+    left_contains_right = left["high"] >= right["high"] and left["low"] <= right["low"]
+    right_contains_left = right["high"] >= left["high"] and right["low"] <= left["low"]
+    return bool(left_contains_right or right_contains_left)
+
+
+def _find_left_one_index(df: pd.DataFrame, median_idx: int) -> Optional[int]:
+    """从中位线向左寻找第一根与中位线无包含关系的 K 线。"""
+    median = df.iloc[median_idx]
+    for idx in range(median_idx - 1, -1, -1):
+        candidate = df.iloc[idx]
+        if not _has_kline_containment(candidate, median):
+            return idx
+    return None
+
+
+def _find_bullish_median_candidates(df: pd.DataFrame) -> List[int]:
+    """
+    寻找下降途中可作为中位线的 K 线。
+
+    下降途中不断寻找更低低点；同低时取高点更高者。
+    """
+    candidates: List[int] = []
+    lowest_low: Optional[float] = None
+    same_low_best_high: Optional[float] = None
+
+    for idx, row in df.iterrows():
+        low = float(row["low"])
+        high = float(row["high"])
+        if lowest_low is None:
+            lowest_low = low
+            same_low_best_high = high
+            continue
+
+        if low < lowest_low:
+            lowest_low = low
+            same_low_best_high = high
+            candidates.append(idx)
+        elif low == lowest_low and same_low_best_high is not None and high > same_low_best_high:
+            same_low_best_high = high
+            candidates.append(idx)
+
+    return candidates
+
+
+def _find_bearish_median_candidates(df: pd.DataFrame) -> List[int]:
+    """
+    寻找上涨途中可作为中位线的 K 线。
+
+    上涨途中不断寻找更高高点；同高时取低点更低者。
+    """
+    candidates: List[int] = []
+    highest_high: Optional[float] = None
+    same_high_best_low: Optional[float] = None
+
+    for idx, row in df.iterrows():
+        high = float(row["high"])
+        low = float(row["low"])
+        if highest_high is None:
+            highest_high = high
+            same_high_best_low = low
+            continue
+
+        if high > highest_high:
+            highest_high = high
+            same_high_best_low = low
+            candidates.append(idx)
+        elif high == highest_high and same_high_best_low is not None and low < same_high_best_low:
+            same_high_best_low = low
+            candidates.append(idx)
+
+    return candidates
+
+
+def _build_zuoyi_signal(
+    df: pd.DataFrame,
+    direction: str,
+    median_idx: int,
+    left_one_idx: int,
+    breakout_idx: int,
+) -> ZuoYiSignal:
+    left_one = df.iloc[left_one_idx]
+    median = df.iloc[median_idx]
+    breakout = df.iloc[breakout_idx]
+    latest = df.iloc[-1]
+    return ZuoYiSignal(
+        direction=direction,
+        left_one_date=left_one["date"].date(),
+        median_date=median["date"].date(),
+        breakout_date=breakout["date"].date(),
+        bars_to_breakout=breakout_idx - median_idx,
+        left_one_high=float(left_one["high"]),
+        left_one_low=float(left_one["low"]),
+        median_high=float(median["high"]),
+        median_low=float(median["low"]),
+        breakout_close=float(breakout["close"]),
+        latest_close=float(latest["close"]),
+    )
+
+
+def _find_recent_zuoyi_signal(
+    df: pd.DataFrame,
+    direction: str,
+    median_candidates: List[int],
+    signal_window: int,
+) -> Optional[ZuoYiSignal]:
+    """
+    寻找最近的左一突破信号。
+
+    信号必须满足：
+    - 突破发生在中位线之后 signal_window 根 K 线内；
+    - 突破本身也发生在最近 signal_window 根 K 线内，避免历史信号长期保留。
+    """
+    latest_idx = len(df) - 1
+
+    for median_idx in reversed(median_candidates):
+        if median_idx >= latest_idx:
+            continue
+
+        left_one_idx = _find_left_one_index(df, median_idx)
+        if left_one_idx is None:
+            continue
+
+        left_one = df.iloc[left_one_idx]
+        end_idx = min(latest_idx, median_idx + signal_window)
+        for breakout_idx in range(median_idx + 1, end_idx + 1):
+            if latest_idx - breakout_idx >= signal_window:
+                continue
+
+            close = float(df.iloc[breakout_idx]["close"])
+            if direction == "bullish" and close > float(left_one["high"]):
+                return _build_zuoyi_signal(df, direction, median_idx, left_one_idx, breakout_idx)
+            if direction == "bearish" and close < float(left_one["low"]):
+                return _build_zuoyi_signal(df, direction, median_idx, left_one_idx, breakout_idx)
+
+    return None
+
+
+def check_zuoyi_strategy(
+    df: pd.DataFrame,
+    check_date: date | None = None,
+    signal_window: int = 3,
+    include_bullish: bool = True,
+    include_bearish: bool = True,
+) -> ZuoYiAnalysis:
+    """
+    检查左一战法信号。
+
+    规则：
+    - 上涨途中：中位线取更高高点，同高取低点更低的 K 线，用于看跌跌破左一低点。
+    - 下降途中：中位线取更低低点，同低取高点更高的 K 线，用于看涨突破左一高点。
+    - 左一 K 线：中位线左侧第一根与中位线不具备包含关系的 K 线。
+    - 有效信号：中位线之后 signal_window 根 K 线内，收盘价突破左一高点或跌破左一低点。
+    """
+    if signal_window <= 0:
+        return ZuoYiAnalysis(
+            satisfied=False,
+            result_type="invalid_data",
+            reason="signal_window 必须大于 0",
+        )
+
+    work, error_msg = _prepare_zuoyi_kline_data(df)
+    if work is None:
+        return ZuoYiAnalysis(
+            satisfied=False,
+            result_type="invalid_data",
+            reason=error_msg,
+        )
+
+    if check_date is not None:
+        work = work[work["date"].dt.date <= check_date].reset_index(drop=True)
+
+    if len(work) < 3:
+        return ZuoYiAnalysis(
+            satisfied=False,
+            result_type="insufficient_data",
+            reason="K线数据不足，至少需要左一、中位线、突破K线",
+            data_rows=len(work),
+        )
+
+    signals: List[ZuoYiSignal] = []
+    if include_bullish:
+        bullish_signal = _find_recent_zuoyi_signal(
+            work,
+            direction="bullish",
+            median_candidates=_find_bullish_median_candidates(work),
+            signal_window=signal_window,
+        )
+        if bullish_signal is not None:
+            signals.append(bullish_signal)
+
+    if include_bearish:
+        bearish_signal = _find_recent_zuoyi_signal(
+            work,
+            direction="bearish",
+            median_candidates=_find_bearish_median_candidates(work),
+            signal_window=signal_window,
+        )
+        if bearish_signal is not None:
+            signals.append(bearish_signal)
+
+    latest_close = float(work.iloc[-1]["close"])
+    if not signals:
+        return ZuoYiAnalysis(
+            satisfied=False,
+            result_type="no_signal",
+            reason=f"最近{signal_window}根K线内无左一战法有效突破",
+            data_rows=len(work),
+            latest_close=latest_close,
+        )
+
+    directions = {s.direction for s in signals}
+    if directions == {"bullish", "bearish"}:
+        result_type = "both_breakout"
+        reason = "同时出现左一战法看涨与看跌信号"
+    elif "bullish" in directions:
+        result_type = "bullish_breakout"
+        reason = f"左一战法看涨：收盘价在{signal_window}根K线内突破左一高点"
+    else:
+        result_type = "bearish_breakdown"
+        reason = f"左一战法看跌：收盘价在{signal_window}根K线内跌破左一低点"
+
+    return ZuoYiAnalysis(
+        satisfied=True,
+        result_type=result_type,
+        reason=reason,
+        signals=signals,
+        data_rows=len(work),
+        latest_close=latest_close,
     )
 
 

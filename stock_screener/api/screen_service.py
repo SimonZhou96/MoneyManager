@@ -27,6 +27,7 @@ from kline_fetcher import KlineFetcherFactory
 from market import normalize_market, market_label
 from strategizers import (
     StrategizerChain,
+    ZuoYiStrategizer,
     EMABreakoutStrategizer,
     RSIOversoldStrategizer,
     RSIOverboughtStrategizer,
@@ -36,6 +37,63 @@ from strategizers import (
 from timeframe import parse_timeframe
 from universe import fetch_stock_list_akshare
 from universe_filter import UniverseFilterFactory
+
+
+STRATEGY_NAME_MAP = {
+    "EMABreakoutStrategizer": "EMA突破",
+    "RSIOversoldStrategizer": "RSI超卖",
+    "RSIOverboughtStrategizer": "RSI超买",
+    "TodayVolumeExceedsPrior3MaxStrategizer": "放量超前三日",
+    "DailyDrop6To65Strategizer": "当日跌6%~6.5%",
+    "DailyRise4To45Strategizer": "当日涨4%~4.5%",
+}
+
+
+def _zuoyi_direction_label(direction: str) -> str:
+    if direction == "bullish":
+        return "左一战法-看涨"
+    if direction == "bearish":
+        return "左一战法-看跌"
+    return "左一战法"
+
+
+def get_strategy_condition_labels(filter_name: str, details: Optional[dict] = None) -> list[str]:
+    """根据策略器输出生成展示用命中条件。"""
+    details = details or {}
+    if filter_name == "ZuoYiStrategizer":
+        signals = details.get("signals")
+        if isinstance(signals, list):
+            labels = []
+            for signal in signals:
+                if isinstance(signal, dict):
+                    label = _zuoyi_direction_label(str(signal.get("direction") or ""))
+                    if label not in labels:
+                        labels.append(label)
+            if labels:
+                return labels
+
+        direction = details.get("direction")
+        if isinstance(direction, str) and direction:
+            return [_zuoyi_direction_label(d) for d in direction.split("|") if d]
+        return ["左一战法"]
+
+    label = STRATEGY_NAME_MAP.get(filter_name)
+    return [label] if label else []
+
+
+def _json_safe_value(value):
+    """递归转换为 JSON 可序列化的值，保留 list/dict 明细。"""
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_value(v) for v in value]
+    return str(value)
 
 
 def create_filter_chain_from_params(params: dict) -> FilterChain:
@@ -92,6 +150,14 @@ def create_strategizer_chain_from_params(params: dict) -> StrategizerChain:
         chain.add_strategizer(EMABreakoutStrategizer(
             ema_short=params.get("ema_short", 10),
             ema_long=params.get("ema_long", 150),
+        ))
+
+    # 左一战法：当前 timeframe 内多空都筛，任一方向命中即满足策略条件
+    if params.get("use_zuoyi_strategy", True):
+        chain.add_strategizer(ZuoYiStrategizer(
+            signal_window=params.get("zuoyi_signal_window", 3),
+            include_bullish=True,
+            include_bearish=True,
         ))
 
     # RSI(14) <= 30 超卖策略器
@@ -384,18 +450,11 @@ def run_screening_task(
 
                     # 提取满足的策略
                     satisfied_strategies = []
-                    strategy_name_map = {
-                        'EMABreakoutStrategizer': 'EMA突破',
-                        'RSIOversoldStrategizer': 'RSI超卖',
-                        'RSIOverboughtStrategizer': 'RSI超买',
-                        'TodayVolumeExceedsPrior3MaxStrategizer': '放量超前三日',
-                        'DailyDrop6To65Strategizer': '当日跌6%~6.5%',
-                        'DailyRise4To45Strategizer': '当日涨4%~4.5%',
-                    }
-
                     for output in result.filter_outputs:
-                        if output.result.value == "pass" and output.filter_name in strategy_name_map:
-                            satisfied_strategies.append(strategy_name_map[output.filter_name])
+                        if output.result.value == "pass":
+                            satisfied_strategies.extend(
+                                get_strategy_condition_labels(output.filter_name, output.details)
+                            )
 
                     passed_stocks.append({
                         "code": si.code,
@@ -427,20 +486,13 @@ def run_screening_task(
                 if output.filter_name == "PriceFilter" and output.details:
                     close_price = output.details.get("price")
                     break
+                if close_price is None and output.details:
+                    close_price = output.details.get("latest_close")
             
             # 构建 filter_details（筛选器 + 策略器已合并到 result.filter_outputs）
             filter_details = []
             for o in result.filter_outputs:
-                details = {}
-                for k, v in (o.details or {}).items():
-                    if v is None:
-                        details[k] = None
-                    elif hasattr(v, "isoformat"):
-                        details[k] = v.isoformat() if v else None
-                    elif isinstance(v, (str, int, float, bool)):
-                        details[k] = v
-                    else:
-                        details[k] = str(v)
+                details = _json_safe_value(o.details or {})
                 filter_details.append({
                     "filter_name": o.filter_name,
                     "result": o.result.value,

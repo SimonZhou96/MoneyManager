@@ -29,6 +29,8 @@ import json
 import os
 import sys
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -58,19 +60,8 @@ from fetch_stock_pools import (
     get_db_config,
 )
 from market import market_label, normalize_market
-from api.screen_service import run_screening_task
+from api.screen_service import get_strategy_condition_labels, run_screening_task
 from timeframe import parse_timeframe
-
-
-# 策略名映射（用于 CSV 中「满足的条件」）
-STRATEGY_NAME_MAP = {
-    "EMABreakoutStrategizer": "EMA突破",
-    "RSIOversoldStrategizer": "RSI超卖",
-    "RSIOverboughtStrategizer": "RSI超买",
-    "TodayVolumeExceedsPrior3MaxStrategizer": "放量超前三日",
-    "DailyDrop6To65Strategizer": "当日跌6%~6.5%",
-    "DailyRise4To45Strategizer": "当日涨4%~4.5%",
-}
 
 
 # ------------------------------------------------------------------
@@ -145,6 +136,15 @@ def get_etf_codes(db: MarketDatabase, market: str) -> set[str]:
     }
 
 
+def get_market_etf_codes(mysql_config: MySqlConfig, market: str) -> set[str]:
+    """使用独立连接读取指定市场 ETF 代码集合。"""
+    db = MarketDatabase(mysql_config)
+    try:
+        return get_etf_codes(db, market)
+    finally:
+        db.close()
+
+
 def run_screening_for_market(
     mysql_config: MySqlConfig,
     market: str,
@@ -210,8 +210,13 @@ def run_screening_for_market(
                 fd = json.loads(fd_raw) if isinstance(fd_raw, str) else fd_raw
                 if isinstance(fd, list):
                     for d in fd:
-                        if d.get("result") == "pass" and d.get("filter_name") in STRATEGY_NAME_MAP:
-                            conditions.append(STRATEGY_NAME_MAP[d["filter_name"]])
+                        if d.get("result") == "pass":
+                            conditions.extend(
+                                get_strategy_condition_labels(
+                                    d.get("filter_name", ""),
+                                    d.get("details") if isinstance(d.get("details"), dict) else {},
+                                )
+                            )
             except Exception:
                 pass
         passed.append({
@@ -290,16 +295,102 @@ def write_split_screening_csvs(records: List[dict], csv_base_path: str, etf_code
 # ------------------------------------------------------------------
 
 
+@dataclass
+class MarketScreeningResult:
+    market: str
+    task_id: Optional[str] = None
+    passed: List[dict] = field(default_factory=list)
+    csv_paths: List[str] = field(default_factory=list)
+    skipped: bool = False
+    error: Optional[str] = None
+
+
 def get_default_screening_params() -> dict:
     """默认筛选参数：EMA 突破 + RSI 等策略"""
     return {
         "use_ema_breakout": True,
         "ema_short": 10,
         "ema_long": 150,
+        "use_zuoyi_strategy": True,
+        "zuoyi_signal_window": 3,
         "rsi_period": 14,
         "rsi_oversold_threshold": 30.0,
         "rsi_overbought_threshold": 70.0,
     }
+
+
+def run_market_screening_worker(
+    mysql_config: MySqlConfig,
+    market: str,
+    timeframe: str,
+    default_params: dict,
+    csv_base: str,
+    today_str: str,
+    verbose: bool = False,
+) -> MarketScreeningResult:
+    """
+    Execute screening and CSV export for one market.
+
+    This helper owns its MarketDatabase connection for stock-pool checks and
+    ETF lookup. It intentionally does not send Feishu messages so notification
+    side effects stay in the main thread.
+    """
+    print(f"\n--- 开始筛选 {market_label(market)} ---")
+    db = None
+    try:
+        db = MarketDatabase(mysql_config)
+        if not has_merged_pool_stocks(db, market):
+            print(f"  {market_label(market)} 无可用股票池数据，跳过")
+            return MarketScreeningResult(market=market, skipped=True)
+        db.close()
+        db = None
+
+        task_id, passed = run_screening_for_market(
+            mysql_config=mysql_config,
+            market=market,
+            timeframe=timeframe,
+            default_params=default_params,
+            verbose=verbose,
+        )
+        if not task_id:
+            print(f"  {market_label(market)} 未创建筛选任务，跳过")
+            return MarketScreeningResult(market=market, skipped=True)
+
+        print(f"  {market_label(market)}: {len(passed)} 只通过")
+
+        csv_paths: List[str] = []
+        if passed:
+            csv_path = f"{csv_base}_{today_str}_{market}.csv"
+            write_screening_csv(passed, csv_path)
+            csv_paths.append(csv_path)
+            print(f"✓ CSV 已导出: {csv_path}")
+
+            no_etf_path, etf_only_path = write_split_screening_csvs(
+                records=passed,
+                csv_base_path=csv_path,
+                etf_codes=get_market_etf_codes(mysql_config, market),
+            )
+            csv_paths.extend([no_etf_path, etf_only_path])
+            print(f"✓ 非 ETF CSV 已导出: {no_etf_path}")
+            print(f"✓ ETF CSV 已导出: {etf_only_path}")
+        else:
+            print(f"  {market_label(market)} 无满足条件的股票，不生成 CSV")
+
+        return MarketScreeningResult(
+            market=market,
+            task_id=task_id,
+            passed=passed,
+            csv_paths=csv_paths,
+        )
+    except Exception as e:
+        return MarketScreeningResult(
+            market=market,
+            skipped=True,
+            error=f"{type(e).__name__}: {e}",
+        )
+    finally:
+        if db is not None:
+            db.close()
 
 
 def main():
@@ -316,6 +407,7 @@ def main():
     parser.add_argument("--pools", default="best,index,industry,ipo,etf", help="股票池类型")
     parser.add_argument("--timeframe", default="1d", help="K线周期")
     parser.add_argument("--csv", default="logs/screening_result.csv", help="CSV 输出路径（会按日期+市场拆分为 screening_result_2026-02-27_HK.csv，并额外生成 _no_etf/_etf_only 两份）")
+    parser.add_argument("--market-workers", type=int, default=3, help="并行筛选市场的 worker 数量")
     parser.add_argument("--futu-host", default="127.0.0.1", help="Futu OpenD 主机")
     parser.add_argument("--futu-port", type=int, default=11111, help="Futu OpenD 端口")
     args = parser.parse_args()
@@ -353,6 +445,8 @@ def main():
     else:
         print("跳过捞取，使用已有股票池数据")
 
+    db.close()
+
     # 2. 对每个市场筛选 + 分市场导出 CSV + 分市场发送飞书
     params = get_default_screening_params()
     webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
@@ -365,61 +459,60 @@ def main():
     today_str = date.today().strftime("%Y-%m-%d")
     processed_markets: List[str] = []
     skipped_markets: List[str] = []
+    market_workers = max(1, args.market_workers)
 
-    for market in markets:
-        print(f"\n--- 开始筛选 {market_label(market)} ---")
-        if not has_merged_pool_stocks(db, market):
-            skipped_markets.append(market)
-            print(f"  {market_label(market)} 无可用股票池数据，跳过")
-            continue
+    with ThreadPoolExecutor(max_workers=market_workers) as executor:
+        future_to_market = {
+            executor.submit(
+                run_market_screening_worker,
+                mysql_config,
+                market,
+                timeframe,
+                params,
+                csv_base,
+                today_str,
+                False,
+            ): market
+            for market in markets
+        }
 
-        task_id, passed = run_screening_for_market(
-            mysql_config=mysql_config,
-            market=market,
-            timeframe=timeframe,
-            default_params=params,
-            verbose=False,
-        )
-        if not task_id:
-            skipped_markets.append(market)
-            print(f"  {market_label(market)} 未创建筛选任务，跳过")
-            continue
+        for future in as_completed(future_to_market):
+            market = future_to_market[future]
+            try:
+                result = future.result()
+            except Exception as e:
+                result = MarketScreeningResult(
+                    market=market,
+                    skipped=True,
+                    error=f"{type(e).__name__}: {e}",
+                )
 
-        processed_markets.append(market)
-        print(f"  {market_label(market)}: {len(passed)} 只通过")
+            if result.error:
+                skipped_markets.append(result.market)
+                print(f"✗ {market_label(result.market)} 筛选失败: {result.error}")
+                continue
 
-        # 3. 导出该市场 CSV（含日期，避免天级运行时互相覆盖）
-        csv_path = f"{csv_base}_{today_str}_{market}.csv"
-        csv_paths: List[str] = []
-        if passed:
-            write_screening_csv(passed, csv_path)
-            csv_paths.append(csv_path)
-            print(f"✓ CSV 已导出: {csv_path}")
-            no_etf_path, etf_only_path = write_split_screening_csvs(
-                records=passed,
-                csv_base_path=csv_path,
-                etf_codes=get_etf_codes(db, market),
-            )
-            csv_paths.extend([no_etf_path, etf_only_path])
-            print(f"✓ 非 ETF CSV 已导出: {no_etf_path}")
-            print(f"✓ ETF CSV 已导出: {etf_only_path}")
-        else:
-            print(f"  {market_label(market)} 无满足条件的股票，不生成 CSV")
+            if result.skipped or not result.task_id:
+                skipped_markets.append(result.market)
+                continue
 
-        # 4. 发送该市场飞书消息
-        if not args.no_feishu and webhook_url:
-            summary_lines = [
-                f"【定时筛选】{date.today()} - {market_label(market)}",
-                f"通过: {len(passed)} 只",
-            ]
-            if passed:
-                summary_lines.extend(["CSV 文件:", *csv_paths])
-                send_screening_result(webhook_url, "\n".join(summary_lines), csv_paths)
-            else:
-                send_feishu_text(webhook_url, "\n".join(summary_lines))
-            print(f"✓ 已发送 {market_label(market)} 飞书消息")
+            processed_markets.append(result.market)
 
-    db.close()
+            # 4. 发送该市场飞书消息
+            if not args.no_feishu and webhook_url:
+                summary_lines = [
+                    f"【定时筛选】{date.today()} - {market_label(result.market)}",
+                    f"通过: {len(result.passed)} 只",
+                ]
+                if result.passed:
+                    summary_lines.extend(["CSV 文件:", *result.csv_paths])
+                    sent_ok = send_screening_result(webhook_url, "\n".join(summary_lines), result.csv_paths)
+                else:
+                    sent_ok = send_feishu_text(webhook_url, "\n".join(summary_lines))
+                if sent_ok:
+                    print(f"✓ 已发送 {market_label(result.market)} 飞书消息")
+                else:
+                    print(f"✗ {market_label(result.market)} 飞书消息发送不完整，请检查上方 [Feishu] 日志")
 
     if not args.no_feishu and not webhook_url:
         print("未配置 FEISHU_WEBHOOK_URL，跳过飞书发送")
