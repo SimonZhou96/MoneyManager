@@ -187,3 +187,31 @@ UPDATE screening_rule_chains
 SET expression_json = CAST('{"and":[{"ref":"zuoyi_signal"},{"ref":"ema_breakout"}]}' AS JSON)
 WHERE market = 'HK' AND chain_key = 'default_zuoyi_and_other';
 ```
+
+# Skill Abstraction Guidance
+
+During project conversations, watch for workflows that are reusable enough to
+become a skill or improvements to an existing skill.
+
+If a conversation reveals a repeatable process, domain-specific procedure,
+validation workflow, code-generation pattern, or project convention that would
+help future agents, ask the user whether they want to create a new skill or
+iterate an existing one. Do not create or modify skills silently.
+
+When the user agrees:
+
+1. Summarize the recent relevant conversation:
+   - User goal and trigger phrases.
+   - Files, commands, schemas, APIs, or workflows involved.
+   - Decisions made and constraints discovered.
+   - Validation steps that proved the workflow.
+2. Decide whether this is a new skill or an update to an existing skill.
+3. Prefer project-level skills under `.agents/skills/<skill-name>` unless the
+   user explicitly requests a global skill.
+4. Use the `skill-creator` skill when creating or materially updating a skill.
+5. Keep `SKILL.md` concise and move detailed examples or long checklists into
+   `references/`.
+6. Run the skill validator after changes when possible. If validation is
+   blocked by missing local dependencies, state the blocker and perform a
+   manual structure/content check.
+7. Report the skill path, what changed, and how future agents should use it.
