@@ -36,6 +36,8 @@ class LLMProvider(ABC):
         market: str,
         signals: List[ScreeningSignalRow],
         market_documents: List[SearchDocument],
+        sector_documents: List[SearchDocument],
+        hot_sectors: List[str],
         company_documents: Dict[str, List[SearchDocument]],
     ) -> List[SignalAnalysisResult]:
         """Analyze a batch of screened stocks."""
@@ -56,6 +58,8 @@ class NullLLMProvider(LLMProvider):
         market: str,
         signals: List[ScreeningSignalRow],
         market_documents: List[SearchDocument],
+        sector_documents: List[SearchDocument],
+        hot_sectors: List[str],
         company_documents: Dict[str, List[SearchDocument]],
     ) -> List[SignalAnalysisResult]:
         raise RuntimeError("LLM provider is not configured")
@@ -93,6 +97,8 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         market: str,
         signals: List[ScreeningSignalRow],
         market_documents: List[SearchDocument],
+        sector_documents: List[SearchDocument],
+        hot_sectors: List[str],
         company_documents: Dict[str, List[SearchDocument]],
     ) -> List[SignalAnalysisResult]:
         if requests is None:
@@ -104,7 +110,17 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             "model": self.model,
             "messages": [
                 {"role": "system", "content": self._system_prompt()},
-                {"role": "user", "content": self._user_prompt(market, signals, market_documents, company_documents)},
+                {
+                    "role": "user",
+                    "content": self._user_prompt(
+                        market,
+                        signals,
+                        market_documents,
+                        sector_documents,
+                        hot_sectors,
+                        company_documents,
+                    ),
+                },
             ],
             "temperature": 0.2,
             "response_format": {"type": "json_object"},
@@ -155,9 +171,12 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             "公司事件摘要评估信号可靠性，不能编造事实。输出必须是 JSON object，且只包含 items。"
             "每个 item 必须包含 code、name、analysis_status、reliability_score、confidence_score、"
             "signal_bias、summary、positive_factors、risk_factors、macro_factors、company_events、"
-            "market_hot_news、company_hot_news、news_impact、news_sources、source_urls。"
+            "market_hot_news、company_hot_news、news_impact、news_sources、hot_sectors、"
+            "hot_sector_mark、matched_hot_sectors、hot_sector_relevance、hot_sector_reason、"
+            "hot_sector_sources、source_urls。"
             "reliability_score 和 confidence_score 使用 0 到 100 的数字。signal_bias 使用 bullish、bearish、"
             "neutral、avoid 或 unknown。news_impact 使用 利好、利空、中性、混合、无明显新闻 或 信息不足。"
+            "hot_sector_mark 使用 重点、相关、观察、无明确关联 或 未知。"
             "该结果仅为辅助判断，不构成投资建议。"
         )
 
@@ -166,9 +185,12 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         market: str,
         signals: List[ScreeningSignalRow],
         market_documents: List[SearchDocument],
+        sector_documents: List[SearchDocument],
+        hot_sectors: List[str],
         company_documents: Dict[str, List[SearchDocument]],
     ) -> str:
         market_context_limit = _env_int("SIGNAL_MARKET_CONTEXT_LIMIT", 2)
+        sector_context_limit = _env_int("SIGNAL_SECTOR_CONTEXT_LIMIT", 3)
         company_context_limit = _env_int("SIGNAL_COMPANY_CONTEXT_LIMIT", 2)
         content_chars = _env_int("SIGNAL_SEARCH_CONTENT_CHARS", 300)
         input_payload = {
@@ -177,11 +199,18 @@ class OpenAICompatibleLLMProvider(LLMProvider):
                 "评估这些已经通过技术规则筛选的股票信号可靠性；不要改变筛选结果，只做辅助判断。"
                 "请从 market_context 提炼市场热点新闻，从 company_context 提炼公司热点新闻，"
                 "并判断这些新闻对当前买入/卖出信号是利好、利空、中性、混合、无明显新闻还是信息不足。"
+                "请从 hot_sector_candidates 和 sector_context 识别热点板块，并结合每只股票的 sector/name "
+                "标注热点板块关系；所有股票都要保留，非热点股票也标注为观察、无明确关联或未知。"
             ),
             "signals": [row.to_prompt_dict() for row in signals],
+            "hot_sector_candidates": hot_sectors,
             "market_context": [
                 _document_to_prompt_dict(doc, content_chars)
                 for doc in market_documents[:market_context_limit]
+            ],
+            "sector_context": [
+                _document_to_prompt_dict(doc, content_chars)
+                for doc in sector_documents[:sector_context_limit]
             ],
             "company_context": {
                 row.code: [
@@ -208,6 +237,12 @@ class OpenAICompatibleLLMProvider(LLMProvider):
                         "company_hot_news": ["string"],
                         "news_impact": "利好|利空|中性|混合|无明显新闻|信息不足",
                         "news_sources": ["string"],
+                        "hot_sectors": ["string"],
+                        "hot_sector_mark": "重点|相关|观察|无明确关联|未知",
+                        "matched_hot_sectors": ["string"],
+                        "hot_sector_relevance": "string, 0-100 or label",
+                        "hot_sector_reason": "string",
+                        "hot_sector_sources": ["string"],
                         "source_urls": ["string"],
                     }
                 ]

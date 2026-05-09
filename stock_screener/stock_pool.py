@@ -226,6 +226,58 @@ class StockPoolFetcher:
 
         return result
 
+    def fetch_industry_memberships(self, market: str) -> List[dict]:
+        """
+        获取完整行业板块成分关系。
+
+        Returns:
+            [{"code": "HK.00700", "name": "腾讯", "sector_type": "industry",
+              "sector_code": "...", "sector_name": "互联网", "source": "futu_plate"}, ...]
+        """
+        market = normalize_market(market)
+        if not self.quote_ctx:
+            return []
+
+        try:
+            import futu as ft
+        except Exception:
+            return []
+
+        market_map = {"HK": ft.Market.HK, "US": ft.Market.US, "A": ft.Market.SH}
+        market_enum = market_map.get(market, ft.Market.HK)
+
+        ret, industries = self.quote_ctx.get_plate_list(market_enum, ft.Plate.INDUSTRY)
+        if ret != ft.RET_OK:
+            return []
+
+        result = []
+        for _, industry_row in industries.iterrows():
+            industry_code = industry_row["code"]
+            industry_name = industry_row["plate_name"]
+            if not industry_code or not industry_name:
+                continue
+
+            ret, stocks = self.quote_ctx.get_plate_stock(industry_code)
+            if ret != ft.RET_OK:
+                continue
+
+            for _, stock_row in stocks.iterrows():
+                code = stock_row.get("code")
+                if not code:
+                    continue
+                result.append({
+                    "code": code,
+                    "name": stock_row.get("stock_name") or stock_row.get("name") or code,
+                    "sector_type": "industry",
+                    "sector_code": industry_code,
+                    "sector_name": industry_name,
+                    "industry_code": industry_code,
+                    "industry_name": industry_name,
+                    "source": "futu_plate",
+                })
+
+        return result
+
     def fetch_recent_ipos(
         self, market: str, days: int = 730
     ) -> List[dict]:

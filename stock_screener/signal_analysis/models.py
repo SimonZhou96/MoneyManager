@@ -48,6 +48,10 @@ SIGNAL_BIAS_CRITERIA = (
     "bullish偏看涨；bearish偏看跌；neutral方向不明确；"
     "avoid风险明显建议回避；unknown信息不足"
 )
+HOT_SECTOR_MARK_CRITERIA = (
+    "重点=与热点板块直接匹配；相关=存在产业链/政策/概念关联；"
+    "观察=暂无明确匹配但可跟踪轮动；无明确关联=当前信息看不出关联；未知=信息不足"
+)
 
 
 @dataclass(frozen=True)
@@ -133,6 +137,12 @@ class SignalAnalysisResult:
     company_hot_news: List[str] = field(default_factory=list)
     news_impact: str = ""
     news_sources: List[str] = field(default_factory=list)
+    hot_sectors: List[str] = field(default_factory=list)
+    hot_sector_mark: str = ""
+    matched_hot_sectors: List[str] = field(default_factory=list)
+    hot_sector_relevance: str = ""
+    hot_sector_reason: str = ""
+    hot_sector_sources: List[str] = field(default_factory=list)
     source_urls: List[str] = field(default_factory=list)
     model: str = ""
     raw_response: Any = None
@@ -156,6 +166,12 @@ class SignalAnalysisResult:
             company_hot_news=_list_of_strings(item.get("company_hot_news")),
             news_impact=_string(item.get("news_impact")),
             news_sources=_list_of_strings(item.get("news_sources")),
+            hot_sectors=_list_of_strings(item.get("hot_sectors")),
+            hot_sector_mark=_string(item.get("hot_sector_mark")),
+            matched_hot_sectors=_list_of_strings(item.get("matched_hot_sectors")),
+            hot_sector_relevance=_string(item.get("hot_sector_relevance")),
+            hot_sector_reason=_string(item.get("hot_sector_reason")),
+            hot_sector_sources=_list_of_strings(item.get("hot_sector_sources")),
             source_urls=_list_of_strings(item.get("source_urls")),
             model=model,
             raw_response=item,
@@ -190,6 +206,13 @@ class SignalAnalysisResult:
             "公司热点新闻": "；".join(self.company_hot_news),
             "新闻影响判断": self.news_impact,
             "新闻来源": "；".join(self.news_sources),
+            "AI识别热点板块": "；".join(self.hot_sectors),
+            "热点板块标记": self.hot_sector_mark,
+            "匹配热点板块": "；".join(self.matched_hot_sectors),
+            "热点板块关联度": self.hot_sector_relevance,
+            "热点板块匹配理由": self.hot_sector_reason,
+            "热点板块来源": "；".join(self.hot_sector_sources),
+            "热点板块标记口径": HOT_SECTOR_MARK_CRITERIA,
             "信息来源": "；".join(self.source_urls),
         }
 
@@ -220,6 +243,12 @@ class SignalAnalysisResult:
             "company_hot_news": self.company_hot_news,
             "news_impact": self.news_impact,
             "news_sources": self.news_sources,
+            "hot_sectors": self.hot_sectors,
+            "hot_sector_mark": self.hot_sector_mark,
+            "matched_hot_sectors": self.matched_hot_sectors,
+            "hot_sector_relevance": self.hot_sector_relevance,
+            "hot_sector_reason": self.hot_sector_reason,
+            "hot_sector_sources": self.hot_sector_sources,
             "source_urls": self.source_urls,
             "model": self.model,
             "raw_response": self.raw_response,

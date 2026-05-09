@@ -232,6 +232,32 @@ screening and must never block the original CSV or Feishu delivery path.
   `MarketScreeningResult.csv_paths`; AI artifacts may only be appended.
 - If analysis fails, log a warning and continue. Do not set
   `MarketScreeningResult.error` for AI-analysis failures.
+- End-to-end tests for HK/US/A screening must include the Feishu delivery step
+  unless the user explicitly asks to skip it. Verify `.env` has the required
+  Feishu webhook/app credentials, call `send_screening_result(...)` with the
+  generated CSV paths, and report the upload success/failure log lines.
+
+## API and Model Quota Discipline
+
+- Any change that adds or modifies external API calls, search calls, market data
+  calls, or LLM calls must include a quota-aware call-count estimate before or
+  during implementation.
+- Always simulate or reason through a realistic batch case, for example 100
+  screened stocks in one market, and state the expected number of calls per
+  provider: K-line API, sector API, search API, and LLM.
+- If the projected call count grows linearly per stock, check whether the work
+  can be batched, cached, skipped by configuration, or limited to passed stocks.
+- Prefer batch or shared-context designs when accuracy remains acceptable, for
+  example one market-level search plus batched company searches instead of one
+  search per stock.
+- Company-news search must default to batch-only. Do not reintroduce a default
+  one-Tavily-request-per-stock implementation; if higher quality is needed,
+  make per-stock fallback an explicit opt-in with a call-count estimate.
+- When batching reduces quality, keep the mode configurable and document the
+  tradeoff. Default should favor correctness unless quota pressure is explicit.
+- Best-effort auxiliary features must stay failure-isolated: quota exhaustion,
+  rate limiting, or provider errors must not block original CSV generation or
+  Feishu delivery.
 
 ## Object Model
 
@@ -259,6 +285,8 @@ screening and must never block the original CSV or Feishu delivery path.
   missing, analysis is skipped and no AI artifacts are generated.
 - `LLM_ANALYSIS_BATCH_SIZE`, `LLM_ANALYSIS_TIMEOUT_SEC`, and
   `SIGNAL_SEARCH_MAX_RESULTS` tune batching, request timeout, and search depth.
+- `SIGNAL_COMPANY_SEARCH_BATCH_SIZE` controls how many screened stocks are
+  grouped into one Tavily company-news query. Default is `10`.
 - `SIGNAL_MARKET_CONTEXT_LIMIT`, `SIGNAL_COMPANY_CONTEXT_LIMIT`, and
   `SIGNAL_SEARCH_CONTENT_CHARS` limit how much search text enters each model
   prompt. Defaults are conservative (`2`, `2`, `300`) for low TPM/RPM model
@@ -283,9 +311,45 @@ screening and must never block the original CSV or Feishu delivery path.
   `辅助方向判断`, plus the corresponding rubric columns
   `信号可靠性评分口径`, `模型置信度口径`, `辅助方向判断口径`, and the factor
   columns `关键利好因素`, `关键风险因素`, `宏观/政策因素`, `公司事件`,
-  `市场热点新闻`, `公司热点新闻`, `新闻影响判断`, `新闻来源`, `信息来源`.
+  `市场热点新闻`, `公司热点新闻`, `新闻影响判断`, `新闻来源`,
+  `AI识别热点板块`, `热点板块标记`, `匹配热点板块`, `热点板块关联度`,
+  `热点板块匹配理由`, `热点板块来源`, `热点板块标记口径`, `信息来源`.
+- 热点板块标注是展示增强，不是策略，不得接入
+  `screening_rule_chains` 作为通过/失败条件。标记口径：
+  `重点`=直接匹配热点板块，`相关`=产业链/政策/概念关联，
+  `观察`=暂无直接匹配但可跟踪轮动，`无明确关联`=当前信息看不出关联，
+  `未知`=信息不足。
+- 热点板块来源优先级是：手动配置 > 行情 API 板块热度计算 > 搜索 + LLM
+  归纳。手动热点板块可用 `SIGNAL_MANUAL_HOT_SECTORS_FILE`,
+  `SIGNAL_MANUAL_MARKET_HOT_SECTORS`,
+  `SIGNAL_MANUAL_MARKET_HOT_SECTORS_<MARKET>`,
+  `SIGNAL_MANUAL_HOT_SECTOR_SOURCES`,
+  `SIGNAL_MANUAL_HOT_SECTOR_SOURCES_<MARKET>` 配置。
+  `SIGNAL_ENABLE_API_HOT_SECTORS=0` 可关闭行情 API 热点板块识别。
 - Persistence DDL lives in
   `MoneyManager/stock_screener/sql/002_signal_analysis.sql`; keep it in sync
   with `MarketDatabase.init_signal_analysis_schema`.
 - `screening_signal_analysis` is keyed by `(task_id, market, code)` and stores
   model output for audit, not for screening decisions.
+
+# Stock Sector Enrichment
+
+`MoneyManager/stock_screener` enriches `sector` / `industry` as base data for
+CSV display and AI hot-sector labels. This enrichment must not decide screening
+pass/fail.
+
+- Deployment SQL lives at
+  `MoneyManager/stock_screener/sql/003_sector_memberships.sql`; keep it in sync
+  with `MarketDatabase.init_sector_schema`.
+- `sector_resolver.SectorResolver` is the object-oriented entry point. Provider
+  priority is manual config > database/stored memberships > stock pools > Futu
+  plates > AKShare boards > Yahoo Finance > weak search fallback.
+- Later providers only fill empty fields. Do not overwrite an existing trusted
+  `sector` / `industry` value with search or model output.
+- `scheduled_daily_job.get_merged_pool_stocks` must merge all pool rows for the
+  same code before screening; do not reintroduce first-hit de-duplication,
+  because `best/index/ipo/etf` often lack industry data while another pool may
+  contain it.
+- After screening, `enrich_records_with_sectors` may run external providers only
+  on passed stocks, then backfill `screening_results` and CSV records. Provider
+  failures are warnings only and must not block CSV or Feishu delivery.

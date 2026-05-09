@@ -15,10 +15,12 @@ from typing import Dict, List, Optional, Protocol
 
 from .llm_providers import LLMProvider
 from .hot_news import ManualHotNewsConfig
+from .hot_sectors import AkshareHotSectorProvider, ManualHotSectorConfig
 from .models import (
     AnalysisRunResult,
     AnalysisSettings,
     CONFIDENCE_SCORE_CRITERIA,
+    HOT_SECTOR_MARK_CRITERIA,
     RELIABILITY_SCORE_CRITERIA,
     ScreeningSignalRow,
     SearchDocument,
@@ -44,6 +46,13 @@ AI_CSV_COLUMNS = [
     "公司热点新闻",
     "新闻影响判断",
     "新闻来源",
+    "AI识别热点板块",
+    "热点板块标记",
+    "匹配热点板块",
+    "热点板块关联度",
+    "热点板块匹配理由",
+    "热点板块来源",
+    "热点板块标记口径",
     "信息来源",
 ]
 
@@ -73,12 +82,17 @@ class SignalAnalysisContext:
     llm_provider: LLMProvider
     repository: Optional[SignalAnalysisRepository] = None
     manual_hot_news: ManualHotNewsConfig = field(default_factory=ManualHotNewsConfig)
+    manual_hot_sectors: ManualHotSectorConfig = field(default_factory=ManualHotSectorConfig)
     rows: List[ScreeningSignalRow] = field(default_factory=list)
     csv_fieldnames: List[str] = field(default_factory=list)
     market_query: str = ""
+    sector_query: str = ""
     company_queries: Dict[str, str] = field(default_factory=dict)
     market_documents: List[SearchDocument] = field(default_factory=list)
+    sector_documents: List[SearchDocument] = field(default_factory=list)
     company_documents: Dict[str, List[SearchDocument]] = field(default_factory=dict)
+    hot_sectors: List[str] = field(default_factory=list)
+    hot_sector_sources: List[str] = field(default_factory=list)
     results_by_code: Dict[str, SignalAnalysisResult] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     artifact_paths: List[str] = field(default_factory=list)
@@ -128,6 +142,10 @@ class BuildSearchQueriesStep(AnalysisStep):
             f"{market_name} 股票市场 最新 政策 宏观经济 热点新闻 "
             f"{context.check_date.isoformat()} stock market policy macro news"
         )
+        context.sector_query = (
+            f"{market_name} 股票市场 今日 热点板块 领涨行业 资金流入 "
+            f"{context.check_date.isoformat()} hot sectors leading industries"
+        )
         for row in context.rows:
             context.company_queries[row.code] = (
                 f"{row.code} {row.name} 股票 最新新闻 财报 公司事件 政策 "
@@ -152,16 +170,42 @@ class SearchContextStep(AnalysisStep):
             context.warnings.append(f"市场上下文搜索失败: {type(exc).__name__}: {exc}")
             context.market_documents = []
 
-        for row in context.rows:
-            query = context.company_queries.get(row.code, "")
+        try:
+            context.sector_documents = context.search_provider.search(
+                context.sector_query,
+                context.settings.search_max_results,
+            )
+        except Exception as exc:
+            context.warnings.append(f"热点板块搜索失败: {type(exc).__name__}: {exc}")
+            context.sector_documents = []
+
+        batch_size = _company_search_batch_size()
+        for batch in _chunk_rows(context.rows, batch_size):
             try:
-                context.company_documents[row.code] = context.search_provider.search(
-                    query,
+                batch_documents = context.search_provider.search_companies_batch(
+                    context.market,
+                    batch,
                     context.settings.search_max_results,
                 )
             except Exception as exc:
-                context.warnings.append(f"{row.code} 公司事件搜索失败: {type(exc).__name__}: {exc}")
-                context.company_documents[row.code] = []
+                codes = [row.code for row in batch]
+                context.warnings.append(
+                    f"公司事件批量搜索失败: {type(exc).__name__}: {exc}; codes={','.join(codes)}"
+                )
+                for row in batch:
+                    context.company_documents[row.code] = []
+                continue
+
+            missing_codes = []
+            for row in batch:
+                documents = list((batch_documents or {}).get(row.code, []))
+                context.company_documents[row.code] = documents
+                if not documents:
+                    missing_codes.append(row.code)
+            if missing_codes:
+                context.warnings.append(
+                    f"公司事件批量搜索未匹配到 {len(missing_codes)} 只股票: {','.join(missing_codes)}"
+                )
 
 
 class ApplyManualHotNewsStep(AnalysisStep):
@@ -181,6 +225,44 @@ class ApplyManualHotNewsStep(AnalysisStep):
                 context.company_queries.get(row.code, ""),
             )
             context.warnings.append(f"{row.code} 已使用手动配置的公司热点信息覆盖搜索热点信息")
+
+
+class ResolveHotSectorsStep(AnalysisStep):
+    name = "ResolveHotSectorsStep"
+
+    def run(self, context: SignalAnalysisContext) -> None:
+        manual = context.manual_hot_sectors
+        if manual.hot_sectors:
+            context.hot_sectors = list(manual.hot_sectors)
+            context.hot_sector_sources = list(manual.sources) or ["manual_config"]
+            context.sector_documents = manual.documents(context.sector_query)
+            context.warnings.append("已使用手动配置的热点板块覆盖自动识别结果")
+            return
+
+        if os.getenv("SIGNAL_ENABLE_API_HOT_SECTORS", "1").strip().lower() in {"0", "false", "no", "off"}:
+            return
+
+        limit = max(1, int(os.getenv("SIGNAL_HOT_SECTOR_LIMIT", "10") or "10"))
+        try:
+            sectors = AkshareHotSectorProvider().find_hot_sectors(context.market, limit=limit)
+        except Exception as exc:
+            context.warnings.append(f"行情 API 热点板块识别失败: {type(exc).__name__}: {exc}")
+            sectors = []
+        if not sectors:
+            return
+
+        context.hot_sectors = [item.name for item in sectors]
+        context.hot_sector_sources = [item.source for item in sectors if item.source]
+        context.sector_documents = [
+            SearchDocument(
+                title=f"行情 API 热点板块: {item.name}",
+                url=item.source or "market_api",
+                content=f"{item.name}: 热度分={item.score:.4f}; {item.reason}",
+                score=item.score,
+                query=context.sector_query,
+            )
+            for item in sectors
+        ]
 
 
 class LLMBatchAnalysisStep(AnalysisStep):
@@ -203,6 +285,8 @@ class LLMBatchAnalysisStep(AnalysisStep):
                     market=context.market,
                     signals=batch,
                     market_documents=context.market_documents,
+                    sector_documents=context.sector_documents,
+                    hot_sectors=context.hot_sectors,
                     company_documents=context.company_documents,
                 )
             except Exception as exc:
@@ -254,6 +338,13 @@ class NormalizeAnalysisStep(AnalysisStep):
                     manual_hot_news=context.manual_hot_news,
                     code=row.code,
                 )
+                _fill_hot_sector_fallbacks(
+                    row=row,
+                    result=result,
+                    hot_sectors=context.hot_sectors,
+                    hot_sector_sources=context.hot_sector_sources,
+                    sector_documents=context.sector_documents,
+                )
 
 
 class PersistAnalysisStep(AnalysisStep):
@@ -300,6 +391,7 @@ class SignalAnalysisChain:
             BuildSearchQueriesStep(),
             SearchContextStep(),
             ApplyManualHotNewsStep(),
+            ResolveHotSectorsStep(),
             LLMBatchAnalysisStep(),
             NormalizeAnalysisStep(),
             PersistAnalysisStep(),
@@ -334,6 +426,18 @@ def _derive_artifact_path(csv_path: str, suffix: str) -> str:
     return f"{csv_path}{suffix}"
 
 
+def _company_search_batch_size() -> int:
+    raw = os.getenv("SIGNAL_COMPANY_SEARCH_BATCH_SIZE", "10").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 10
+
+
+def _chunk_rows(rows: List[ScreeningSignalRow], batch_size: int) -> List[List[ScreeningSignalRow]]:
+    return [rows[start:start + batch_size] for start in range(0, len(rows), batch_size)]
+
+
 def _fill_news_fallbacks(
     result: SignalAnalysisResult,
     market_documents: List[SearchDocument],
@@ -366,6 +470,46 @@ def _fill_news_fallbacks(
         result.news_impact = "未明确判断" if (market_documents or company_documents) else "信息不足"
 
 
+def _fill_hot_sector_fallbacks(
+    row: ScreeningSignalRow,
+    result: SignalAnalysisResult,
+    hot_sectors: List[str],
+    hot_sector_sources: List[str],
+    sector_documents: List[SearchDocument],
+) -> None:
+    if hot_sectors and not result.hot_sectors:
+        result.hot_sectors = list(hot_sectors)
+    elif not result.hot_sectors:
+        result.hot_sectors = _documents_to_hot_sectors(sector_documents)
+
+    if hot_sector_sources and not result.hot_sector_sources:
+        result.hot_sector_sources = _dedupe(hot_sector_sources)
+    elif not result.hot_sector_sources:
+        result.hot_sector_sources = _documents_to_urls(sector_documents)
+
+    if result.hot_sector_mark:
+        return
+
+    matched = _match_hot_sectors(row.sector, row.name, result.hot_sectors)
+    if matched:
+        result.hot_sector_mark = "重点"
+        result.matched_hot_sectors = matched
+        result.hot_sector_relevance = "100"
+        result.hot_sector_reason = f"股票所属板块/名称与热点板块直接匹配: {'；'.join(matched)}"
+    elif result.hot_sectors and row.sector:
+        result.hot_sector_mark = "观察"
+        result.hot_sector_relevance = "30"
+        result.hot_sector_reason = "当前所属板块未直接匹配热点板块，但保留观察市场轮动"
+    elif result.hot_sectors:
+        result.hot_sector_mark = "未知"
+        result.hot_sector_relevance = ""
+        result.hot_sector_reason = "股票缺少所属板块，无法稳定判断热点板块归属"
+    else:
+        result.hot_sector_mark = "未知"
+        result.hot_sector_relevance = ""
+        result.hot_sector_reason = "未识别到明确热点板块"
+
+
 def _documents_to_news(documents: List[SearchDocument]) -> List[str]:
     news = []
     for doc in documents[:2]:
@@ -390,6 +534,47 @@ def _documents_to_urls(documents: List[SearchDocument]) -> List[str]:
         seen.add(url)
         urls.append(url)
     return urls
+
+
+def _documents_to_hot_sectors(documents: List[SearchDocument]) -> List[str]:
+    sectors = []
+    for doc in documents[:3]:
+        text = (doc.title or doc.content or "").strip()
+        for sep in ("、", "，", ",", "；", ";", "|"):
+            text = text.replace(sep, "\n")
+        for item in text.split("\n"):
+            item = item.strip()
+            if not item:
+                continue
+            if len(item) > 40:
+                continue
+            if any(keyword in item for keyword in ("热点", "板块", "行业", "概念", "sector", "Sector")):
+                sectors.append(item)
+    return _dedupe(sectors)[:10]
+
+
+def _match_hot_sectors(sector: str, name: str, hot_sectors: List[str]) -> List[str]:
+    haystack = f"{sector or ''} {name or ''}".lower()
+    matches = []
+    for item in hot_sectors:
+        text = (item or "").strip()
+        if not text:
+            continue
+        text_lower = text.lower()
+        if text_lower in haystack or (sector and sector.lower() in text_lower):
+            matches.append(text)
+    return _dedupe(matches)
+
+
+def _dedupe(items: List[str]) -> List[str]:
+    seen = set()
+    result = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
 
 
 def write_analysis_columns_to_csv(
@@ -468,6 +653,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         f"- 信号可靠性评分: {RELIABILITY_SCORE_CRITERIA}",
         f"- 模型置信度: {CONFIDENCE_SCORE_CRITERIA}",
         f"- 辅助方向判断: {SIGNAL_BIAS_CRITERIA}",
+        f"- 热点板块标记: {HOT_SECTOR_MARK_CRITERIA}",
         "",
         "## 评分较高的信号",
     ]
@@ -480,6 +666,14 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         news = "；".join(item.market_hot_news + item.company_hot_news) or "无明确热点新闻摘要"
         impact = item.news_impact or "未明确判断"
         lines.append(f"- `{item.code}`: {impact} | {news}")
+
+    lines.extend(["", "## 热点板块标注"])
+    hot_sector_text = "；".join(context.hot_sectors) if context.hot_sectors else "未识别到明确热点板块"
+    lines.append(f"- 识别热点板块: {hot_sector_text}")
+    for item in ranked[:10]:
+        matched = "；".join(item.matched_hot_sectors) or "无直接匹配"
+        mark = item.hot_sector_mark or "未知"
+        lines.append(f"- `{item.code}` {item.name}: {mark} | {matched} | {item.hot_sector_reason}")
 
     lines.extend(["", "## 风险提示"])
     for item in ranked[:10]:

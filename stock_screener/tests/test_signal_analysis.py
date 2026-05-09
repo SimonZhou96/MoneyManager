@@ -11,13 +11,16 @@ from unittest.mock import patch
 
 from signal_analysis.chain import SignalAnalysisChain, SignalAnalysisContext, write_analysis_columns_to_csv
 from signal_analysis.hot_news import ManualHotNewsConfig
+from signal_analysis.hot_sectors import ManualHotSectorConfig
 from signal_analysis.factories import LLMProviderFactory, SearchProviderFactory
 from signal_analysis.llm_providers import NullLLMProvider, OpenAICompatibleLLMProvider
 from signal_analysis.models import (
     AnalysisSettings,
     CONFIDENCE_SCORE_CRITERIA,
+    HOT_SECTOR_MARK_CRITERIA,
     RELIABILITY_SCORE_CRITERIA,
     SIGNAL_BIAS_CRITERIA,
+    ScreeningSignalRow,
     SearchDocument,
     SignalAnalysisResult,
 )
@@ -30,11 +33,29 @@ class FakeSearchProvider:
 
     def __init__(self, should_fail=False):
         self.should_fail = should_fail
+        self.search_queries = []
+        self.company_batch_calls = []
 
     def search(self, query, max_results):
+        self.search_queries.append(query)
         if self.should_fail:
             raise RuntimeError("search boom")
         return [SearchDocument(title="News", url="https://example.com/news", content="policy context")]
+
+    def search_companies_batch(self, market, rows, max_results):
+        self.company_batch_calls.append([row.code for row in rows])
+        if self.should_fail:
+            raise RuntimeError("search boom")
+        return {
+            row.code: [
+                SearchDocument(
+                    title=f"{row.code} company news",
+                    url=f"https://example.com/{row.code}",
+                    content=f"{row.name} company context",
+                )
+            ]
+            for row in rows
+        }
 
 
 class FakeLLMProvider:
@@ -45,7 +66,7 @@ class FakeLLMProvider:
     def model_name(self):
         return "fake-model"
 
-    def analyze_batch(self, market, signals, market_documents, company_documents):
+    def analyze_batch(self, market, signals, market_documents, sector_documents, hot_sectors, company_documents):
         return [
             SignalAnalysisResult(
                 code=row.code,
@@ -63,6 +84,12 @@ class FakeLLMProvider:
                 news_impact="利好",
                 news_sources=["https://example.com/news"],
                 source_urls=["https://example.com/news"],
+                hot_sectors=hot_sectors or ["Finance"],
+                hot_sector_mark="重点",
+                matched_hot_sectors=["Finance"],
+                hot_sector_relevance="100",
+                hot_sector_reason="所属板块直接匹配热点板块",
+                hot_sector_sources=["manual_config"],
                 model=self.model_name,
             )
             for row in signals
@@ -75,23 +102,24 @@ class ExplodingRepository:
 
 
 class SignalAnalysisTest(unittest.TestCase):
-    def write_csv(self, directory):
+    def write_csv(self, directory, rows=None):
         path = Path(directory) / "screening_result_2026-05-09_HK.csv"
+        rows = rows or [{
+            "股票代码": "HK.00001",
+            "市场": "港股",
+            "名称": "Test HK",
+            "pe": "10",
+            "市值": "1000",
+            "所属板块": "Finance",
+            "满足的条件": "左一战法-看涨|EMA突破",
+        }]
         with open(path, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(
                 f,
                 fieldnames=["股票代码", "市场", "名称", "pe", "市值", "所属板块", "满足的条件"],
             )
             writer.writeheader()
-            writer.writerow({
-                "股票代码": "HK.00001",
-                "市场": "港股",
-                "名称": "Test HK",
-                "pe": "10",
-                "市值": "1000",
-                "所属板块": "Finance",
-                "满足的条件": "左一战法-看涨|EMA突破",
-            })
+            writer.writerows(rows)
         return str(path)
 
     def test_factories_return_null_providers_without_credentials(self):
@@ -126,6 +154,98 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertEqual(docs[0].score, 0.91)
         self.assertEqual(post.call_args.kwargs["json"]["max_results"], 3)
 
+    def test_tavily_provider_assigns_batch_documents_to_matching_stocks(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {
+                    "results": [
+                        {
+                            "title": "HK.00001 earnings update",
+                            "url": "https://example.com/hk-00001",
+                            "content": "Company event for HK.00001",
+                        },
+                        {
+                            "title": "AAPL stock news",
+                            "url": "https://example.com/aapl",
+                            "content": "Apple Inc product launch",
+                        },
+                        {
+                            "title": "Textile Manufacturing rebound",
+                            "url": "https://example.com/bros",
+                            "content": "Bros Eastern Co Ltd latest company event",
+                        },
+                    ]
+                }
+
+        rows = [
+            ScreeningSignalRow(
+                index=0,
+                code="HK.00001",
+                market="HK",
+                market_label="港股",
+                name="Test HK",
+                pe_ratio="",
+                market_cap="",
+                sector="Finance",
+                conditions_met="",
+            ),
+            ScreeningSignalRow(
+                index=1,
+                code="US.AAPL",
+                market="US",
+                market_label="美股",
+                name="Apple Inc",
+                pe_ratio="",
+                market_cap="",
+                sector="Technology",
+                conditions_met="",
+            ),
+            ScreeningSignalRow(
+                index=2,
+                code="SH.601339",
+                market="A",
+                market_label="A股",
+                name="Bros Eastern Co Ltd",
+                pe_ratio="",
+                market_cap="",
+                sector="Consumer Cyclical",
+                conditions_met="",
+            ),
+        ]
+
+        with patch("signal_analysis.search_providers.requests.post", return_value=Response()) as post:
+            provider = TavilySearchProvider(api_key="key", timeout_sec=5)
+            grouped = provider.search_companies_batch("US", rows, 5)
+
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(len(grouped["HK.00001"]), 1)
+        self.assertEqual(len(grouped["US.AAPL"]), 1)
+        self.assertEqual(len(grouped["SH.601339"]), 1)
+        self.assertIn("HK.00001", post.call_args.kwargs["json"]["query"])
+        self.assertIn("US.AAPL", post.call_args.kwargs["json"]["query"])
+
+    def test_null_search_provider_batch_returns_empty_documents_by_code(self):
+        rows = [
+            ScreeningSignalRow(
+                index=0,
+                code="HK.00001",
+                market="HK",
+                market_label="港股",
+                name="Test HK",
+                pe_ratio="",
+                market_cap="",
+                sector="Finance",
+                conditions_met="",
+            )
+        ]
+
+        result = NullSearchProvider().search_companies_batch("HK", rows, 3)
+
+        self.assertEqual(result, {"HK.00001": []})
+
     def test_openai_compatible_provider_parses_items(self):
         class Response:
             status_code = 200
@@ -144,6 +264,9 @@ class SignalAnalysisTest(unittest.TestCase):
                                 '"company_events":["e"],"market_hot_news":["mh"],'
                                 '"company_hot_news":["ch"],"news_impact":"利好",'
                                 '"news_sources":["https://example.com/news"],'
+                                '"hot_sectors":["Finance"],"hot_sector_mark":"重点",'
+                                '"matched_hot_sectors":["Finance"],"hot_sector_relevance":"100",'
+                                '"hot_sector_reason":"直接匹配","hot_sector_sources":["api"],'
                                 '"source_urls":["https://example.com"]}]}'
                             )
                         }
@@ -165,7 +288,7 @@ class SignalAnalysisTest(unittest.TestCase):
                 api_base="https://llm.example.com/v1",
                 timeout_sec=10,
             )
-            results = provider.analyze_batch("HK", signals, [], {})
+            results = provider.analyze_batch("HK", signals, [], [], ["Finance"], {})
 
         self.assertEqual(post.call_args.args[0], "https://llm.example.com/v1/chat/completions")
         self.assertEqual(results[0].code, "HK.00001")
@@ -197,6 +320,7 @@ class SignalAnalysisTest(unittest.TestCase):
             self.assertFalse(Path(csv_path.replace(".csv", "_ai.csv")).exists())
             self.assertTrue(any("搜索失败" in warning for warning in result.warnings))
             self.assertTrue(any("落库失败" in warning for warning in result.warnings))
+            self.assertEqual(context.search_provider.company_batch_calls, [["HK.00001"]])
 
             with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
                 rows = list(csv.DictReader(f))
@@ -210,7 +334,67 @@ class SignalAnalysisTest(unittest.TestCase):
             self.assertEqual(rows[0]["公司热点新闻"], "公司热点")
             self.assertEqual(rows[0]["新闻影响判断"], "利好")
             self.assertEqual(rows[0]["新闻来源"], "https://example.com/news")
+            self.assertEqual(rows[0]["热点板块标记"], "重点")
+            self.assertEqual(rows[0]["热点板块标记口径"], HOT_SECTOR_MARK_CRITERIA)
             self.assertEqual(result.results_by_code["HK.00001"].reliability_score, 82.5)
+
+    def test_chain_batches_company_search_without_per_stock_search_calls(self):
+        rows = []
+        for index in range(23):
+            rows.append({
+                "股票代码": f"HK.{index + 1:05d}",
+                "市场": "港股",
+                "名称": f"Company {index + 1}",
+                "pe": "10",
+                "市值": "1000",
+                "所属板块": "Finance",
+                "满足的条件": "左一战法-看涨|EMA突破",
+            })
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir, rows=rows)
+            provider = FakeSearchProvider()
+            context = SignalAnalysisContext(
+                task_id="task-HK",
+                market="HK",
+                csv_path=csv_path,
+                check_date=date(2026, 5, 9),
+                settings=AnalysisSettings(batch_size=50, search_max_results=2),
+                search_provider=provider,
+                llm_provider=FakeLLMProvider(),
+            )
+
+            with patch.dict(os.environ, {"SIGNAL_COMPANY_SEARCH_BATCH_SIZE": "10", "SIGNAL_ENABLE_API_HOT_SECTORS": "0"}):
+                result = SignalAnalysisChain().run(context)
+
+        self.assertTrue(result.success)
+        self.assertEqual(len(provider.search_queries), 2)
+        self.assertEqual([len(batch) for batch in provider.company_batch_calls], [10, 10, 3])
+        self.assertEqual(len(result.results_by_code), 23)
+        self.assertFalse(any("公司事件批量搜索未匹配" in warning for warning in result.warnings))
+
+    def test_chain_batch_search_failure_does_not_fallback_to_per_stock_search(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            provider = FakeSearchProvider(should_fail=True)
+            context = SignalAnalysisContext(
+                task_id="task-HK",
+                market="HK",
+                csv_path=csv_path,
+                check_date=date(2026, 5, 9),
+                settings=AnalysisSettings(batch_size=20, search_max_results=2),
+                search_provider=provider,
+                llm_provider=FakeLLMProvider(),
+            )
+
+            with patch.dict(os.environ, {"SIGNAL_COMPANY_SEARCH_BATCH_SIZE": "10", "SIGNAL_ENABLE_API_HOT_SECTORS": "0"}):
+                result = SignalAnalysisChain().run(context)
+
+        self.assertTrue(result.success)
+        self.assertEqual(len(provider.search_queries), 2)
+        self.assertEqual(provider.company_batch_calls, [["HK.00001"]])
+        self.assertEqual(context.company_documents["HK.00001"], [])
+        self.assertTrue(any("公司事件批量搜索失败" in warning for warning in result.warnings))
 
     def test_write_analysis_columns_refreshes_existing_ai_columns_in_place(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -229,6 +413,12 @@ class SignalAnalysisTest(unittest.TestCase):
                         company_hot_news=["旧公司新闻"],
                         news_impact="中性",
                         news_sources=["https://example.com/old"],
+                        hot_sectors=["旧热点"],
+                        hot_sector_mark="观察",
+                        matched_hot_sectors=[],
+                        hot_sector_relevance="30",
+                        hot_sector_reason="旧理由",
+                        hot_sector_sources=["old_source"],
                     )
                 },
             )
@@ -246,6 +436,12 @@ class SignalAnalysisTest(unittest.TestCase):
                         company_hot_news=["新公司新闻"],
                         news_impact="利好",
                         news_sources=["https://example.com/new"],
+                        hot_sectors=["新热点"],
+                        hot_sector_mark="重点",
+                        matched_hot_sectors=["新热点"],
+                        hot_sector_relevance="100",
+                        hot_sector_reason="新理由",
+                        hot_sector_sources=["new_source"],
                     )
                 },
             )
@@ -265,6 +461,12 @@ class SignalAnalysisTest(unittest.TestCase):
             self.assertEqual(rows[0]["公司热点新闻"], "新公司新闻")
             self.assertEqual(rows[0]["新闻影响判断"], "利好")
             self.assertEqual(rows[0]["新闻来源"], "https://example.com/new")
+            self.assertEqual(rows[0]["AI识别热点板块"], "新热点")
+            self.assertEqual(rows[0]["热点板块标记"], "重点")
+            self.assertEqual(rows[0]["匹配热点板块"], "新热点")
+            self.assertEqual(rows[0]["热点板块关联度"], "100")
+            self.assertEqual(rows[0]["热点板块匹配理由"], "新理由")
+            self.assertEqual(rows[0]["热点板块来源"], "new_source")
 
     def test_chain_skips_artifacts_when_llm_is_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -318,12 +520,42 @@ class SignalAnalysisTest(unittest.TestCase):
             )
             self.assertTrue(any("手动配置" in warning for warning in result.warnings))
 
+    def test_manual_hot_sectors_override_search_and_are_written_to_csv(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            context = SignalAnalysisContext(
+                task_id="task-HK",
+                market="HK",
+                csv_path=csv_path,
+                check_date=date(2026, 5, 9),
+                settings=AnalysisSettings(batch_size=20, search_max_results=2),
+                search_provider=FakeSearchProvider(),
+                llm_provider=FakeLLMProvider(),
+                manual_hot_sectors=ManualHotSectorConfig(
+                    hot_sectors=["Finance"],
+                    sources=["https://manual.example.com/sector"],
+                ),
+            )
+
+            result = SignalAnalysisChain().run(context)
+
+            self.assertTrue(result.success)
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(rows[0]["AI识别热点板块"], "Finance")
+            self.assertEqual(rows[0]["热点板块标记"], "重点")
+            self.assertEqual(rows[0]["匹配热点板块"], "Finance")
+            self.assertEqual(rows[0]["热点板块来源"], "manual_config")
+            self.assertTrue(any("热点板块" in warning for warning in result.warnings))
+
     def test_signal_analysis_sql_exists(self):
         sql_path = Path(__file__).resolve().parents[1] / "sql" / "002_signal_analysis.sql"
         content = sql_path.read_text(encoding="utf-8")
 
         self.assertIn("CREATE TABLE IF NOT EXISTS screening_signal_analysis", content)
         self.assertIn("uk_signal_analysis_task_market_code", content)
+        self.assertIn("hot_sector_mark", content)
 
 
 if __name__ == "__main__":

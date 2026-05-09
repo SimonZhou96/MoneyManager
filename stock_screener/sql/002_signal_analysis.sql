@@ -18,6 +18,12 @@ CREATE TABLE IF NOT EXISTS screening_signal_analysis (
     risk_factors JSON NULL COMMENT '风险因素',
     macro_factors JSON NULL COMMENT '宏观/政策因素',
     company_events JSON NULL COMMENT '公司事件',
+    hot_sectors JSON NULL COMMENT '识别到的热点板块',
+    hot_sector_mark VARCHAR(32) NULL COMMENT '重点/相关/观察/无明确关联/未知',
+    matched_hot_sectors JSON NULL COMMENT '匹配到的热点板块',
+    hot_sector_relevance VARCHAR(64) NULL COMMENT '热点板块关联度',
+    hot_sector_reason TEXT NULL COMMENT '热点板块匹配理由',
+    hot_sector_sources JSON NULL COMMENT '热点板块来源',
     source_urls JSON NULL COMMENT '信息来源 URL',
     model VARCHAR(128) NULL COMMENT '模型名',
     raw_response JSON NULL COMMENT '模型原始结构化响应',
@@ -31,4 +37,3 @@ CREATE TABLE IF NOT EXISTS screening_signal_analysis (
     KEY idx_signal_analysis_status (analysis_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 COMMENT='选股结果搜索与模型辅助分析';
-

@@ -16,7 +16,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
 
@@ -596,6 +596,31 @@ class MarketDatabase:
         with self.conn.cursor() as cursor:
             cursor.executemany(sql, rows)
 
+    def update_screening_result_sectors(self, task_id: str, market: str, rows: Iterable[dict]):
+        """补写已生成筛选结果的 sector/industry 字段。"""
+        values = []
+        for item in rows:
+            code = str(item.get("code") or "").strip()
+            if not code:
+                continue
+            values.append((
+                item.get("sector"),
+                item.get("industry"),
+                task_id,
+                market,
+                code,
+            ))
+        if not values:
+            return
+        sql = """
+            UPDATE screening_results
+            SET sector=COALESCE(%s, sector),
+                industry=COALESCE(%s, industry)
+            WHERE task_id=%s AND market=%s AND code=%s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.executemany(sql, values)
+
     # ------------------------------------------------------------------
     # watchlist_cache
     # ------------------------------------------------------------------
@@ -913,6 +938,92 @@ class MarketDatabase:
     # Signal analysis
     # ------------------------------------------------------------------
 
+    def init_sector_schema(self):
+        """初始化股票板块成分关系表。"""
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS stock_sector_memberships (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    market VARCHAR(8) NOT NULL,
+                    code VARCHAR(32) NOT NULL,
+                    sector_type VARCHAR(32) NOT NULL,
+                    sector_code VARCHAR(64) NULL,
+                    sector_name VARCHAR(128) NOT NULL,
+                    source VARCHAR(32) NOT NULL,
+                    as_of_date DATE NOT NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                        ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_sector_member (market, code, sector_type, sector_name, source),
+                    KEY idx_sector_member_code (market, code),
+                    KEY idx_sector_member_sector (market, sector_type, sector_name)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+
+    def upsert_stock_sector_memberships(self, rows: Iterable[dict]):
+        """插入或更新股票-板块成分关系。"""
+        values = []
+        for item in rows:
+            market = str(item.get("market") or "").strip()
+            code = str(item.get("code") or "").strip()
+            sector_name = str(item.get("sector_name") or "").strip()
+            if not (market and code and sector_name):
+                continue
+            values.append((
+                market,
+                code,
+                str(item.get("sector_type") or "sector").strip(),
+                item.get("sector_code"),
+                sector_name,
+                str(item.get("source") or "unknown").strip(),
+                item.get("as_of_date") or date.today(),
+            ))
+        if not values:
+            return
+        sql = """
+            INSERT INTO stock_sector_memberships
+                (market, code, sector_type, sector_code, sector_name, source, as_of_date)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                sector_code=VALUES(sector_code),
+                as_of_date=VALUES(as_of_date)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.executemany(sql, values)
+
+    def get_sector_memberships_by_codes(self, market: str, codes: List[str]) -> Dict[str, List[dict]]:
+        """按股票代码查询板块成分关系。"""
+        codes = [str(code).strip() for code in codes if str(code).strip()]
+        if not codes:
+            return {}
+        placeholders = ",".join(["%s"] * len(codes))
+        sql = f"""
+            SELECT code, sector_type, sector_code, sector_name, source, as_of_date
+            FROM stock_sector_memberships
+            WHERE market=%s AND code IN ({placeholders})
+            ORDER BY
+                CASE sector_type WHEN 'industry' THEN 0 WHEN 'sector' THEN 1 ELSE 2 END,
+                as_of_date DESC,
+                id ASC
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, [market] + codes)
+            rows = cursor.fetchall() or []
+        result: Dict[str, List[dict]] = {}
+        for row in rows:
+            result.setdefault(row[0], []).append({
+                "code": row[0],
+                "sector_type": row[1],
+                "sector_code": row[2],
+                "sector_name": row[3],
+                "source": row[4],
+                "as_of_date": str(row[5]) if row[5] else None,
+            })
+        return result
+
     def init_signal_analysis_schema(self):
         """初始化选股信号 AI 辅助分析表。"""
         with self.conn.cursor() as cursor:
@@ -935,6 +1046,12 @@ class MarketDatabase:
                     risk_factors JSON NULL COMMENT '风险因素',
                     macro_factors JSON NULL COMMENT '宏观/政策因素',
                     company_events JSON NULL COMMENT '公司事件',
+                    hot_sectors JSON NULL COMMENT '识别到的热点板块',
+                    hot_sector_mark VARCHAR(32) NULL COMMENT '重点/相关/观察/无明确关联/未知',
+                    matched_hot_sectors JSON NULL COMMENT '匹配到的热点板块',
+                    hot_sector_relevance VARCHAR(64) NULL COMMENT '热点板块关联度',
+                    hot_sector_reason TEXT NULL COMMENT '热点板块匹配理由',
+                    hot_sector_sources JSON NULL COMMENT '热点板块来源',
                     source_urls JSON NULL COMMENT '信息来源 URL',
                     model VARCHAR(128) NULL COMMENT '模型名',
                     raw_response JSON NULL COMMENT '模型原始结构化响应',
@@ -950,6 +1067,22 @@ class MarketDatabase:
                 COMMENT='选股结果搜索与模型辅助分析'
                 """
             )
+            signal_analysis_alters = [
+                ("hot_sectors", "ALTER TABLE screening_signal_analysis ADD COLUMN hot_sectors JSON NULL COMMENT '识别到的热点板块' AFTER company_events"),
+                ("hot_sector_mark", "ALTER TABLE screening_signal_analysis ADD COLUMN hot_sector_mark VARCHAR(32) NULL COMMENT '重点/相关/观察/无明确关联/未知' AFTER hot_sectors"),
+                ("matched_hot_sectors", "ALTER TABLE screening_signal_analysis ADD COLUMN matched_hot_sectors JSON NULL COMMENT '匹配到的热点板块' AFTER hot_sector_mark"),
+                ("hot_sector_relevance", "ALTER TABLE screening_signal_analysis ADD COLUMN hot_sector_relevance VARCHAR(64) NULL COMMENT '热点板块关联度' AFTER matched_hot_sectors"),
+                ("hot_sector_reason", "ALTER TABLE screening_signal_analysis ADD COLUMN hot_sector_reason TEXT NULL COMMENT '热点板块匹配理由' AFTER hot_sector_relevance"),
+                ("hot_sector_sources", "ALTER TABLE screening_signal_analysis ADD COLUMN hot_sector_sources JSON NULL COMMENT '热点板块来源' AFTER hot_sector_reason"),
+            ]
+            for column, alter_sql in signal_analysis_alters:
+                try:
+                    cursor.execute(f"SELECT `{column}` FROM screening_signal_analysis LIMIT 1")
+                except Exception:
+                    try:
+                        cursor.execute(alter_sql)
+                    except Exception:
+                        pass
 
     def upsert_signal_analysis_results(self, results: Iterable[dict]):
         """写入或更新选股信号 AI 辅助分析结果。"""
@@ -976,6 +1109,12 @@ class MarketDatabase:
                 _json_or_none(item.get("risk_factors")),
                 _json_or_none(item.get("macro_factors")),
                 _json_or_none(item.get("company_events")),
+                _json_or_none(item.get("hot_sectors")),
+                item.get("hot_sector_mark"),
+                _json_or_none(item.get("matched_hot_sectors")),
+                item.get("hot_sector_relevance"),
+                item.get("hot_sector_reason"),
+                _json_or_none(item.get("hot_sector_sources")),
                 _json_or_none(item.get("source_urls")),
                 item.get("model"),
                 _json_or_none(item.get("raw_response")),
@@ -989,8 +1128,10 @@ class MarketDatabase:
                 (task_id, market, code, name, check_date, csv_path, analysis_status,
                  reliability_score, confidence_score, signal_bias, summary,
                  positive_factors, risk_factors, macro_factors, company_events,
-                 source_urls, model, raw_response, error_message)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 hot_sectors, hot_sector_mark, matched_hot_sectors, hot_sector_relevance,
+                 hot_sector_reason, hot_sector_sources, source_urls, model, raw_response,
+                 error_message)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
                 name=VALUES(name),
                 check_date=VALUES(check_date),
@@ -1004,6 +1145,12 @@ class MarketDatabase:
                 risk_factors=VALUES(risk_factors),
                 macro_factors=VALUES(macro_factors),
                 company_events=VALUES(company_events),
+                hot_sectors=VALUES(hot_sectors),
+                hot_sector_mark=VALUES(hot_sector_mark),
+                matched_hot_sectors=VALUES(matched_hot_sectors),
+                hot_sector_relevance=VALUES(hot_sector_relevance),
+                hot_sector_reason=VALUES(hot_sector_reason),
+                hot_sector_sources=VALUES(hot_sector_sources),
                 source_urls=VALUES(source_urls),
                 model=VALUES(model),
                 raw_response=VALUES(raw_response),

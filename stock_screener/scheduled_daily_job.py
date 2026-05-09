@@ -24,6 +24,8 @@ cron 示例（每天 18:00 执行，收盘后）:
     ENABLE_LLM_ANALYSIS  是否自动启用搜索+模型辅助分析，默认 1
     TAVILY_API_KEY       搜索 provider key（不配置则跳过联网检索）
     LLM_API_BASE, LLM_API_KEY, LLM_MODEL  OpenAI-compatible 模型配置
+    SECTOR_SYNC_MEMBERSHIPS  是否同步完整行业板块成分，默认 1
+    SECTOR_ENABLE_EXTERNAL_ENRICHMENT  是否对通过股票调用外部板块补齐，默认 1
 """
 
 import argparse
@@ -66,6 +68,12 @@ from market import market_label, normalize_market
 from api.screen_service import get_strategy_condition_labels, run_screening_task
 from signal_analysis.service import env_flag, run_signal_analysis_for_market
 from signal_analysis.chain import write_analysis_columns_to_csv
+from sector_resolver import (
+    SectorInfo,
+    SectorResolver,
+    sector_info_to_membership_rows,
+    sector_info_to_stock_row,
+)
 from timeframe import parse_timeframe
 
 
@@ -95,6 +103,62 @@ def fetch_all_markets_pools(
             fetch_and_save_etf_list(fetcher, db, market)
 
 
+def sync_sector_memberships_for_markets(db: MarketDatabase, fetcher, markets: List[str]) -> None:
+    """Best-effort sync of complete industry memberships from the quote API."""
+    if not env_flag("SECTOR_SYNC_MEMBERSHIPS", True):
+        print("板块成分同步: 已关闭")
+        return
+    if not hasattr(fetcher, "fetch_industry_memberships"):
+        return
+
+    try:
+        db.init_sector_schema()
+    except Exception as exc:
+        print(f"板块成分表初始化失败，跳过同步: {type(exc).__name__}: {exc}")
+        return
+
+    for market in markets:
+        market = normalize_market(market)
+        try:
+            rows = fetcher.fetch_industry_memberships(market)
+        except Exception as exc:
+            print(f"{market_label(market)} 板块成分同步失败: {type(exc).__name__}: {exc}")
+            continue
+        if not rows:
+            print(f"{market_label(market)} 未获取到完整行业板块成分")
+            continue
+        membership_rows = []
+        stock_rows_by_code = {}
+        for item in rows:
+            code = (item.get("code") or "").strip()
+            sector_name = (item.get("sector_name") or item.get("industry_name") or "").strip()
+            if not code or not sector_name:
+                continue
+            membership_rows.append({
+                "market": market,
+                "code": code,
+                "sector_type": item.get("sector_type") or "industry",
+                "sector_code": item.get("sector_code") or item.get("industry_code"),
+                "sector_name": sector_name,
+                "source": item.get("source") or "futu_plate",
+            })
+            stock_rows_by_code.setdefault(code, {
+                "code": code,
+                "name": item.get("name") or code,
+                "sector": sector_name,
+                "sector_code": item.get("sector_code") or item.get("industry_code"),
+                "industry": item.get("industry_name") or sector_name,
+                "industry_code": item.get("industry_code") or item.get("sector_code"),
+                "source": item.get("source") or "futu_plate",
+            })
+        try:
+            db.upsert_stock_sector_memberships(membership_rows)
+            db.upsert_stocks(market, stock_rows_by_code.values(), source="futu_plate")
+            print(f"✓ {market_label(market)} 板块成分已同步: {len(membership_rows)} 条")
+        except Exception as exc:
+            print(f"{market_label(market)} 板块成分写入失败: {type(exc).__name__}: {exc}")
+
+
 # ------------------------------------------------------------------
 # 2. 合并股票池 + 筛选
 # ------------------------------------------------------------------
@@ -102,29 +166,35 @@ def fetch_all_markets_pools(
 
 def get_merged_pool_stocks(db: MarketDatabase, market: str) -> List[dict]:
     """
-    合并指定市场所有股票池类型，按 code 去重。
+    合并指定市场所有股票池类型，按 code 聚合并补齐板块字段。
     返回格式兼容 screen_service 的 watchlist。
     """
     pool_types = ["best", "index", "industry", "ipo", "etf"]
-    seen = set()
-    result = []
+    merged = {}
     for pool_type in pool_types:
         stocks = db.get_stock_pool(market, pool_type, limit=None)
         for s in stocks:
             code = (s.get("code") or "").strip()
-            if not code or code in seen:
+            if not code:
                 continue
-            seen.add(code)
-            # 映射字段: industry_name -> industry
-            result.append({
-                "code": code,
-                "name": s.get("name") or code,
-                "market_cap": s.get("market_cap"),
-                "pe_ratio": s.get("pe_ratio"),
-                "industry": s.get("industry_name"),
-                "sector": s.get("industry_name"),  # 股票池无 sector，用 industry 代替
-            })
-    return result
+            current = merged.setdefault(code, {"code": code})
+            current["name"] = current.get("name") or s.get("name") or code
+            current["market_cap"] = current.get("market_cap") or s.get("market_cap")
+            current["pe_ratio"] = current.get("pe_ratio") or s.get("pe_ratio")
+
+            industry = s.get("industry_name")
+            if industry:
+                current["industry"] = current.get("industry") or industry
+                current["sector"] = current.get("sector") or industry
+
+            if pool_type == "etf":
+                current["industry"] = current.get("industry") or "ETF"
+                current["sector"] = current.get("sector") or "ETF"
+
+    resolver = SectorResolver.default(db=db, include_external=False)
+    sector_map = resolver.resolve(market, list(merged.keys()))
+    _apply_sector_info_to_records(list(merged.values()), sector_map)
+    return list(merged.values())
 
 
 def has_merged_pool_stocks(db: MarketDatabase, market: str) -> bool:
@@ -148,6 +218,78 @@ def get_market_etf_codes(mysql_config: MySqlConfig, market: str) -> set[str]:
         return get_etf_codes(db, market)
     finally:
         db.close()
+
+
+def _apply_sector_info_to_records(records: List[dict], sector_map: dict[str, SectorInfo]) -> List[dict]:
+    """Fill missing sector/industry fields on records in place."""
+    for record in records:
+        code = (record.get("code") or "").strip()
+        info = sector_map.get(code)
+        if not info:
+            continue
+        sector = info.sector or info.industry
+        industry = info.industry or info.sector
+        if sector and not record.get("sector"):
+            record["sector"] = sector
+        if industry and not record.get("industry"):
+            record["industry"] = industry
+        if info.source:
+            record["sector_source"] = info.source
+    return records
+
+
+def enrich_records_with_sectors(
+    mysql_config: MySqlConfig,
+    task_id: str,
+    market: str,
+    records: List[dict],
+) -> List[dict]:
+    """
+    Best-effort sector enrichment for passed records.
+
+    External providers are applied only to the passed list to avoid slowing down
+    the full screening universe. Failures here must not affect CSV/Feishu.
+    """
+    if not records:
+        return records
+
+    db = MarketDatabase(mysql_config)
+    try:
+        try:
+            db.init_sector_schema()
+        except Exception:
+            pass
+        resolver = SectorResolver.default(
+            db=db,
+            include_external=env_flag("SECTOR_ENABLE_EXTERNAL_ENRICHMENT", True),
+        )
+        sector_map = resolver.resolve(market, [(record.get("code") or "").strip() for record in records])
+        _apply_sector_info_to_records(records, sector_map)
+
+        update_rows = []
+        membership_rows = []
+        stock_rows = []
+        name_by_code = {record.get("code"): record.get("name") for record in records}
+        for code, info in sector_map.items():
+            sector = info.sector or info.industry
+            industry = info.industry or info.sector
+            if not (sector or industry):
+                continue
+            update_rows.append({"code": code, "sector": sector, "industry": industry})
+            membership_rows.extend(sector_info_to_membership_rows(market, info))
+            stock_rows.append(sector_info_to_stock_row(info, name=name_by_code.get(code) or code))
+
+        if update_rows:
+            db.update_screening_result_sectors(task_id, market, update_rows)
+        if membership_rows:
+            db.upsert_stock_sector_memberships(membership_rows)
+        if stock_rows:
+            db.upsert_stocks(market, stock_rows)
+    except Exception as exc:
+        print(f"[板块补齐] {market_label(market)} 失败但不影响 CSV/飞书发送: {type(exc).__name__}: {exc}")
+    finally:
+        db.close()
+    return records
 
 
 def run_screening_for_market(
@@ -234,6 +376,7 @@ def run_screening_for_market(
             "pe_ratio": pe_ratio,
             "conditions_met": "|".join(conditions) if conditions else "",
         })
+    enrich_records_with_sectors(mysql_config, task_id, market, passed)
     return task_id, passed
 
 
@@ -472,6 +615,7 @@ def main():
             quote_ctx = ft.OpenQuoteContext(host=args.futu_host, port=args.futu_port)
             fetcher = StockPoolFetcher(quote_ctx=quote_ctx, db=db)
             fetch_all_markets_pools(db, fetcher, markets, pools)
+            sync_sector_memberships_for_markets(db, fetcher, markets)
             quote_ctx.close()
         except Exception as e:
             fetch_failed = True

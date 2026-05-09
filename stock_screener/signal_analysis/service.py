@@ -14,6 +14,7 @@ from db import MarketDatabase, MySqlConfig
 from .chain import SignalAnalysisChain, SignalAnalysisContext
 from .factories import LLMProviderFactory, SearchProviderFactory
 from .hot_news import ManualHotNewsConfig
+from .hot_sectors import ManualHotSectorConfig
 from .models import AnalysisRunResult, AnalysisSettings
 
 
@@ -90,5 +91,6 @@ def run_signal_analysis_for_market(
         llm_provider=llm_provider,
         repository=MySqlSignalAnalysisRepository(mysql_config),
         manual_hot_news=ManualHotNewsConfig.from_env(market),
+        manual_hot_sectors=ManualHotSectorConfig.from_env(market),
     )
     return SignalAnalysisChain().run(context)
