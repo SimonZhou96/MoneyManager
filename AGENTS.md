@@ -265,11 +265,16 @@ screening and must never block the original CSV or Feishu delivery path.
   Use `TavilySearchProvider` for Tavily and `NullSearchProvider` when no search
   key is configured.
 - `signal_analysis.llm_providers.LLMProvider` is the model interface. Use
-  `OpenAICompatibleLLMProvider` for `/v1/chat/completions` compatible services
-  and `NullLLMProvider` when model credentials are missing.
+  `OpenAICompatibleLLMProvider` for `/v1/chat/completions` compatible services,
+  `CodexResponsesLLMProvider` for Codex models through `/v1/responses`, and
+  `DeepSeekLLMProvider` for DeepSeek Chat Completions. Use `NullLLMProvider`
+  when model credentials are missing.
 - `signal_analysis.factories.SearchProviderFactory` and
   `LLMProviderFactory` are the only places that should read provider-specific
   environment variables.
+- Switch model providers only through `LLMProviderFactory` and environment
+  variables. Do not add provider-specific branches inside
+  `SignalAnalysisChain`.
 - `signal_analysis.chain.SignalAnalysisChain` runs ordered `AnalysisStep`
   objects. Add new behavior by adding a small step instead of expanding the
   scheduler or service.
@@ -282,7 +287,20 @@ screening and must never block the original CSV or Feishu delivery path.
   analysis if an LLM is configured.
 - `LLM_API_BASE` defaults to `https://api.openai.com`.
 - `LLM_API_KEY` and `LLM_MODEL` are required for model analysis. If either is
-  missing, analysis is skipped and no AI artifacts are generated.
+  missing for the default provider, analysis is skipped and no AI artifacts are
+  generated.
+- `LLM_PROVIDER=openai_compatible|codex_responses|deepseek` selects the
+  analysis model provider. The default is `openai_compatible`.
+- Codex Responses provider variables are `CODEX_API_BASE`,
+  `CODEX_API_KEY`, `CODEX_LLM_MODEL`, and `CODEX_REASONING_EFFORT`.
+  `CODEX_API_KEY` falls back to `LLM_API_KEY`; `CODEX_LLM_MODEL` defaults to
+  `gpt-5.2-codex`.
+- DeepSeek provider variables are `DEEPSEEK_API_BASE`, `DEEPSEEK_API_KEY`,
+  and `DEEPSEEK_LLM_MODEL`. `DEEPSEEK_API_BASE` defaults to
+  `https://api.deepseek.com`, `DEEPSEEK_API_KEY` falls back to `LLM_API_KEY`,
+  and `DEEPSEEK_LLM_MODEL` defaults to `deepseek-v4-flash`. DeepSeek JSON
+  output must keep `response_format={"type":"json_object"}` and the shared
+  prompt/schema JSON instructions.
 - `LLM_ANALYSIS_BATCH_SIZE`, `LLM_ANALYSIS_TIMEOUT_SEC`, and
   `SIGNAL_SEARCH_MAX_RESULTS` tune batching, request timeout, and search depth.
 - `SIGNAL_COMPANY_SEARCH_BATCH_SIZE` controls how many screened stocks are

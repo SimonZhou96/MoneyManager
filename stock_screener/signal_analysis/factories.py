@@ -7,7 +7,13 @@ from __future__ import annotations
 
 import os
 
-from .llm_providers import LLMProvider, NullLLMProvider, OpenAICompatibleLLMProvider
+from .llm_providers import (
+    CodexResponsesLLMProvider,
+    DeepSeekLLMProvider,
+    LLMProvider,
+    NullLLMProvider,
+    OpenAICompatibleLLMProvider,
+)
 from .models import AnalysisSettings
 from .search_providers import NullSearchProvider, SearchProvider, TavilySearchProvider
 
@@ -36,10 +42,19 @@ class SearchProviderFactory:
 
 
 class LLMProviderFactory:
-    """Create an OpenAI-compatible LLM provider from environment configuration."""
+    """Create an LLM provider from environment configuration."""
 
     @staticmethod
     def from_env(settings: AnalysisSettings) -> LLMProvider:
+        provider = os.getenv("LLM_PROVIDER", "openai_compatible").strip().lower() or "openai_compatible"
+        if provider == "codex_responses":
+            return LLMProviderFactory._codex_responses_from_env(settings)
+        if provider == "deepseek":
+            return LLMProviderFactory._deepseek_from_env(settings)
+        return LLMProviderFactory._openai_compatible_from_env(settings)
+
+    @staticmethod
+    def _openai_compatible_from_env(settings: AnalysisSettings) -> LLMProvider:
         api_key = os.getenv("LLM_API_KEY", "").strip()
         model = os.getenv("LLM_MODEL", "").strip()
         if not api_key or not model:
@@ -52,3 +67,36 @@ class LLMProviderFactory:
             timeout_sec=settings.timeout_sec,
         )
 
+    @staticmethod
+    def _codex_responses_from_env(settings: AnalysisSettings) -> LLMProvider:
+        api_key = os.getenv("CODEX_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
+        model = os.getenv("CODEX_LLM_MODEL", "gpt-5.2-codex").strip()
+        if not api_key or not model:
+            return NullLLMProvider()
+        api_base = os.getenv("CODEX_API_BASE", "https://api.openai.com").strip()
+        reasoning_effort = os.getenv("CODEX_REASONING_EFFORT", "medium").strip()
+        return CodexResponsesLLMProvider(
+            api_key=api_key,
+            model=model,
+            api_base=api_base,
+            timeout_sec=settings.timeout_sec,
+            reasoning_effort=reasoning_effort,
+        )
+
+    @staticmethod
+    def _deepseek_from_env(settings: AnalysisSettings) -> LLMProvider:
+        api_key = os.getenv("DEEPSEEK_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
+        model = (
+            os.getenv("DEEPSEEK_LLM_MODEL", "").strip()
+            or os.getenv("DEEPSEEK_MODEL", "").strip()
+            or "deepseek-v4-flash"
+        )
+        if not api_key or not model:
+            return NullLLMProvider()
+        api_base = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").strip()
+        return DeepSeekLLMProvider(
+            api_key=api_key,
+            model=model,
+            api_base=api_base,
+            timeout_sec=settings.timeout_sec,
+        )

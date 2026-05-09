@@ -23,7 +23,10 @@ cron 示例（每天 18:00 执行，收盘后）:
     FEISHU_WEBHOOK_URL  飞书机器人 Webhook 地址（不配置则跳过飞书发送）
     ENABLE_LLM_ANALYSIS  是否自动启用搜索+模型辅助分析，默认 1
     TAVILY_API_KEY       搜索 provider key（不配置则跳过联网检索）
+    LLM_PROVIDER=openai_compatible|codex_responses|deepseek  AI 分析模型 provider
     LLM_API_BASE, LLM_API_KEY, LLM_MODEL  OpenAI-compatible 模型配置
+    CODEX_API_BASE, CODEX_API_KEY, CODEX_LLM_MODEL, CODEX_REASONING_EFFORT  Codex Responses 配置
+    DEEPSEEK_API_BASE, DEEPSEEK_API_KEY, DEEPSEEK_LLM_MODEL  DeepSeek Chat Completions 配置
     SECTOR_SYNC_MEMBERSHIPS  是否同步完整行业板块成分，默认 1
     SECTOR_ENABLE_EXTERNAL_ENRICHMENT  是否对通过股票调用外部板块补齐，默认 1
 """

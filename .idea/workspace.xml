@@ -7,14 +7,10 @@
     <list default="true" id="0bf7b9ee-c261-4d26-a715-0c09e20aab7a" name="更改" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/AGENTS.md" beforeDir="false" afterPath="$PROJECT_DIR$/AGENTS.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/db.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/db.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/scheduled_daily_job.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/scheduled_daily_job.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/chain.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/chain.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/factories.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/factories.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/llm_providers.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/llm_providers.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/models.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/service.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/service.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/sql/002_signal_analysis.sql" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/sql/002_signal_analysis.sql" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/stock_pool.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/stock_pool.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/tests/test_signal_analysis.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/tests/test_signal_analysis.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />

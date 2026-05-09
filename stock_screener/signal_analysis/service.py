@@ -76,7 +76,7 @@ def run_signal_analysis_for_market(
     if not llm_provider.is_available:
         return AnalysisRunResult(
             success=False,
-            warnings=["未配置 LLM_API_KEY 或 LLM_MODEL，跳过 AI 辅助分析"],
+            warnings=["未配置可用 LLM provider，跳过 AI 辅助分析"],
             skipped_reason="未配置 LLM provider",
         )
 

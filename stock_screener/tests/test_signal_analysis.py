@@ -13,7 +13,12 @@ from signal_analysis.chain import SignalAnalysisChain, SignalAnalysisContext, wr
 from signal_analysis.hot_news import ManualHotNewsConfig
 from signal_analysis.hot_sectors import ManualHotSectorConfig
 from signal_analysis.factories import LLMProviderFactory, SearchProviderFactory
-from signal_analysis.llm_providers import NullLLMProvider, OpenAICompatibleLLMProvider
+from signal_analysis.llm_providers import (
+    CodexResponsesLLMProvider,
+    DeepSeekLLMProvider,
+    NullLLMProvider,
+    OpenAICompatibleLLMProvider,
+)
 from signal_analysis.models import (
     AnalysisSettings,
     CONFIDENCE_SCORE_CRITERIA,
@@ -127,6 +132,46 @@ class SignalAnalysisTest(unittest.TestCase):
             settings = AnalysisSettings()
             self.assertIsInstance(SearchProviderFactory.from_env(settings), NullSearchProvider)
             self.assertIsInstance(LLMProviderFactory.from_env(settings), NullLLMProvider)
+
+    def test_factory_selects_default_openai_compatible_provider(self):
+        with patch.dict(os.environ, {"LLM_API_KEY": "key", "LLM_MODEL": "model-x"}, clear=True):
+            provider = LLMProviderFactory.from_env(AnalysisSettings())
+
+        self.assertIsInstance(provider, OpenAICompatibleLLMProvider)
+        self.assertEqual(provider.model_name, "model-x")
+
+    def test_factory_selects_codex_responses_provider_with_llm_key_fallback(self):
+        with patch.dict(
+            os.environ,
+            {
+                "LLM_PROVIDER": "codex_responses",
+                "LLM_API_KEY": "fallback-key",
+                "CODEX_LLM_MODEL": "gpt-5.2-codex",
+                "CODEX_REASONING_EFFORT": "high",
+            },
+            clear=True,
+        ):
+            provider = LLMProviderFactory.from_env(AnalysisSettings(timeout_sec=7))
+
+        self.assertIsInstance(provider, CodexResponsesLLMProvider)
+        self.assertEqual(provider.model_name, "gpt-5.2-codex")
+        self.assertEqual(provider.reasoning_effort, "high")
+
+    def test_factory_selects_deepseek_provider_with_llm_key_fallback(self):
+        with patch.dict(
+            os.environ,
+            {
+                "LLM_PROVIDER": "deepseek",
+                "LLM_API_KEY": "fallback-key",
+                "DEEPSEEK_LLM_MODEL": "deepseek-v4-pro",
+            },
+            clear=True,
+        ):
+            provider = LLMProviderFactory.from_env(AnalysisSettings(timeout_sec=7))
+
+        self.assertIsInstance(provider, DeepSeekLLMProvider)
+        self.assertEqual(provider.model_name, "deepseek-v4-pro")
+        self.assertEqual(provider.timeout_sec, 7)
 
     def test_tavily_provider_parses_search_results(self):
         class Response:
@@ -296,6 +341,203 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertEqual(results[0].market_hot_news, ["mh"])
         self.assertEqual(results[0].company_hot_news, ["ch"])
         self.assertEqual(results[0].news_impact, "利好")
+
+    def test_deepseek_provider_parses_chat_completions_json(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {
+                    "choices": [{
+                        "message": {
+                            "content": (
+                                '{"items":[{"code":"HK.00001","name":"Test HK",'
+                                '"analysis_status":"success","reliability_score":86,'
+                                '"confidence_score":75,"signal_bias":"bullish",'
+                                '"summary":"ok","positive_factors":["p"],'
+                                '"risk_factors":["r"],"macro_factors":["m"],'
+                                '"company_events":["e"],"market_hot_news":["mh"],'
+                                '"company_hot_news":["ch"],"news_impact":"利好",'
+                                '"news_sources":["https://example.com/news"],'
+                                '"hot_sectors":["Finance"],"hot_sector_mark":"重点",'
+                                '"matched_hot_sectors":["Finance"],"hot_sector_relevance":"100",'
+                                '"hot_sector_reason":"直接匹配","hot_sector_sources":["api"],'
+                                '"source_urls":["https://example.com"]}]}'
+                            )
+                        }
+                    }]
+                }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+                row = next(csv.DictReader(f))
+
+        signals = [ScreeningSignalRow.from_csv_row(row, 0, "HK")]
+
+        with patch("signal_analysis.llm_providers.requests.post", return_value=Response()) as post:
+            provider = DeepSeekLLMProvider(
+                api_key="key",
+                model="deepseek-v4-flash",
+                api_base="https://api.deepseek.com",
+                timeout_sec=10,
+            )
+            results = provider.analyze_batch("HK", signals, [], [], ["Finance"], {})
+
+        self.assertEqual(post.call_args.args[0], "https://api.deepseek.com/chat/completions")
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["model"], "deepseek-v4-flash")
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+        self.assertIn("JSON object", payload["messages"][0]["content"])
+        self.assertEqual(results[0].code, "HK.00001")
+        self.assertEqual(results[0].reliability_score, 86.0)
+
+    def test_codex_responses_provider_parses_output_text_json(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {
+                    "output_text": (
+                        '{"items":[{"code":"HK.00001","name":"Test HK",'
+                        '"analysis_status":"success","reliability_score":88,'
+                        '"confidence_score":79,"signal_bias":"bullish",'
+                        '"summary":"ok","positive_factors":["p"],'
+                        '"risk_factors":["r"],"macro_factors":["m"],'
+                        '"company_events":["e"],"market_hot_news":["mh"],'
+                        '"company_hot_news":["ch"],"news_impact":"利好",'
+                        '"news_sources":["https://example.com/news"],'
+                        '"hot_sectors":["Finance"],"hot_sector_mark":"重点",'
+                        '"matched_hot_sectors":["Finance"],"hot_sector_relevance":"100",'
+                        '"hot_sector_reason":"直接匹配","hot_sector_sources":["api"],'
+                        '"source_urls":["https://example.com"]}]}'
+                    )
+                }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+                row = next(csv.DictReader(f))
+        signals = [ScreeningSignalRow.from_csv_row(row, 0, "HK")]
+
+        with patch("signal_analysis.llm_providers.requests.post", return_value=Response()) as post:
+            provider = CodexResponsesLLMProvider(
+                api_key="key",
+                model="gpt-5.2-codex",
+                api_base="https://api.openai.com/v1",
+                timeout_sec=10,
+                reasoning_effort="high",
+            )
+            results = provider.analyze_batch("HK", signals, [], [], ["Finance"], {})
+
+        self.assertEqual(post.call_args.args[0], "https://api.openai.com/v1/responses")
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["reasoning"], {"effort": "high"})
+        self.assertEqual(payload["text"]["format"]["type"], "json_schema")
+        self.assertEqual(results[0].code, "HK.00001")
+        self.assertEqual(results[0].reliability_score, 88.0)
+
+    def test_codex_responses_provider_parses_output_content_text(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {
+                    "output": [{
+                        "type": "message",
+                        "content": [{
+                            "type": "output_text",
+                            "text": (
+                                '{"items":[{"code":"HK.00001","name":"Test HK",'
+                                '"analysis_status":"success","reliability_score":77,'
+                                '"confidence_score":66,"signal_bias":"neutral",'
+                                '"summary":"ok","positive_factors":[],"risk_factors":[],'
+                                '"macro_factors":[],"company_events":[],"market_hot_news":[],'
+                                '"company_hot_news":[],"news_impact":"中性","news_sources":[],'
+                                '"hot_sectors":[],"hot_sector_mark":"观察","matched_hot_sectors":[],'
+                                '"hot_sector_relevance":"30","hot_sector_reason":"观察",'
+                                '"hot_sector_sources":[],"source_urls":[]}]}'
+                            ),
+                        }],
+                    }]
+                }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+                row = next(csv.DictReader(f))
+        signals = [ScreeningSignalRow.from_csv_row(row, 0, "HK")]
+
+        with patch("signal_analysis.llm_providers.requests.post", return_value=Response()):
+            provider = CodexResponsesLLMProvider(api_key="key")
+            results = provider.analyze_batch("HK", signals, [], [], [], {})
+
+        self.assertEqual(results[0].code, "HK.00001")
+        self.assertEqual(results[0].reliability_score, 77.0)
+
+    def test_codex_responses_provider_retries_json_schema_as_json_object(self):
+        class BadSchemaResponse:
+            status_code = 400
+            text = "unsupported json_schema in text.format"
+
+            def json(self):
+                return {}
+
+        class OkResponse:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {
+                    "output_text": (
+                        '{"items":[{"code":"HK.00001","name":"Test HK",'
+                        '"analysis_status":"success","reliability_score":70,'
+                        '"confidence_score":61,"signal_bias":"neutral",'
+                        '"summary":"ok","positive_factors":[],"risk_factors":[],'
+                        '"macro_factors":[],"company_events":[],"market_hot_news":[],'
+                        '"company_hot_news":[],"news_impact":"中性","news_sources":[],'
+                        '"hot_sectors":[],"hot_sector_mark":"观察","matched_hot_sectors":[],'
+                        '"hot_sector_relevance":"30","hot_sector_reason":"观察",'
+                        '"hot_sector_sources":[],"source_urls":[]}]}'
+                    )
+                }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+                row = next(csv.DictReader(f))
+        signals = [ScreeningSignalRow.from_csv_row(row, 0, "HK")]
+
+        with patch("signal_analysis.llm_providers.requests.post", side_effect=[BadSchemaResponse(), OkResponse()]) as post:
+            provider = CodexResponsesLLMProvider(api_key="key")
+            results = provider.analyze_batch("HK", signals, [], [], [], {})
+
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.call_args_list[0].kwargs["json"]["text"]["format"]["type"], "json_schema")
+        self.assertEqual(post.call_args_list[1].kwargs["json"]["text"]["format"]["type"], "json_object")
+        self.assertEqual(results[0].reliability_score, 70.0)
+
+    def test_codex_responses_provider_raises_on_rate_limit_or_malformed_json(self):
+        class RateLimitResponse:
+            status_code = 429
+            text = "rate limit"
+
+            def json(self):
+                return {}
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+                row = next(csv.DictReader(f))
+        signals = [ScreeningSignalRow.from_csv_row(row, 0, "HK")]
+
+        with patch("signal_analysis.llm_providers.requests.post", return_value=RateLimitResponse()):
+            provider = CodexResponsesLLMProvider(api_key="key")
+            with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
+                provider.analyze_batch("HK", signals, [], [], [], {})
 
     def test_chain_writes_artifacts_and_keeps_going_when_search_and_db_fail(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

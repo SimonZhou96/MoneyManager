@@ -65,110 +65,14 @@ class NullLLMProvider(LLMProvider):
         raise RuntimeError("LLM provider is not configured")
 
 
-class OpenAICompatibleLLMProvider(LLMProvider):
-    """OpenAI Chat Completions compatible implementation."""
+class SignalAnalysisPromptBuilder:
+    """Build shared prompts and schemas for signal-analysis LLM providers."""
 
-    name = "openai_compatible"
-
-    def __init__(
-        self,
-        api_key: str,
-        model: str,
-        api_base: str = "https://api.openai.com",
-        timeout_sec: int = 120,
-    ):
-        self.api_key = api_key
-        self.model = model
-        self.api_base = api_base.rstrip("/")
-        self.timeout_sec = int(timeout_sec)
-
-    @property
-    def model_name(self) -> str:
-        return self.model
-
-    @property
-    def chat_completions_url(self) -> str:
-        if self.api_base.endswith("/v1"):
-            return f"{self.api_base}/chat/completions"
-        return f"{self.api_base}/v1/chat/completions"
-
-    def analyze_batch(
-        self,
-        market: str,
-        signals: List[ScreeningSignalRow],
-        market_documents: List[SearchDocument],
-        sector_documents: List[SearchDocument],
-        hot_sectors: List[str],
-        company_documents: Dict[str, List[SearchDocument]],
-    ) -> List[SignalAnalysisResult]:
-        if requests is None:
-            raise RuntimeError("requests is not installed")
-        if not signals:
-            return []
-
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": self._system_prompt()},
-                {
-                    "role": "user",
-                    "content": self._user_prompt(
-                        market,
-                        signals,
-                        market_documents,
-                        sector_documents,
-                        hot_sectors,
-                        company_documents,
-                    ),
-                },
-            ],
-            "temperature": 0.2,
-            "response_format": {"type": "json_object"},
-        }
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        response = requests.post(
-            self.chat_completions_url,
-            headers=headers,
-            json=payload,
-            timeout=self.timeout_sec,
-        )
-        if response.status_code >= 400 and "response_format" in payload:
-            payload = dict(payload)
-            payload.pop("response_format", None)
-            response = requests.post(
-                self.chat_completions_url,
-                headers=headers,
-                json=payload,
-                timeout=self.timeout_sec,
-            )
-        if response.status_code >= 400:
-            raise RuntimeError(f"LLM analysis failed: HTTP {response.status_code} {response.text[:300]}")
-
-        data = response.json() or {}
-        content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
-        parsed = _parse_json_content(content)
-        items = parsed.get("items") if isinstance(parsed, dict) else None
-        if not isinstance(items, list):
-            raise RuntimeError("LLM response JSON must contain an items list")
-
-        results: List[SignalAnalysisResult] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            result = SignalAnalysisResult.from_llm_item(item, model=self.model)
-            if result.code:
-                results.append(result)
-        if not results:
-            raise RuntimeError("LLM response did not contain any valid stock analysis items")
-        return results
-
-    def _system_prompt(self) -> str:
+    @staticmethod
+    def system_prompt() -> str:
         return (
             "你是一个股票筛选信号的辅助评估器。你只能根据输入的选股信号、宏观/政策/新闻摘要、"
-            "公司事件摘要评估信号可靠性，不能编造事实。输出必须是 JSON object，且只包含 items。"
+            "公司事件摘要评估信号可靠性，不能编造事实。输出必须是 JSON object（json 对象），且只包含 items。"
             "每个 item 必须包含 code、name、analysis_status、reliability_score、confidence_score、"
             "signal_bias、summary、positive_factors、risk_factors、macro_factors、company_events、"
             "market_hot_news、company_hot_news、news_impact、news_sources、hot_sectors、"
@@ -180,8 +84,8 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             "该结果仅为辅助判断，不构成投资建议。"
         )
 
-    def _user_prompt(
-        self,
+    @staticmethod
+    def user_prompt(
         market: str,
         signals: List[ScreeningSignalRow],
         market_documents: List[SearchDocument],
@@ -250,6 +154,292 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         }
         return json.dumps(input_payload, ensure_ascii=False)
 
+    @staticmethod
+    def json_schema() -> Dict[str, object]:
+        string_array = {"type": "array", "items": {"type": "string"}}
+        item_properties = {
+            "code": {"type": "string"},
+            "name": {"type": "string"},
+            "analysis_status": {"type": "string"},
+            "reliability_score": {"type": "number"},
+            "confidence_score": {"type": "number"},
+            "signal_bias": {"type": "string"},
+            "summary": {"type": "string"},
+            "positive_factors": string_array,
+            "risk_factors": string_array,
+            "macro_factors": string_array,
+            "company_events": string_array,
+            "market_hot_news": string_array,
+            "company_hot_news": string_array,
+            "news_impact": {"type": "string"},
+            "news_sources": string_array,
+            "hot_sectors": string_array,
+            "hot_sector_mark": {"type": "string"},
+            "matched_hot_sectors": string_array,
+            "hot_sector_relevance": {"type": "string"},
+            "hot_sector_reason": {"type": "string"},
+            "hot_sector_sources": string_array,
+            "source_urls": string_array,
+        }
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": item_properties,
+                        "required": list(item_properties.keys()),
+                    },
+                }
+            },
+            "required": ["items"],
+        }
+
+
+class OpenAICompatibleLLMProvider(LLMProvider):
+    """OpenAI Chat Completions compatible implementation."""
+
+    name = "openai_compatible"
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        api_base: str = "https://api.openai.com",
+        timeout_sec: int = 120,
+        prompt_builder: SignalAnalysisPromptBuilder | None = None,
+    ):
+        self.api_key = api_key
+        self.model = model
+        self.api_base = api_base.rstrip("/")
+        self.timeout_sec = int(timeout_sec)
+        self.prompt_builder = prompt_builder or SignalAnalysisPromptBuilder()
+
+    @property
+    def model_name(self) -> str:
+        return self.model
+
+    @property
+    def chat_completions_url(self) -> str:
+        if self.api_base.endswith("/v1"):
+            return f"{self.api_base}/chat/completions"
+        return f"{self.api_base}/v1/chat/completions"
+
+    def analyze_batch(
+        self,
+        market: str,
+        signals: List[ScreeningSignalRow],
+        market_documents: List[SearchDocument],
+        sector_documents: List[SearchDocument],
+        hot_sectors: List[str],
+        company_documents: Dict[str, List[SearchDocument]],
+    ) -> List[SignalAnalysisResult]:
+        if requests is None:
+            raise RuntimeError("requests is not installed")
+        if not signals:
+            return []
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": self.prompt_builder.system_prompt()},
+                {
+                    "role": "user",
+                    "content": self.prompt_builder.user_prompt(
+                        market,
+                        signals,
+                        market_documents,
+                        sector_documents,
+                        hot_sectors,
+                        company_documents,
+                    ),
+                },
+            ],
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        response = requests.post(
+            self.chat_completions_url,
+            headers=headers,
+            json=payload,
+            timeout=self.timeout_sec,
+        )
+        if response.status_code >= 400 and "response_format" in payload:
+            payload = dict(payload)
+            payload.pop("response_format", None)
+            response = requests.post(
+                self.chat_completions_url,
+                headers=headers,
+                json=payload,
+                timeout=self.timeout_sec,
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(f"LLM analysis failed: HTTP {response.status_code} {response.text[:300]}")
+
+        data = response.json() or {}
+        content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+        parsed = _parse_json_content(content)
+        return _results_from_parsed_json(parsed, self.model)
+
+
+class DeepSeekLLMProvider(OpenAICompatibleLLMProvider):
+    """DeepSeek Chat Completions implementation."""
+
+    name = "deepseek"
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "deepseek-v4-flash",
+        api_base: str = "https://api.deepseek.com",
+        timeout_sec: int = 120,
+        prompt_builder: SignalAnalysisPromptBuilder | None = None,
+    ):
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            api_base=api_base,
+            timeout_sec=timeout_sec,
+            prompt_builder=prompt_builder,
+        )
+
+    @property
+    def chat_completions_url(self) -> str:
+        if self.api_base.endswith("/chat/completions"):
+            return self.api_base
+        return f"{self.api_base}/chat/completions"
+
+
+class CodexResponsesLLMProvider(LLMProvider):
+    """OpenAI Codex model implementation using the Responses API."""
+
+    name = "codex_responses"
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-5.2-codex",
+        api_base: str = "https://api.openai.com",
+        timeout_sec: int = 120,
+        reasoning_effort: str = "medium",
+        prompt_builder: SignalAnalysisPromptBuilder | None = None,
+    ):
+        self.api_key = api_key
+        self.model = model
+        self.api_base = api_base.rstrip("/")
+        self.timeout_sec = int(timeout_sec)
+        self.reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
+        self.prompt_builder = prompt_builder or SignalAnalysisPromptBuilder()
+
+    @property
+    def model_name(self) -> str:
+        return self.model
+
+    @property
+    def responses_url(self) -> str:
+        if self.api_base.endswith("/v1"):
+            return f"{self.api_base}/responses"
+        return f"{self.api_base}/v1/responses"
+
+    def analyze_batch(
+        self,
+        market: str,
+        signals: List[ScreeningSignalRow],
+        market_documents: List[SearchDocument],
+        sector_documents: List[SearchDocument],
+        hot_sectors: List[str],
+        company_documents: Dict[str, List[SearchDocument]],
+    ) -> List[SignalAnalysisResult]:
+        if requests is None:
+            raise RuntimeError("requests is not installed")
+        if not signals:
+            return []
+
+        payload = self._build_payload(
+            market,
+            signals,
+            market_documents,
+            sector_documents,
+            hot_sectors,
+            company_documents,
+            text_format={
+                "type": "json_schema",
+                "name": "signal_analysis_result",
+                "schema": self.prompt_builder.json_schema(),
+                "strict": True,
+            },
+        )
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        response = requests.post(
+            self.responses_url,
+            headers=headers,
+            json=payload,
+            timeout=self.timeout_sec,
+        )
+        if response.status_code >= 400 and _should_retry_responses_json_object(response):
+            payload = self._build_payload(
+                market,
+                signals,
+                market_documents,
+                sector_documents,
+                hot_sectors,
+                company_documents,
+                text_format={"type": "json_object"},
+            )
+            response = requests.post(
+                self.responses_url,
+                headers=headers,
+                json=payload,
+                timeout=self.timeout_sec,
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(f"Codex Responses analysis failed: HTTP {response.status_code} {response.text[:300]}")
+
+        data = response.json() or {}
+        content = _extract_responses_output_text(data)
+        parsed = _parse_json_content(content)
+        return _results_from_parsed_json(parsed, self.model)
+
+    def _build_payload(
+        self,
+        market: str,
+        signals: List[ScreeningSignalRow],
+        market_documents: List[SearchDocument],
+        sector_documents: List[SearchDocument],
+        hot_sectors: List[str],
+        company_documents: Dict[str, List[SearchDocument]],
+        text_format: Dict[str, object],
+    ) -> Dict[str, object]:
+        return {
+            "model": self.model,
+            "input": [
+                {"role": "system", "content": self.prompt_builder.system_prompt()},
+                {
+                    "role": "user",
+                    "content": self.prompt_builder.user_prompt(
+                        market,
+                        signals,
+                        market_documents,
+                        sector_documents,
+                        hot_sectors,
+                        company_documents,
+                    ),
+                },
+            ],
+            "reasoning": {"effort": self.reasoning_effort},
+            "text": {"format": text_format},
+        }
+
 
 def _parse_json_content(content: str):
     """Parse raw JSON content, tolerating fenced code blocks from compatible providers."""
@@ -260,6 +450,68 @@ def _parse_json_content(content: str):
     if match:
         text = match.group(1).strip()
     return json.loads(text)
+
+
+def _results_from_parsed_json(parsed, model: str) -> List[SignalAnalysisResult]:
+    items = parsed.get("items") if isinstance(parsed, dict) else None
+    if not isinstance(items, list):
+        raise RuntimeError("LLM response JSON must contain an items list")
+
+    results: List[SignalAnalysisResult] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        result = SignalAnalysisResult.from_llm_item(item, model=model)
+        if result.code:
+            results.append(result)
+    if not results:
+        raise RuntimeError("LLM response did not contain any valid stock analysis items")
+    return results
+
+
+def _extract_responses_output_text(data: Dict[str, object]) -> str:
+    output_text = str(data.get("output_text") or "").strip()
+    if output_text:
+        return output_text
+
+    text_parts: List[str] = []
+    refusals: List[str] = []
+    for item in data.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        for content in item.get("content") or []:
+            if not isinstance(content, dict):
+                continue
+            content_type = str(content.get("type") or "")
+            if content_type in {"output_text", "text"}:
+                text = str(content.get("text") or "").strip()
+                if text:
+                    text_parts.append(text)
+            elif content_type == "refusal":
+                refusal = str(content.get("refusal") or "").strip()
+                if refusal:
+                    refusals.append(refusal)
+    if text_parts:
+        return "\n".join(text_parts)
+    if refusals:
+        raise RuntimeError(f"Codex Responses refused the request: {'; '.join(refusals)}")
+    raise RuntimeError("Codex Responses output text is empty")
+
+
+def _should_retry_responses_json_object(response) -> bool:
+    text = (getattr(response, "text", "") or "").lower()
+    return response.status_code in {400, 422} and (
+        "json_schema" in text
+        or "schema" in text
+        or "text.format" in text
+        or "response_format" in text
+        or "unsupported" in text
+    )
+
+
+def _normalize_reasoning_effort(value: str) -> str:
+    effort = (value or "medium").strip().lower()
+    return effort if effort in {"low", "medium", "high", "xhigh"} else "medium"
 
 
 def _env_int(name: str, default: int) -> int:
