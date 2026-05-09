@@ -55,6 +55,15 @@ def _decode_json_field(value: Any, default: Any):
     return value
 
 
+def _json_or_none(value: Any):
+    """Encode structured values for MySQL JSON columns."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
 DEFAULT_RULE_MARKETS = ("HK", "US", "A")
 
 
@@ -899,6 +908,109 @@ class MarketDatabase:
             "priority": int(row[5] or 100),
             "description": row[6],
         }
+
+    # ------------------------------------------------------------------
+    # Signal analysis
+    # ------------------------------------------------------------------
+
+    def init_signal_analysis_schema(self):
+        """初始化选股信号 AI 辅助分析表。"""
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS screening_signal_analysis (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    task_id VARCHAR(36) NOT NULL COMMENT '筛选任务 ID',
+                    market VARCHAR(8) NOT NULL COMMENT '市场: HK/US/A',
+                    code VARCHAR(32) NOT NULL COMMENT '股票代码',
+                    name VARCHAR(255) NULL COMMENT '股票名称',
+                    check_date DATE NOT NULL COMMENT '筛选日期',
+                    csv_path VARCHAR(1024) NULL COMMENT '来源 CSV 路径',
+                    analysis_status VARCHAR(32) NOT NULL DEFAULT 'success' COMMENT 'success/error/skipped',
+                    reliability_score DECIMAL(6,2) NULL COMMENT '信号可靠性评分 0-100',
+                    confidence_score DECIMAL(6,2) NULL COMMENT '模型置信度 0-100',
+                    signal_bias VARCHAR(32) NULL COMMENT 'bullish/bearish/neutral/avoid/unknown',
+                    summary TEXT NULL COMMENT '模型摘要',
+                    positive_factors JSON NULL COMMENT '利好因素',
+                    risk_factors JSON NULL COMMENT '风险因素',
+                    macro_factors JSON NULL COMMENT '宏观/政策因素',
+                    company_events JSON NULL COMMENT '公司事件',
+                    source_urls JSON NULL COMMENT '信息来源 URL',
+                    model VARCHAR(128) NULL COMMENT '模型名',
+                    raw_response JSON NULL COMMENT '模型原始结构化响应',
+                    error_message TEXT NULL COMMENT '错误信息',
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_signal_analysis_task_market_code (task_id, market, code),
+                    KEY idx_signal_analysis_market_date (market, check_date),
+                    KEY idx_signal_analysis_score (reliability_score),
+                    KEY idx_signal_analysis_status (analysis_status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='选股结果搜索与模型辅助分析'
+                """
+            )
+
+    def upsert_signal_analysis_results(self, results: Iterable[dict]):
+        """写入或更新选股信号 AI 辅助分析结果。"""
+        rows = []
+        for item in results:
+            code = str(item.get("code") or "").strip()
+            task_id = str(item.get("task_id") or "").strip()
+            market = str(item.get("market") or "").strip()
+            if not (task_id and market and code):
+                continue
+            rows.append((
+                task_id,
+                market,
+                code,
+                item.get("name"),
+                item.get("check_date"),
+                item.get("csv_path"),
+                item.get("analysis_status") or "success",
+                item.get("reliability_score"),
+                item.get("confidence_score"),
+                item.get("signal_bias"),
+                item.get("summary"),
+                _json_or_none(item.get("positive_factors")),
+                _json_or_none(item.get("risk_factors")),
+                _json_or_none(item.get("macro_factors")),
+                _json_or_none(item.get("company_events")),
+                _json_or_none(item.get("source_urls")),
+                item.get("model"),
+                _json_or_none(item.get("raw_response")),
+                item.get("error_message"),
+            ))
+        if not rows:
+            return
+
+        sql = """
+            INSERT INTO screening_signal_analysis
+                (task_id, market, code, name, check_date, csv_path, analysis_status,
+                 reliability_score, confidence_score, signal_bias, summary,
+                 positive_factors, risk_factors, macro_factors, company_events,
+                 source_urls, model, raw_response, error_message)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                name=VALUES(name),
+                check_date=VALUES(check_date),
+                csv_path=VALUES(csv_path),
+                analysis_status=VALUES(analysis_status),
+                reliability_score=VALUES(reliability_score),
+                confidence_score=VALUES(confidence_score),
+                signal_bias=VALUES(signal_bias),
+                summary=VALUES(summary),
+                positive_factors=VALUES(positive_factors),
+                risk_factors=VALUES(risk_factors),
+                macro_factors=VALUES(macro_factors),
+                company_events=VALUES(company_events),
+                source_urls=VALUES(source_urls),
+                model=VALUES(model),
+                raw_response=VALUES(raw_response),
+                error_message=VALUES(error_message)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.executemany(sql, rows)
 
     # ------------------------------------------------------------------
     # 迁移（保留兼容）

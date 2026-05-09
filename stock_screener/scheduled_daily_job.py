@@ -21,6 +21,9 @@ cron 示例（每天 18:00 执行，收盘后）:
 环境变量:
     MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
     FEISHU_WEBHOOK_URL  飞书机器人 Webhook 地址（不配置则跳过飞书发送）
+    ENABLE_LLM_ANALYSIS  是否自动启用搜索+模型辅助分析，默认 1
+    TAVILY_API_KEY       搜索 provider key（不配置则跳过联网检索）
+    LLM_API_BASE, LLM_API_KEY, LLM_MODEL  OpenAI-compatible 模型配置
 """
 
 import argparse
@@ -61,6 +64,8 @@ from fetch_stock_pools import (
 )
 from market import market_label, normalize_market
 from api.screen_service import get_strategy_condition_labels, run_screening_task
+from signal_analysis.service import env_flag, run_signal_analysis_for_market
+from signal_analysis.chain import write_analysis_columns_to_csv
 from timeframe import parse_timeframe
 
 
@@ -328,6 +333,7 @@ def run_market_screening_worker(
     csv_base: str,
     today_str: str,
     verbose: bool = False,
+    enable_ai_analysis: bool = False,
 ) -> MarketScreeningResult:
     """
     Execute screening and CSV export for one market.
@@ -374,6 +380,35 @@ def run_market_screening_worker(
             csv_paths.extend([no_etf_path, etf_only_path])
             print(f"✓ 非 ETF CSV 已导出: {no_etf_path}")
             print(f"✓ ETF CSV 已导出: {etf_only_path}")
+
+            if enable_ai_analysis:
+                try:
+                    analysis_result = run_signal_analysis_for_market(
+                        mysql_config=mysql_config,
+                        task_id=task_id,
+                        market=market,
+                        csv_path=csv_path,
+                        check_date=date.fromisoformat(today_str),
+                        enabled=True,
+                    )
+                    for warning in analysis_result.warnings:
+                        print(f"[AI分析] {market_label(market)}: {warning}")
+                    results_by_code = getattr(analysis_result, "results_by_code", {}) or {}
+                    if results_by_code:
+                        try:
+                            write_analysis_columns_to_csv(no_etf_path, results_by_code)
+                            write_analysis_columns_to_csv(etf_only_path, results_by_code)
+                            print(f"✓ AI 辅助分析已同步到拆分 CSV: {no_etf_path}, {etf_only_path}")
+                        except Exception as e:
+                            print(f"[AI分析] {market_label(market)} 拆分 CSV 写回失败但不影响飞书发送: {type(e).__name__}: {e}")
+                    if analysis_result.artifact_paths:
+                        csv_paths.extend(analysis_result.artifact_paths)
+                        for artifact_path in analysis_result.artifact_paths:
+                            print(f"✓ AI 辅助分析文件已导出: {artifact_path}")
+                    elif analysis_result.skipped_reason:
+                        print(f"[AI分析] {market_label(market)} 跳过: {analysis_result.skipped_reason}")
+                except Exception as e:
+                    print(f"[AI分析] {market_label(market)} 失败但不影响 CSV/飞书发送: {type(e).__name__}: {e}")
         else:
             print(f"  {market_label(market)} 无满足条件的股票，不生成 CSV")
 
@@ -409,6 +444,9 @@ def main():
     parser.add_argument("--timeframe", default="1d", help="K线周期")
     parser.add_argument("--csv", default="logs/screening_result.csv", help="CSV 输出路径（会按日期+市场拆分为 screening_result_2026-02-27_HK.csv，并额外生成 _no_etf/_etf_only 两份）")
     parser.add_argument("--market-workers", type=int, default=3, help="并行筛选市场的 worker 数量")
+    ai_group = parser.add_mutually_exclusive_group()
+    ai_group.add_argument("--ai-analysis", dest="enable_ai_analysis", action="store_true", default=None, help="启用搜索+模型辅助分析")
+    ai_group.add_argument("--no-ai-analysis", dest="enable_ai_analysis", action="store_false", help="关闭搜索+模型辅助分析")
     parser.add_argument("--futu-host", default="127.0.0.1", help="Futu OpenD 主机")
     parser.add_argument("--futu-port", type=int, default=11111, help="Futu OpenD 端口")
     args = parser.parse_args()
@@ -461,6 +499,15 @@ def main():
     processed_markets: List[str] = []
     skipped_markets: List[str] = []
     market_workers = max(1, args.market_workers)
+    enable_ai_analysis = (
+        env_flag("ENABLE_LLM_ANALYSIS", True)
+        if args.enable_ai_analysis is None
+        else bool(args.enable_ai_analysis)
+    )
+    if enable_ai_analysis:
+        print("搜索+模型辅助分析: 已启用（失败不会影响原始 CSV/飞书发送）")
+    else:
+        print("搜索+模型辅助分析: 已关闭")
 
     with ThreadPoolExecutor(max_workers=market_workers) as executor:
         future_to_market = {
@@ -473,6 +520,7 @@ def main():
                 csv_base,
                 today_str,
                 False,
+                enable_ai_analysis,
             ): market
             for market in markets
         }

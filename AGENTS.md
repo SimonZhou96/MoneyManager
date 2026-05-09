@@ -215,3 +215,77 @@ When the user agrees:
    blocked by missing local dependencies, state the blocker and perform a
    manual structure/content check.
 7. Report the skill path, what changed, and how future agents should use it.
+
+# Stock Screener Signal Analysis Chain
+
+`MoneyManager/stock_screener` can optionally run a best-effort search + LLM
+analysis pass after a market's screening CSV files are generated. This pass is
+only an auxiliary judgement layer: it must never decide whether a stock passed
+screening and must never block the original CSV or Feishu delivery path.
+
+## Runtime Flow
+
+- Scheduler integration lives in `scheduled_daily_job.py`, immediately after
+  the market CSV, `_no_etf.csv`, and `_etf_only.csv` files are written.
+- The scheduler calls `signal_analysis.service.run_signal_analysis_for_market`
+  only for the base market CSV. Original CSV paths must always remain in
+  `MarketScreeningResult.csv_paths`; AI artifacts may only be appended.
+- If analysis fails, log a warning and continue. Do not set
+  `MarketScreeningResult.error` for AI-analysis failures.
+
+## Object Model
+
+- `signal_analysis.search_providers.SearchProvider` is the search interface.
+  Use `TavilySearchProvider` for Tavily and `NullSearchProvider` when no search
+  key is configured.
+- `signal_analysis.llm_providers.LLMProvider` is the model interface. Use
+  `OpenAICompatibleLLMProvider` for `/v1/chat/completions` compatible services
+  and `NullLLMProvider` when model credentials are missing.
+- `signal_analysis.factories.SearchProviderFactory` and
+  `LLMProviderFactory` are the only places that should read provider-specific
+  environment variables.
+- `signal_analysis.chain.SignalAnalysisChain` runs ordered `AnalysisStep`
+  objects. Add new behavior by adding a small step instead of expanding the
+  scheduler or service.
+
+## Environment Variables
+
+- `ENABLE_LLM_ANALYSIS=1` enables automatic post-screening analysis. Set `0`,
+  `false`, `no`, or `off` to disable it.
+- `TAVILY_API_KEY` enables Tavily search. Missing key means CSV-only model
+  analysis if an LLM is configured.
+- `LLM_API_BASE` defaults to `https://api.openai.com`.
+- `LLM_API_KEY` and `LLM_MODEL` are required for model analysis. If either is
+  missing, analysis is skipped and no AI artifacts are generated.
+- `LLM_ANALYSIS_BATCH_SIZE`, `LLM_ANALYSIS_TIMEOUT_SEC`, and
+  `SIGNAL_SEARCH_MAX_RESULTS` tune batching, request timeout, and search depth.
+- `SIGNAL_MARKET_CONTEXT_LIMIT`, `SIGNAL_COMPANY_CONTEXT_LIMIT`, and
+  `SIGNAL_SEARCH_CONTENT_CHARS` limit how much search text enters each model
+  prompt. Defaults are conservative (`2`, `2`, `300`) for low TPM/RPM model
+  plans.
+- Manual hot news can be configured with `SIGNAL_MANUAL_HOT_NEWS_FILE`,
+  `SIGNAL_MANUAL_MARKET_HOT_NEWS`, `SIGNAL_MANUAL_MARKET_HOT_NEWS_<MARKET>`,
+  `SIGNAL_MANUAL_NEWS_SOURCES`, `SIGNAL_MANUAL_NEWS_SOURCES_<MARKET>`,
+  `SIGNAL_MANUAL_COMPANY_HOT_NEWS_JSON`, and
+  `SIGNAL_MANUAL_COMPANY_NEWS_SOURCES_JSON`. If manual hot news is present, it
+  overrides searched hot-news context for that market or stock code.
+
+## Artifacts and Persistence
+
+- The screening CSV must be generated before AI analysis starts. After a
+  successful analysis, append or refresh AI columns in that existing CSV.
+  Failures must preserve the original CSV for Feishu sending.
+- Successful analysis appends or refreshes AI columns in the existing market
+  CSV and split CSV files; it must not create `<base>_ai.csv`.
+- Successful analysis may write `<base>_ai_report.md` as an extra Feishu
+  attachment.
+- Enhanced CSV columns are: `AI分析状态`, `信号可靠性评分`, `模型置信度`,
+  `辅助方向判断`, plus the corresponding rubric columns
+  `信号可靠性评分口径`, `模型置信度口径`, `辅助方向判断口径`, and the factor
+  columns `关键利好因素`, `关键风险因素`, `宏观/政策因素`, `公司事件`,
+  `市场热点新闻`, `公司热点新闻`, `新闻影响判断`, `新闻来源`, `信息来源`.
+- Persistence DDL lives in
+  `MoneyManager/stock_screener/sql/002_signal_analysis.sql`; keep it in sync
+  with `MarketDatabase.init_signal_analysis_schema`.
+- `screening_signal_analysis` is keyed by `(task_id, market, code)` and stores
+  model output for audit, not for screening decisions.

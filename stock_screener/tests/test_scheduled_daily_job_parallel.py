@@ -2,15 +2,18 @@
 # -*- coding: utf-8 -*-
 
 import contextlib
+import csv
 import io
 import sys
 import tempfile
 import threading
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
 import scheduled_daily_job as job
+from signal_analysis.models import SignalAnalysisResult
 
 
 class FakeMarketDatabase:
@@ -54,6 +57,7 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
             markets,
             "--market-workers",
             str(workers),
+            "--no-ai-analysis",
             "--csv",
             str(Path(tmp_dir) / "screening_result.csv"),
         ]
@@ -177,6 +181,156 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
             self.assertEqual(result.csv_paths, expected_paths)
             for path in expected_paths:
                 self.assertTrue(Path(path).exists())
+
+    def test_ai_analysis_success_appends_artifact_paths(self):
+        FakeMarketDatabase.pools_by_market = {
+            "US": [{"code": "US.TEST", "name": "Test Inc"}],
+        }
+        FakeMarketDatabase.etfs_by_market = {
+            "US": [{"code": "US.ETF", "name": "ETF Fund"}],
+        }
+        passed = [
+            {
+                "code": "US.TEST",
+                "name": "Test Inc",
+                "market": "US",
+                "sector": "Tech",
+                "industry": "Software",
+                "market_cap": 200.0,
+                "pe_ratio": 20.0,
+                "conditions_met": "左一战法-看涨|EMA突破",
+            },
+            {
+                "code": "US.ETF",
+                "name": "ETF Fund",
+                "market": "US",
+                "sector": "ETF",
+                "industry": "ETF",
+                "market_cap": 300.0,
+                "pe_ratio": 30.0,
+                "conditions_met": "左一战法-看跌|RSI超买",
+            },
+        ]
+
+        def fake_run_screening(mysql_config, market, timeframe, default_params, verbose=False):
+            return "task-US", passed
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_base = str(Path(tmp_dir) / "screening_result")
+            report_path = str(Path(tmp_dir) / "screening_result_2026-05-08_US_ai_report.md")
+            results_by_code = {
+                "US.TEST": SignalAnalysisResult(
+                    code="US.TEST",
+                    name="Test Inc",
+                    reliability_score=82.0,
+                    confidence_score=76.0,
+                    signal_bias="bullish",
+                    market_hot_news=["美股市场热点"],
+                    company_hot_news=["Test Inc 新闻"],
+                    news_impact="利好",
+                    news_sources=["https://example.com/us-test"],
+                ),
+                "US.ETF": SignalAnalysisResult(
+                    code="US.ETF",
+                    name="ETF Fund",
+                    reliability_score=55.0,
+                    confidence_score=66.0,
+                    signal_bias="bearish",
+                    market_hot_news=["美股市场热点"],
+                    company_hot_news=["ETF 新闻"],
+                    news_impact="利空",
+                    news_sources=["https://example.com/us-etf"],
+                ),
+            }
+            with patch.object(job, "MarketDatabase", FakeMarketDatabase), \
+                    patch.object(job, "run_screening_for_market", side_effect=fake_run_screening), \
+                    patch.object(
+                        job,
+                        "run_signal_analysis_for_market",
+                        return_value=SimpleNamespace(
+                            warnings=[],
+                            artifact_paths=[report_path],
+                            results_by_code=results_by_code,
+                            skipped_reason="",
+                        ),
+                    ) as analyze:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    result = job.run_market_screening_worker(
+                        mysql_config=object(),
+                        market="US",
+                        timeframe="1d",
+                        default_params={},
+                        csv_base=csv_base,
+                        today_str="2026-05-08",
+                        enable_ai_analysis=True,
+                    )
+
+            self.assertFalse(result.skipped)
+            self.assertEqual(result.csv_paths, [
+                str(Path(tmp_dir) / "screening_result_2026-05-08_US.csv"),
+                str(Path(tmp_dir) / "screening_result_2026-05-08_US_no_etf.csv"),
+                str(Path(tmp_dir) / "screening_result_2026-05-08_US_etf_only.csv"),
+                report_path,
+            ])
+            self.assertFalse(Path(tmp_dir, "screening_result_2026-05-08_US_ai.csv").exists())
+            with open(Path(tmp_dir) / "screening_result_2026-05-08_US_no_etf.csv", "r", encoding="utf-8-sig", newline="") as f:
+                no_etf_rows = list(csv.DictReader(f))
+            with open(Path(tmp_dir) / "screening_result_2026-05-08_US_etf_only.csv", "r", encoding="utf-8-sig", newline="") as f:
+                etf_rows = list(csv.DictReader(f))
+            self.assertEqual(no_etf_rows[0]["股票代码"], "US.TEST")
+            self.assertEqual(no_etf_rows[0]["信号可靠性评分"], "82.00")
+            self.assertIn("80-100", no_etf_rows[0]["信号可靠性评分口径"])
+            self.assertEqual(no_etf_rows[0]["市场热点新闻"], "美股市场热点")
+            self.assertEqual(no_etf_rows[0]["公司热点新闻"], "Test Inc 新闻")
+            self.assertEqual(no_etf_rows[0]["新闻影响判断"], "利好")
+            self.assertEqual(no_etf_rows[0]["新闻来源"], "https://example.com/us-test")
+            self.assertEqual(etf_rows[0]["股票代码"], "US.ETF")
+            self.assertEqual(etf_rows[0]["辅助方向判断"], "bearish")
+            self.assertIn("bearish偏看跌", etf_rows[0]["辅助方向判断口径"])
+            self.assertEqual(etf_rows[0]["新闻影响判断"], "利空")
+            analyze.assert_called_once()
+
+    def test_ai_analysis_failure_keeps_original_csv_paths(self):
+        FakeMarketDatabase.pools_by_market = {
+            "US": [{"code": "US.TEST", "name": "Test Inc"}],
+        }
+        passed = [{
+            "code": "US.TEST",
+            "name": "Test Inc",
+            "market": "US",
+            "sector": "Tech",
+            "industry": "Software",
+            "market_cap": 200.0,
+            "pe_ratio": 20.0,
+            "conditions_met": "左一战法-看涨|EMA突破",
+        }]
+
+        def fake_run_screening(mysql_config, market, timeframe, default_params, verbose=False):
+            return "task-US", passed
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_base = str(Path(tmp_dir) / "screening_result")
+            with patch.object(job, "MarketDatabase", FakeMarketDatabase), \
+                    patch.object(job, "run_screening_for_market", side_effect=fake_run_screening), \
+                    patch.object(job, "run_signal_analysis_for_market", side_effect=RuntimeError("model down")):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    result = job.run_market_screening_worker(
+                        mysql_config=object(),
+                        market="US",
+                        timeframe="1d",
+                        default_params={},
+                        csv_base=csv_base,
+                        today_str="2026-05-08",
+                        enable_ai_analysis=True,
+                    )
+
+            expected_paths = [
+                str(Path(tmp_dir) / "screening_result_2026-05-08_US.csv"),
+                str(Path(tmp_dir) / "screening_result_2026-05-08_US_no_etf.csv"),
+                str(Path(tmp_dir) / "screening_result_2026-05-08_US_etf_only.csv"),
+            ]
+            self.assertIsNone(result.error)
+            self.assertEqual(result.csv_paths, expected_paths)
 
 
 if __name__ == "__main__":
