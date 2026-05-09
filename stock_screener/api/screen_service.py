@@ -25,6 +25,7 @@ from filters import (
 )
 from kline_fetcher import KlineFetcherFactory
 from market import normalize_market, market_label
+from rule_engine import RuleEngine, RuleRegistry, RuleRepository
 from strategizers import (
     StrategizerChain,
     ZuoYiStrategizer,
@@ -140,7 +141,8 @@ def create_filter_chain_from_params(params: dict) -> FilterChain:
 
 def create_strategizer_chain_from_params(params: dict) -> StrategizerChain:
     """
-    根据参数创建策略器链。任意一个策略器满足即视为股票满足策略条件。
+    根据参数创建策略器链。
+    最终通过逻辑在 evaluate_strategy_gate 中统一判断。
     """
     chain = StrategizerChain()
 
@@ -172,7 +174,7 @@ def create_strategizer_chain_from_params(params: dict) -> StrategizerChain:
         threshold=params.get("rsi_overbought_threshold", 70.0),
     ))
 
-    # 量价/涨跌幅：与 EMA、RSI 并列，任一满足即可（StrategizerChain）
+    # 量价/涨跌幅：与 EMA、RSI 并列，作为左一战法之外的策略条件
     if params.get("use_volume_spike_vs_prior3", True):
         chain.add_strategizer(TodayVolumeExceedsPrior3MaxStrategizer())
     if params.get("use_daily_drop_band", True):
@@ -189,6 +191,38 @@ def create_strategizer_chain_from_params(params: dict) -> StrategizerChain:
         ))
 
     return chain
+
+
+def evaluate_strategy_gate(strategy_result, require_zuoyi_strategy: bool = True) -> bool:
+    """
+    判断策略组合是否满足最终通过条件。
+
+    默认逻辑：左一战法 && 任一其他策略。
+    当显式关闭左一战法时，保持旧逻辑：任一策略满足即可。
+    """
+    if not require_zuoyi_strategy:
+        return strategy_result.any_satisfied
+
+    zuoyi_satisfied = False
+    other_strategy_satisfied = False
+    for output in strategy_result.outputs:
+        if output.name == "ZuoYiStrategizer":
+            zuoyi_satisfied = output.satisfied
+        elif output.satisfied:
+            other_strategy_satisfied = True
+    return zuoyi_satisfied and other_strategy_satisfied
+
+
+def create_rule_engine_from_db(db: MarketDatabase, market: str) -> RuleEngine:
+    """按市场加载数据库规则引擎。"""
+    repository = RuleRepository(db)
+    metadata = repository.load_metadata(market)
+    chain_config = repository.load_active_chain(market)
+    return RuleEngine(
+        metadata=metadata,
+        chain_config=chain_config,
+        registry=RuleRegistry.default(),
+    )
 
 
 def run_screening_task(
@@ -296,23 +330,38 @@ def run_screening_task(
         # 转换为 StockInfo 列表
         stock_infos = stocks_to_stock_infos(stocks, market, db)
         
-        # 创建筛选器链与策略器链
-        filter_chain = create_filter_chain_from_params(params)
-        strategy_chain = create_strategizer_chain_from_params(params)
-
-        has_filters = len(filter_chain.list_filters()) > 0
-        has_strategizers = len(strategy_chain.list_strategizers()) > 0
-        if not has_filters and not has_strategizers:
+        # 创建数据库规则引擎或回退到参数驱动链路
+        use_db_rule_engine = params.get("use_db_rule_engine", True)
+        rule_engine = None
+        filter_chain = None
+        strategy_chain = None
+        if use_db_rule_engine:
+            rule_engine = create_rule_engine_from_db(db, market)
+            if not rule_engine.has_rules():
+                if verbose:
+                    print("警告：数据库规则链未引用任何规则")
+                db.update_task_status(task_id, "completed")
+                return
+            needs_kline = rule_engine.requires_kline()
             if verbose:
-                print("警告：没有启用任何筛选器或策略器")
-            db.update_task_status(task_id, "completed")
-            return
+                print(f"✓ 已加载数据库规则链: {rule_engine.chain_config.chain_key}")
+        else:
+            filter_chain = create_filter_chain_from_params(params)
+            strategy_chain = create_strategizer_chain_from_params(params)
 
-        # 检查是否需要 K 线：筛选器或策略器任一需要则拉取
-        needs_kline = any(
-            f.__class__.__name__ in ["PriceFilter", "AvgDailyVolumeFilter"]
-            for f in filter_chain._filters if f.enabled
-        ) or len(strategy_chain.list_strategizers()) > 0
+            has_filters = len(filter_chain.list_filters()) > 0
+            has_strategizers = len(strategy_chain.list_strategizers()) > 0
+            if not has_filters and not has_strategizers:
+                if verbose:
+                    print("警告：没有启用任何筛选器或策略器")
+                db.update_task_status(task_id, "completed")
+                return
+
+            # 检查是否需要 K 线：筛选器或策略器任一需要则拉取
+            needs_kline = any(
+                f.__class__.__name__ in ["PriceFilter", "AvgDailyVolumeFilter"]
+                for f in filter_chain._filters if f.enabled
+            ) or len(strategy_chain.list_strategizers()) > 0
 
         # 创建 K 线获取器（尝试连接 Futu OpenD）
         fetchers = None
@@ -388,17 +437,25 @@ def run_screening_task(
                 # 限速
                 time.sleep(0.2)
             
-            # 步骤2: 筛选器 -> 策略器；合并为单一 result（filter_outputs 含筛选器+策略器，passed=筛选通过且任意策略满足）
-            result = filter_chain.apply(si, context)
-            strategy_result = strategy_chain.apply(si, context)
-            for out in strategy_result.outputs:
-                result.add_output(FilterOutput(
-                    filter_name=out.name,
-                    result=FilterResult.PASS if out.satisfied else FilterResult.FAIL,
-                    reason=out.reason or "",
-                    details=dict(out.details) if out.details else {},
-                ))
-            result.passed = result.passed and strategy_result.any_satisfied
+            # 步骤2: 应用规则。默认由 DB 规则引擎计算；兼容模式保留旧链路。
+            if rule_engine is not None:
+                result = rule_engine.evaluate_stock(si, context)
+            else:
+                # 策略通过条件：左一战法 && 任一其他策略（关闭左一时退回任一策略命中）
+                result = filter_chain.apply(si, context)
+                strategy_result = strategy_chain.apply(si, context)
+                for out in strategy_result.outputs:
+                    result.add_output(FilterOutput(
+                        filter_name=out.name,
+                        result=FilterResult.PASS if out.satisfied else FilterResult.FAIL,
+                        reason=out.reason or "",
+                        details=dict(out.details) if out.details else {},
+                    ))
+                strategy_gate_passed = evaluate_strategy_gate(
+                    strategy_result,
+                    require_zuoyi_strategy=params.get("use_zuoyi_strategy", True),
+                )
+                result.passed = result.passed and strategy_gate_passed
             results.append(result)
 
             # 步骤3: 详细日志输出（所有股票都打印，不论是否满足条件）

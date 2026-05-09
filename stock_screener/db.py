@@ -43,6 +43,76 @@ def _safe_table_suffix(timeframe: str) -> str:
     return re.sub(r"[^a-z0-9]", "", timeframe.lower())
 
 
+def _decode_json_field(value: Any, default: Any):
+    """兼容 PyMySQL 返回 JSON 字符串或已解析对象两种情况。"""
+    if value is None or value == "":
+        return default
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return default
+    return value
+
+
+DEFAULT_RULE_MARKETS = ("HK", "US", "A")
+
+
+DEFAULT_RULE_METADATA = (
+    ("market_cap_range", "市值范围", "filter", "MarketCapFilter",
+     {"min_cap": None, "max_cap": None}, False, 10, "按市值上下限筛选"),
+    ("avg_daily_volume_range", "每日平均交易量范围", "filter", "AvgDailyVolumeFilter",
+     {"min_volume": None, "max_volume": None}, False, 20, "按 K 线计算每日平均交易量"),
+    ("price_range", "价格范围", "filter", "PriceFilter",
+     {"min_price": None, "max_price": None}, False, 30, "按最新收盘价筛选"),
+    ("pe_range", "PE 范围", "filter", "PEFilter",
+     {"min_pe": None, "max_pe": None, "allow_negative": False}, False, 40, "按 PE 上下限筛选"),
+    ("profitability", "公司盈利", "filter", "ProfitabilityFilter",
+     {"require_profitable": True}, False, 50, "要求 PE 为正"),
+    ("zuoyi_signal", "左一战法", "strategy", "ZuoYiStrategizer",
+     {"signal_window": 3, "include_bullish": True, "include_bearish": True}, True, 110,
+     "当前周期左一战法看涨/看跌信号"),
+    ("ema_breakout", "EMA 突破", "strategy", "EMABreakoutStrategizer",
+     {"ema_short": 10, "ema_long": 150}, True, 120, "EMA 短线向上突破长线"),
+    ("rsi_oversold", "RSI 超卖", "strategy", "RSIOversoldStrategizer",
+     {"period": 14, "threshold": 30.0}, True, 130, "RSI 低于等于阈值"),
+    ("rsi_overbought", "RSI 超买", "strategy", "RSIOverboughtStrategizer",
+     {"period": 14, "threshold": 70.0}, True, 140, "RSI 高于等于阈值"),
+    ("volume_spike_prior3", "放量超前三日", "strategy", "TodayVolumeExceedsPrior3MaxStrategizer",
+     {}, True, 150, "当日成交量大于前三日最大值"),
+    ("daily_drop_6_65", "当日跌 6%~6.5%", "strategy", "DailyDrop6To65Strategizer",
+     {"pct_min": -6.5, "pct_max": -6.0}, True, 160, "当日跌幅在指定区间"),
+    ("daily_rise_4_45", "当日涨 4%~4.5%", "strategy", "DailyRise4To45Strategizer",
+     {"pct_min": 4.0, "pct_max": 4.5}, True, 170, "当日涨幅在指定区间"),
+)
+
+
+DEFAULT_RULE_CHAIN_EXPRESSION = {
+    "and": [
+        {
+            "all_enabled": [
+                "market_cap_range",
+                "avg_daily_volume_range",
+                "price_range",
+                "pe_range",
+                "profitability",
+            ]
+        },
+        {"ref": "zuoyi_signal"},
+        {
+            "any_enabled": [
+                "ema_breakout",
+                "rsi_oversold",
+                "rsi_overbought",
+                "volume_spike_prior3",
+                "daily_drop_6_65",
+                "daily_rise_4_45",
+            ]
+        },
+    ]
+}
+
+
 class MarketDatabase:
     """MySQL 存储层"""
 
@@ -183,6 +253,7 @@ class MarketDatabase:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+        self.init_rule_schema()
 
     def _ema_table_name(self, timeframe: str) -> str:
         """获取 EMA 信号表名：ema_breakout_signals_{timeframe}"""
@@ -666,6 +737,168 @@ class MarketDatabase:
                 "created_at": row[10],
                 "updated_at": row[11],
             }
+
+    # ------------------------------------------------------------------
+    # Screening Rule Engine
+    # ------------------------------------------------------------------
+
+    def init_rule_schema(self):
+        """初始化数据库化规则引擎表，并写入默认市场规则。"""
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS screening_rule_metadata (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    market VARCHAR(8) NOT NULL COMMENT '市场: HK/US/A',
+                    rule_key VARCHAR(64) NOT NULL COMMENT '原子规则键',
+                    rule_name VARCHAR(128) NOT NULL COMMENT '规则展示名称',
+                    rule_type VARCHAR(16) NOT NULL COMMENT 'filter/strategy',
+                    implementation VARCHAR(128) NOT NULL COMMENT '代码侧白名单实现名',
+                    params_json JSON NULL COMMENT '规则参数',
+                    enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+                    display_order INT NOT NULL DEFAULT 100 COMMENT '执行展示顺序',
+                    description VARCHAR(512) NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_rule_metadata_market_key (market, rule_key),
+                    KEY idx_rule_metadata_market_enabled (market, enabled),
+                    KEY idx_rule_metadata_type (rule_type)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='筛选原子规则元数据'
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS screening_rule_chains (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    market VARCHAR(8) NOT NULL COMMENT '市场: HK/US/A',
+                    chain_key VARCHAR(64) NOT NULL COMMENT '规则链键',
+                    chain_name VARCHAR(128) NOT NULL COMMENT '规则链名称',
+                    expression_json JSON NOT NULL COMMENT '规则链 JSON DSL',
+                    enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+                    priority INT NOT NULL DEFAULT 100 COMMENT '优先级，越小越优先',
+                    description VARCHAR(512) NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_rule_chains_market_key (market, chain_key),
+                    KEY idx_rule_chains_market_enabled (market, enabled, priority)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='筛选规则使用链'
+                """
+            )
+        self.seed_default_screening_rules()
+
+    def seed_default_screening_rules(self):
+        """写入默认规则配置；已有配置保持不变。"""
+        metadata_rows = []
+        for market in DEFAULT_RULE_MARKETS:
+            for (
+                rule_key,
+                rule_name,
+                rule_type,
+                implementation,
+                params,
+                enabled,
+                display_order,
+                description,
+            ) in DEFAULT_RULE_METADATA:
+                metadata_rows.append((
+                    market,
+                    rule_key,
+                    rule_name,
+                    rule_type,
+                    implementation,
+                    json.dumps(params, ensure_ascii=False),
+                    1 if enabled else 0,
+                    display_order,
+                    description,
+                ))
+
+        chain_rows = [
+            (
+                market,
+                "default_zuoyi_and_other",
+                "左一战法与其他策略默认链",
+                json.dumps(DEFAULT_RULE_CHAIN_EXPRESSION, ensure_ascii=False),
+                1,
+                100,
+                "启用硬筛选全部通过 && 左一战法命中 && 至少一个其他策略命中",
+            )
+            for market in DEFAULT_RULE_MARKETS
+        ]
+
+        with self.conn.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT IGNORE INTO screening_rule_metadata
+                    (market, rule_key, rule_name, rule_type, implementation,
+                     params_json, enabled, display_order, description)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                metadata_rows,
+            )
+            cursor.executemany(
+                """
+                INSERT IGNORE INTO screening_rule_chains
+                    (market, chain_key, chain_name, expression_json, enabled, priority, description)
+                VALUES (%s,%s,%s,%s,%s,%s,%s)
+                """,
+                chain_rows,
+            )
+
+    def get_screening_rule_metadata(self, market: str) -> List[dict]:
+        """读取某个市场的所有原子规则元数据。"""
+        sql = """
+            SELECT market, rule_key, rule_name, rule_type, implementation,
+                   params_json, enabled, display_order, description
+            FROM screening_rule_metadata
+            WHERE market=%s
+            ORDER BY display_order, id
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (market,))
+            rows = cursor.fetchall() or []
+        return [
+            {
+                "market": row[0],
+                "rule_key": row[1],
+                "rule_name": row[2],
+                "rule_type": row[3],
+                "implementation": row[4],
+                "params_json": _decode_json_field(row[5], {}),
+                "enabled": bool(row[6]),
+                "display_order": int(row[7] or 0),
+                "description": row[8],
+            }
+            for row in rows
+        ]
+
+    def get_active_screening_rule_chain(self, market: str) -> Optional[dict]:
+        """读取某个市场优先级最高的启用规则链。"""
+        sql = """
+            SELECT market, chain_key, chain_name, expression_json,
+                   enabled, priority, description
+            FROM screening_rule_chains
+            WHERE market=%s AND enabled=1
+            ORDER BY priority ASC, id ASC
+            LIMIT 1
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (market,))
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "market": row[0],
+            "chain_key": row[1],
+            "chain_name": row[2],
+            "expression_json": _decode_json_field(row[3], {}),
+            "enabled": bool(row[4]),
+            "priority": int(row[5] or 100),
+            "description": row[6],
+        }
 
     # ------------------------------------------------------------------
     # 迁移（保留兼容）

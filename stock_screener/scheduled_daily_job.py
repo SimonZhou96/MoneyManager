@@ -308,6 +308,7 @@ class MarketScreeningResult:
 def get_default_screening_params() -> dict:
     """默认筛选参数：EMA 突破 + RSI 等策略"""
     return {
+        "use_db_rule_engine": True,
         "use_ema_breakout": True,
         "ema_short": 10,
         "ema_long": 150,
