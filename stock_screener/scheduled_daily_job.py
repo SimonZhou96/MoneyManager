@@ -357,6 +357,7 @@ def run_screening_for_market(
     for row in rows:
         code, name, fd_raw, sector, industry, market_cap, pe_ratio = row
         conditions = []
+        zuoyi_summary = {}
         if fd_raw:
             try:
                 fd = json.loads(fd_raw) if isinstance(fd_raw, str) else fd_raw
@@ -369,9 +370,13 @@ def run_screening_for_market(
                                     d.get("details") if isinstance(d.get("details"), dict) else {},
                                 )
                             )
+                        if d.get("filter_name") == "ZuoYiStrategizer":
+                            extracted_zuoyi = _extract_zuoyi_csv_fields(d)
+                            if extracted_zuoyi:
+                                zuoyi_summary = extracted_zuoyi
             except Exception:
                 pass
-        passed.append({
+        record = {
             "code": code,
             "name": name or code,
             "market": market,
@@ -380,7 +385,9 @@ def run_screening_for_market(
             "market_cap": market_cap,
             "pe_ratio": pe_ratio,
             "conditions_met": "|".join(conditions) if conditions else "",
-        })
+        }
+        record.update(zuoyi_summary)
+        passed.append(record)
     enrich_records_with_sectors(mysql_config, task_id, market, passed)
     return task_id, passed
 
@@ -390,10 +397,95 @@ def run_screening_for_market(
 # ------------------------------------------------------------------
 
 
+ZUOYI_CSV_COLUMNS = [
+    ("左一方向", "zuoyi_direction"),
+    ("左一日期", "zuoyi_left_one_date"),
+    ("左一顶", "zuoyi_left_one_high"),
+    ("左一底", "zuoyi_left_one_low"),
+    ("左一支撑区间", "zuoyi_support_zone"),
+    ("左一中位线日期", "zuoyi_median_date"),
+    ("左一突破日期", "zuoyi_breakout_date"),
+    ("左一突破用时", "zuoyi_bars_to_breakout"),
+]
+
+
+def _format_zuoyi_number(value) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if number != number:
+        return ""
+    return f"{number:.4g}"
+
+
+def _zuoyi_direction_text(direction: str) -> str:
+    if direction == "bullish":
+        return "看涨"
+    if direction == "bearish":
+        return "看跌"
+    return direction or ""
+
+
+def _extract_zuoyi_csv_fields(filter_detail: dict) -> dict:
+    """
+    从 ZuoYiStrategizer 的通过明细中提取 CSV 展示字段。
+
+    只有左一策略本身通过且存在 signals 时才返回字段；未启用左一、左一未命中、
+    或规则链未执行左一时保持空 dict，CSV 不会出现左一相关列。
+    """
+    if not isinstance(filter_detail, dict):
+        return {}
+    if filter_detail.get("filter_name") != "ZuoYiStrategizer":
+        return {}
+    if filter_detail.get("result") != "pass":
+        return {}
+
+    details = filter_detail.get("details")
+    if not isinstance(details, dict):
+        return {}
+    signals = details.get("signals")
+    if not isinstance(signals, list) or not signals:
+        return {}
+
+    extracted = []
+    for signal in signals:
+        if not isinstance(signal, dict):
+            continue
+        left_high = _format_zuoyi_number(signal.get("left_one_high"))
+        left_low = _format_zuoyi_number(signal.get("left_one_low"))
+        extracted.append({
+            "direction": _zuoyi_direction_text(str(signal.get("direction") or "")),
+            "left_one_date": str(signal.get("left_one_date") or ""),
+            "left_one_high": left_high,
+            "left_one_low": left_low,
+            "support_zone": f"{left_low}~{left_high}" if left_low and left_high else "",
+            "median_date": str(signal.get("median_date") or ""),
+            "breakout_date": str(signal.get("breakout_date") or ""),
+            "bars_to_breakout": str(signal.get("bars_to_breakout") or ""),
+        })
+
+    extracted = [item for item in extracted if item.get("left_one_high") or item.get("left_one_low")]
+    if not extracted:
+        return {}
+
+    return {
+        "zuoyi_direction": "；".join(item["direction"] for item in extracted if item["direction"]),
+        "zuoyi_left_one_date": "；".join(item["left_one_date"] for item in extracted if item["left_one_date"]),
+        "zuoyi_left_one_high": "；".join(item["left_one_high"] for item in extracted if item["left_one_high"]),
+        "zuoyi_left_one_low": "；".join(item["left_one_low"] for item in extracted if item["left_one_low"]),
+        "zuoyi_support_zone": "；".join(item["support_zone"] for item in extracted if item["support_zone"]),
+        "zuoyi_median_date": "；".join(item["median_date"] for item in extracted if item["median_date"]),
+        "zuoyi_breakout_date": "；".join(item["breakout_date"] for item in extracted if item["breakout_date"]),
+        "zuoyi_bars_to_breakout": "；".join(item["bars_to_breakout"] for item in extracted if item["bars_to_breakout"]),
+    }
+
+
 def write_screening_csv(records: List[dict], csv_path: str) -> None:
     """
     将满足条件的股票写入 CSV。
-    列：code, 市场, 名称, pe, 市值, 所属板块, 满足的条件
+    列：code, 市场, 名称, pe, 市值, 所属板块, 满足的条件。
+    若本次 records 中存在左一战法命中明细，则追加左一支撑区间列。
     """
     os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
     columns = [
@@ -405,6 +497,8 @@ def write_screening_csv(records: List[dict], csv_path: str) -> None:
         ("所属板块", "sector"),
         ("满足的条件", "conditions_met"),
     ]
+    if any(r.get("zuoyi_support_zone") for r in records):
+        columns.extend(ZUOYI_CSV_COLUMNS)
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
         w.writerow([c[0] for c in columns])
@@ -466,7 +560,7 @@ def get_default_screening_params() -> dict:
         "ema_short": 10,
         "ema_long": 150,
         "use_zuoyi_strategy": True,
-        "zuoyi_signal_window": 3,
+        "zuoyi_signal_window": 15,
         "rsi_period": 14,
         "rsi_oversold_threshold": 30.0,
         "rsi_overbought_threshold": 70.0,

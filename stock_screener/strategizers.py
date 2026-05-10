@@ -123,7 +123,7 @@ class ZuoYiStrategizer(Strategizer):
 
     def __init__(
         self,
-        signal_window: int = 3,
+        signal_window: int = 15,
         include_bullish: bool = True,
         include_bearish: bool = True,
         name: str = "ZuoYiStrategizer",

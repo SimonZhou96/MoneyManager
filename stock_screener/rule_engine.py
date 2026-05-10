@@ -199,7 +199,7 @@ class RuleRegistry:
         registry.register_strategy(
             "ZuoYiStrategizer",
             lambda params: ZuoYiStrategizer(
-                signal_window=int(params.get("signal_window", 3)),
+                signal_window=int(params.get("signal_window", 15)),
                 include_bullish=bool(params.get("include_bullish", True)),
                 include_bearish=bool(params.get("include_bearish", True)),
             ),

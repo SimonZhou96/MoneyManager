@@ -469,7 +469,7 @@ def _find_recent_zuoyi_signal(
 def check_zuoyi_strategy(
     df: pd.DataFrame,
     check_date: date | None = None,
-    signal_window: int = 3,
+    signal_window: int = 15,
     include_bullish: bool = True,
     include_bearish: bool = True,
 ) -> ZuoYiAnalysis:

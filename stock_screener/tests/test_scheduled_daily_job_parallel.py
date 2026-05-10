@@ -182,6 +182,165 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
             for path in expected_paths:
                 self.assertTrue(Path(path).exists())
 
+    def test_default_screening_params_use_zuoyi_window_15(self):
+        params = job.get_default_screening_params()
+
+        self.assertTrue(params["use_zuoyi_strategy"])
+        self.assertEqual(params["zuoyi_signal_window"], 15)
+
+    def test_extract_zuoyi_csv_fields_requires_passed_signals(self):
+        failed_detail = {
+            "filter_name": "ZuoYiStrategizer",
+            "result": "fail",
+            "details": {"signals": [{
+                "direction": "bullish",
+                "left_one_high": 10.0,
+                "left_one_low": 8.0,
+            }]},
+        }
+        other_detail = {
+            "filter_name": "EMABreakoutStrategizer",
+            "result": "pass",
+            "details": {"signals": [{
+                "direction": "bullish",
+                "left_one_high": 10.0,
+                "left_one_low": 8.0,
+            }]},
+        }
+
+        self.assertEqual(job._extract_zuoyi_csv_fields(failed_detail), {})
+        self.assertEqual(job._extract_zuoyi_csv_fields(other_detail), {})
+
+    def test_extract_zuoyi_csv_fields_formats_multiple_signals(self):
+        detail = {
+            "filter_name": "ZuoYiStrategizer",
+            "result": "pass",
+            "details": {
+                "signals": [
+                    {
+                        "direction": "bullish",
+                        "left_one_date": "2026-05-01",
+                        "left_one_high": 10.0,
+                        "left_one_low": 8.0,
+                        "median_date": "2026-05-03",
+                        "breakout_date": "2026-05-10",
+                        "bars_to_breakout": 7,
+                    },
+                    {
+                        "direction": "bearish",
+                        "left_one_date": "2026-05-02",
+                        "left_one_high": 14.0,
+                        "left_one_low": 12.0,
+                        "median_date": "2026-05-04",
+                        "breakout_date": "2026-05-11",
+                        "bars_to_breakout": 7,
+                    },
+                ],
+            },
+        }
+
+        fields = job._extract_zuoyi_csv_fields(detail)
+
+        self.assertEqual(fields["zuoyi_direction"], "看涨；看跌")
+        self.assertEqual(fields["zuoyi_left_one_high"], "10；14")
+        self.assertEqual(fields["zuoyi_left_one_low"], "8；12")
+        self.assertEqual(fields["zuoyi_support_zone"], "8~10；12~14")
+        self.assertEqual(fields["zuoyi_breakout_date"], "2026-05-10；2026-05-11")
+
+    def test_write_screening_csv_adds_zuoyi_columns_only_when_present(self):
+        base_record = {
+            "code": "HK.00001",
+            "name": "HK One",
+            "market": "HK",
+            "sector": "Finance",
+            "market_cap": 100.0,
+            "pe_ratio": 10.0,
+            "conditions_met": "EMA突破",
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            plain_csv = Path(tmp_dir) / "plain.csv"
+            zuoyi_csv = Path(tmp_dir) / "zuoyi.csv"
+
+            job.write_screening_csv([base_record], str(plain_csv))
+            with open(plain_csv, "r", encoding="utf-8-sig", newline="") as f:
+                plain_rows = list(csv.DictReader(f))
+
+            zuoyi_record = dict(base_record)
+            zuoyi_record.update({
+                "conditions_met": "左一战法-看涨|EMA突破",
+                "zuoyi_direction": "看涨",
+                "zuoyi_left_one_date": "2026-05-01",
+                "zuoyi_left_one_high": "10",
+                "zuoyi_left_one_low": "8",
+                "zuoyi_support_zone": "8~10",
+                "zuoyi_median_date": "2026-05-03",
+                "zuoyi_breakout_date": "2026-05-10",
+                "zuoyi_bars_to_breakout": "7",
+            })
+            job.write_screening_csv([zuoyi_record], str(zuoyi_csv))
+            with open(zuoyi_csv, "r", encoding="utf-8-sig", newline="") as f:
+                zuoyi_rows = list(csv.DictReader(f))
+
+        self.assertNotIn("左一顶", plain_rows[0])
+        self.assertNotIn("左一支撑区间", plain_rows[0])
+        self.assertEqual(zuoyi_rows[0]["左一方向"], "看涨")
+        self.assertEqual(zuoyi_rows[0]["左一顶"], "10")
+        self.assertEqual(zuoyi_rows[0]["左一底"], "8")
+        self.assertEqual(zuoyi_rows[0]["左一支撑区间"], "8~10")
+
+    def test_split_screening_csvs_inherit_zuoyi_columns_per_file(self):
+        records = [
+            {
+                "code": "US.TEST",
+                "name": "Test Inc",
+                "market": "US",
+                "sector": "Tech",
+                "market_cap": 200.0,
+                "pe_ratio": 20.0,
+                "conditions_met": "左一战法-看涨|EMA突破",
+                "zuoyi_direction": "看涨",
+                "zuoyi_left_one_date": "2026-05-01",
+                "zuoyi_left_one_high": "10",
+                "zuoyi_left_one_low": "8",
+                "zuoyi_support_zone": "8~10",
+                "zuoyi_median_date": "2026-05-03",
+                "zuoyi_breakout_date": "2026-05-10",
+                "zuoyi_bars_to_breakout": "7",
+            },
+            {
+                "code": "US.ETF",
+                "name": "ETF Fund",
+                "market": "US",
+                "sector": "ETF",
+                "market_cap": 300.0,
+                "pe_ratio": 30.0,
+                "conditions_met": "左一战法-看跌|RSI超买",
+                "zuoyi_direction": "看跌",
+                "zuoyi_left_one_date": "2026-05-02",
+                "zuoyi_left_one_high": "14",
+                "zuoyi_left_one_low": "12",
+                "zuoyi_support_zone": "12~14",
+                "zuoyi_median_date": "2026-05-04",
+                "zuoyi_breakout_date": "2026-05-11",
+                "zuoyi_bars_to_breakout": "7",
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            no_etf_path, etf_only_path = job.write_split_screening_csvs(
+                records,
+                str(Path(tmp_dir) / "screening_result.csv"),
+                {"US.ETF"},
+            )
+            with open(no_etf_path, "r", encoding="utf-8-sig", newline="") as f:
+                no_etf_rows = list(csv.DictReader(f))
+            with open(etf_only_path, "r", encoding="utf-8-sig", newline="") as f:
+                etf_rows = list(csv.DictReader(f))
+
+        self.assertEqual(no_etf_rows[0]["左一支撑区间"], "8~10")
+        self.assertEqual(etf_rows[0]["左一支撑区间"], "12~14")
+
     def test_ai_analysis_success_appends_artifact_paths(self):
         FakeMarketDatabase.pools_by_market = {
             "US": [{"code": "US.TEST", "name": "Test Inc"}],

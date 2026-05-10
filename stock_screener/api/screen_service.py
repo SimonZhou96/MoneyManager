@@ -157,7 +157,7 @@ def create_strategizer_chain_from_params(params: dict) -> StrategizerChain:
     # 左一战法：当前 timeframe 内多空都筛，任一方向命中即满足策略条件
     if params.get("use_zuoyi_strategy", True):
         chain.add_strategizer(ZuoYiStrategizer(
-            signal_window=params.get("zuoyi_signal_window", 3),
+            signal_window=params.get("zuoyi_signal_window", 15),
             include_bullish=True,
             include_bearish=True,
         ))

@@ -125,6 +125,71 @@ class ZuoYiStrategyTest(unittest.TestCase):
         self.assertFalse(result.satisfied)
         self.assertEqual(result.result_type, "no_signal")
 
+    def test_bullish_breakout_on_tenth_bar_is_satisfied_with_window_15(self):
+        df = make_kline([
+            (10.0, 8.0, 9.0),
+            (9.0, 8.5, 8.8),
+            (9.2, 7.0, 7.4),
+            (9.4, 7.3, 9.0),
+            (9.5, 7.4, 9.1),
+            (9.6, 7.5, 9.2),
+            (9.7, 7.6, 9.3),
+            (9.8, 7.7, 9.4),
+            (9.9, 7.8, 9.5),
+            (9.9, 7.9, 9.6),
+            (9.9, 8.0, 9.7),
+            (9.9, 8.1, 9.8),
+            (10.5, 8.2, 10.2),
+        ])
+
+        result = check_zuoyi_strategy(df, signal_window=15)
+
+        self.assertTrue(result.satisfied)
+        self.assertEqual(result.result_type, "bullish_breakout")
+        signal = result.signals[0]
+        self.assertEqual(signal.direction, "bullish")
+        self.assertEqual(signal.left_one_date, date(2026, 1, 1))
+        self.assertEqual(signal.left_one_high, 10.0)
+        self.assertEqual(signal.left_one_low, 8.0)
+        self.assertEqual(signal.median_date, date(2026, 1, 3))
+        self.assertEqual(signal.breakout_date, date(2026, 1, 13))
+        self.assertEqual(signal.bars_to_breakout, 10)
+
+    def test_bearish_breakdown_on_fifteenth_bar_is_satisfied_with_window_15(self):
+        df = make_kline([
+            (12.0, 10.0, 11.0),
+            (13.0, 10.8, 12.0),
+            (14.0, 10.5, 13.8),
+            (13.8, 10.6, 12.8),
+            (13.7, 10.6, 12.7),
+            (13.6, 10.6, 12.6),
+            (13.5, 10.6, 12.5),
+            (13.4, 10.5, 12.4),
+            (13.3, 10.5, 12.3),
+            (13.2, 10.5, 12.2),
+            (13.1, 10.4, 12.1),
+            (13.0, 10.4, 12.0),
+            (12.9, 10.4, 11.9),
+            (12.8, 10.3, 11.8),
+            (12.7, 10.3, 11.7),
+            (12.6, 10.2, 11.6),
+            (12.5, 10.1, 11.5),
+            (12.4, 9.5, 9.8),
+        ])
+
+        result = check_zuoyi_strategy(df, signal_window=15)
+
+        self.assertTrue(result.satisfied)
+        self.assertEqual(result.result_type, "bearish_breakdown")
+        signal = result.signals[0]
+        self.assertEqual(signal.direction, "bearish")
+        self.assertEqual(signal.left_one_date, date(2026, 1, 1))
+        self.assertEqual(signal.left_one_high, 12.0)
+        self.assertEqual(signal.left_one_low, 10.0)
+        self.assertEqual(signal.median_date, date(2026, 1, 3))
+        self.assertEqual(signal.breakout_date, date(2026, 1, 18))
+        self.assertEqual(signal.bars_to_breakout, 15)
+
     def test_invalid_data_reports_missing_columns(self):
         df = pd.DataFrame({
             "date": pd.date_range("2026-01-01", periods=3, freq="D"),
@@ -182,6 +247,8 @@ class ZuoYiStrategyTest(unittest.TestCase):
         self.assertEqual(output.name, "ZuoYiStrategizer")
         self.assertEqual(output.details["direction"], "bullish")
         self.assertEqual(output.details["signals"][0]["direction"], "bullish")
+        self.assertEqual(output.details["signals"][0]["left_one_high"], 10.0)
+        self.assertEqual(output.details["signals"][0]["left_one_low"], 8.0)
 
 
 if __name__ == "__main__":
