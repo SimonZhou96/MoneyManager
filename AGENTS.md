@@ -250,9 +250,11 @@ screening and must never block the original CSV or Feishu delivery path.
 - Prefer batch or shared-context designs when accuracy remains acceptable, for
   example one market-level search plus batched company searches instead of one
   search per stock.
-- Company-news search must default to batch-only. Do not reintroduce a default
-  one-Tavily-request-per-stock implementation; if higher quality is needed,
-  make per-stock fallback an explicit opt-in with a call-count estimate.
+- Company-news search must default to batch-first. Do not reintroduce a default
+  one-Tavily-request-per-stock implementation. If Tavily's query length budget
+  cannot fit multiple stocks while preserving `code/ticker + company-name`
+  fragments, split into smaller batches and only degrade to single-stock
+  requests for those unavoidable edge cases.
 - When batching reduces quality, keep the mode configurable and document the
   tradeoff. Default should favor correctness unless quota pressure is explicit.
 - Best-effort auxiliary features must stay failure-isolated: quota exhaustion,
@@ -269,6 +271,9 @@ screening and must never block the original CSV or Feishu delivery path.
   `CodexResponsesLLMProvider` for Codex models through `/v1/responses`, and
   `DeepSeekLLMProvider` for DeepSeek Chat Completions. Use `NullLLMProvider`
   when model credentials are missing.
+- `FallbackLLMProvider` is the only place that should implement model fallback.
+  It tries providers in order per LLM batch and stops on the first successful
+  result.
 - `signal_analysis.factories.SearchProviderFactory` and
   `LLMProviderFactory` are the only places that should read provider-specific
   environment variables.
@@ -286,11 +291,15 @@ screening and must never block the original CSV or Feishu delivery path.
 - `TAVILY_API_KEY` enables Tavily search. Missing key means CSV-only model
   analysis if an LLM is configured.
 - `LLM_API_BASE` defaults to `https://api.openai.com`.
-- `LLM_API_KEY` and `LLM_MODEL` are required for model analysis. If either is
-  missing for the default provider, analysis is skipped and no AI artifacts are
-  generated.
+- `LLM_API_KEY` and `LLM_MODEL` configure the OpenAI-compatible provider. If
+  they are missing, that provider is skipped and the fallback chain tries the
+  next configured provider.
 - `LLM_PROVIDER=openai_compatible|codex_responses|deepseek` selects the
-  analysis model provider. The default is `openai_compatible`.
+  first analysis model provider when `LLM_PROVIDER_ORDER` is not set.
+- `LLM_PROVIDER_ORDER=openai_compatible,codex_responses,deepseek` selects the
+  fallback chain. Missing provider credentials are skipped. If every provider
+  fails for a batch, the chain records warnings and the original CSV/Feishu path
+  must still continue.
 - Codex Responses provider variables are `CODEX_API_BASE`,
   `CODEX_API_KEY`, `CODEX_LLM_MODEL`, and `CODEX_REASONING_EFFORT`.
   `CODEX_API_KEY` falls back to `LLM_API_KEY`; `CODEX_LLM_MODEL` defaults to
@@ -305,6 +314,11 @@ screening and must never block the original CSV or Feishu delivery path.
   `SIGNAL_SEARCH_MAX_RESULTS` tune batching, request timeout, and search depth.
 - `SIGNAL_COMPANY_SEARCH_BATCH_SIZE` controls how many screened stocks are
   grouped into one Tavily company-news query. Default is `10`.
+- `SIGNAL_COMPANY_SEARCH_QUERY_MAX_CHARS` caps each Tavily company-news query.
+  Default is `390` to stay below Tavily's 400-character hard limit. If a
+  name-preserving batch would exceed the cap, split it into query-safe
+  sub-batches; single-stock requests are allowed only when the query budget
+  cannot safely hold more than one stock.
 - `SIGNAL_MARKET_CONTEXT_LIMIT`, `SIGNAL_COMPANY_CONTEXT_LIMIT`, and
   `SIGNAL_SEARCH_CONTENT_CHARS` limit how much search text enters each model
   prompt. Defaults are conservative (`2`, `2`, `300`) for low TPM/RPM model

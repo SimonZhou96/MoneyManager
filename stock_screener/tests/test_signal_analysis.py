@@ -16,6 +16,7 @@ from signal_analysis.factories import LLMProviderFactory, SearchProviderFactory
 from signal_analysis.llm_providers import (
     CodexResponsesLLMProvider,
     DeepSeekLLMProvider,
+    FallbackLLMProvider,
     NullLLMProvider,
     OpenAICompatibleLLMProvider,
 )
@@ -101,12 +102,59 @@ class FakeLLMProvider:
         ]
 
 
+class RecordingLLMProvider:
+    is_available = True
+
+    def __init__(self, name, model, should_fail=False, reliability_score=80.0):
+        self.name = name
+        self.model = model
+        self.should_fail = should_fail
+        self.reliability_score = reliability_score
+        self.calls = 0
+
+    @property
+    def model_name(self):
+        return self.model
+
+    def analyze_batch(self, market, signals, market_documents, sector_documents, hot_sectors, company_documents):
+        self.calls += 1
+        if self.should_fail:
+            raise RuntimeError(f"{self.name} boom")
+        return [
+            SignalAnalysisResult(
+                code=row.code,
+                name=row.name,
+                reliability_score=self.reliability_score,
+                confidence_score=70.0,
+                signal_bias="neutral",
+                summary=f"{self.name} result",
+                model=self.model,
+            )
+            for row in signals
+        ]
+
+
 class ExplodingRepository:
     def save_results(self, rows):
         raise RuntimeError("db boom")
 
 
 class SignalAnalysisTest(unittest.TestCase):
+    def signal_rows(self):
+        return [
+            ScreeningSignalRow(
+                index=0,
+                code="HK.00001",
+                market="HK",
+                market_label="港股",
+                name="Test HK",
+                pe_ratio="",
+                market_cap="",
+                sector="Finance",
+                conditions_met="左一战法-看涨|EMA突破",
+            )
+        ]
+
     def write_csv(self, directory, rows=None):
         path = Path(directory) / "screening_result_2026-05-09_HK.csv"
         rows = rows or [{
@@ -137,8 +185,48 @@ class SignalAnalysisTest(unittest.TestCase):
         with patch.dict(os.environ, {"LLM_API_KEY": "key", "LLM_MODEL": "model-x"}, clear=True):
             provider = LLMProviderFactory.from_env(AnalysisSettings())
 
-        self.assertIsInstance(provider, OpenAICompatibleLLMProvider)
-        self.assertEqual(provider.model_name, "model-x")
+        self.assertIsInstance(provider, FallbackLLMProvider)
+        self.assertEqual(provider.provider_names, ["openai_compatible", "codex_responses", "deepseek"])
+        self.assertIsInstance(provider.providers[0], OpenAICompatibleLLMProvider)
+        self.assertEqual(provider.providers[0].model_name, "model-x")
+
+    def test_factory_builds_fallback_provider_from_provider_order(self):
+        with patch.dict(
+            os.environ,
+            {
+                "LLM_PROVIDER_ORDER": "openai_compatible,codex_responses,deepseek",
+                "LLM_API_KEY": "openai-key",
+                "LLM_MODEL": "model-x",
+                "CODEX_API_KEY": "codex-key",
+                "CODEX_LLM_MODEL": "gpt-5.2-codex",
+                "DEEPSEEK_API_KEY": "deepseek-key",
+                "DEEPSEEK_LLM_MODEL": "deepseek-v4-flash",
+            },
+            clear=True,
+        ):
+            provider = LLMProviderFactory.from_env(AnalysisSettings())
+
+        self.assertIsInstance(provider, FallbackLLMProvider)
+        self.assertEqual(provider.provider_names, ["openai_compatible", "codex_responses", "deepseek"])
+
+    def test_factory_uses_legacy_llm_provider_as_first_fallback_choice(self):
+        with patch.dict(
+            os.environ,
+            {
+                "LLM_PROVIDER": "deepseek",
+                "LLM_API_KEY": "openai-key",
+                "LLM_MODEL": "model-x",
+                "CODEX_API_KEY": "codex-key",
+                "CODEX_LLM_MODEL": "gpt-5.2-codex",
+                "DEEPSEEK_API_KEY": "deepseek-key",
+                "DEEPSEEK_LLM_MODEL": "deepseek-v4-flash",
+            },
+            clear=True,
+        ):
+            provider = LLMProviderFactory.from_env(AnalysisSettings())
+
+        self.assertIsInstance(provider, FallbackLLMProvider)
+        self.assertEqual(provider.provider_names, ["deepseek", "openai_compatible", "codex_responses"])
 
     def test_factory_selects_codex_responses_provider_with_llm_key_fallback(self):
         with patch.dict(
@@ -153,15 +241,17 @@ class SignalAnalysisTest(unittest.TestCase):
         ):
             provider = LLMProviderFactory.from_env(AnalysisSettings(timeout_sec=7))
 
-        self.assertIsInstance(provider, CodexResponsesLLMProvider)
-        self.assertEqual(provider.model_name, "gpt-5.2-codex")
-        self.assertEqual(provider.reasoning_effort, "high")
+        self.assertIsInstance(provider, FallbackLLMProvider)
+        self.assertEqual(provider.provider_names, ["codex_responses", "deepseek"])
+        self.assertIsInstance(provider.providers[0], CodexResponsesLLMProvider)
+        self.assertEqual(provider.providers[0].model_name, "gpt-5.2-codex")
+        self.assertEqual(provider.providers[0].reasoning_effort, "high")
 
     def test_factory_selects_deepseek_provider_with_llm_key_fallback(self):
         with patch.dict(
             os.environ,
             {
-                "LLM_PROVIDER": "deepseek",
+                "LLM_PROVIDER_ORDER": "deepseek",
                 "LLM_API_KEY": "fallback-key",
                 "DEEPSEEK_LLM_MODEL": "deepseek-v4-pro",
             },
@@ -172,6 +262,21 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertIsInstance(provider, DeepSeekLLMProvider)
         self.assertEqual(provider.model_name, "deepseek-v4-pro")
         self.assertEqual(provider.timeout_sec, 7)
+
+    def test_factory_skips_unconfigured_providers_in_order(self):
+        with patch.dict(
+            os.environ,
+            {
+                "LLM_PROVIDER_ORDER": "openai_compatible,codex_responses,deepseek",
+                "DEEPSEEK_API_KEY": "deepseek-key",
+                "DEEPSEEK_LLM_MODEL": "deepseek-v4-flash",
+            },
+            clear=True,
+        ):
+            provider = LLMProviderFactory.from_env(AnalysisSettings())
+
+        self.assertIsInstance(provider, DeepSeekLLMProvider)
+        self.assertEqual(provider.model_name, "deepseek-v4-flash")
 
     def test_tavily_provider_parses_search_results(self):
         class Response:
@@ -271,6 +376,122 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertEqual(len(grouped["SH.601339"]), 1)
         self.assertIn("HK.00001", post.call_args.kwargs["json"]["query"])
         self.assertIn("US.AAPL", post.call_args.kwargs["json"]["query"])
+
+    def test_tavily_company_batch_query_stays_under_provider_limit_with_name_fragments(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"results": []}
+
+        fixtures = [
+            ("HK.00006", "POWER ASSETS HOLDINGS"),
+            ("HK.01038", "CK INFRASTRUCTURE HOLDINGS"),
+            ("HK.02460", "JIDU INC"),
+            ("HK.02543", "AUTOHOME INC"),
+            ("HK.02587", "WEIMOB INC"),
+            ("HK.02656", "BOSS ZHIPIN"),
+            ("HK.02659", "S.F. HOLDING"),
+            ("HK.03476", "CSOP MSCI HK TECH ETF"),
+            ("HK.09151", "PREMIA CHINA STAR50 ETF"),
+        ]
+        rows = [
+            ScreeningSignalRow(
+                index=index,
+                code=code,
+                market="HK",
+                market_label="港股",
+                name=name,
+                pe_ratio="",
+                market_cap="",
+                sector="",
+                conditions_met="",
+            )
+            for index, (code, name) in enumerate(fixtures)
+        ]
+
+        with patch("signal_analysis.search_providers.requests.post", return_value=Response()) as post:
+            provider = TavilySearchProvider(api_key="key", timeout_sec=5)
+            grouped = provider.search_companies_batch("HK", rows, 5)
+
+        self.assertEqual(post.call_count, 1)
+        query = post.call_args.kwargs["json"]["query"]
+        self.assertLessEqual(len(query), 400)
+        for row in rows:
+            self.assertIn(row.code, query)
+            self.assertIn(row.name.split()[0], query)
+            self.assertIn(row.code, grouped)
+
+    def test_tavily_company_batch_splits_when_name_preserving_query_is_too_long(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"results": []}
+
+        rows = [
+            ScreeningSignalRow(
+                index=index,
+                code=f"US.LONGTICK{index:02d}",
+                market="US",
+                market_label="美股",
+                name=f"Very Long Company Name {index}",
+                pe_ratio="",
+                market_cap="",
+                sector="",
+                conditions_met="",
+            )
+            for index in range(18)
+        ]
+
+        with patch.dict(os.environ, {"SIGNAL_COMPANY_SEARCH_QUERY_MAX_CHARS": "120"}):
+            with patch("signal_analysis.search_providers.requests.post", return_value=Response()) as post:
+                provider = TavilySearchProvider(api_key="key", timeout_sec=5)
+                grouped = provider.search_companies_batch("US", rows, 5)
+
+        self.assertGreater(post.call_count, 1)
+        self.assertEqual(set(grouped), {row.code for row in rows})
+        for call in post.call_args_list:
+            query = call.kwargs["json"]["query"]
+            self.assertLessEqual(len(query), 120)
+            self.assertIn("Very", query)
+
+    def test_tavily_company_batch_falls_back_to_single_safe_queries_for_extreme_batches(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"results": []}
+
+        rows = [
+            ScreeningSignalRow(
+                index=index,
+                code=f"US.EXTREMELYLONGTICKER000000000{index}",
+                market="US",
+                market_label="美股",
+                name=f"Very Long Company Name With Many Words {index}",
+                pe_ratio="",
+                market_cap="",
+                sector="",
+                conditions_met="",
+            )
+            for index in range(3)
+        ]
+
+        with patch.dict(os.environ, {"SIGNAL_COMPANY_SEARCH_QUERY_MAX_CHARS": "120"}):
+            with patch("signal_analysis.search_providers.requests.post", return_value=Response()) as post:
+                provider = TavilySearchProvider(api_key="key", timeout_sec=5)
+                grouped = provider.search_companies_batch("US", rows, 5)
+
+        self.assertEqual(post.call_count, len(rows))
+        self.assertEqual(set(grouped), {row.code for row in rows})
+        for call in post.call_args_list:
+            query = call.kwargs["json"]["query"]
+            self.assertLessEqual(len(query), 120)
+            self.assertIn("Very", query)
 
     def test_null_search_provider_batch_returns_empty_documents_by_code(self):
         rows = [
@@ -392,6 +613,46 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertIn("JSON object", payload["messages"][0]["content"])
         self.assertEqual(results[0].code, "HK.00001")
         self.assertEqual(results[0].reliability_score, 86.0)
+
+    def test_fallback_provider_stops_after_first_success(self):
+        first = RecordingLLMProvider("first", "model-a", reliability_score=81.0)
+        second = RecordingLLMProvider("second", "model-b", reliability_score=92.0)
+        provider = FallbackLLMProvider([first, second])
+
+        results = provider.analyze_batch("HK", self.signal_rows(), [], [], ["Finance"], {})
+
+        self.assertEqual(first.calls, 1)
+        self.assertEqual(second.calls, 0)
+        self.assertEqual(results[0].reliability_score, 81.0)
+        self.assertEqual(provider.drain_warnings(), [])
+
+    def test_fallback_provider_tries_next_after_failure(self):
+        first = RecordingLLMProvider("first", "model-a", should_fail=True)
+        second = RecordingLLMProvider("second", "model-b", reliability_score=92.0)
+        provider = FallbackLLMProvider([first, second])
+
+        results = provider.analyze_batch("HK", self.signal_rows(), [], [], ["Finance"], {})
+        warnings = provider.drain_warnings()
+
+        self.assertEqual(first.calls, 1)
+        self.assertEqual(second.calls, 1)
+        self.assertEqual(results[0].reliability_score, 92.0)
+        self.assertTrue(any("first:model-a 失败" in warning for warning in warnings))
+        self.assertTrue(any("fallback 使用 second:model-b 成功返回" in warning for warning in warnings))
+
+    def test_fallback_provider_raises_after_all_providers_fail(self):
+        first = RecordingLLMProvider("first", "model-a", should_fail=True)
+        second = RecordingLLMProvider("second", "model-b", should_fail=True)
+        provider = FallbackLLMProvider([first, second])
+
+        with self.assertRaisesRegex(RuntimeError, "所有 LLM provider 均失败"):
+            provider.analyze_batch("HK", self.signal_rows(), [], [], ["Finance"], {})
+
+        warnings = provider.drain_warnings()
+        self.assertEqual(first.calls, 1)
+        self.assertEqual(second.calls, 1)
+        self.assertTrue(any("first:model-a 失败" in warning for warning in warnings))
+        self.assertTrue(any("second:model-b 失败" in warning for warning in warnings))
 
     def test_codex_responses_provider_parses_output_text_json(self):
         class Response:
@@ -637,6 +898,33 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertEqual(provider.company_batch_calls, [["HK.00001"]])
         self.assertEqual(context.company_documents["HK.00001"], [])
         self.assertTrue(any("公司事件批量搜索失败" in warning for warning in result.warnings))
+
+    def test_chain_records_warning_when_all_fallback_llm_providers_fail(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            llm_provider = FallbackLLMProvider([
+                RecordingLLMProvider("first", "model-a", should_fail=True),
+                RecordingLLMProvider("second", "model-b", should_fail=True),
+            ])
+            context = SignalAnalysisContext(
+                task_id="task-HK",
+                market="HK",
+                csv_path=csv_path,
+                check_date=date(2026, 5, 9),
+                settings=AnalysisSettings(batch_size=20, search_max_results=2),
+                search_provider=FakeSearchProvider(),
+                llm_provider=llm_provider,
+            )
+
+            with patch.dict(os.environ, {"SIGNAL_ENABLE_API_HOT_SECTORS": "0"}):
+                result = SignalAnalysisChain().run(context)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.artifact_paths, [])
+        self.assertTrue(any("LLM provider first:model-a 失败" in warning for warning in result.warnings))
+        self.assertTrue(any("LLM provider second:model-b 失败" in warning for warning in result.warnings))
+        self.assertTrue(any("模型批量分析失败" in warning for warning in result.warnings))
+        self.assertTrue(any("模型分析没有成功返回任何股票结果" in warning for warning in result.warnings))
 
     def test_write_analysis_columns_refreshes_existing_ai_columns_in_place(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import os
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .models import ScreeningSignalRow, SearchDocument
 
@@ -123,26 +124,112 @@ class TavilySearchProvider(SearchProvider):
     ) -> Dict[str, List[SearchDocument]]:
         if not rows:
             return {}
-        query = _build_company_batch_query(market, rows)
-        documents = self.search(query, max_results)
-        return _assign_documents_to_stocks(documents, rows)
+        grouped: Dict[str, List[SearchDocument]] = {row.code: [] for row in rows}
+        max_chars = _company_search_query_max_chars()
+        for query_rows in _split_rows_by_query_budget(market, rows, max_chars):
+            query = _build_company_batch_query(market, query_rows, max_chars=max_chars)
+            documents = self.search(query, max_results)
+            assigned = _assign_documents_to_stocks(documents, query_rows)
+            for code, code_documents in assigned.items():
+                grouped.setdefault(code, []).extend(code_documents)
+        return grouped
 
 
-def _build_company_batch_query(market: str, rows: List[ScreeningSignalRow]) -> str:
-    items = []
+def _build_company_batch_query(
+    market: str,
+    rows: List[ScreeningSignalRow],
+    max_chars: Optional[int] = None,
+) -> str:
+    max_chars = max_chars or _company_search_query_max_chars()
+    prefix = f"{market} stocks latest news earnings events: "
+    if not rows:
+        return prefix.rstrip()
+
+    for name_max_chars in (36, 30, 24, 18, 12, 8):
+        query = _compose_company_batch_query(prefix, rows, name_max_chars)
+        if len(query) <= max_chars:
+            return query
+
+    if len(rows) == 1:
+        return _build_single_company_query(prefix, rows[0], max_chars)
+
+    return _compose_company_batch_query(prefix, rows, 8)
+
+
+def _split_rows_by_query_budget(
+    market: str,
+    rows: List[ScreeningSignalRow],
+    max_chars: int,
+) -> List[List[ScreeningSignalRow]]:
+    batches: List[List[ScreeningSignalRow]] = []
+    current: List[ScreeningSignalRow] = []
     for row in rows:
-        terms = [row.code]
-        ticker = _normalize_ticker(row.code)
-        if ticker and ticker != row.code:
-            terms.append(ticker)
-        if row.name and row.name != row.code:
-            terms.append(row.name)
-        items.append(" / ".join(terms))
-    joined = "; ".join(items)
-    return (
-        f"{market} listed companies latest news earnings company events policy "
-        f"for these stocks: {joined}"
-    )
+        candidate = [*current, row]
+        if current and len(_build_company_batch_query(market, candidate, max_chars=max_chars)) > max_chars:
+            batches.append(current)
+            current = [row]
+        else:
+            current = candidate
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _compose_company_batch_query(
+    prefix: str,
+    rows: List[ScreeningSignalRow],
+    name_max_chars: int,
+) -> str:
+    return f"{prefix}{'; '.join(_company_query_item(row, name_max_chars) for row in rows)}"
+
+
+def _build_single_company_query(prefix: str, row: ScreeningSignalRow, max_chars: int) -> str:
+    base = " ".join(_company_query_base_terms(row))
+    if not base:
+        return prefix[:max_chars].rstrip()
+    name_budget = max_chars - len(prefix) - len(base) - 1
+    name_fragment = _fit_company_name_fragment(row.name, name_budget)
+    item = f"{base} {name_fragment}".strip()
+    query = f"{prefix}{item}"
+    if len(query) <= max_chars:
+        return query
+    return query[:max_chars].rstrip()
+
+
+def _company_query_item(row: ScreeningSignalRow, name_max_chars: int) -> str:
+    terms = _company_query_base_terms(row)
+    name_fragment = _fit_company_name_fragment(row.name, name_max_chars)
+    if name_fragment and name_fragment != row.code and name_fragment not in terms:
+        terms.append(name_fragment)
+    return " ".join(terms)
+
+
+def _company_query_base_terms(row: ScreeningSignalRow) -> List[str]:
+    terms: List[str] = []
+    code = (row.code or "").strip()
+    ticker = _normalize_ticker(code)
+    for term in (code, ticker):
+        if term and term not in terms:
+            terms.append(term)
+    return terms
+
+
+def _fit_company_name_fragment(name: str, budget: int) -> str:
+    if budget <= 0:
+        return ""
+    value = re.sub(r"\s+", " ", (name or "")).strip()
+    if len(value) <= budget:
+        return value
+    return value[:budget].rstrip()
+
+
+def _company_search_query_max_chars() -> int:
+    raw = os.getenv("SIGNAL_COMPANY_SEARCH_QUERY_MAX_CHARS", "390").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 390
+    return min(400, max(120, value))
 
 
 def _stock_identity_terms(row: ScreeningSignalRow) -> List[str]:

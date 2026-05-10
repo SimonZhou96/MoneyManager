@@ -8,9 +8,10 @@
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/AGENTS.md" beforeDir="false" afterPath="$PROJECT_DIR$/AGENTS.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/scheduled_daily_job.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/scheduled_daily_job.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/chain.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/chain.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/factories.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/factories.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/llm_providers.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/llm_providers.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/service.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/search_providers.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/search_providers.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/tests/test_signal_analysis.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/tests/test_signal_analysis.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />

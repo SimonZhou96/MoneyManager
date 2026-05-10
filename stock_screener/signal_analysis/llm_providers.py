@@ -42,6 +42,10 @@ class LLMProvider(ABC):
     ) -> List[SignalAnalysisResult]:
         """Analyze a batch of screened stocks."""
 
+    def drain_warnings(self) -> List[str]:
+        """Return and clear provider-local warnings from the last call."""
+        return []
+
 
 class NullLLMProvider(LLMProvider):
     """Unavailable provider used when LLM credentials are not configured."""
@@ -63,6 +67,75 @@ class NullLLMProvider(LLMProvider):
         company_documents: Dict[str, List[SearchDocument]],
     ) -> List[SignalAnalysisResult]:
         raise RuntimeError("LLM provider is not configured")
+
+
+class FallbackLLMProvider(LLMProvider):
+    """Try multiple model providers in order for each analysis batch."""
+
+    name = "fallback"
+
+    def __init__(self, providers: List[LLMProvider]):
+        self.providers = [provider for provider in providers if getattr(provider, "is_available", False)]
+        self._warnings: List[str] = []
+        self._last_success_provider = ""
+
+    @property
+    def is_available(self) -> bool:
+        return bool(self.providers)
+
+    @property
+    def provider_names(self) -> List[str]:
+        return [provider.name for provider in self.providers]
+
+    @property
+    def model_name(self) -> str:
+        if self._last_success_provider:
+            return self._last_success_provider
+        return " -> ".join(_llm_provider_label(provider) for provider in self.providers)
+
+    def analyze_batch(
+        self,
+        market: str,
+        signals: List[ScreeningSignalRow],
+        market_documents: List[SearchDocument],
+        sector_documents: List[SearchDocument],
+        hot_sectors: List[str],
+        company_documents: Dict[str, List[SearchDocument]],
+    ) -> List[SignalAnalysisResult]:
+        self._warnings = []
+        self._last_success_provider = ""
+        failed_labels: List[str] = []
+
+        for provider in self.providers:
+            label = _llm_provider_label(provider)
+            try:
+                results = provider.analyze_batch(
+                    market=market,
+                    signals=signals,
+                    market_documents=market_documents,
+                    sector_documents=sector_documents,
+                    hot_sectors=hot_sectors,
+                    company_documents=company_documents,
+                )
+                if signals and not results:
+                    raise RuntimeError("provider returned no analysis results")
+            except Exception as exc:
+                failed_labels.append(label)
+                self._warnings.append(f"LLM provider {label} 失败: {type(exc).__name__}: {exc}")
+                continue
+
+            self._last_success_provider = label
+            if self._warnings:
+                self._warnings.append(f"LLM provider fallback 使用 {label} 成功返回")
+            return results
+
+        failed_text = ", ".join(failed_labels) if failed_labels else "无可用 provider"
+        raise RuntimeError(f"所有 LLM provider 均失败: {failed_text}")
+
+    def drain_warnings(self) -> List[str]:
+        warnings = list(self._warnings)
+        self._warnings = []
+        return warnings
 
 
 class SignalAnalysisPromptBuilder:
@@ -450,6 +523,11 @@ def _parse_json_content(content: str):
     if match:
         text = match.group(1).strip()
     return json.loads(text)
+
+
+def _llm_provider_label(provider: LLMProvider) -> str:
+    model = (provider.model_name or "").strip()
+    return f"{provider.name}:{model}" if model else provider.name
 
 
 def _results_from_parsed_json(parsed, model: str) -> List[SignalAnalysisResult]:

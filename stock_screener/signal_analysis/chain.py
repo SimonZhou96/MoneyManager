@@ -290,12 +290,14 @@ class LLMBatchAnalysisStep(AnalysisStep):
                     company_documents=context.company_documents,
                 )
             except Exception as exc:
+                context.warnings.extend(_drain_llm_provider_warnings(context.llm_provider))
                 message = f"模型批量分析失败: {type(exc).__name__}: {exc}"
                 context.warnings.append(message)
                 for row in batch:
                     failed_rows[row.code] = message
                 continue
 
+            context.warnings.extend(_drain_llm_provider_warnings(context.llm_provider))
             for result in results:
                 context.results_by_code[result.code] = result
                 success_count += 1
@@ -424,6 +426,13 @@ def _derive_artifact_path(csv_path: str, suffix: str) -> str:
     if csv_path.endswith(".csv"):
         return f"{csv_path[:-4]}{suffix}"
     return f"{csv_path}{suffix}"
+
+
+def _drain_llm_provider_warnings(provider: LLMProvider) -> List[str]:
+    drain = getattr(provider, "drain_warnings", None)
+    if not callable(drain):
+        return []
+    return list(drain())
 
 
 def _company_search_batch_size() -> int:

@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 import os
+from typing import List
 
 from .llm_providers import (
     CodexResponsesLLMProvider,
     DeepSeekLLMProvider,
+    FallbackLLMProvider,
     LLMProvider,
     NullLLMProvider,
     OpenAICompatibleLLMProvider,
@@ -44,14 +46,64 @@ class SearchProviderFactory:
 class LLMProviderFactory:
     """Create an LLM provider from environment configuration."""
 
+    DEFAULT_PROVIDER_ORDER = ["openai_compatible", "codex_responses", "deepseek"]
+
     @staticmethod
     def from_env(settings: AnalysisSettings) -> LLMProvider:
-        provider = os.getenv("LLM_PROVIDER", "openai_compatible").strip().lower() or "openai_compatible"
+        providers = [
+            provider
+            for provider_name in LLMProviderFactory._provider_order_from_env()
+            for provider in [LLMProviderFactory._provider_from_env(provider_name, settings)]
+            if getattr(provider, "is_available", False)
+        ]
+        if not providers:
+            return NullLLMProvider()
+        if len(providers) == 1:
+            return providers[0]
+        return FallbackLLMProvider(providers)
+
+    @staticmethod
+    def _provider_from_env(provider: str, settings: AnalysisSettings) -> LLMProvider:
         if provider == "codex_responses":
             return LLMProviderFactory._codex_responses_from_env(settings)
         if provider == "deepseek":
             return LLMProviderFactory._deepseek_from_env(settings)
-        return LLMProviderFactory._openai_compatible_from_env(settings)
+        if provider == "openai_compatible":
+            return LLMProviderFactory._openai_compatible_from_env(settings)
+        return NullLLMProvider()
+
+    @staticmethod
+    def _provider_order_from_env() -> List[str]:
+        explicit_order = os.getenv("LLM_PROVIDER_ORDER", "").strip()
+        if explicit_order:
+            return LLMProviderFactory._dedupe_provider_names(explicit_order.split(","))
+
+        preferred = os.getenv("LLM_PROVIDER", "").strip()
+        if preferred:
+            return LLMProviderFactory._dedupe_provider_names([
+                preferred,
+                *LLMProviderFactory.DEFAULT_PROVIDER_ORDER,
+            ])
+        return list(LLMProviderFactory.DEFAULT_PROVIDER_ORDER)
+
+    @staticmethod
+    def _dedupe_provider_names(raw_names) -> List[str]:
+        aliases = {
+            "openai": "openai_compatible",
+            "chat_completions": "openai_compatible",
+            "codex": "codex_responses",
+        }
+        names: List[str] = []
+        seen = set()
+        for raw_name in raw_names:
+            name = aliases.get(str(raw_name).strip().lower(), str(raw_name).strip().lower())
+            if not name or name in seen:
+                continue
+            if name not in set(LLMProviderFactory.DEFAULT_PROVIDER_ORDER):
+                continue
+            names.append(name)
+            seen.add(name)
+        return names
 
     @staticmethod
     def _openai_compatible_from_env(settings: AnalysisSettings) -> LLMProvider:
