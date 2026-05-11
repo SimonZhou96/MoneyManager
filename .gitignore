@@ -4,3 +4,9 @@ stock_screener/.runtime_home/
 stock_screener/logs/
 stock_screener/__pycache__/
 stock_screener/api/__pycache__/
+stock_screener/**/__pycache__/
+stock_screener/**/*.pyc
+stock_screener/web_frontend/node_modules/
+stock_screener/web_frontend/dist/
+stock_screener/web_frontend/.npm-cache/
+stock_screener/web_frontend/.vite/
