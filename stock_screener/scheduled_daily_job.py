@@ -600,14 +600,16 @@ def run_market_screening_worker(
         db.close()
         db = None
 
-        task_id, passed = run_screening_for_market(
+        screening_kwargs = dict(
             mysql_config=mysql_config,
             market=market,
             timeframe=timeframe,
             default_params=default_params,
             verbose=verbose,
-            chain_key=chain_key,
         )
+        if chain_key:
+            screening_kwargs["chain_key"] = chain_key
+        task_id, passed = run_screening_for_market(**screening_kwargs)
         if not task_id:
             print(f"  {market_label(market)} 未创建筛选任务，跳过")
             return MarketScreeningResult(market=market, skipped=True)

@@ -3,8 +3,8 @@ import unittest
 from db import hash_password, verify_password
 from kline_fetcher import DatabaseKlineFetcher, KlineFetcherFactory
 from web.business import BusinessError
-from web.main import _resolve_rule_chain
 from web.rate_limit import InMemorySlidingWindowRateLimiter, RateLimitRule, rate_limiter
+from web.rule_chains import resolve_rule_chain
 from web.single_stock import _load_stock_info, normalize_stock_code
 from web.validation import (
     validate_agent_artifact_size,
@@ -157,7 +157,7 @@ class WebPlatformTests(unittest.TestCase):
                     }
                 return None
 
-        chain = _resolve_rule_chain(FakeDB(), ["HK", "US"], "trend_capital_accumulation_watch")
+        chain = resolve_rule_chain(FakeDB(), ["HK", "US"], "trend_capital_accumulation_watch")
 
         self.assertEqual(chain["chain_key"], "trend_capital_accumulation_watch")
         self.assertFalse(chain["enabled"])
@@ -171,7 +171,7 @@ class WebPlatformTests(unittest.TestCase):
                 return None
 
         with self.assertRaises(BusinessError) as ctx:
-            _resolve_rule_chain(FakeDB(), ["HK"], "missing_chain")
+            resolve_rule_chain(FakeDB(), ["HK"], "missing_chain")
 
         self.assertEqual(ctx.exception.error_code, "RULE_CHAIN_NOT_FOUND")
         self.assertIn("不适用于所选市场", ctx.exception.message)

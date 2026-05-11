@@ -43,6 +43,7 @@ from .rate_limit import (
     WEB_READ_RULE,
     enforce_rate_limit,
 )
+from .rule_chains import resolve_rule_chain
 from .single_stock import normalize_stock_code
 from .validation import (
     validate_agent_artifact_size,
@@ -168,34 +169,6 @@ def _safe_file_name(file_name: str) -> str:
     return value
 
 
-def _resolve_rule_chain(db: MarketDatabase, markets: List[str], chain_key: Optional[str] = None) -> dict:
-    if not markets:
-        raise BusinessError("INVALID_RULE_CHAIN", "至少选择一个市场后才能选择规则链")
-    repository = RuleRepository(db)
-    requested = str(chain_key or "").strip()
-    try:
-        if requested:
-            chains = [repository.load_chain(market, requested) for market in markets]
-        else:
-            active = repository.load_active_chain(markets[0])
-            chains = [active]
-            for market in markets[1:]:
-                chains.append(repository.load_chain(market, active.chain_key))
-    except Exception as exc:
-        label = requested or "默认生效链"
-        raise BusinessError(
-            "RULE_CHAIN_NOT_FOUND",
-            f"规则链 {label} 不适用于所选市场，请重新选择规则链",
-        ) from exc
-    first = chains[0]
-    return {
-        "chain_key": first.chain_key,
-        "chain_name": first.chain_name,
-        "enabled": first.enabled,
-        "description": first.description,
-    }
-
-
 @app.on_event("startup")
 def startup() -> None:
     db = MarketDatabase(mysql_config_from_env())
@@ -252,7 +225,7 @@ def create_screening_task(
         raise BusinessError("INVALID_SCREENING_TASK", str(exc)) from exc
     enforce_rate_limit(f"user:{user.id}:create_task", CREATE_TASK_RULE)
     run_date = _run_date()
-    chain = _resolve_rule_chain(db, markets, payload.chain_key)
+    chain = resolve_rule_chain(db, markets, payload.chain_key)
     chain_key = chain["chain_key"]
     existing_locks = db.get_screening_run_locks(run_date, markets, timeframe, chain_key=chain_key)
     completed = [item for item in existing_locks if item.get("status") == "completed"]
@@ -399,7 +372,7 @@ def single_stock(payload: SingleStockApiRequest, user: CurrentUser = Depends(req
         normalized_code = normalize_stock_code(market, payload.code)
     except Exception as exc:
         raise BusinessError("INVALID_SINGLE_STOCK", f"单股参数不合法：{exc}") from exc
-    chain = _resolve_rule_chain(db, [market], payload.chain_key)
+    chain = resolve_rule_chain(db, [market], payload.chain_key)
     run_id = str(uuid.uuid4())
     db.create_single_stock_run({
         "run_id": run_id,

@@ -261,6 +261,7 @@ class RuleEngineTest(unittest.TestCase):
         for market in ("HK", "US", "A"):
             self.assertIn(f"('{market}', 'zuoyi_signal'", content)
             self.assertIn(f"('{market}', 'default_zuoyi_and_other'", content)
+            self.assertIn(f"('{market}', 'trend_capital_accumulation_watch'", content)
             self.assertIn(
                 f"('{market}', 'market_cap_range', '市值范围', 'filter', 'MarketCapFilter', "
                 """'{"min_cap": null, "max_cap": null}', 1,""",
