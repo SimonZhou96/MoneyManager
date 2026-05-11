@@ -69,6 +69,7 @@ class LoginRequest(BaseModel):
 class ScreeningTaskRequest(BaseModel):
     markets: List[str] = Field(default_factory=lambda: ["HK", "US", "A"])
     timeframe: str = "1d"
+    chain_key: Optional[str] = None
     enable_ai_analysis: bool = True
     send_feishu: bool = False
 
@@ -77,6 +78,7 @@ class SingleStockApiRequest(BaseModel):
     market: str
     code: str
     timeframe: str = "1d"
+    chain_key: Optional[str] = None
 
 
 class SyncRunRequest(BaseModel):
@@ -166,6 +168,34 @@ def _safe_file_name(file_name: str) -> str:
     return value
 
 
+def _resolve_rule_chain(db: MarketDatabase, markets: List[str], chain_key: Optional[str] = None) -> dict:
+    if not markets:
+        raise BusinessError("INVALID_RULE_CHAIN", "至少选择一个市场后才能选择规则链")
+    repository = RuleRepository(db)
+    requested = str(chain_key or "").strip()
+    try:
+        if requested:
+            chains = [repository.load_chain(market, requested) for market in markets]
+        else:
+            active = repository.load_active_chain(markets[0])
+            chains = [active]
+            for market in markets[1:]:
+                chains.append(repository.load_chain(market, active.chain_key))
+    except Exception as exc:
+        label = requested or "默认生效链"
+        raise BusinessError(
+            "RULE_CHAIN_NOT_FOUND",
+            f"规则链 {label} 不适用于所选市场，请重新选择规则链",
+        ) from exc
+    first = chains[0]
+    return {
+        "chain_key": first.chain_key,
+        "chain_name": first.chain_name,
+        "enabled": first.enabled,
+        "description": first.description,
+    }
+
+
 @app.on_event("startup")
 def startup() -> None:
     db = MarketDatabase(mysql_config_from_env())
@@ -222,10 +252,12 @@ def create_screening_task(
         raise BusinessError("INVALID_SCREENING_TASK", str(exc)) from exc
     enforce_rate_limit(f"user:{user.id}:create_task", CREATE_TASK_RULE)
     run_date = _run_date()
-    existing_locks = db.get_screening_run_locks(run_date, markets, timeframe)
+    chain = _resolve_rule_chain(db, markets, payload.chain_key)
+    chain_key = chain["chain_key"]
+    existing_locks = db.get_screening_run_locks(run_date, markets, timeframe, chain_key=chain_key)
     completed = [item for item in existing_locks if item.get("status") == "completed"]
     if completed:
-        scopes = "、".join(f"{item['market']}/{item['timeframe']}" for item in completed)
+        scopes = "、".join(f"{item['market']}/{item['timeframe']}/{item.get('chain_key') or chain_key}" for item in completed)
         raise BusinessError(
             "SCREENING_ALREADY_COMPLETED",
             f"今日 {scopes} 已筛选成功，无需重复运行",
@@ -242,18 +274,28 @@ def create_screening_task(
             "message": "已有任务运行中，已为你复用该任务",
             "markets": job.get("markets") or sorted({item["market"] for item in active}),
             "timeframe": timeframe,
+            "chain_key": chain_key,
+            "chain_name": chain.get("chain_name"),
         }
     job_id = str(uuid.uuid4())
     options = {
         "enable_ai_analysis": bool(payload.enable_ai_analysis),
         "send_feishu": bool(payload.send_feishu),
         "result_upload_scope": "passed_only",
+        "chain_key": chain_key,
+        "chain_name": chain.get("chain_name"),
     }
     db.create_web_screening_job(job_id=job_id, user_id=user.id, markets=markets, timeframe=timeframe, options=options)
     try:
-        db.create_screening_run_locks(job_id=job_id, run_date=run_date, markets=markets, timeframe=timeframe)
+        db.create_screening_run_locks(
+            job_id=job_id,
+            run_date=run_date,
+            markets=markets,
+            timeframe=timeframe,
+            chain_key=chain_key,
+        )
     except Exception as exc:
-        locks = db.get_screening_run_locks(run_date, markets, timeframe)
+        locks = db.get_screening_run_locks(run_date, markets, timeframe, chain_key=chain_key)
         active_after_race = [item for item in locks if item.get("status") in {"queued", "running"}]
         if active_after_race:
             return {
@@ -264,9 +306,19 @@ def create_screening_task(
                 "message": "已有任务运行中，已为你复用该任务",
                 "markets": sorted({item["market"] for item in active_after_race}),
                 "timeframe": timeframe,
+                "chain_key": chain_key,
+                "chain_name": chain.get("chain_name"),
             }
         raise BusinessError("SCREENING_LOCK_CREATE_FAILED", f"创建筛选锁失败：{type(exc).__name__}: {exc}") from exc
-    return {"job_id": job_id, "status": "queued", "runner": "local_agent", "markets": markets, "timeframe": timeframe}
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "runner": "local_agent",
+        "markets": markets,
+        "timeframe": timeframe,
+        "chain_key": chain_key,
+        "chain_name": chain.get("chain_name"),
+    }
 
 
 @app.get("/api/screening/tasks")
@@ -347,6 +399,7 @@ def single_stock(payload: SingleStockApiRequest, user: CurrentUser = Depends(req
         normalized_code = normalize_stock_code(market, payload.code)
     except Exception as exc:
         raise BusinessError("INVALID_SINGLE_STOCK", f"单股参数不合法：{exc}") from exc
+    chain = _resolve_rule_chain(db, [market], payload.chain_key)
     run_id = str(uuid.uuid4())
     db.create_single_stock_run({
         "run_id": run_id,
@@ -355,9 +408,19 @@ def single_stock(payload: SingleStockApiRequest, user: CurrentUser = Depends(req
         "code": payload.code,
         "normalized_code": normalized_code,
         "timeframe": timeframe,
+        "chain_key": chain["chain_key"],
         "status": "queued",
     })
-    return {"run_id": run_id, "status": "queued", "runner": "local_agent", "market": market, "code": normalized_code, "timeframe": timeframe}
+    return {
+        "run_id": run_id,
+        "status": "queued",
+        "runner": "local_agent",
+        "market": market,
+        "code": normalized_code,
+        "timeframe": timeframe,
+        "chain_key": chain["chain_key"],
+        "chain_name": chain.get("chain_name"),
+    }
 
 
 @app.get("/api/screening/single-stock/{run_id}")
@@ -372,10 +435,12 @@ def get_single_stock(run_id: str, _: CurrentUser = Depends(require_read_user), d
 def get_rules(market: str = "HK", _: CurrentUser = Depends(require_read_user), db: MarketDatabase = Depends(get_db)):
     market = normalize_market(market)
     repository = RuleRepository(db)
+    chains = repository.load_chains(market)
     return {
         "market": market,
         "metadata": [item.__dict__ for item in repository.load_metadata(market)],
         "chain": repository.load_active_chain(market).__dict__,
+        "chains": [item.__dict__ for item in chains],
     }
 
 

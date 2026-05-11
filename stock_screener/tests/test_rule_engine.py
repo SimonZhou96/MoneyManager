@@ -222,13 +222,35 @@ class RuleEngineTest(unittest.TestCase):
                     "description": "chain",
                 }
 
+            def get_screening_rule_chain(self, market, chain_key):
+                return {
+                    "market": market,
+                    "chain_key": chain_key,
+                    "chain_name": "试跑链",
+                    "expression_json": {"ref": "zuoyi_signal"},
+                    "enabled": False,
+                    "priority": 200,
+                    "description": "trial",
+                }
+
+            def list_screening_rule_chains(self, market):
+                return [
+                    self.get_active_screening_rule_chain(market),
+                    self.get_screening_rule_chain(market, "trial"),
+                ]
+
         repo = RuleRepository(FakeDB())
         metadata_items = repo.load_metadata("HK")
         chain_config = repo.load_active_chain("HK")
+        trial_chain = repo.load_chain("HK", "trial")
+        all_chains = repo.load_chains("HK")
 
         self.assertEqual(metadata_items[0].rule_key, "zuoyi_signal")
         self.assertEqual(metadata_items[0].params["signal_window"], 3)
         self.assertEqual(chain_config.expression, {"ref": "zuoyi_signal"})
+        self.assertEqual(trial_chain.chain_key, "trial")
+        self.assertFalse(trial_chain.enabled)
+        self.assertEqual([item.chain_key for item in all_chains], ["default", "trial"])
 
     def test_deployment_sql_contains_tables_and_market_seed_data(self):
         sql_path = Path(__file__).resolve().parents[1] / "sql" / "001_screening_rules.sql"

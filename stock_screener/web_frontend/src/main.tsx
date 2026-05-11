@@ -22,6 +22,8 @@ type Task = {
   code?: string
   name?: string
   passed?: boolean
+  chain_key?: string
+  chain_name?: string
 }
 type SingleStockRun = {
   job_type: 'single_stock'
@@ -33,6 +35,8 @@ type SingleStockRun = {
   status: string
   passed: boolean
   name?: string
+  chain_key?: string
+  chain_name?: string
   created_at?: string
   error_message?: string
 }
@@ -69,7 +73,24 @@ type Job = {
   created_at?: string
   error_message?: string
   execution_mode?: string
+  chain_key?: string
+  chain_name?: string
   summary?: Record<string, unknown>
+}
+type RuleChain = {
+  market: string
+  chain_key: string
+  chain_name: string
+  expression: Record<string, unknown>
+  enabled: boolean
+  priority: number
+  description?: string
+}
+type RulesResponse = {
+  market: string
+  metadata: any[]
+  chain: RuleChain
+  chains: RuleChain[]
 }
 
 const MARKET_OPTIONS = ['HK', 'US', 'A']
@@ -78,6 +99,8 @@ const TIMEFRAME_OPTIONS = ['1d', '1wk', '1mo', '3mo', '1m', '3m', '5m', '15m', '
 const COLUMN_LABELS: Record<string, string> = {
   artifact_type: '文件类型',
   close_price: '最新收盘价',
+  chain_key: '规则链 Key',
+  chain_name: '规则链',
   code: '股票代码',
   created_at: '创建时间',
   current_stock_code: '当前股票',
@@ -134,6 +157,20 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
     throw new Error(payload?.detail || payload?.message || `${response.status} ${response.statusText}`)
   }
   return payload as T
+}
+
+function chainDisplay(chain?: Partial<RuleChain> | null) {
+  if (!chain?.chain_key) return '默认链/历史任务'
+  return chain.chain_name ? `${chain.chain_name} (${chain.chain_key})` : chain.chain_key
+}
+
+function commonRuleChains(markets: string[], rulesByMarket: Record<string, RulesResponse | undefined>): RuleChain[] {
+  if (markets.length === 0) return []
+  const firstRules = rulesByMarket[markets[0]]
+  if (!firstRules?.chains) return []
+  return firstRules.chains
+    .filter(chain => markets.every(market => (rulesByMarket[market]?.chains || []).some(item => item.chain_key === chain.chain_key)))
+    .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.priority - b.priority || a.chain_key.localeCompare(b.chain_key))
 }
 
 function Login({ onLogin }: { onLogin: (user: User) => void }) {
@@ -267,7 +304,7 @@ function Dashboard({ openTask, openSingle }: { openTask: (taskId: string) => voi
         <Metric label="最近同步" value={statusLabel(syncRuns[0]?.status || '无')} />
       </div>
       <Panel title="最近 Web 任务">
-        <Table rows={jobs} columns={['job_id', 'markets', 'timeframe', 'status', 'created_at', 'error_message']} />
+        <Table rows={jobs} columns={['job_id', 'markets', 'timeframe', 'chain_name', 'status', 'created_at', 'error_message']} />
       </Panel>
       <Panel title="最近筛选任务">
         <TaskTable rows={mergeRecentTasks(tasks, singleRuns, jobs)} openTask={openTask} openSingle={openSingle} />
@@ -285,7 +322,9 @@ function mergeRecentTasks(tasks: Task[], singleRuns: SingleStockRun[], jobs: Job
     total_count: 1,
     completed_count: item.status === 'completed' || item.status === 'failed' ? 1 : 0,
     current_stock_code: item.normalized_code || item.code,
-    current_stock_name: item.name
+    current_stock_name: item.name,
+    chain_key: item.chain_key,
+    chain_name: item.chain_name
   }))
   const webJobs = (jobs || []).map(item => ({
     ...item,
@@ -294,7 +333,9 @@ function mergeRecentTasks(tasks: Task[], singleRuns: SingleStockRun[], jobs: Job
     market: (item.markets || []).join(', '),
     total_count: item.task_ids?.length || 0,
     completed_count: item.status === 'completed' ? (item.task_ids?.length || 0) : 0,
-    current_stock_code: item.task_ids && item.task_ids.length > 0 ? item.task_ids[0] : '等待本地 Agent'
+    current_stock_code: item.task_ids && item.task_ids.length > 0 ? item.task_ids[0] : '等待本地 Agent',
+    chain_key: item.chain_key,
+    chain_name: item.chain_name
   }))
   return [...webJobs, ...marketTasks, ...singleTasks]
     .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
@@ -304,6 +345,8 @@ function mergeRecentTasks(tasks: Task[], singleRuns: SingleStockRun[], jobs: Job
 function Screening() {
   const [markets, setMarkets] = useState(['HK', 'US', 'A'])
   const [timeframe, setTimeframe] = useState('1d')
+  const [rulesByMarket, setRulesByMarket] = useState<Record<string, RulesResponse>>({})
+  const [chainKey, setChainKey] = useState('')
   const [enableAi, setEnableAi] = useState(true)
   const [sendFeishu, setSendFeishu] = useState(false)
   const [message, setMessage] = useState('')
@@ -314,6 +357,35 @@ function Screening() {
     setError('')
     setMarkets(current => current.includes(market) ? current.filter(item => item !== market) : [...current, market])
   }
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadRules() {
+      const entries = await Promise.all(markets.map(async market => {
+        const rules = await api<RulesResponse>(`/api/rules?market=${market}`)
+        return [market, rules] as const
+      }))
+      if (!cancelled) {
+        setRulesByMarket(current => ({ ...current, ...Object.fromEntries(entries) }))
+      }
+    }
+    if (markets.length > 0) loadRules().catch(err => setError(err instanceof Error ? err.message : '加载规则链失败'))
+    return () => { cancelled = true }
+  }, [markets.join('|')])
+
+  const chainOptions = commonRuleChains(markets, rulesByMarket)
+  const chainOptionKey = chainOptions.map(item => item.chain_key).join('|')
+
+  useEffect(() => {
+    if (chainOptions.length === 0) {
+      setChainKey('')
+      return
+    }
+    const activeKey = rulesByMarket[markets[0]]?.chain?.chain_key
+    if (!chainKey || !chainOptions.some(item => item.chain_key === chainKey)) {
+      setChainKey(activeKey && chainOptions.some(item => item.chain_key === activeKey) ? activeKey : chainOptions[0].chain_key)
+    }
+  }, [chainOptionKey, markets.join('|')])
 
   async function submit(event: React.FormEvent) {
     event.preventDefault()
@@ -327,7 +399,7 @@ function Screening() {
     try {
       const result = await api<any>('/api/screening/tasks', {
         method: 'POST',
-        body: JSON.stringify({ markets, timeframe, enable_ai_analysis: enableAi, send_feishu: sendFeishu })
+        body: JSON.stringify({ markets, timeframe, chain_key: chainKey || undefined, enable_ai_analysis: enableAi, send_feishu: sendFeishu })
       })
       setMessage(result.reused
         ? `已有任务运行中，已复用任务组 ${result.job_id}。`
@@ -355,11 +427,21 @@ function Screening() {
             {TIMEFRAME_OPTIONS.map(item => <option key={item}>{item}</option>)}
           </select>
         </Field>
+        <Field label="规则链">
+          <select value={chainKey} onChange={event => setChainKey(event.target.value)} disabled={chainOptions.length === 0}>
+            {chainOptions.length === 0 ? <option value="">暂无共同规则链</option> : chainOptions.map(item => (
+              <option key={item.chain_key} value={item.chain_key}>
+                {item.chain_name} {item.enabled ? '默认候选' : '可试跑'}
+              </option>
+            ))}
+          </select>
+        </Field>
         <label className="check"><input type="checkbox" checked={enableAi} onChange={event => setEnableAi(event.target.checked)} /> AI 分析</label>
         <label className="check"><input type="checkbox" checked={sendFeishu} onChange={event => setSendFeishu(event.target.checked)} /> 发送飞书</label>
-        <button className="primary" disabled={submitting || markets.length === 0}>{submitting ? '创建中...' : '启动筛选'}</button>
+        <button className="primary" disabled={submitting || markets.length === 0 || chainOptions.length === 0}>{submitting ? '创建中...' : '启动筛选'}</button>
       </form>
       {markets.length === 0 && <div className="inline-error">至少选择一个市场后才能启动筛选。</div>}
+      {markets.length > 0 && chainOptions.length === 0 && <div className="inline-error">所选市场没有共同规则链，无法创建多市场任务。</div>}
       {error && <div className="error">{error}</div>}
       {message && <div className="notice">{message}</div>}
     </section>
@@ -369,6 +451,8 @@ function Screening() {
 function SingleStock() {
   const [market, setMarket] = useState('US')
   const [timeframe, setTimeframe] = useState('1d')
+  const [rules, setRules] = useState<RulesResponse | null>(null)
+  const [chainKey, setChainKey] = useState('')
   const [code, setCode] = useState('AAPL')
   const [result, setResult] = useState<any>(null)
   const [loading, setLoading] = useState(false)
@@ -382,7 +466,7 @@ function SingleStock() {
     try {
       const data = await api('/api/screening/single-stock', {
         method: 'POST',
-        body: JSON.stringify({ market, code, timeframe })
+        body: JSON.stringify({ market, code, timeframe, chain_key: chainKey || undefined })
       })
       setResult(data)
       setRunId((data as any).run_id || '')
@@ -419,6 +503,21 @@ function SingleStock() {
     }
   }, [result, runId])
 
+  useEffect(() => {
+    let cancelled = false
+    api<RulesResponse>(`/api/rules?market=${market}`)
+      .then(data => {
+        if (cancelled) return
+        setRules(data)
+        const activeKey = data.chain?.chain_key
+        if (!chainKey || !(data.chains || []).some(item => item.chain_key === chainKey)) {
+          setChainKey(activeKey || data.chains?.[0]?.chain_key || '')
+        }
+      })
+      .catch(err => setResult({ error: err instanceof Error ? err.message : '加载规则链失败' }))
+    return () => { cancelled = true }
+  }, [market])
+
   return (
     <section>
       <Header title="单股选股" subtitle="输入股票代码，跑完整规则链；未通过只展示失败原因" />
@@ -435,6 +534,15 @@ function SingleStock() {
         </Field>
         <Field label="股票代码">
           <input value={code} onChange={event => setCode(event.target.value)} />
+        </Field>
+        <Field label="规则链">
+          <select value={chainKey} onChange={event => setChainKey(event.target.value)}>
+            {(rules?.chains || []).map(item => (
+              <option key={item.chain_key} value={item.chain_key}>
+                {item.chain_name} {item.enabled ? '默认候选' : '可试跑'}
+              </option>
+            ))}
+          </select>
         </Field>
         <button className="primary" disabled={loading}>{loading ? '等待本地 Agent...' : '开始分析'}</button>
       </form>
@@ -456,6 +564,7 @@ function SingleResult({ result }: { result: any }) {
       <Panel title={`${displayCode} ${displayName}`}>
         <StatusBadge value={Boolean(result.passed)} />
         <dl className="info-list">
+          <div><dt>规则链</dt><dd>{displayMissing(result.rule_chain?.chain_name || result.chain_name || result.chain_key)}</dd></div>
           <div><dt>板块</dt><dd>{displayMissing(result.sector)}</dd></div>
           <div><dt>行业</dt><dd>{displayMissing(result.industry)}</dd></div>
           <div><dt>数据源</dt><dd>{displayMissing(result.data_source)}</dd></div>
@@ -508,21 +617,45 @@ function SingleRunDetail({ runId }: { runId: string }) {
 
 function Rules() {
   const [market, setMarket] = useState('HK')
-  const [rules, setRules] = useState<any>(null)
+  const [rules, setRules] = useState<RulesResponse | null>(null)
+  const [chainKey, setChainKey] = useState('')
   useEffect(() => {
-    api(`/api/rules?market=${market}`).then(setRules).catch(console.error)
+    api<RulesResponse>(`/api/rules?market=${market}`)
+      .then(data => {
+        setRules(data)
+        const activeKey = data.chain?.chain_key
+        if (!chainKey || !(data.chains || []).some(item => item.chain_key === chainKey)) {
+          setChainKey(activeKey || data.chains?.[0]?.chain_key || '')
+        }
+      })
+      .catch(console.error)
   }, [market])
+  const selectedChain = (rules?.chains || []).find(item => item.chain_key === chainKey) || rules?.chain
   return (
     <section>
       <Header title="规则链" subtitle="只读展示当前数据库规则配置" />
-      <div className="toolbar">
+      <div className="toolbar toolbar-row">
         <select value={market} onChange={event => setMarket(event.target.value)}>
           {MARKET_OPTIONS.map(item => <option key={item}>{item}</option>)}
         </select>
+        <Field label="规则链">
+          <select value={chainKey} onChange={event => setChainKey(event.target.value)}>
+            {(rules?.chains || []).map(item => (
+              <option key={item.chain_key} value={item.chain_key}>{item.chain_name}</option>
+            ))}
+          </select>
+        </Field>
       </div>
       <div className="table-note">SKIP 表示该规则启用但当前参数为空，不阻断通过。</div>
+      <Panel title="规则链列表">
+        <Table rows={(rules?.chains || []).map(item => ({
+          ...item,
+          chain_name: item.chain_key === rules?.chain?.chain_key ? `${item.chain_name}（默认生效）` : item.chain_name,
+          enabled: item.enabled ? '默认候选' : '可试跑',
+        }))} columns={['chain_name', 'chain_key', 'enabled', 'priority', 'description']} />
+      </Panel>
       <Panel title="生效规则链">
-        <pre>{JSON.stringify(rules?.chain || {}, null, 2)}</pre>
+        <pre>{JSON.stringify(selectedChain || {}, null, 2)}</pre>
       </Panel>
       <Panel title="原子规则">
         <Table rows={rules?.metadata || []} columns={['rule_key', 'rule_name', 'rule_type', 'implementation', 'enabled', 'display_order']} />
@@ -600,6 +733,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
       {task && (
         <div className="metric-grid">
           <Metric label="市场" value={task.market} />
+          <Metric label="规则链" value={task.chain_name || task.chain_key || '默认链/历史任务'} />
           <Metric label="状态" value={<StatusBadge value={task.status} />} />
           <Metric label="进度" value={`${task.completed_count}/${task.total_count}`} />
           <Metric label="通过" value={`${passedCount}/${totalCount}`} />
@@ -676,6 +810,7 @@ function TaskTable({ rows, openTask, openSingle }: { rows: Task[]; openTask: (ta
             <th>任务 ID</th>
             <th>市场</th>
             <th>周期</th>
+            <th>规则链</th>
             <th>状态</th>
             <th>进度</th>
             <th>当前股票</th>
@@ -713,6 +848,7 @@ function TaskTable({ rows, openTask, openSingle }: { rows: Task[]; openTask: (ta
                 </td>
                 <td>{row.market}</td>
                 <td>{row.timeframe}</td>
+                <td>{row.chain_name || row.chain_key || '默认链/历史任务'}</td>
                 <td><StatusBadge value={row.status} /></td>
                 <td>{progressText}</td>
                 <td>{stockText}</td>
@@ -761,7 +897,7 @@ function columnLabel(column: string) {
 
 function formatCell(value: any, column?: string): React.ReactNode {
   if (column === 'status' || column === 'is_passed' || column === 'result') return <StatusBadge value={value} />
-  if (column === 'enabled') return value ? '启用' : '停用'
+  if (column === 'enabled') return typeof value === 'string' ? value : (value ? '启用' : '停用')
   if ((column === 'sector' || column === 'industry') && (value === undefined || value === null || value === '')) return '未补齐'
   if (Array.isArray(value)) return value.join(', ')
   if (typeof value === 'object' && value !== null) return JSON.stringify(value)

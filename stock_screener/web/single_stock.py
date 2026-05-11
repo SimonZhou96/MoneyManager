@@ -22,6 +22,7 @@ class SingleStockRequest:
     market: str
     code: str
     timeframe: str
+    chain_key: Optional[str] = None
     user_id: Optional[int] = None
     run_id: Optional[str] = None
 
@@ -73,6 +74,7 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
         "code": request.code,
         "normalized_code": normalized_code,
         "timeframe": timeframe,
+        "chain_key": request.chain_key,
         "status": "running",
     })
 
@@ -84,7 +86,7 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
 
         context = FilterContext(check_date=date.today(), market=market, db=db, verbose=False)
         context.timeframe = timeframe
-        rule_engine = create_rule_engine_from_db(db, market)
+        rule_engine = create_rule_engine_from_db(db, market, request.chain_key)
         result = rule_engine.evaluate_stock(stock, context)
         rule_details = _rule_details(rule_engine, result.filter_outputs)
 

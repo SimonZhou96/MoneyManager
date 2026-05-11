@@ -95,6 +95,7 @@ def session_hash(token: str) -> str:
 
 
 DEFAULT_RULE_MARKETS = ("HK", "US", "A")
+DEFAULT_RULE_CHAIN_KEY = "default_zuoyi_and_other"
 
 
 DEFAULT_RULE_METADATA = (
@@ -145,6 +146,29 @@ DEFAULT_RULE_CHAIN_EXPRESSION = {
                 "rsi_overbought",
                 "volume_spike_prior3",
                 "daily_drop_6_65",
+                "daily_rise_4_45",
+            ]
+        },
+    ]
+}
+
+
+TREND_CAPITAL_ACCUMULATION_WATCH_EXPRESSION = {
+    "and": [
+        {
+            "all_enabled": [
+                "market_cap_range",
+                "avg_daily_volume_range",
+                "price_range",
+                "pe_range",
+                "profitability",
+            ]
+        },
+        {"ref": "zuoyi_signal"},
+        {
+            "any_enabled": [
+                "ema_breakout",
+                "volume_spike_prior3",
                 "daily_rise_4_45",
             ]
         },
@@ -451,6 +475,7 @@ class MarketDatabase:
                     code VARCHAR(32) NOT NULL,
                     normalized_code VARCHAR(32) NOT NULL,
                     timeframe VARCHAR(8) NOT NULL,
+                    chain_key VARCHAR(64) NULL,
                     passed TINYINT(1) NOT NULL DEFAULT 0,
                     data_source VARCHAR(32) NULL,
                     status VARCHAR(32) NOT NULL DEFAULT 'running',
@@ -472,6 +497,7 @@ class MarketDatabase:
                 """
             )
             single_stock_alters = [
+                ("chain_key", "ALTER TABLE single_stock_runs ADD COLUMN chain_key VARCHAR(64) NULL AFTER timeframe"),
                 ("result_json", "ALTER TABLE single_stock_runs ADD COLUMN result_json JSON NULL AFTER ai_analysis_json"),
                 ("agent_id", "ALTER TABLE single_stock_runs ADD COLUMN agent_id VARCHAR(128) NULL AFTER ai_analysis_json"),
                 ("claimed_at", "ALTER TABLE single_stock_runs ADD COLUMN claimed_at DATETIME(6) NULL AFTER agent_id"),
@@ -558,6 +584,7 @@ class MarketDatabase:
                     run_date DATE NOT NULL,
                     market VARCHAR(8) NOT NULL,
                     timeframe VARCHAR(8) NOT NULL,
+                    chain_key VARCHAR(64) NOT NULL DEFAULT 'default_zuoyi_and_other',
                     status VARCHAR(32) NOT NULL DEFAULT 'queued',
                     job_id VARCHAR(64) NOT NULL,
                     task_id VARCHAR(64) NULL,
@@ -570,7 +597,7 @@ class MarketDatabase:
                     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                         ON UPDATE CURRENT_TIMESTAMP(6),
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_screening_run_lock_scope (run_date, market, timeframe),
+                    UNIQUE KEY uk_screening_run_lock_scope (run_date, market, timeframe, chain_key),
                     UNIQUE KEY uk_screening_run_lock_id (lock_id),
                     KEY idx_screening_run_lock_job (job_id),
                     KEY idx_screening_run_lock_status (status, run_date)
@@ -578,6 +605,29 @@ class MarketDatabase:
                 COMMENT='全市场筛选每日分布式锁'
                 """
             )
+            try:
+                cursor.execute("SELECT `chain_key` FROM screening_run_locks LIMIT 1")
+            except Exception:
+                try:
+                    cursor.execute(
+                        "ALTER TABLE screening_run_locks "
+                        "ADD COLUMN chain_key VARCHAR(64) NOT NULL DEFAULT 'default_zuoyi_and_other' "
+                        "AFTER timeframe"
+                    )
+                except Exception:
+                    pass
+            try:
+                cursor.execute("ALTER TABLE screening_run_locks DROP INDEX uk_screening_run_lock_scope")
+            except Exception:
+                pass
+            try:
+                cursor.execute(
+                    "ALTER TABLE screening_run_locks "
+                    "ADD UNIQUE KEY uk_screening_run_lock_scope "
+                    "(run_date, market, timeframe, chain_key)"
+                )
+            except Exception:
+                pass
 
     def _ema_table_name(self, timeframe: str) -> str:
         """获取 EMA 信号表名：ema_breakout_signals_{timeframe}"""
@@ -1031,6 +1081,7 @@ class MarketDatabase:
             if not row:
                 return None
             params = _decode_json_field(row[11], None)
+            params_dict = params if isinstance(params, dict) else {}
             return {
                 "task_id": row[0],
                 "market": row[1],
@@ -1044,6 +1095,8 @@ class MarketDatabase:
                 "current_stock_code": row[9],
                 "current_stock_name": row[10],
                 "params_json": params,
+                "chain_key": params_dict.get("chain_key"),
+                "chain_name": params_dict.get("chain_name"),
                 "check_date": str(row[12]) if row[12] else None,
                 "created_at": str(row[13]) if row[13] else None,
                 "updated_at": str(row[14]) if row[14] else None,
@@ -1071,6 +1124,7 @@ class MarketDatabase:
                     params = json.loads(row[8])
                 except Exception:
                     params = None
+            params_dict = params if isinstance(params, dict) else {}
             return {
                 "task_id": row[0],
                 "market": row[1],
@@ -1081,6 +1135,8 @@ class MarketDatabase:
                 "current_stock_code": row[6],
                 "current_stock_name": row[7],
                 "params_json": params,
+                "chain_key": params_dict.get("chain_key"),
+                "chain_name": params_dict.get("chain_name"),
                 "check_date": row[9],
                 "created_at": row[10],
                 "updated_at": row[11],
@@ -1101,6 +1157,7 @@ class MarketDatabase:
             rows = cursor.fetchall() or []
         result = []
         for row in rows:
+            params = _decode_json_field(row[11], {})
             result.append({
                 "task_id": row[0],
                 "market": row[1],
@@ -1113,7 +1170,9 @@ class MarketDatabase:
                 "uploaded_result_scope": row[8],
                 "current_stock_code": row[9],
                 "current_stock_name": row[10],
-                "params_json": _decode_json_field(row[11], {}),
+                "params_json": params,
+                "chain_key": params.get("chain_key") if isinstance(params, dict) else None,
+                "chain_name": params.get("chain_name") if isinstance(params, dict) else None,
                 "check_date": str(row[12]) if row[12] else None,
                 "created_at": str(row[13]) if row[13] else None,
                 "updated_at": str(row[14]) if row[14] else None,
@@ -1446,6 +1505,8 @@ class MarketDatabase:
                 "claimed_at": str(row[9]) if row[9] else None,
                 "heartbeat_at": str(row[10]) if row[10] else None,
                 "options": _decode_json_field(row[11], {}),
+                "chain_key": _decode_json_field(row[11], {}).get("chain_key"),
+                "chain_name": _decode_json_field(row[11], {}).get("chain_name"),
                 "summary": _decode_json_field(row[12], {}),
                 "created_at": str(row[13]) if row[13] else None,
                 "updated_at": str(row[14]) if row[14] else None,
@@ -1481,24 +1542,35 @@ class MarketDatabase:
             "claimed_at": str(row[9]) if row[9] else None,
             "heartbeat_at": str(row[10]) if row[10] else None,
             "options": _decode_json_field(row[11], {}),
+            "chain_key": _decode_json_field(row[11], {}).get("chain_key"),
+            "chain_name": _decode_json_field(row[11], {}).get("chain_name"),
             "summary": _decode_json_field(row[12], {}),
             "created_at": str(row[13]) if row[13] else None,
             "updated_at": str(row[14]) if row[14] else None,
             "finished_at": str(row[15]) if row[15] else None,
         }
 
-    def get_screening_run_locks(self, run_date: date, markets: List[str], timeframe: str) -> List[dict]:
+    def get_screening_run_locks(
+        self,
+        run_date: date,
+        markets: List[str],
+        timeframe: str,
+        chain_key: Optional[str] = None,
+    ) -> List[dict]:
         if not markets:
             return []
         placeholders = ",".join(["%s"] * len(markets))
+        chain_condition = " AND chain_key=%s" if chain_key else ""
         sql = f"""
-            SELECT lock_id, run_date, market, timeframe, status, job_id, task_id,
+            SELECT lock_id, run_date, market, timeframe, chain_key, status, job_id, task_id,
                    agent_id, claimed_at, heartbeat_at, completed_at, error_message
             FROM screening_run_locks
-            WHERE run_date=%s AND timeframe=%s AND market IN ({placeholders})
+            WHERE run_date=%s AND timeframe=%s AND market IN ({placeholders}){chain_condition}
             ORDER BY market
         """
         params: List[Any] = [run_date, timeframe, *markets]
+        if chain_key:
+            params.append(chain_key)
         with self.conn.cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall() or []
@@ -1508,28 +1580,39 @@ class MarketDatabase:
                 "run_date": str(row[1]) if row[1] else None,
                 "market": row[2],
                 "timeframe": row[3],
-                "status": row[4],
-                "job_id": row[5],
-                "task_id": row[6],
-                "agent_id": row[7],
-                "claimed_at": str(row[8]) if row[8] else None,
-                "heartbeat_at": str(row[9]) if row[9] else None,
-                "completed_at": str(row[10]) if row[10] else None,
-                "error_message": row[11],
+                "chain_key": row[4],
+                "status": row[5],
+                "job_id": row[6],
+                "task_id": row[7],
+                "agent_id": row[8],
+                "claimed_at": str(row[9]) if row[9] else None,
+                "heartbeat_at": str(row[10]) if row[10] else None,
+                "completed_at": str(row[11]) if row[11] else None,
+                "error_message": row[12],
             }
             for row in rows
         ]
 
-    def create_screening_run_locks(self, job_id: str, run_date: date, markets: List[str], timeframe: str) -> None:
-        rows = [(secrets.token_hex(16), run_date, market, timeframe, "queued", job_id) for market in markets]
+    def create_screening_run_locks(
+        self,
+        job_id: str,
+        run_date: date,
+        markets: List[str],
+        timeframe: str,
+        chain_key: str = DEFAULT_RULE_CHAIN_KEY,
+    ) -> None:
+        rows = [
+            (secrets.token_hex(16), run_date, market, timeframe, chain_key, "queued", job_id)
+            for market in markets
+        ]
         if not rows:
             return
         with self.conn.cursor() as cursor:
             cursor.executemany(
                 """
                 INSERT INTO screening_run_locks
-                    (lock_id, run_date, market, timeframe, status, job_id)
-                VALUES (%s,%s,%s,%s,%s,%s)
+                    (lock_id, run_date, market, timeframe, chain_key, status, job_id)
+                VALUES (%s,%s,%s,%s,%s,%s,%s)
                 """,
                 rows,
             )
@@ -1552,7 +1635,7 @@ class MarketDatabase:
             cursor.execute(
                 """
                 SELECT run_id, user_id, market, code, normalized_code, timeframe,
-                       status, created_at
+                       chain_key, status, created_at
                 FROM single_stock_runs
                 WHERE status IN ('queued','expired')
                 ORDER BY created_at ASC
@@ -1570,6 +1653,8 @@ class MarketDatabase:
                 "timeframe": row[3],
                 "status": row[4],
                 "options": _decode_json_field(row[5], {}),
+                "chain_key": _decode_json_field(row[5], {}).get("chain_key"),
+                "chain_name": _decode_json_field(row[5], {}).get("chain_name"),
                 "created_at": str(row[6]) if row[6] else None,
             }
             for row in screening_rows
@@ -1584,8 +1669,9 @@ class MarketDatabase:
                 "code": row[3],
                 "normalized_code": row[4],
                 "timeframe": row[5],
-                "status": row[6],
-                "created_at": str(row[7]) if row[7] else None,
+                "chain_key": row[6],
+                "status": row[7],
+                "created_at": str(row[8]) if row[8] else None,
             }
             for row in single_rows
         )
@@ -2005,14 +2091,15 @@ class MarketDatabase:
     def create_single_stock_run(self, item: dict) -> None:
         sql = """
             INSERT INTO single_stock_runs
-                (run_id, user_id, market, code, normalized_code, timeframe, status)
-            VALUES (%s,%s,%s,%s,%s,%s,%s)
+                (run_id, user_id, market, code, normalized_code, timeframe, chain_key, status)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
                 user_id=VALUES(user_id),
                 market=VALUES(market),
                 code=VALUES(code),
                 normalized_code=VALUES(normalized_code),
                 timeframe=VALUES(timeframe),
+                chain_key=VALUES(chain_key),
                 status=VALUES(status)
         """
         with self.conn.cursor() as cursor:
@@ -2023,6 +2110,7 @@ class MarketDatabase:
                 item.get("code"),
                 item.get("normalized_code"),
                 item.get("timeframe"),
+                item.get("chain_key"),
                 item.get("status") or "running",
             ))
 
@@ -2066,7 +2154,7 @@ class MarketDatabase:
     def get_single_stock_run(self, run_id: str) -> Optional[dict]:
         sql = """
             SELECT run_id, user_id, market, code, normalized_code, timeframe, passed,
-                   data_source, status, warnings_json, ai_analysis_json, result_json, agent_id,
+                   chain_key, data_source, status, warnings_json, ai_analysis_json, result_json, agent_id,
                    claimed_at, heartbeat_at, error_message, created_at, finished_at
             FROM single_stock_runs
             WHERE run_id=%s
@@ -2077,7 +2165,7 @@ class MarketDatabase:
             row = cursor.fetchone()
         if not row:
             return None
-        result_json = _decode_json_field(row[11], {})
+        result_json = _decode_json_field(row[12], {})
         item = {
             "job_type": "single_stock",
             "job_id": row[0],
@@ -2088,17 +2176,18 @@ class MarketDatabase:
             "normalized_code": row[4],
             "timeframe": row[5],
             "passed": bool(row[6]),
-            "data_source": row[7],
-            "status": row[8],
-            "warnings": _decode_json_field(row[9], []),
-            "ai_analysis": _decode_json_field(row[10], None),
+            "chain_key": row[7],
+            "data_source": row[8],
+            "status": row[9],
+            "warnings": _decode_json_field(row[10], []),
+            "ai_analysis": _decode_json_field(row[11], None),
             "result_json": result_json,
-            "agent_id": row[12],
-            "claimed_at": str(row[13]) if row[13] else None,
-            "heartbeat_at": str(row[14]) if row[14] else None,
-            "error_message": row[15],
-            "created_at": str(row[16]) if row[16] else None,
-            "finished_at": str(row[17]) if row[17] else None,
+            "agent_id": row[13],
+            "claimed_at": str(row[14]) if row[14] else None,
+            "heartbeat_at": str(row[15]) if row[15] else None,
+            "error_message": row[16],
+            "created_at": str(row[17]) if row[17] else None,
+            "finished_at": str(row[18]) if row[18] else None,
             "rule_details": self.get_single_stock_rule_details(row[0]),
         }
         if isinstance(result_json, dict):
@@ -2109,7 +2198,7 @@ class MarketDatabase:
     def list_single_stock_runs(self, limit: int = 50) -> List[dict]:
         sql = """
             SELECT run_id, user_id, market, code, normalized_code, timeframe, passed,
-                   data_source, status, warnings_json, ai_analysis_json, result_json,
+                   chain_key, data_source, status, warnings_json, ai_analysis_json, result_json,
                    agent_id, claimed_at, heartbeat_at, error_message, created_at, finished_at
             FROM single_stock_runs
             ORDER BY created_at DESC
@@ -2120,7 +2209,7 @@ class MarketDatabase:
             rows = cursor.fetchall() or []
         result = []
         for row in rows:
-            result_json = _decode_json_field(row[11], {})
+            result_json = _decode_json_field(row[12], {})
             item = {
                 "job_type": "single_stock",
                 "job_id": row[0],
@@ -2131,21 +2220,23 @@ class MarketDatabase:
                 "normalized_code": row[4],
                 "timeframe": row[5],
                 "passed": bool(row[6]),
-                "data_source": row[7],
-                "status": row[8],
-                "warnings": _decode_json_field(row[9], []),
-                "ai_analysis": _decode_json_field(row[10], None),
-                "agent_id": row[12],
-                "claimed_at": str(row[13]) if row[13] else None,
-                "heartbeat_at": str(row[14]) if row[14] else None,
-                "error_message": row[15],
-                "created_at": str(row[16]) if row[16] else None,
-                "finished_at": str(row[17]) if row[17] else None,
+                "chain_key": row[7],
+                "data_source": row[8],
+                "status": row[9],
+                "warnings": _decode_json_field(row[10], []),
+                "ai_analysis": _decode_json_field(row[11], None),
+                "agent_id": row[13],
+                "claimed_at": str(row[14]) if row[14] else None,
+                "heartbeat_at": str(row[15]) if row[15] else None,
+                "error_message": row[16],
+                "created_at": str(row[17]) if row[17] else None,
+                "finished_at": str(row[18]) if row[18] else None,
             }
             if isinstance(result_json, dict):
                 item["name"] = result_json.get("name")
                 item["sector"] = result_json.get("sector")
                 item["industry"] = result_json.get("industry")
+                item["chain_name"] = (result_json.get("rule_chain") or {}).get("chain_name")
             result.append(item)
         return result
 
@@ -2153,7 +2244,9 @@ class MarketDatabase:
         sql = """
             UPDATE single_stock_runs
             SET passed=%s, status=%s, data_source=%s, warnings_json=%s,
-                ai_analysis_json=%s, result_json=%s, finished_at=%s
+                ai_analysis_json=%s, result_json=%s,
+                chain_key=COALESCE(%s, chain_key),
+                finished_at=%s
             WHERE run_id=%s
         """
         with self.conn.cursor() as cursor:
@@ -2164,6 +2257,7 @@ class MarketDatabase:
                 _json_or_none(result.get("warnings") or []),
                 _json_or_none(result.get("ai_analysis")),
                 _json_or_none(result),
+                ((result.get("rule_chain") or {}).get("chain_key") if isinstance(result.get("rule_chain"), dict) else None),
                 _utcnow(),
                 run_id,
             ))
@@ -2296,18 +2390,26 @@ class MarketDatabase:
                     description,
                 ))
 
-        chain_rows = [
-            (
+        chain_rows = []
+        for market in DEFAULT_RULE_MARKETS:
+            chain_rows.append((
                 market,
-                "default_zuoyi_and_other",
+                DEFAULT_RULE_CHAIN_KEY,
                 "左一战法与其他策略默认链",
                 json.dumps(DEFAULT_RULE_CHAIN_EXPRESSION, ensure_ascii=False),
                 1,
                 100,
                 "启用硬筛选全部通过 && 左一战法命中 && 至少一个其他策略命中",
-            )
-            for market in DEFAULT_RULE_MARKETS
-        ]
+            ))
+            chain_rows.append((
+                market,
+                "trend_capital_accumulation_watch",
+                "趋势主力缩量观察链",
+                json.dumps(TREND_CAPITAL_ACCUMULATION_WATCH_EXPRESSION, ensure_ascii=False),
+                0,
+                300,
+                "默认关闭的试跑链：基于现有上涨趋势/放量规则做观察，主力资金与热点板块原子规则接入后可扩展",
+            ))
 
         with self.conn.cursor() as cursor:
             cursor.executemany(
@@ -2367,6 +2469,55 @@ class MarketDatabase:
         """
         with self.conn.cursor() as cursor:
             cursor.execute(sql, (market,))
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "market": row[0],
+            "chain_key": row[1],
+            "chain_name": row[2],
+            "expression_json": _decode_json_field(row[3], {}),
+            "enabled": bool(row[4]),
+            "priority": int(row[5] or 100),
+            "description": row[6],
+        }
+
+    def list_screening_rule_chains(self, market: str) -> List[dict]:
+        """读取某个市场的全部规则链，包含未启用的试跑链。"""
+        sql = """
+            SELECT market, chain_key, chain_name, expression_json,
+                   enabled, priority, description
+            FROM screening_rule_chains
+            WHERE market=%s
+            ORDER BY enabled DESC, priority ASC, id ASC
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (market,))
+            rows = cursor.fetchall() or []
+        return [
+            {
+                "market": row[0],
+                "chain_key": row[1],
+                "chain_name": row[2],
+                "expression_json": _decode_json_field(row[3], {}),
+                "enabled": bool(row[4]),
+                "priority": int(row[5] or 100),
+                "description": row[6],
+            }
+            for row in rows
+        ]
+
+    def get_screening_rule_chain(self, market: str, chain_key: str) -> Optional[dict]:
+        """按 key 读取某个市场规则链；显式试跑允许读取未启用链。"""
+        sql = """
+            SELECT market, chain_key, chain_name, expression_json,
+                   enabled, priority, description
+            FROM screening_rule_chains
+            WHERE market=%s AND chain_key=%s
+            LIMIT 1
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (market, chain_key))
             row = cursor.fetchone()
         if not row:
             return None

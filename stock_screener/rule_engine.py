@@ -129,6 +129,19 @@ class RuleRepository:
             raise ValueError(f"规则链表达式为空: market={market}, chain_key={chain.chain_key}")
         return chain
 
+    def load_chain(self, market: str, chain_key: str) -> RuleChainConfig:
+        row = self.db.get_screening_rule_chain(market, chain_key)
+        if not row:
+            raise ValueError(f"未找到规则链: market={market}, chain_key={chain_key}")
+        chain = RuleChainConfig.from_row(row)
+        if not chain.expression:
+            raise ValueError(f"规则链表达式为空: market={market}, chain_key={chain.chain_key}")
+        return chain
+
+    def load_chains(self, market: str) -> List[RuleChainConfig]:
+        rows = self.db.list_screening_rule_chains(market)
+        return [RuleChainConfig.from_row(row) for row in rows]
+
 
 class RuleRegistry:
     """受信任规则实现白名单。"""

@@ -3,6 +3,7 @@ import unittest
 from db import hash_password, verify_password
 from kline_fetcher import DatabaseKlineFetcher, KlineFetcherFactory
 from web.business import BusinessError
+from web.main import _resolve_rule_chain
 from web.rate_limit import InMemorySlidingWindowRateLimiter, RateLimitRule, rate_limiter
 from web.single_stock import _load_stock_info, normalize_stock_code
 from web.validation import (
@@ -129,6 +130,51 @@ class WebPlatformTests(unittest.TestCase):
             validate_agent_artifact_size(128, max_bytes=64)
         self.assertEqual(artifact_too_large.exception.error_code, "AGENT_ARTIFACT_TOO_LARGE")
         self.assertIn("单个导出文件过大", artifact_too_large.exception.message)
+
+    def test_resolve_rule_chain_allows_disabled_explicit_trial_chain(self):
+        class FakeDB:
+            def get_active_screening_rule_chain(self, market):
+                return {
+                    "market": market,
+                    "chain_key": "default_zuoyi_and_other",
+                    "chain_name": "默认链",
+                    "expression_json": {"ref": "zuoyi_signal"},
+                    "enabled": True,
+                    "priority": 100,
+                    "description": "",
+                }
+
+            def get_screening_rule_chain(self, market, chain_key):
+                if chain_key == "trend_capital_accumulation_watch":
+                    return {
+                        "market": market,
+                        "chain_key": chain_key,
+                        "chain_name": "趋势主力缩量试跑链",
+                        "expression_json": {"ref": "zuoyi_signal"},
+                        "enabled": False,
+                        "priority": 300,
+                        "description": "trial",
+                    }
+                return None
+
+        chain = _resolve_rule_chain(FakeDB(), ["HK", "US"], "trend_capital_accumulation_watch")
+
+        self.assertEqual(chain["chain_key"], "trend_capital_accumulation_watch")
+        self.assertFalse(chain["enabled"])
+
+    def test_resolve_rule_chain_returns_business_error_for_missing_market_chain(self):
+        class FakeDB:
+            def get_active_screening_rule_chain(self, market):
+                return None
+
+            def get_screening_rule_chain(self, market, chain_key):
+                return None
+
+        with self.assertRaises(BusinessError) as ctx:
+            _resolve_rule_chain(FakeDB(), ["HK"], "missing_chain")
+
+        self.assertEqual(ctx.exception.error_code, "RULE_CHAIN_NOT_FOUND")
+        self.assertIn("不适用于所选市场", ctx.exception.message)
 
 
 if __name__ == "__main__":

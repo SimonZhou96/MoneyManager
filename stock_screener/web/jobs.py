@@ -20,6 +20,7 @@ def run_web_screening_job(
     artifact_root: str,
     enable_ai_analysis: bool = True,
     send_feishu: bool = False,
+    chain_key: str | None = None,
 ) -> None:
     db = MarketDatabase(mysql_config)
     db.init_web_schema()
@@ -33,6 +34,8 @@ def run_web_screening_job(
         csv_base = str(root / "screening_result")
         today_str = date.today().strftime("%Y-%m-%d")
         params = get_default_screening_params()
+        if chain_key:
+            params["chain_key"] = chain_key
         webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
 
         for raw_market in markets:
@@ -46,6 +49,7 @@ def run_web_screening_job(
                 today_str=today_str,
                 verbose=False,
                 enable_ai_analysis=enable_ai_analysis,
+                chain_key=chain_key,
             )
             if result.task_id:
                 task_ids.append(result.task_id)

@@ -214,11 +214,11 @@ def evaluate_strategy_gate(strategy_result, require_zuoyi_strategy: bool = True)
     return zuoyi_satisfied and other_strategy_satisfied
 
 
-def create_rule_engine_from_db(db: MarketDatabase, market: str) -> RuleEngine:
+def create_rule_engine_from_db(db: MarketDatabase, market: str, chain_key: Optional[str] = None) -> RuleEngine:
     """按市场加载数据库规则引擎。"""
     repository = RuleRepository(db)
     metadata = repository.load_metadata(market)
-    chain_config = repository.load_active_chain(market)
+    chain_config = repository.load_chain(market, chain_key) if chain_key else repository.load_active_chain(market)
     return RuleEngine(
         metadata=metadata,
         chain_config=chain_config,
@@ -235,6 +235,7 @@ def run_screening_task(
     verbose: bool = False,
     watchlist: Optional[list] = None,
     progress_log: bool = False,
+    chain_key: Optional[str] = None,
 ):
     """
     执行筛选任务（后台运行）
@@ -333,11 +334,12 @@ def run_screening_task(
         
         # 创建数据库规则引擎或回退到参数驱动链路
         use_db_rule_engine = params.get("use_db_rule_engine", True)
+        requested_chain_key = chain_key or params.get("chain_key")
         rule_engine = None
         filter_chain = None
         strategy_chain = None
         if use_db_rule_engine:
-            rule_engine = create_rule_engine_from_db(db, market)
+            rule_engine = create_rule_engine_from_db(db, market, requested_chain_key)
             if not rule_engine.has_rules():
                 if verbose:
                     print("警告：数据库规则链未引用任何规则")
@@ -623,6 +625,7 @@ def create_and_start_screening_task(
     params: dict,
     background_runner: Callable[[Callable], None],
     watchlist: Optional[list] = None,
+    chain_key: Optional[str] = None,
 ) -> str:
     """
     创建并启动筛选任务
@@ -639,6 +642,9 @@ def create_and_start_screening_task(
         task_id: 任务ID
     """
     task_id = str(uuid.uuid4())
+    params_for_task = dict(params or {})
+    if chain_key:
+        params_for_task["chain_key"] = chain_key
 
     db = MarketDatabase(mysql_config)
     db.init_schema(timeframe)
@@ -653,7 +659,7 @@ def create_and_start_screening_task(
         market=market,
         timeframe=timeframe,
         total_count=total_count,
-        params_json=params,
+        params_json=params_for_task,
         check_date=date.today(),
     )
 
@@ -665,9 +671,10 @@ def create_and_start_screening_task(
             task_id=task_id,
             market=market,
             timeframe=timeframe,
-            params=params,
+            params=params_for_task,
             watchlist=watchlist,
             verbose=True,
+            chain_key=chain_key,
         )
     )
 

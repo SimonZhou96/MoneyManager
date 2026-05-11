@@ -359,7 +359,10 @@ def process_pending_jobs_once(args, client: CloudClient) -> int:
         if not job_id:
             continue
         try:
-            client.claim_job(job_id, args.agent_id)
+            claim_result = client.claim_job(job_id, args.agent_id)
+            claimed_job = claim_result.get("job") if isinstance(claim_result, dict) else None
+            if isinstance(claimed_job, dict):
+                job = {**job, **claimed_job}
         except Exception as exc:
             print(f"claim skipped: {job_id}: {type(exc).__name__}: {exc}")
             continue
@@ -383,8 +386,11 @@ def process_screening_job(args, client: CloudClient, job: dict) -> None:
     options = job.get("options") or {}
     enable_ai_analysis = bool(options.get("enable_ai_analysis", True))
     send_feishu = bool(options.get("send_feishu", False))
+    chain_key = job.get("chain_key") or options.get("chain_key")
     mysql_config = get_db_config()
     default_params = get_default_screening_params()
+    if chain_key:
+        default_params["chain_key"] = chain_key
     csv_base = args.screening_csv[:-4] if args.screening_csv.endswith(".csv") else args.screening_csv
     today_str = date.today().strftime("%Y-%m-%d")
     webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
@@ -394,6 +400,8 @@ def process_screening_job(args, client: CloudClient, job: dict) -> None:
     summary: Dict[str, Any] = {
         "markets": markets,
         "timeframe": timeframe,
+        "chain_key": chain_key,
+        "chain_name": job.get("chain_name") or options.get("chain_name"),
         "result_upload_scope": "passed_only",
         "market_statuses": market_statuses,
     }
@@ -409,6 +417,7 @@ def process_screening_job(args, client: CloudClient, job: dict) -> None:
             today_str=today_str,
             verbose=False,
             enable_ai_analysis=enable_ai_analysis,
+            chain_key=chain_key,
         )
         if result.error:
             warnings.append(f"{market}: {result.error}")
@@ -515,6 +524,7 @@ def process_single_stock_job(args, client: CloudClient, job: dict) -> None:
                 market=job["market"],
                 code=job.get("code") or job.get("normalized_code"),
                 timeframe=job.get("timeframe") or "1d",
+                chain_key=job.get("chain_key"),
                 user_id=job.get("user_id"),
                 run_id=run_id,
             ),

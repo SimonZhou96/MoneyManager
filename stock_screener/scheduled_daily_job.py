@@ -303,6 +303,7 @@ def run_screening_for_market(
     timeframe: str,
     default_params: dict,
     verbose: bool = False,
+    chain_key: Optional[str] = None,
 ) -> Tuple[Optional[str], List[dict]]:
     """
     对指定市场的合并股票池执行筛选。
@@ -319,12 +320,15 @@ def run_screening_for_market(
         return None, []
 
     task_id = str(uuid.uuid4())
+    task_params = dict(default_params or {})
+    if chain_key:
+        task_params["chain_key"] = chain_key
     db.create_screening_task(
         task_id=task_id,
         market=market,
         timeframe=timeframe,
         total_count=len(watchlist),
-        params_json=default_params,
+        params_json=task_params,
         check_date=date.today(),
     )
     db.close()
@@ -334,10 +338,11 @@ def run_screening_for_market(
         task_id=task_id,
         market=market,
         timeframe=timeframe,
-        params=default_params,
+        params=task_params,
         verbose=verbose,
         watchlist=watchlist,
         progress_log=True,
+        chain_key=chain_key,
     )
 
     # 查询通过筛选的股票
@@ -576,6 +581,7 @@ def run_market_screening_worker(
     today_str: str,
     verbose: bool = False,
     enable_ai_analysis: bool = False,
+    chain_key: Optional[str] = None,
 ) -> MarketScreeningResult:
     """
     Execute screening and CSV export for one market.
@@ -600,6 +606,7 @@ def run_market_screening_worker(
             timeframe=timeframe,
             default_params=default_params,
             verbose=verbose,
+            chain_key=chain_key,
         )
         if not task_id:
             print(f"  {market_label(market)} 未创建筛选任务，跳过")

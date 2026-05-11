@@ -1,5 +1,5 @@
 -- Cloud Web screening jobs are queued for the local OpenD Agent.
--- One successful full-market screening run is allowed per market + timeframe + day.
+-- One successful full-market screening run is allowed per market + timeframe + rule-chain + day.
 
 CREATE TABLE IF NOT EXISTS screening_run_locks (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS screening_run_locks (
     run_date DATE NOT NULL,
     market VARCHAR(8) NOT NULL,
     timeframe VARCHAR(8) NOT NULL,
+    chain_key VARCHAR(64) NOT NULL DEFAULT 'default_zuoyi_and_other',
     status VARCHAR(32) NOT NULL DEFAULT 'queued',
     job_id VARCHAR(64) NOT NULL,
     task_id VARCHAR(64) NULL,
@@ -19,7 +20,7 @@ CREATE TABLE IF NOT EXISTS screening_run_locks (
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
         ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id),
-    UNIQUE KEY uk_screening_run_lock_scope (run_date, market, timeframe),
+    UNIQUE KEY uk_screening_run_lock_scope (run_date, market, timeframe, chain_key),
     UNIQUE KEY uk_screening_run_lock_id (lock_id),
     KEY idx_screening_run_lock_job (job_id),
     KEY idx_screening_run_lock_status (status, run_date)
@@ -35,6 +36,7 @@ ALTER TABLE web_screening_jobs
     ADD COLUMN IF NOT EXISTS summary_json JSON NULL AFTER options_json;
 
 ALTER TABLE single_stock_runs
+    ADD COLUMN IF NOT EXISTS chain_key VARCHAR(64) NULL AFTER timeframe,
     ADD COLUMN IF NOT EXISTS result_json JSON NULL AFTER ai_analysis_json,
     ADD COLUMN IF NOT EXISTS agent_id VARCHAR(128) NULL AFTER ai_analysis_json,
     ADD COLUMN IF NOT EXISTS claimed_at DATETIME(6) NULL AFTER agent_id,
@@ -45,3 +47,13 @@ ALTER TABLE screening_tasks
     ADD COLUMN IF NOT EXISTS passed_count INT NULL AFTER completed_count,
     ADD COLUMN IF NOT EXISTS failed_count INT NULL AFTER passed_count,
     ADD COLUMN IF NOT EXISTS uploaded_result_scope VARCHAR(32) NULL AFTER failed_count;
+
+ALTER TABLE screening_run_locks
+    ADD COLUMN IF NOT EXISTS chain_key VARCHAR(64) NOT NULL DEFAULT 'default_zuoyi_and_other' AFTER timeframe;
+
+-- Existing deployments may still have the old unique key on (run_date, market, timeframe).
+-- If your MySQL version does not support conditional index DDL, run these two statements manually
+-- after checking SHOW INDEX FROM screening_run_locks.
+ALTER TABLE screening_run_locks DROP INDEX uk_screening_run_lock_scope;
+ALTER TABLE screening_run_locks
+    ADD UNIQUE KEY uk_screening_run_lock_scope (run_date, market, timeframe, chain_key);
