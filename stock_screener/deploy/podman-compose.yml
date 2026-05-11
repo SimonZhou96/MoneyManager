@@ -1,0 +1,86 @@
+version: "3.8"
+
+services:
+  mysql:
+    image: docker.io/library/mysql:8.0
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-market_data}
+    volumes:
+      - ${MYSQL_DATA_DIR:-/data/moneymanager/mysql}:/var/lib/mysql:Z
+    networks: [moneymanager]
+
+  redis:
+    image: docker.io/library/redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ${REDIS_DATA_DIR:-/data/moneymanager/redis}:/data:Z
+    networks: [moneymanager]
+
+  web-api:
+    build:
+      context: ..
+      dockerfile: deploy/Containerfile
+    env_file:
+      - ../.env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACT_DIR: /data/moneymanager/artifacts
+      KLINE_USE_FUTU_OPEND: "0"
+    volumes:
+      - ${ARTIFACT_DIR:-/data/moneymanager/artifacts}:/data/moneymanager/artifacts:Z
+    depends_on: [mysql, redis]
+    networks: [moneymanager]
+
+  web-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Containerfile
+    command: ["python", "-m", "web.worker"]
+    env_file:
+      - ../.env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACT_DIR: /data/moneymanager/artifacts
+      KLINE_USE_FUTU_OPEND: "0"
+    volumes:
+      - ${ARTIFACT_DIR:-/data/moneymanager/artifacts}:/data/moneymanager/artifacts:Z
+    depends_on: [mysql, redis]
+    networks: [moneymanager]
+
+  frontend:
+    image: docker.io/library/node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run build && cp -r dist/* /srv"
+    volumes:
+      - ../web_frontend:/app:Z
+      - frontend_dist:/srv:Z
+    networks: [moneymanager]
+
+  caddy:
+    image: docker.io/library/caddy:2-alpine
+    environment:
+      DOMAIN_NAME: ${DOMAIN_NAME:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:Z
+      - frontend_dist:/srv:ro,Z
+      - caddy_data:/data:Z
+      - caddy_config:/config:Z
+    depends_on: [web-api, frontend]
+    networks: [moneymanager]
+
+networks:
+  moneymanager:
+
+volumes:
+  frontend_dist:
+  caddy_data:
+  caddy_config:

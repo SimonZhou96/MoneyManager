@@ -6,6 +6,7 @@
 
 import time
 import uuid
+import os
 from datetime import date
 from typing import Callable, Optional
 
@@ -363,23 +364,25 @@ def run_screening_task(
                 for f in filter_chain._filters if f.enabled
             ) or len(strategy_chain.list_strategizers()) > 0
 
-        # 创建 K 线获取器（尝试连接 Futu OpenD）
+        # 创建 K 线获取器。云端优先读 DB 缓存；本地脚本可通过环境变量继续连接 Futu OpenD。
         fetchers = None
         quote_ctx = None
         if needs_kline:
-            # 尝试连接 Futu OpenD
-            try:
-                from futu import OpenQuoteContext
-                quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
-                if verbose:
-                    print("✓ 已连接 Futu OpenD")
-            except Exception as e:
-                if verbose:
-                    print(f"⚠️  无法连接 Futu OpenD: {e}，将使用其他数据源")
-                quote_ctx = None
+            use_futu = os.getenv("KLINE_USE_FUTU_OPEND", "1").strip().lower() in {"1", "true", "yes", "on"}
+            if use_futu:
+                try:
+                    from futu import OpenQuoteContext
+                    futu_host = os.getenv("FUTU_HOST", "127.0.0.1")
+                    futu_port = int(os.getenv("FUTU_PORT", "11111"))
+                    quote_ctx = OpenQuoteContext(host=futu_host, port=futu_port)
+                    if verbose:
+                        print(f"✓ 已连接 Futu OpenD ({futu_host}:{futu_port})")
+                except Exception as e:
+                    if verbose:
+                        print(f"⚠️  无法连接 Futu OpenD: {e}，将使用 DB/YFinance/AKShare")
+                    quote_ctx = None
 
-            # 创建获取器链（传入 quote_ctx，如果可用）
-            fetchers = KlineFetcherFactory.create_fetcher_chain(quote_ctx=quote_ctx)
+            fetchers = KlineFetcherFactory.create_fetcher_chain(quote_ctx=quote_ctx, db=db)
         
         # 创建筛选器上下文
         context = FilterContext(

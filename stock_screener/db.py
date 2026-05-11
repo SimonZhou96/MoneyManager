@@ -7,15 +7,17 @@ MySQL 存储层
 - stocks：股票主数据，(market, code) 唯一约束
 - ema_breakout_signals_{timeframe}：按 timeframe 分表，每张表只存一种周期的信号
 - screening_results：筛选结果
-- 不再存储 K 线数据（K 线在内存中使用）
+- stock_kline_cache：云端 Web 模式下的 K 线缓存，优先由本地 OpenD Agent 推送
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import secrets
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
@@ -64,20 +66,48 @@ def _json_or_none(value: Any):
     return json.dumps(value, ensure_ascii=False)
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def hash_password(password: str, *, iterations: int = 260_000) -> str:
+    """Return a PBKDF2-SHA256 password hash string."""
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("ascii"), iterations)
+    return f"pbkdf2_sha256${iterations}${salt}${digest.hex()}"
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify PBKDF2-SHA256 password hashes created by hash_password."""
+    try:
+        algorithm, iterations_raw, salt, digest_hex = str(password_hash).split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        iterations = int(iterations_raw)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("ascii"), iterations)
+        return secrets.compare_digest(digest.hex(), digest_hex)
+    except Exception:
+        return False
+
+
+def session_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 DEFAULT_RULE_MARKETS = ("HK", "US", "A")
 
 
 DEFAULT_RULE_METADATA = (
     ("market_cap_range", "市值范围", "filter", "MarketCapFilter",
-     {"min_cap": None, "max_cap": None}, False, 10, "按市值上下限筛选"),
+     {"min_cap": None, "max_cap": None}, True, 10, "按市值上下限筛选"),
     ("avg_daily_volume_range", "每日平均交易量范围", "filter", "AvgDailyVolumeFilter",
-     {"min_volume": None, "max_volume": None}, False, 20, "按 K 线计算每日平均交易量"),
+     {"min_volume": None, "max_volume": None}, True, 20, "按 K 线计算每日平均交易量"),
     ("price_range", "价格范围", "filter", "PriceFilter",
-     {"min_price": None, "max_price": None}, False, 30, "按最新收盘价筛选"),
+     {"min_price": None, "max_price": None}, True, 30, "按最新收盘价筛选"),
     ("pe_range", "PE 范围", "filter", "PEFilter",
-     {"min_pe": None, "max_pe": None, "allow_negative": False}, False, 40, "按 PE 上下限筛选"),
+     {"min_pe": None, "max_pe": None, "allow_negative": False}, True, 40, "按 PE 上下限筛选"),
     ("profitability", "公司盈利", "filter", "ProfitabilityFilter",
-     {"require_profitable": True}, False, 50, "要求 PE 为正"),
+     {"require_profitable": True}, True, 50, "要求 PE 为正"),
     ("zuoyi_signal", "左一战法", "strategy", "ZuoYiStrategizer",
      {"signal_window": 15, "include_bullish": True, "include_bearish": True}, True, 110,
      "当前周期15根K线内左一战法看涨/看跌信号"),
@@ -263,6 +293,208 @@ class MarketDatabase:
                 """
             )
         self.init_rule_schema()
+
+    def init_web_schema(self):
+        """初始化 Web、Agent、K 线缓存和 artifact 相关表。"""
+        self.init_schema("1d")
+        self.init_stock_pool_schema()
+        self.init_sector_schema()
+        self.init_signal_analysis_schema()
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS web_users (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    username VARCHAR(128) NOT NULL,
+                    password_hash VARCHAR(255) NOT NULL,
+                    role VARCHAR(32) NOT NULL DEFAULT 'admin',
+                    is_active TINYINT(1) NOT NULL DEFAULT 1,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                        ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_web_users_username (username),
+                    KEY idx_web_users_active (is_active)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='Web 固定登录账号'
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS web_sessions (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    session_hash CHAR(64) NOT NULL,
+                    user_id BIGINT UNSIGNED NOT NULL,
+                    expires_at DATETIME(6) NOT NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    last_seen_at DATETIME(6) NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_web_sessions_hash (session_hash),
+                    KEY idx_web_sessions_user (user_id),
+                    KEY idx_web_sessions_expires (expires_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='Web 服务端 Session'
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS web_login_attempts (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    username VARCHAR(128) NOT NULL,
+                    ip_address VARCHAR(64) NOT NULL,
+                    success TINYINT(1) NOT NULL DEFAULT 0,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    KEY idx_login_attempts_lookup (username, ip_address, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='Web 登录尝试记录'
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS data_sync_runs (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    sync_run_id VARCHAR(64) NOT NULL,
+                    agent_id VARCHAR(128) NULL,
+                    markets JSON NULL,
+                    timeframes JSON NULL,
+                    status VARCHAR(32) NOT NULL DEFAULT 'running',
+                    started_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    finished_at DATETIME(6) NULL,
+                    stock_pool_rows INT NOT NULL DEFAULT 0,
+                    sector_rows INT NOT NULL DEFAULT 0,
+                    kline_rows INT NOT NULL DEFAULT 0,
+                    error_message TEXT NULL,
+                    metadata_json JSON NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                        ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_data_sync_runs_id (sync_run_id),
+                    KEY idx_data_sync_status (status),
+                    KEY idx_data_sync_started (started_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='本地 Agent 数据同步批次'
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS stock_kline_cache (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    market VARCHAR(8) NOT NULL,
+                    code VARCHAR(32) NOT NULL,
+                    timeframe VARCHAR(8) NOT NULL,
+                    bar_time DATETIME(6) NOT NULL,
+                    open DECIMAL(20,6) NULL,
+                    high DECIMAL(20,6) NULL,
+                    low DECIMAL(20,6) NULL,
+                    close DECIMAL(20,6) NULL,
+                    volume DECIMAL(28,6) NULL,
+                    turnover DECIMAL(28,6) NULL,
+                    source VARCHAR(32) NOT NULL DEFAULT 'opend_cache',
+                    sync_run_id VARCHAR(64) NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                        ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_kline_cache_bar (market, code, timeframe, bar_time),
+                    KEY idx_kline_cache_lookup (market, code, timeframe, bar_time),
+                    KEY idx_kline_cache_source (source),
+                    KEY idx_kline_cache_sync_run (sync_run_id),
+                    KEY idx_kline_cache_updated (updated_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='云端 K 线缓存'
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS screening_artifacts (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    artifact_id VARCHAR(64) NOT NULL,
+                    task_id VARCHAR(64) NOT NULL,
+                    market VARCHAR(8) NULL,
+                    artifact_type VARCHAR(32) NOT NULL,
+                    file_name VARCHAR(255) NOT NULL,
+                    file_path VARCHAR(1024) NOT NULL,
+                    content_type VARCHAR(128) NULL,
+                    file_size BIGINT NULL,
+                    checksum VARCHAR(128) NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_screening_artifact_id (artifact_id),
+                    KEY idx_screening_artifacts_task (task_id),
+                    KEY idx_screening_artifacts_created (created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='筛选导出文件元信息'
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS single_stock_runs (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    run_id VARCHAR(64) NOT NULL,
+                    user_id BIGINT UNSIGNED NULL,
+                    market VARCHAR(8) NOT NULL,
+                    code VARCHAR(32) NOT NULL,
+                    normalized_code VARCHAR(32) NOT NULL,
+                    timeframe VARCHAR(8) NOT NULL,
+                    passed TINYINT(1) NOT NULL DEFAULT 0,
+                    data_source VARCHAR(32) NULL,
+                    status VARCHAR(32) NOT NULL DEFAULT 'running',
+                    warnings_json JSON NULL,
+                    ai_analysis_json JSON NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    finished_at DATETIME(6) NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_single_stock_run_id (run_id),
+                    KEY idx_single_stock_user (user_id, created_at),
+                    KEY idx_single_stock_code (market, normalized_code, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='单股选股运行记录'
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS single_stock_rule_details (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    run_id VARCHAR(64) NOT NULL,
+                    rule_key VARCHAR(64) NULL,
+                    rule_name VARCHAR(128) NOT NULL,
+                    rule_type VARCHAR(16) NULL,
+                    result VARCHAR(16) NOT NULL,
+                    reason TEXT NULL,
+                    details_json JSON NULL,
+                    display_order INT NOT NULL DEFAULT 0,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    KEY idx_single_rule_run (run_id, display_order)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='单股选股规则明细'
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS web_screening_jobs (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    job_id VARCHAR(64) NOT NULL,
+                    user_id BIGINT UNSIGNED NULL,
+                    markets JSON NULL,
+                    timeframe VARCHAR(8) NOT NULL,
+                    status VARCHAR(32) NOT NULL DEFAULT 'queued',
+                    task_ids JSON NULL,
+                    error_message TEXT NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                        ON UPDATE CURRENT_TIMESTAMP(6),
+                    finished_at DATETIME(6) NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_web_screening_job_id (job_id),
+                    KEY idx_web_screening_jobs_user (user_id, created_at),
+                    KEY idx_web_screening_jobs_status (status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='Web 发起的筛选任务组'
+                """
+            )
 
     def _ema_table_name(self, timeframe: str) -> str:
         """获取 EMA 信号表名：ema_breakout_signals_{timeframe}"""
@@ -771,6 +1003,636 @@ class MarketDatabase:
                 "created_at": row[10],
                 "updated_at": row[11],
             }
+
+    def list_screening_tasks(self, limit: int = 50) -> List[dict]:
+        sql = """
+            SELECT task_id, market, timeframe, status, total_count, completed_count,
+                   current_stock_code, current_stock_name, params_json, check_date,
+                   created_at, updated_at
+            FROM screening_tasks
+            ORDER BY created_at DESC
+            LIMIT %s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (int(limit),))
+            rows = cursor.fetchall() or []
+        result = []
+        for row in rows:
+            result.append({
+                "task_id": row[0],
+                "market": row[1],
+                "timeframe": row[2],
+                "status": row[3],
+                "total_count": int(row[4] or 0),
+                "completed_count": int(row[5] or 0),
+                "current_stock_code": row[6],
+                "current_stock_name": row[7],
+                "params_json": _decode_json_field(row[8], {}),
+                "check_date": str(row[9]) if row[9] else None,
+                "created_at": str(row[10]) if row[10] else None,
+                "updated_at": str(row[11]) if row[11] else None,
+            })
+        return result
+
+    def count_screening_results_by_task(self, task_id: str, passed_only: Optional[bool] = None) -> int:
+        conditions = ["task_id=%s"]
+        params: List[Any] = [task_id]
+        if passed_only is not None:
+            conditions.append("is_passed=%s")
+            params.append(1 if passed_only else 0)
+        sql = f"SELECT COUNT(*) FROM screening_results WHERE {' AND '.join(conditions)}"
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
+        return int(row[0] or 0) if row else 0
+
+    def get_screening_results_by_task(
+        self,
+        task_id: str,
+        limit: int = 1000,
+        offset: int = 0,
+        passed_only: bool = False,
+    ) -> List[dict]:
+        conditions = ["task_id=%s"]
+        params: List[Any] = [task_id]
+        if passed_only:
+            conditions.append("is_passed=1")
+        sql = """
+            SELECT market, code, name, check_date, is_passed, filter_summary,
+                   filter_details, sector, industry, market_cap, pe_ratio, close_price,
+                   created_at
+            FROM screening_results
+            WHERE {where_clause}
+            ORDER BY is_passed DESC, code ASC
+            LIMIT %s OFFSET %s
+        """.format(where_clause=" AND ".join(conditions))
+        params.extend([int(limit), int(offset)])
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall() or []
+        return [
+            {
+                "market": row[0],
+                "code": row[1],
+                "name": row[2],
+                "check_date": str(row[3]) if row[3] else None,
+                "is_passed": bool(row[4]),
+                "filter_summary": row[5],
+                "filter_details": _decode_json_field(row[6], []),
+                "sector": row[7],
+                "industry": row[8],
+                "market_cap": float(row[9]) if row[9] is not None else None,
+                "pe_ratio": float(row[10]) if row[10] is not None else None,
+                "close_price": float(row[11]) if row[11] is not None else None,
+                "created_at": str(row[12]) if row[12] else None,
+            }
+            for row in rows
+        ]
+
+    def get_stock_pool_records_by_codes(self, market: str, codes: List[str]) -> List[dict]:
+        codes = [str(code).strip() for code in codes if str(code).strip()]
+        if not codes:
+            return []
+        placeholders = ",".join(["%s"] * len(codes))
+        sql = f"""
+            SELECT pool_type, code, name, market_cap, price, pe_ratio, turnover, volume,
+                   listing_date, days_since_listing, index_code, index_name,
+                   industry_code, industry_name, rank_in_industry, extra_data,
+                   created_at, updated_at
+            FROM stock_pools
+            WHERE market=%s AND code IN ({placeholders})
+            ORDER BY
+                code ASC,
+                CASE pool_type
+                    WHEN 'best' THEN 0
+                    WHEN 'industry' THEN 1
+                    WHEN 'index' THEN 2
+                    WHEN 'ipo' THEN 3
+                    WHEN 'etf' THEN 4
+                    ELSE 5
+                END,
+                updated_at DESC
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, [market] + codes)
+            rows = cursor.fetchall() or []
+        result = []
+        for row in rows:
+            result.append({
+                "pool_type": row[0],
+                "code": row[1],
+                "name": row[2],
+                "market_cap": float(row[3]) if row[3] is not None else None,
+                "price": float(row[4]) if row[4] is not None else None,
+                "pe_ratio": float(row[5]) if row[5] is not None else None,
+                "turnover": float(row[6]) if row[6] is not None else None,
+                "volume": int(row[7]) if row[7] is not None else None,
+                "listing_date": str(row[8]) if row[8] else None,
+                "days_since_listing": int(row[9]) if row[9] is not None else None,
+                "index_code": row[10],
+                "index_name": row[11],
+                "industry_code": row[12],
+                "industry_name": row[13],
+                "rank_in_industry": int(row[14]) if row[14] is not None else None,
+                "extra_data": _decode_json_field(row[15], {}),
+                "created_at": str(row[16]) if row[16] else None,
+                "updated_at": str(row[17]) if row[17] else None,
+            })
+        return result
+
+    # ------------------------------------------------------------------
+    # Web auth
+    # ------------------------------------------------------------------
+
+    def upsert_web_user(self, username: str, password: str, role: str = "admin", is_active: bool = True) -> int:
+        username = str(username or "").strip()
+        if not username:
+            raise ValueError("username is required")
+        password_hash = hash_password(password)
+        sql = """
+            INSERT INTO web_users (username, password_hash, role, is_active)
+            VALUES (%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                password_hash=VALUES(password_hash),
+                role=VALUES(role),
+                is_active=VALUES(is_active)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (username, password_hash, role, 1 if is_active else 0))
+            return int(cursor.lastrowid or 0)
+
+    def get_web_user_by_username(self, username: str) -> Optional[dict]:
+        sql = """
+            SELECT id, username, password_hash, role, is_active, created_at, updated_at
+            FROM web_users WHERE username=%s LIMIT 1
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (username,))
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": int(row[0]),
+            "username": row[1],
+            "password_hash": row[2],
+            "role": row[3],
+            "is_active": bool(row[4]),
+            "created_at": str(row[5]) if row[5] else None,
+            "updated_at": str(row[6]) if row[6] else None,
+        }
+
+    def record_login_attempt(self, username: str, ip_address: str, success: bool) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO web_login_attempts (username, ip_address, success) VALUES (%s,%s,%s)",
+                (username, ip_address, 1 if success else 0),
+            )
+
+    def count_recent_failed_logins(self, username: str, ip_address: str, window_minutes: int = 15) -> int:
+        since = _utcnow() - timedelta(minutes=window_minutes)
+        sql = """
+            SELECT COUNT(1) FROM web_login_attempts
+            WHERE username=%s AND ip_address=%s AND success=0 AND created_at >= %s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (username, ip_address, since))
+            row = cursor.fetchone()
+        return int(row[0] or 0) if row else 0
+
+    def create_web_session(self, user_id: int, ttl_hours: int = 24) -> str:
+        token = secrets.token_urlsafe(48)
+        expires_at = _utcnow() + timedelta(hours=ttl_hours)
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO web_sessions (session_hash, user_id, expires_at, last_seen_at) VALUES (%s,%s,%s,%s)",
+                (session_hash(token), int(user_id), expires_at, _utcnow()),
+            )
+        return token
+
+    def get_user_by_session_token(self, token: str) -> Optional[dict]:
+        sql = """
+            SELECT u.id, u.username, u.role, u.is_active, s.expires_at
+            FROM web_sessions s
+            JOIN web_users u ON u.id=s.user_id
+            WHERE s.session_hash=%s
+            LIMIT 1
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (session_hash(token),))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            expires_at = row[4]
+            if expires_at and expires_at <= _utcnow():
+                return None
+            cursor.execute("UPDATE web_sessions SET last_seen_at=%s WHERE session_hash=%s", (_utcnow(), session_hash(token)))
+        if not bool(row[3]):
+            return None
+        return {"id": int(row[0]), "username": row[1], "role": row[2], "is_active": bool(row[3])}
+
+    def delete_web_session(self, token: str) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute("DELETE FROM web_sessions WHERE session_hash=%s", (session_hash(token),))
+
+    # ------------------------------------------------------------------
+    # Web screening jobs and artifacts
+    # ------------------------------------------------------------------
+
+    def create_web_screening_job(self, job_id: str, user_id: Optional[int], markets: List[str], timeframe: str) -> None:
+        sql = """
+            INSERT INTO web_screening_jobs (job_id, user_id, markets, timeframe, status)
+            VALUES (%s,%s,%s,%s,'queued')
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (job_id, user_id, _json_or_none(markets), timeframe))
+
+    def update_web_screening_job(
+        self,
+        job_id: str,
+        status: str,
+        task_ids: Optional[List[str]] = None,
+        error_message: Optional[str] = None,
+        finished: bool = False,
+    ) -> None:
+        sql = """
+            UPDATE web_screening_jobs
+            SET status=%s, task_ids=COALESCE(%s, task_ids), error_message=%s,
+                finished_at=CASE WHEN %s=1 THEN %s ELSE finished_at END
+            WHERE job_id=%s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (
+                status,
+                _json_or_none(task_ids) if task_ids is not None else None,
+                error_message,
+                1 if finished else 0,
+                _utcnow(),
+                job_id,
+            ))
+
+    def list_web_screening_jobs(self, limit: int = 50) -> List[dict]:
+        sql = """
+            SELECT job_id, user_id, markets, timeframe, status, task_ids,
+                   error_message, created_at, updated_at, finished_at
+            FROM web_screening_jobs
+            ORDER BY created_at DESC
+            LIMIT %s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (int(limit),))
+            rows = cursor.fetchall() or []
+        return [
+            {
+                "job_id": row[0],
+                "user_id": row[1],
+                "markets": _decode_json_field(row[2], []),
+                "timeframe": row[3],
+                "status": row[4],
+                "task_ids": _decode_json_field(row[5], []),
+                "error_message": row[6],
+                "created_at": str(row[7]) if row[7] else None,
+                "updated_at": str(row[8]) if row[8] else None,
+                "finished_at": str(row[9]) if row[9] else None,
+            }
+            for row in rows
+        ]
+
+    def create_screening_artifact(self, item: dict) -> str:
+        artifact_id = item.get("artifact_id") or secrets.token_hex(16)
+        sql = """
+            INSERT INTO screening_artifacts
+                (artifact_id, task_id, market, artifact_type, file_name, file_path,
+                 content_type, file_size, checksum)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                file_name=VALUES(file_name),
+                file_path=VALUES(file_path),
+                file_size=VALUES(file_size),
+                checksum=VALUES(checksum)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (
+                artifact_id,
+                item.get("task_id"),
+                item.get("market"),
+                item.get("artifact_type"),
+                item.get("file_name"),
+                item.get("file_path"),
+                item.get("content_type"),
+                item.get("file_size"),
+                item.get("checksum"),
+            ))
+        return artifact_id
+
+    def list_screening_artifacts(self, task_id: Optional[str] = None, limit: int = 100) -> List[dict]:
+        params: list = []
+        sql = """
+            SELECT artifact_id, task_id, market, artifact_type, file_name, file_path,
+                   content_type, file_size, checksum, created_at
+            FROM screening_artifacts
+            WHERE 1=1
+        """
+        if task_id:
+            sql += " AND task_id=%s"
+            params.append(task_id)
+        sql += " ORDER BY created_at DESC LIMIT %s"
+        params.append(int(limit))
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall() or []
+        return [
+            {
+                "artifact_id": row[0],
+                "task_id": row[1],
+                "market": row[2],
+                "artifact_type": row[3],
+                "file_name": row[4],
+                "file_path": row[5],
+                "content_type": row[6],
+                "file_size": int(row[7]) if row[7] is not None else None,
+                "checksum": row[8],
+                "created_at": str(row[9]) if row[9] else None,
+            }
+            for row in rows
+        ]
+
+    def get_screening_artifact(self, artifact_id: str) -> Optional[dict]:
+        sql = """
+            SELECT artifact_id, task_id, market, artifact_type, file_name, file_path,
+                   content_type, file_size, checksum, created_at
+            FROM screening_artifacts
+            WHERE artifact_id=%s
+            LIMIT 1
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (artifact_id,))
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "artifact_id": row[0],
+            "task_id": row[1],
+            "market": row[2],
+            "artifact_type": row[3],
+            "file_name": row[4],
+            "file_path": row[5],
+            "content_type": row[6],
+            "file_size": int(row[7]) if row[7] is not None else None,
+            "checksum": row[8],
+            "created_at": str(row[9]) if row[9] else None,
+        }
+
+    # ------------------------------------------------------------------
+    # Agent sync and K line cache
+    # ------------------------------------------------------------------
+
+    def create_data_sync_run(
+        self,
+        sync_run_id: str,
+        agent_id: Optional[str],
+        markets: List[str],
+        timeframes: List[str],
+        metadata: Optional[dict] = None,
+    ) -> None:
+        sql = """
+            INSERT INTO data_sync_runs
+                (sync_run_id, agent_id, markets, timeframes, status, metadata_json)
+            VALUES (%s,%s,%s,%s,'running',%s)
+            ON DUPLICATE KEY UPDATE
+                agent_id=VALUES(agent_id),
+                markets=VALUES(markets),
+                timeframes=VALUES(timeframes),
+                status='running',
+                metadata_json=VALUES(metadata_json)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (
+                sync_run_id,
+                agent_id,
+                _json_or_none(markets),
+                _json_or_none(timeframes),
+                _json_or_none(metadata or {}),
+            ))
+
+    def complete_data_sync_run(
+        self,
+        sync_run_id: str,
+        status: str,
+        error_message: Optional[str] = None,
+        stock_pool_rows: Optional[int] = None,
+        sector_rows: Optional[int] = None,
+        kline_rows: Optional[int] = None,
+    ) -> None:
+        sql = """
+            UPDATE data_sync_runs
+            SET status=%s,
+                finished_at=%s,
+                error_message=%s,
+                stock_pool_rows=COALESCE(%s, stock_pool_rows),
+                sector_rows=COALESCE(%s, sector_rows),
+                kline_rows=COALESCE(%s, kline_rows)
+            WHERE sync_run_id=%s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (
+                status,
+                _utcnow(),
+                error_message,
+                stock_pool_rows,
+                sector_rows,
+                kline_rows,
+                sync_run_id,
+            ))
+
+    def latest_data_sync_runs(self, limit: int = 10) -> List[dict]:
+        sql = """
+            SELECT sync_run_id, agent_id, markets, timeframes, status, started_at,
+                   finished_at, stock_pool_rows, sector_rows, kline_rows, error_message
+            FROM data_sync_runs
+            ORDER BY started_at DESC
+            LIMIT %s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (int(limit),))
+            rows = cursor.fetchall() or []
+        return [
+            {
+                "sync_run_id": row[0],
+                "agent_id": row[1],
+                "markets": _decode_json_field(row[2], []),
+                "timeframes": _decode_json_field(row[3], []),
+                "status": row[4],
+                "started_at": str(row[5]) if row[5] else None,
+                "finished_at": str(row[6]) if row[6] else None,
+                "stock_pool_rows": int(row[7] or 0),
+                "sector_rows": int(row[8] or 0),
+                "kline_rows": int(row[9] or 0),
+                "error_message": row[10],
+            }
+            for row in rows
+        ]
+
+    def upsert_kline_cache(self, rows: Iterable[dict]) -> int:
+        values = []
+        for item in rows:
+            market = str(item.get("market") or "").strip()
+            code = str(item.get("code") or "").strip()
+            timeframe = str(item.get("timeframe") or "").strip()
+            bar_time = item.get("bar_time") or item.get("date")
+            if not (market and code and timeframe and bar_time):
+                continue
+            values.append((
+                market,
+                code,
+                timeframe,
+                bar_time,
+                item.get("open"),
+                item.get("high"),
+                item.get("low"),
+                item.get("close"),
+                item.get("volume"),
+                item.get("turnover"),
+                item.get("source") or "opend_cache",
+                item.get("sync_run_id"),
+            ))
+        if not values:
+            return 0
+        sql = """
+            INSERT INTO stock_kline_cache
+                (market, code, timeframe, bar_time, open, high, low, close,
+                 volume, turnover, source, sync_run_id)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                open=VALUES(open),
+                high=VALUES(high),
+                low=VALUES(low),
+                close=VALUES(close),
+                volume=VALUES(volume),
+                turnover=VALUES(turnover),
+                source=VALUES(source),
+                sync_run_id=VALUES(sync_run_id)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.executemany(sql, values)
+        return len(values)
+
+    def get_kline_cache(self, market: str, code: str, timeframe: str, max_count: int = 500) -> pd.DataFrame:
+        sql = """
+            SELECT bar_time, open, high, low, close, volume, turnover, source
+            FROM stock_kline_cache
+            WHERE market=%s AND code=%s AND timeframe=%s
+            ORDER BY bar_time DESC
+            LIMIT %s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (market, code, timeframe, int(max_count)))
+            rows = cursor.fetchall() or []
+        if not rows:
+            return pd.DataFrame()
+        data = [
+            {
+                "date": row[0],
+                "open": float(row[1]) if row[1] is not None else None,
+                "high": float(row[2]) if row[2] is not None else None,
+                "low": float(row[3]) if row[3] is not None else None,
+                "close": float(row[4]) if row[4] is not None else None,
+                "volume": float(row[5]) if row[5] is not None else None,
+                "turnover": float(row[6]) if row[6] is not None else None,
+                "source": row[7],
+            }
+            for row in rows
+        ]
+        return pd.DataFrame(data).sort_values("date").reset_index(drop=True)
+
+    def prune_kline_cache(self, market: str, code: str, timeframe: str, max_bars: int = 500) -> None:
+        sql = """
+            DELETE FROM stock_kline_cache
+            WHERE market=%s AND code=%s AND timeframe=%s
+              AND id NOT IN (
+                  SELECT id FROM (
+                      SELECT id
+                      FROM stock_kline_cache
+                      WHERE market=%s AND code=%s AND timeframe=%s
+                      ORDER BY bar_time DESC
+                      LIMIT %s
+                  ) keep_rows
+              )
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (market, code, timeframe, market, code, timeframe, int(max_bars)))
+
+    # ------------------------------------------------------------------
+    # Single stock runs
+    # ------------------------------------------------------------------
+
+    def create_single_stock_run(self, item: dict) -> None:
+        sql = """
+            INSERT INTO single_stock_runs
+                (run_id, user_id, market, code, normalized_code, timeframe, status)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (
+                item.get("run_id"),
+                item.get("user_id"),
+                item.get("market"),
+                item.get("code"),
+                item.get("normalized_code"),
+                item.get("timeframe"),
+                item.get("status") or "running",
+            ))
+
+    def finish_single_stock_run(
+        self,
+        run_id: str,
+        passed: bool,
+        status: str,
+        data_source: Optional[str],
+        warnings: Optional[List[str]] = None,
+        ai_analysis: Optional[dict] = None,
+    ) -> None:
+        sql = """
+            UPDATE single_stock_runs
+            SET passed=%s, status=%s, data_source=%s, warnings_json=%s,
+                ai_analysis_json=%s, finished_at=%s
+            WHERE run_id=%s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (
+                1 if passed else 0,
+                status,
+                data_source,
+                _json_or_none(warnings or []),
+                _json_or_none(ai_analysis),
+                _utcnow(),
+                run_id,
+            ))
+
+    def insert_single_stock_rule_details(self, run_id: str, rows: Iterable[dict]) -> None:
+        values = []
+        for index, item in enumerate(rows):
+            values.append((
+                run_id,
+                item.get("rule_key"),
+                item.get("rule_name"),
+                item.get("rule_type"),
+                item.get("result"),
+                item.get("reason"),
+                _json_or_none(item.get("details")),
+                int(item.get("display_order") if item.get("display_order") is not None else index),
+            ))
+        if not values:
+            return
+        with self.conn.cursor() as cursor:
+            cursor.execute("DELETE FROM single_stock_rule_details WHERE run_id=%s", (run_id,))
+            cursor.executemany(
+                """
+                INSERT INTO single_stock_rule_details
+                    (run_id, rule_key, rule_name, rule_type, result, reason, details_json, display_order)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                values,
+            )
 
     # ------------------------------------------------------------------
     # Screening Rule Engine

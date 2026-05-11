@@ -135,6 +135,25 @@ class RuleEngineTest(unittest.TestCase):
 
         self.assertFalse(result.passed)
 
+    def test_enabled_hard_filter_skip_does_not_block_result(self):
+        result = self.evaluate(
+            [
+                metadata("market_cap_range", "filter", "StaticFilter", params={"result": "skip"}),
+                metadata("price_range", "filter", "StaticFilter", params={"result": "pass"}),
+                metadata("zuoyi_signal", "strategy", "StaticStrategizer", params={"satisfied": True}),
+                metadata("ema_breakout", "strategy", "StaticStrategizer", params={"satisfied": True}),
+            ],
+            {
+                "and": [
+                    {"all_enabled": ["market_cap_range", "price_range"]},
+                    {"ref": "zuoyi_signal"},
+                    {"any_enabled": ["ema_breakout"]},
+                ]
+            },
+        )
+
+        self.assertTrue(result.passed)
+
     def test_zuoyi_is_required_even_when_other_strategy_passes(self):
         result = self.evaluate(
             [
@@ -220,6 +239,11 @@ class RuleEngineTest(unittest.TestCase):
         for market in ("HK", "US", "A"):
             self.assertIn(f"('{market}', 'zuoyi_signal'", content)
             self.assertIn(f"('{market}', 'default_zuoyi_and_other'", content)
+            self.assertIn(
+                f"('{market}', 'market_cap_range', '市值范围', 'filter', 'MarketCapFilter', "
+                """'{"min_cap": null, "max_cap": null}', 1,""",
+                content,
+            )
 
 
 if __name__ == "__main__":

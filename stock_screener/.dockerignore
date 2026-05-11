@@ -1,0 +1,14 @@
+.agent.env
+.env
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+logs/
+deploy/.env
+deploy/*.env
+deploy/backend.env
+web_frontend/node_modules/
+web_frontend/dist/
+web_frontend/.npm-cache/
+web_frontend/.vite/

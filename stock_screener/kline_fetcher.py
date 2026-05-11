@@ -363,6 +363,40 @@ class AKShareKlineFetcher(KlineFetcherBase):
 
 
 # ---------------------------------------------------------------------------
+# Database cache
+# ---------------------------------------------------------------------------
+
+class DatabaseKlineFetcher(KlineFetcherBase):
+    """K 线缓存获取器：优先读取本地 Agent 推送到 MySQL 的缓存。"""
+
+    def __init__(self, db, min_rows: int = 20):
+        self.db = db
+        self.min_rows = max(1, int(min_rows))
+
+    def get_name(self) -> str:
+        return "DatabaseKlineCache"
+
+    def fetch(
+        self,
+        stock_code: str,
+        market: str = "HK",
+        timeframe: str = "1d",
+        max_count: int = 2000,
+    ) -> Optional[pd.DataFrame]:
+        try:
+            df = self.db.get_kline_cache(market=market, code=stock_code, timeframe=timeframe, max_count=max_count)
+            if df is None or df.empty or len(df) < self.min_rows:
+                return None
+            normalized = _normalize_dataframe(df)
+            if normalized is None or normalized.empty:
+                return None
+            return normalized.tail(max_count).reset_index(drop=True)
+        except Exception as e:
+            _log_fetch_warning("DatabaseKlineCache", f"fetch code={stock_code} market={market} timeframe={timeframe}", e)
+            return None
+
+
+# ---------------------------------------------------------------------------
 # Futu
 # ---------------------------------------------------------------------------
 
@@ -512,6 +546,7 @@ class KlineFetcherFactory:
     @staticmethod
     def create_fetcher_chain(
         quote_ctx=None,
+        db=None,
         rate_limiter=None,
     ) -> List[KlineFetcherBase]:
         """
@@ -525,20 +560,27 @@ class KlineFetcherFactory:
         fetchers: List[KlineFetcherBase] = []
         disable_akshare = KlineFetcherFactory._env_enabled("KLINE_DISABLE_AKSHARE", default=False)
 
-        # 1. Futu（需要 OpenD，本地依赖稳定性通常高于外部公网数据源）
+        # 1. Database cache（云端优先使用本地 Agent 推送的 OpenD 缓存）
+        if db is not None:
+            try:
+                fetchers.append(DatabaseKlineFetcher(db))
+            except Exception:
+                pass
+
+        # 2. Futu（仅本地任务显式传入 OpenD 时使用；云端不要连接 OpenD）
         if quote_ctx is not None:
             try:
                 fetchers.append(FutuKlineFetcher(quote_ctx, rate_limiter))
             except Exception:
                 pass
 
-        # 2. YFinance（全 timeframe）
+        # 3. YFinance（全 timeframe）
         try:
             fetchers.append(YFinanceKlineFetcher())
         except ImportError:
             pass
 
-        # 3. AKShare（日线 + A 股分钟线）。可通过 .env 禁用，避免 DNS/外站问题刷屏。
+        # 4. AKShare（日线 + A 股分钟线）。可通过 .env 禁用，避免 DNS/外站问题刷屏。
         if not disable_akshare:
             try:
                 fetchers.append(AKShareKlineFetcher())

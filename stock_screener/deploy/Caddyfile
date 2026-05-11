@@ -1,0 +1,17 @@
+{$DOMAIN_NAME:localhost} {
+    encode gzip
+
+    handle /api/* {
+        reverse_proxy web-api:8000
+    }
+
+    handle /healthz {
+        reverse_proxy web-api:8000
+    }
+
+    handle {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+}
