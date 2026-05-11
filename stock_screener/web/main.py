@@ -5,9 +5,11 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import Depends, FastAPI, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from db import MarketDatabase
 from market import normalize_market
@@ -23,16 +25,33 @@ from .auth import (
     require_agent,
     require_user,
 )
+from .business import BusinessError
 from .config import artifact_dir, load_dotenv, mysql_config_from_env, session_cookie_name
+from .errors import (
+    business_error_handler,
+    http_exception_handler,
+    request_validation_exception_handler,
+)
 from .jobs import run_web_screening_job
 from .queue import enqueue_or_thread
+from .rate_limit import (
+    ARTIFACT_DOWNLOAD_RULE,
+    CREATE_TASK_RULE,
+    LOGIN_REQUEST_RULE,
+    SINGLE_STOCK_RULE,
+    WEB_READ_RULE,
+    enforce_rate_limit,
+)
 from .single_stock import SingleStockRequest, run_single_stock_analysis
-from .validation import validate_markets, validate_timeframe
+from .validation import validate_agent_bulk_size, validate_markets, validate_timeframe
 
 
 load_dotenv()
 
 app = FastAPI(title="MoneyManager Stock Screener", version="0.1.0")
+app.add_exception_handler(BusinessError, business_error_handler)
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
 
 
 class LoginRequest(BaseModel):
@@ -88,6 +107,11 @@ class CompleteSyncRunRequest(BaseModel):
     kline_rows: Optional[int] = None
 
 
+def require_read_user(user: CurrentUser = Depends(require_user)) -> CurrentUser:
+    enforce_rate_limit(f"user:{user.id}:read", WEB_READ_RULE)
+    return user
+
+
 @app.on_event("startup")
 def startup() -> None:
     db = MarketDatabase(mysql_config_from_env())
@@ -108,9 +132,11 @@ def healthz():
 
 @app.post("/api/auth/login")
 def login(payload: LoginRequest, request: Request, response: Response, db: MarketDatabase = Depends(get_db)):
-    ok, user, message = authenticate(db, payload.username.strip(), payload.password, client_ip(request))
+    ip_address = client_ip(request)
+    enforce_rate_limit(f"ip:{ip_address}:login", LOGIN_REQUEST_RULE)
+    ok, user, message = authenticate(db, payload.username.strip(), payload.password, ip_address)
     if not ok or not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=message or "登录失败")
+        raise BusinessError("LOGIN_FAILED", message or "登录失败，请检查账号或密码")
     create_login_session(db, response, int(user["id"]))
     return {"user": {"id": user["id"], "username": user["username"], "role": user["role"]}}
 
@@ -125,7 +151,7 @@ def logout(response: Response, request: Request, db: MarketDatabase = Depends(ge
 @app.get("/api/auth/me")
 def me(user: Optional[CurrentUser] = Depends(optional_user)):
     if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未登录")
+        raise BusinessError("AUTH_REQUIRED", "请先登录后再访问")
     return {"id": user.id, "username": user.username, "role": user.role}
 
 
@@ -139,7 +165,8 @@ def create_screening_task(
         markets = validate_markets(payload.markets)
         timeframe = validate_timeframe(payload.timeframe)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise BusinessError("INVALID_SCREENING_TASK", str(exc)) from exc
+    enforce_rate_limit(f"user:{user.id}:create_task", CREATE_TASK_RULE)
     job_id = str(uuid.uuid4())
     db.create_web_screening_job(job_id=job_id, user_id=user.id, markets=markets, timeframe=timeframe)
     runner = enqueue_or_thread(
@@ -156,7 +183,7 @@ def create_screening_task(
 
 
 @app.get("/api/screening/tasks")
-def list_tasks(_: CurrentUser = Depends(require_user), db: MarketDatabase = Depends(get_db)):
+def list_tasks(_: CurrentUser = Depends(require_read_user), db: MarketDatabase = Depends(get_db)):
     return {
         "jobs": db.list_web_screening_jobs(limit=50),
         "tasks": db.list_screening_tasks(limit=50),
@@ -164,10 +191,10 @@ def list_tasks(_: CurrentUser = Depends(require_user), db: MarketDatabase = Depe
 
 
 @app.get("/api/screening/tasks/{task_id}")
-def get_task(task_id: str, _: CurrentUser = Depends(require_user), db: MarketDatabase = Depends(get_db)):
+def get_task(task_id: str, _: CurrentUser = Depends(require_read_user), db: MarketDatabase = Depends(get_db)):
     task = db.get_task_by_id(task_id)
     if not task:
-        raise HTTPException(status_code=404, detail="任务不存在")
+        raise BusinessError("TASK_NOT_FOUND", "任务不存在")
     return task
 
 
@@ -177,7 +204,7 @@ def get_task_results(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     passed_only: bool = False,
-    _: CurrentUser = Depends(require_user),
+    _: CurrentUser = Depends(require_read_user),
     db: MarketDatabase = Depends(get_db),
 ):
     return {
@@ -195,18 +222,19 @@ def get_task_results(
 
 
 @app.get("/api/screening/tasks/{task_id}/artifacts")
-def get_task_artifacts(task_id: str, _: CurrentUser = Depends(require_user), db: MarketDatabase = Depends(get_db)):
+def get_task_artifacts(task_id: str, _: CurrentUser = Depends(require_read_user), db: MarketDatabase = Depends(get_db)):
     return {"artifacts": db.list_screening_artifacts(task_id=task_id)}
 
 
 @app.get("/api/artifacts/{artifact_id}/download")
-def download_artifact(artifact_id: str, _: CurrentUser = Depends(require_user), db: MarketDatabase = Depends(get_db)):
+def download_artifact(artifact_id: str, user: CurrentUser = Depends(require_user), db: MarketDatabase = Depends(get_db)):
+    enforce_rate_limit(f"user:{user.id}:artifact_download", ARTIFACT_DOWNLOAD_RULE)
     artifact = db.get_screening_artifact(artifact_id)
     if not artifact:
-        raise HTTPException(status_code=404, detail="文件不存在")
+        raise BusinessError("ARTIFACT_NOT_FOUND", "文件不存在")
     path = Path(artifact["file_path"])
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="文件已丢失")
+        raise BusinessError("ARTIFACT_FILE_MISSING", "文件已丢失")
     return FileResponse(
         path=str(path),
         filename=artifact["file_name"],
@@ -216,6 +244,7 @@ def download_artifact(artifact_id: str, _: CurrentUser = Depends(require_user), 
 
 @app.post("/api/screening/single-stock")
 def single_stock(payload: SingleStockApiRequest, user: CurrentUser = Depends(require_user)):
+    enforce_rate_limit(f"user:{user.id}:single_stock", SINGLE_STOCK_RULE)
     try:
         return run_single_stock_analysis(
             mysql_config=mysql_config_from_env(),
@@ -227,11 +256,11 @@ def single_stock(payload: SingleStockApiRequest, user: CurrentUser = Depends(req
             ),
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}") from exc
+        raise BusinessError("SINGLE_STOCK_FAILED", f"单股分析失败：{type(exc).__name__}: {exc}") from exc
 
 
 @app.get("/api/rules")
-def get_rules(market: str = "HK", _: CurrentUser = Depends(require_user), db: MarketDatabase = Depends(get_db)):
+def get_rules(market: str = "HK", _: CurrentUser = Depends(require_read_user), db: MarketDatabase = Depends(get_db)):
     market = normalize_market(market)
     repository = RuleRepository(db)
     return {
@@ -242,7 +271,7 @@ def get_rules(market: str = "HK", _: CurrentUser = Depends(require_user), db: Ma
 
 
 @app.get("/api/system/data-freshness")
-def data_freshness(_: CurrentUser = Depends(require_user), db: MarketDatabase = Depends(get_db)):
+def data_freshness(_: CurrentUser = Depends(require_read_user), db: MarketDatabase = Depends(get_db)):
     return {"sync_runs": db.latest_data_sync_runs(limit=10)}
 
 
@@ -261,6 +290,7 @@ def create_sync_run(payload: SyncRunRequest, db: MarketDatabase = Depends(get_db
 
 @app.post("/api/agent/stock-pools/bulk-upsert", dependencies=[Depends(require_agent)])
 def bulk_stock_pool(payload: BulkStockPoolRequest, db: MarketDatabase = Depends(get_db)):
+    validate_agent_bulk_size(payload.rows)
     rows = [dict(row, sync_run_id=payload.sync_run_id) for row in payload.rows]
     db.upsert_stock_pool(normalize_market(payload.market), payload.pool_type, rows)
     return {"written": len(rows)}
@@ -268,6 +298,7 @@ def bulk_stock_pool(payload: BulkStockPoolRequest, db: MarketDatabase = Depends(
 
 @app.post("/api/agent/sector-memberships/bulk-upsert", dependencies=[Depends(require_agent)])
 def bulk_sector(payload: BulkSectorRequest, db: MarketDatabase = Depends(get_db)):
+    validate_agent_bulk_size(payload.rows)
     rows = [dict(row, sync_run_id=payload.sync_run_id) for row in payload.rows]
     db.upsert_stock_sector_memberships(rows)
     return {"written": len(rows)}
@@ -275,6 +306,7 @@ def bulk_sector(payload: BulkSectorRequest, db: MarketDatabase = Depends(get_db)
 
 @app.post("/api/agent/klines/bulk-upsert", dependencies=[Depends(require_agent)])
 def bulk_klines(payload: BulkKlineRequest, db: MarketDatabase = Depends(get_db)):
+    validate_agent_bulk_size(payload.rows)
     rows = [dict(row, sync_run_id=payload.sync_run_id, source=row.get("source") or "opend_cache") for row in payload.rows]
     written = db.upsert_kline_cache(rows)
     if payload.prune:

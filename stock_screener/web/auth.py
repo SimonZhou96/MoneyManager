@@ -4,10 +4,12 @@ import secrets
 from dataclasses import dataclass
 from typing import Optional
 
-from fastapi import Cookie, Depends, Header, HTTPException, Request, Response, status
+from fastapi import Cookie, Depends, Header, Request, Response
 
-from db import MarketDatabase, verify_password
+from db import MarketDatabase, session_hash, verify_password
 from .config import agent_token, cookie_secure, mysql_config_from_env, session_cookie_name, session_ttl_hours
+from .business import BusinessError
+from .rate_limit import AGENT_BULK_RULE, enforce_rate_limit
 
 
 @dataclass(frozen=True)
@@ -70,10 +72,10 @@ def require_user(
     token: Optional[str] = Cookie(default=None, alias=session_cookie_name()),
 ) -> CurrentUser:
     if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未登录")
+        raise BusinessError("AUTH_REQUIRED", "请先登录后再访问")
     user = db.get_user_by_session_token(token)
     if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="登录已过期")
+        raise BusinessError("SESSION_EXPIRED", "登录已过期，请重新登录")
     return CurrentUser(id=int(user["id"]), username=user["username"], role=user["role"])
 
 
@@ -92,9 +94,10 @@ def optional_user(
 def require_agent(authorization: str = Header(default="")) -> None:
     expected = agent_token()
     if not expected:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Agent token 未配置")
+        raise BusinessError("AGENT_TOKEN_NOT_CONFIGURED", "Agent token 未配置")
     if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Agent 未授权")
+        raise BusinessError("AGENT_UNAUTHORIZED", "Agent 未授权或 token 无效")
     token = authorization.removeprefix("Bearer ").strip()
     if not secrets.compare_digest(token, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Agent token 无效")
+        raise BusinessError("AGENT_UNAUTHORIZED", "Agent 未授权或 token 无效")
+    enforce_rate_limit(f"agent:{session_hash(token)}:bulk", AGENT_BULK_RULE)

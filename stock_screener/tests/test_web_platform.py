@@ -2,8 +2,10 @@ import unittest
 
 from db import hash_password, verify_password
 from kline_fetcher import DatabaseKlineFetcher, KlineFetcherFactory
+from web.business import BusinessError
+from web.rate_limit import InMemorySlidingWindowRateLimiter, RateLimitRule, rate_limiter
 from web.single_stock import _load_stock_info, normalize_stock_code
-from web.validation import validate_markets, validate_timeframe
+from web.validation import validate_agent_bulk_size, validate_markets, validate_timeframe
 
 
 class WebPlatformTests(unittest.TestCase):
@@ -70,6 +72,46 @@ class WebPlatformTests(unittest.TestCase):
         self.assertEqual(stock.pe_ratio, 18.5)
         self.assertEqual(stock.sector, "Biotechnology")
         self.assertEqual(stock.industry, "Biotechnology")
+
+    def test_business_error_carries_chinese_message_and_retry_after(self):
+        error = BusinessError(
+            "RATE_LIMIT_CREATE_TASK",
+            "筛选任务创建太频繁，请 28 分钟后再试",
+            retry_after_seconds=1680,
+        )
+
+        self.assertEqual(error.error_code, "RATE_LIMIT_CREATE_TASK")
+        self.assertEqual(error.message, "筛选任务创建太频繁，请 28 分钟后再试")
+        self.assertEqual(error.retry_after_seconds, 1680)
+
+    def test_in_memory_sliding_window_rate_limiter_blocks_until_window_expires(self):
+        now = [1000.0]
+        limiter = InMemorySlidingWindowRateLimiter(clock=lambda: now[0])
+        rule = RateLimitRule(
+            limit=2,
+            window_seconds=60,
+            error_code="RATE_LIMIT_TEST",
+            message_template="测试太频繁，请 {retry_after_text} 后再试",
+        )
+
+        self.assertTrue(limiter.check("user:1:test", rule).allowed)
+        self.assertTrue(limiter.check("user:1:test", rule).allowed)
+        blocked = limiter.check("user:1:test", rule)
+        self.assertFalse(blocked.allowed)
+        self.assertEqual(blocked.retry_after_seconds, 60)
+
+        now[0] += 61
+        self.assertTrue(limiter.check("user:1:test", rule).allowed)
+
+    def test_agent_bulk_size_fails_with_business_error(self):
+        rate_limiter.reset()
+        try:
+            with self.assertRaises(BusinessError) as too_large:
+                validate_agent_bulk_size([{} for _ in range(2001)])
+            self.assertEqual(too_large.exception.error_code, "AGENT_BULK_TOO_LARGE")
+            self.assertIn("2000 行以内", too_large.exception.message)
+        finally:
+            rate_limiter.reset()
 
 
 if __name__ == "__main__":

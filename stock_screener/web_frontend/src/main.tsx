@@ -100,11 +100,14 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options
   })
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}))
-    throw new Error(payload.detail || `${response.status} ${response.statusText}`)
+  const payload = await response.json().catch(() => null)
+  if (payload?.ok === false) {
+    throw new Error(payload.message || '请求失败，请稍后重试')
   }
-  return response.json()
+  if (!response.ok) {
+    throw new Error(payload?.detail || payload?.message || `${response.status} ${response.statusText}`)
+  }
+  return payload as T
 }
 
 function Login({ onLogin }: { onLogin: (user: User) => void }) {
