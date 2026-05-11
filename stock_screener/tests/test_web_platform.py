@@ -5,7 +5,13 @@ from kline_fetcher import DatabaseKlineFetcher, KlineFetcherFactory
 from web.business import BusinessError
 from web.rate_limit import InMemorySlidingWindowRateLimiter, RateLimitRule, rate_limiter
 from web.single_stock import _load_stock_info, normalize_stock_code
-from web.validation import validate_agent_bulk_size, validate_markets, validate_timeframe
+from web.validation import (
+    validate_agent_artifact_size,
+    validate_agent_bulk_size,
+    validate_agent_json_payload_size,
+    validate_markets,
+    validate_timeframe,
+)
 
 
 class WebPlatformTests(unittest.TestCase):
@@ -112,6 +118,17 @@ class WebPlatformTests(unittest.TestCase):
             self.assertIn("2000 行以内", too_large.exception.message)
         finally:
             rate_limiter.reset()
+
+    def test_agent_payload_and_artifact_size_fail_with_business_error(self):
+        with self.assertRaises(BusinessError) as json_too_large:
+            validate_agent_json_payload_size({"rows": [{"text": "x" * 128}]}, max_bytes=64)
+        self.assertEqual(json_too_large.exception.error_code, "AGENT_PAYLOAD_TOO_LARGE")
+        self.assertIn("单次推送内容过大", json_too_large.exception.message)
+
+        with self.assertRaises(BusinessError) as artifact_too_large:
+            validate_agent_artifact_size(128, max_bytes=64)
+        self.assertEqual(artifact_too_large.exception.error_code, "AGENT_ARTIFACT_TOO_LARGE")
+        self.assertIn("单个导出文件过大", artifact_too_large.exception.message)
 
 
 if __name__ == "__main__":

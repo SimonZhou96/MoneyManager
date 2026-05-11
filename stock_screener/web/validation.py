@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Iterable, List
+import json
+from typing import Any, Iterable, List
 
 from .business import BusinessError
 
@@ -8,6 +9,8 @@ from .business import BusinessError
 ALLOWED_MARKETS = {"HK", "US", "A"}
 SUPPORTED_TIMEFRAMES = {"1d", "1wk", "1mo", "3mo", "1m", "3m", "5m", "15m", "30m", "60m"}
 MAX_AGENT_BULK_ROWS = 2000
+MAX_AGENT_JSON_BYTES = 2 * 1024 * 1024
+MAX_AGENT_ARTIFACT_BYTES = 20 * 1024 * 1024
 
 
 def validate_markets(markets: Iterable[str]) -> List[str]:
@@ -38,4 +41,23 @@ def validate_agent_bulk_size(rows: list[dict], max_rows: int = MAX_AGENT_BULK_RO
         raise BusinessError(
             "AGENT_BULK_TOO_LARGE",
             f"单次推送数据过大，请拆分为 {max_rows} 行以内后重试",
+        )
+
+
+def validate_agent_json_payload_size(payload: Any, max_bytes: int = MAX_AGENT_JSON_BYTES) -> None:
+    size = len(json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"))
+    if size > max_bytes:
+        mib = max_bytes / 1024 / 1024
+        raise BusinessError(
+            "AGENT_PAYLOAD_TOO_LARGE",
+            f"单次推送内容过大，请拆分为 {mib:.0f} MiB 以内后重试",
+        )
+
+
+def validate_agent_artifact_size(size: int, max_bytes: int = MAX_AGENT_ARTIFACT_BYTES) -> None:
+    if size > max_bytes:
+        mib = max_bytes / 1024 / 1024
+        raise BusinessError(
+            "AGENT_ARTIFACT_TOO_LARGE",
+            f"单个导出文件过大，请控制在 {mib:.0f} MiB 以内后重试",
         )

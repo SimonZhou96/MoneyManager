@@ -23,6 +23,7 @@ class SingleStockRequest:
     code: str
     timeframe: str
     user_id: Optional[int] = None
+    run_id: Optional[str] = None
 
 
 def normalize_stock_code(market: str, code: str) -> str:
@@ -58,7 +59,7 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
     market = normalize_market(request.market)
     timeframe = parse_timeframe(request.timeframe)
     normalized_code = normalize_stock_code(market, request.code)
-    run_id = str(uuid.uuid4())
+    run_id = request.run_id or str(uuid.uuid4())
     warnings: List[str] = []
     ai_analysis: Optional[dict] = None
     data_source = ""

@@ -13,6 +13,28 @@ type Task = {
   current_stock_code?: string
   current_stock_name?: string
   created_at?: string
+  job_type?: string
+  run_id?: string
+  job_id?: string
+  task_ids?: string[]
+  markets?: string[]
+  normalized_code?: string
+  code?: string
+  name?: string
+  passed?: boolean
+}
+type SingleStockRun = {
+  job_type: 'single_stock'
+  run_id: string
+  market: string
+  code: string
+  normalized_code: string
+  timeframe: string
+  status: string
+  passed: boolean
+  name?: string
+  created_at?: string
+  error_message?: string
 }
 type ScreeningResult = {
   market: string
@@ -28,6 +50,7 @@ type TaskResultsResponse = {
   rows: ScreeningResult[]
   total_count: number
   passed_count: number
+  uploaded_result_scope?: string
   limit: number
   offset: number
 }
@@ -45,6 +68,8 @@ type Job = {
   task_ids: string[]
   created_at?: string
   error_message?: string
+  execution_mode?: string
+  summary?: Record<string, unknown>
 }
 
 const MARKET_OPTIONS = ['HK', 'US', 'A']
@@ -87,6 +112,7 @@ const STATUS_LABELS: Record<string, string> = {
   fail: '失败',
   failed: '失败',
   false: '未通过',
+  expired: '已过期',
   pass: '通过',
   queued: '排队中',
   running: '运行中',
@@ -161,6 +187,7 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState('dashboard')
   const [selectedTaskId, setSelectedTaskId] = useState('')
+  const [selectedSingleRunId, setSelectedSingleRunId] = useState('')
 
   useEffect(() => {
     api<User>('/api/auth/me')
@@ -196,25 +223,31 @@ function App() {
         </div>
       </aside>
       <main className="content">
-        {page === 'dashboard' && <Dashboard openTask={(taskId) => { setSelectedTaskId(taskId); setPage('task') }} />}
+        {page === 'dashboard' && <Dashboard
+          openTask={(taskId) => { setSelectedTaskId(taskId); setPage('task') }}
+          openSingle={(runId) => { setSelectedSingleRunId(runId); setPage('singleRun') }}
+        />}
         {page === 'screening' && <Screening />}
         {page === 'single' && <SingleStock />}
         {page === 'rules' && <Rules />}
         {page === 'task' && <TaskDetail taskId={selectedTaskId} />}
+        {page === 'singleRun' && <SingleRunDetail runId={selectedSingleRunId} />}
       </main>
     </div>
   )
 }
 
-function Dashboard({ openTask }: { openTask: (taskId: string) => void }) {
+function Dashboard({ openTask, openSingle }: { openTask: (taskId: string) => void; openSingle: (runId: string) => void }) {
   const [tasks, setTasks] = useState<Task[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
+  const [singleRuns, setSingleRuns] = useState<SingleStockRun[]>([])
   const [syncRuns, setSyncRuns] = useState<any[]>([])
 
   async function refresh() {
-    const taskData = await api<{ jobs: Job[]; tasks: Task[] }>('/api/screening/tasks')
+    const taskData = await api<{ jobs: Job[]; tasks: Task[]; single_stock_runs?: SingleStockRun[] }>('/api/screening/tasks')
     setJobs(taskData.jobs)
     setTasks(taskData.tasks)
+    setSingleRuns(taskData.single_stock_runs || [])
     const fresh = await api<{ sync_runs: any[] }>('/api/system/data-freshness')
     setSyncRuns(fresh.sync_runs)
   }
@@ -230,17 +263,42 @@ function Dashboard({ openTask }: { openTask: (taskId: string) => void }) {
       <Header title="总览" subtitle="任务进度、数据同步和最近筛选结果" />
       <div className="metric-grid">
         <Metric label="Web 任务" value={jobs.length} />
-        <Metric label="筛选任务" value={tasks.length} />
+        <Metric label="筛选任务" value={tasks.length + singleRuns.length} />
         <Metric label="最近同步" value={statusLabel(syncRuns[0]?.status || '无')} />
       </div>
       <Panel title="最近 Web 任务">
         <Table rows={jobs} columns={['job_id', 'markets', 'timeframe', 'status', 'created_at', 'error_message']} />
       </Panel>
       <Panel title="最近筛选任务">
-        <TaskTable rows={tasks} openTask={openTask} />
+        <TaskTable rows={mergeRecentTasks(tasks, singleRuns, jobs)} openTask={openTask} openSingle={openSingle} />
       </Panel>
     </section>
   )
+}
+
+function mergeRecentTasks(tasks: Task[], singleRuns: SingleStockRun[], jobs: Job[]): Task[] {
+  const marketTasks = (tasks || []).map(item => ({ ...item, job_type: 'screening' }))
+  const singleTasks = (singleRuns || []).map(item => ({
+    ...item,
+    task_id: item.run_id,
+    job_type: 'single_stock',
+    total_count: 1,
+    completed_count: item.status === 'completed' || item.status === 'failed' ? 1 : 0,
+    current_stock_code: item.normalized_code || item.code,
+    current_stock_name: item.name
+  }))
+  const webJobs = (jobs || []).map(item => ({
+    ...item,
+    task_id: item.job_id,
+    job_type: 'web_job',
+    market: (item.markets || []).join(', '),
+    total_count: item.task_ids?.length || 0,
+    completed_count: item.status === 'completed' ? (item.task_ids?.length || 0) : 0,
+    current_stock_code: item.task_ids && item.task_ids.length > 0 ? item.task_ids[0] : '等待本地 Agent'
+  }))
+  return [...webJobs, ...marketTasks, ...singleTasks]
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+    .slice(0, 50)
 }
 
 function Screening() {
@@ -271,7 +329,9 @@ function Screening() {
         method: 'POST',
         body: JSON.stringify({ markets, timeframe, enable_ai_analysis: enableAi, send_feishu: sendFeishu })
       })
-      setMessage(`已创建任务组 ${result.job_id}，可在总览页面查看任务进度。`)
+      setMessage(result.reused
+        ? `已有任务运行中，已复用任务组 ${result.job_id}。`
+        : `已创建任务组 ${result.job_id}，等待本地 Agent 领取执行。`)
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建失败')
     } finally {
@@ -312,23 +372,52 @@ function SingleStock() {
   const [code, setCode] = useState('AAPL')
   const [result, setResult] = useState<any>(null)
   const [loading, setLoading] = useState(false)
+  const [runId, setRunId] = useState('')
 
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     setLoading(true)
     setResult(null)
+    setRunId('')
     try {
       const data = await api('/api/screening/single-stock', {
         method: 'POST',
         body: JSON.stringify({ market, code, timeframe })
       })
       setResult(data)
+      setRunId((data as any).run_id || '')
     } catch (err) {
       setResult({ error: err instanceof Error ? err.message : '分析失败' })
-    } finally {
       setLoading(false)
     }
   }
+
+  async function refreshRun(id: string) {
+    try {
+      const data = await api(`/api/screening/single-stock/${id}`)
+      setResult(data)
+      const status = (data as any).status
+      if (status === 'completed' || status === 'failed') setLoading(false)
+    } catch (err) {
+      setResult({ error: err instanceof Error ? err.message : '加载单股任务失败' })
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!runId) return
+    refreshRun(runId).catch(console.error)
+    const timer = window.setInterval(() => refreshRun(runId).catch(console.error), 5000)
+    return () => window.clearInterval(timer)
+  }, [runId])
+
+  useEffect(() => {
+    if (!result || !runId) return
+    if (result.status === 'completed' || result.status === 'failed') {
+      setLoading(false)
+      setRunId('')
+    }
+  }, [result, runId])
 
   return (
     <section>
@@ -347,7 +436,7 @@ function SingleStock() {
         <Field label="股票代码">
           <input value={code} onChange={event => setCode(event.target.value)} />
         </Field>
-        <button className="primary" disabled={loading}>{loading ? '分析中...' : '开始分析'}</button>
+        <button className="primary" disabled={loading}>{loading ? '等待本地 Agent...' : '开始分析'}</button>
       </form>
       {result && <SingleResult result={result} />}
     </section>
@@ -356,10 +445,15 @@ function SingleStock() {
 
 function SingleResult({ result }: { result: any }) {
   if (result.error) return <div className="error">{result.error}</div>
-  const details = result.rule_chain?.details || []
+  if (result.status && result.status !== 'completed' && result.status !== 'failed') {
+    return <div className="notice">单股任务 {result.run_id} 当前状态：{statusLabel(result.status)}，等待本地 Agent 执行。</div>
+  }
+  const details = result.rule_chain?.details || result.rule_details || []
+  const displayCode = result.code || result.normalized_code || result.run_id
+  const displayName = result.name || result.normalized_code || ''
   return (
     <div className="result-layout">
-      <Panel title={`${result.code} ${result.name}`}>
+      <Panel title={`${displayCode} ${displayName}`}>
         <StatusBadge value={Boolean(result.passed)} />
         <dl className="info-list">
           <div><dt>板块</dt><dd>{displayMissing(result.sector)}</dd></div>
@@ -375,6 +469,40 @@ function SingleResult({ result }: { result: any }) {
         <Table rows={details} columns={['rule_name', 'rule_type', 'result', 'reason']} />
       </Panel>
     </div>
+  )
+}
+
+function SingleRunDetail({ runId }: { runId: string }) {
+  const [result, setResult] = useState<any>(null)
+  const [error, setError] = useState('')
+
+  async function refresh() {
+    if (!runId) return
+    setError('')
+    try {
+      const data = await api(`/api/screening/single-stock/${runId}`)
+      setResult(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载单股任务失败')
+    }
+  }
+
+  useEffect(() => {
+    refresh().catch(console.error)
+    if (!runId) return
+    const timer = window.setInterval(() => refresh().catch(console.error), 5000)
+    return () => window.clearInterval(timer)
+  }, [runId])
+
+  return (
+    <section>
+      <Header title={`单股任务 ${runId ? runId.slice(0, 8) : ''}`} subtitle={runId || '请选择一个单股任务'} />
+      <div className="toolbar toolbar-row">
+        <button className="primary" onClick={() => refresh().catch(console.error)}>刷新</button>
+      </div>
+      {error && <div className="error">{error}</div>}
+      {result && <SingleResult result={result} />}
+    </section>
   )
 }
 
@@ -412,6 +540,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
   const [offset, setOffset] = useState(0)
   const [passedOnly, setPassedOnly] = useState(false)
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
+  const [uploadedResultScope, setUploadedResultScope] = useState('')
   const [error, setError] = useState('')
 
   async function refresh() {
@@ -432,6 +561,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
       setResults(resultData.rows || [])
       setTotalCount(resultData.total_count || 0)
       setPassedCount(resultData.passed_count || 0)
+      setUploadedResultScope(resultData.uploaded_result_scope || '')
       setArtifacts(artifactData.artifacts || [])
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载任务失败')
@@ -489,6 +619,9 @@ function TaskDetail({ taskId }: { taskId: string }) {
         )}
       </Panel>
       <Panel title="结果表格">
+        {uploadedResultScope === 'passed_only' && (
+          <div className="table-note">该任务为本地 Agent 轻量上传模式：云端只保存通过股票明细，失败股票只计入统计。</div>
+        )}
         <div className="pager">
           <button type="button" disabled={!canPrev} onClick={() => setOffset(Math.max(0, offset - limit))}>上一页</button>
           <span>第 {filteredTotal === 0 ? 0 : Math.floor(offset / limit) + 1} 页</span>
@@ -532,13 +665,14 @@ function Table({ rows, columns }: { rows: any[]; columns: string[] }) {
   )
 }
 
-function TaskTable({ rows, openTask }: { rows: Task[]; openTask: (taskId: string) => void }) {
+function TaskTable({ rows, openTask, openSingle }: { rows: Task[]; openTask: (taskId: string) => void; openSingle: (runId: string) => void }) {
   if (!rows || rows.length === 0) return <div className="empty">暂无数据</div>
   return (
     <div className="table-wrap">
       <table>
         <thead>
           <tr>
+            <th>类型</th>
             <th>任务 ID</th>
             <th>市场</th>
             <th>周期</th>
@@ -548,20 +682,57 @@ function TaskTable({ rows, openTask }: { rows: Task[]; openTask: (taskId: string
           </tr>
         </thead>
         <tbody>
-          {rows.map(row => (
-            <tr key={row.task_id}>
-              <td><button className="link-button" title={row.task_id} onClick={() => openTask(row.task_id)}>{row.task_id.slice(0, 8)}</button></td>
-              <td>{row.market}</td>
-              <td>{row.timeframe}</td>
-              <td><StatusBadge value={row.status} /></td>
-              <td>{row.completed_count}/{row.total_count}</td>
-              <td>{row.current_stock_code || '未补齐'}</td>
-            </tr>
-          ))}
+          {rows.map(row => {
+            const isSingle = row.job_type === 'single_stock'
+            const isWebJob = row.job_type === 'web_job'
+            const id = isSingle ? (row.run_id || row.task_id) : row.task_id
+            const stockText = isSingle
+              ? formatSingleStockText(row)
+              : (row.current_stock_code || '未补齐')
+            const progressText = isSingle
+              ? (row.status === 'completed' ? (row.passed ? '通过' : '未通过') : statusLabel(row.status))
+              : isWebJob
+                ? (row.task_ids && row.task_ids.length > 0 ? `${row.task_ids.length} 个市场任务` : statusLabel(row.status))
+              : `${row.completed_count}/${row.total_count}`
+            const firstTaskId = row.task_ids && row.task_ids.length > 0 ? row.task_ids[0] : ''
+            return (
+              <tr key={`${row.job_type || 'screening'}-${id}`}>
+                <td>{isSingle ? '单股' : isWebJob ? '任务组' : '全市场'}</td>
+                <td>
+                  {isWebJob && !firstTaskId ? (
+                    <span title={id}>{id.slice(0, 8)}</span>
+                  ) : (
+                    <button
+                      className="link-button"
+                      title={id}
+                      onClick={() => isSingle ? openSingle(id) : openTask(isWebJob ? firstTaskId : id)}
+                    >
+                      {id.slice(0, 8)}
+                    </button>
+                  )}
+                </td>
+                <td>{row.market}</td>
+                <td>{row.timeframe}</td>
+                <td><StatusBadge value={row.status} /></td>
+                <td>{progressText}</td>
+                <td>{stockText}</td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
   )
+}
+
+function formatSingleStockText(row: Task): string {
+  const code = row.normalized_code || row.code || ''
+  const name = row.name || row.current_stock_name || ''
+  if (!name) return code || '未补齐'
+  const normalized = (value: string) => value.trim().toLowerCase()
+  const duplicateNames = new Set([row.normalized_code, row.code, code].filter(Boolean).map(value => normalized(String(value))))
+  if (duplicateNames.has(normalized(name))) return code || name
+  return [code, name].filter(Boolean).join(' ')
 }
 
 function StatusBadge({ value }: { value: string | boolean }) {
