@@ -92,6 +92,7 @@ class ScreeningSignalRow:
     main_force_risk_score: str = ""
     main_force_risk_signals: str = ""
     main_force_risk_summary: str = ""
+    main_force_market_data_observation: str = ""
     main_force_fund_flow_data: str = ""
     main_force_order_book_data: str = ""
     main_force_lhb_data: str = ""
@@ -118,10 +119,19 @@ class ScreeningSignalRow:
             main_force_risk_score=_string(row.get("主力风险分") or row.get("main_force_risk_score")),
             main_force_risk_signals=_string(row.get("主力风险信号") or row.get("main_force_risk_signals")),
             main_force_risk_summary=_string(row.get("主力风险说明") or row.get("main_force_risk_summary")),
+            main_force_market_data_observation=_string(
+                row.get("资金与盘面观察")
+                or row.get("资金与盘口观察")
+                or row.get("main_force_market_data_observation")
+            ),
             main_force_fund_flow_data=_string(row.get("资金流向数据") or row.get("main_force_fund_flow_data")),
             main_force_order_book_data=_string(row.get("盘口数据") or row.get("main_force_order_book_data")),
             main_force_lhb_data=_string(row.get("龙虎榜数据") or row.get("main_force_lhb_data")),
-            main_force_chip_data=_string(row.get("筹码分布数据") or row.get("main_force_chip_data")),
+            main_force_chip_data=_string(
+                row.get("成交量分布数据")
+                or row.get("筹码分布数据")
+                or row.get("main_force_chip_data")
+            ),
             main_force_missing_data=_string(row.get("数据不足项") or row.get("main_force_missing_data")),
             raw={_string(k): _string(v) for k, v in row.items()},
         )
@@ -145,6 +155,7 @@ class ScreeningSignalRow:
             "main_force_risk_score": self.main_force_risk_score,
             "main_force_risk_signals": self.main_force_risk_signals,
             "main_force_risk_summary": self.main_force_risk_summary,
+            "main_force_market_data_observation": self.main_force_market_data_observation,
             "main_force_data_gap": self.main_force_missing_data,
         }
 

@@ -24,6 +24,7 @@ COMMENT='筛选原子规则元数据';
 CREATE TABLE IF NOT EXISTS screening_rule_chains (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     market VARCHAR(8) NOT NULL COMMENT '市场: HK/US/A',
+    timeframe VARCHAR(16) NOT NULL DEFAULT '*' COMMENT '适用周期，* 表示通用规则链',
     chain_key VARCHAR(64) NOT NULL COMMENT '规则链键',
     chain_name VARCHAR(128) NOT NULL COMMENT '规则链名称',
     expression_json JSON NOT NULL COMMENT '规则链 JSON DSL',
@@ -33,8 +34,8 @@ CREATE TABLE IF NOT EXISTS screening_rule_chains (
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id),
-    UNIQUE KEY uk_rule_chains_market_key (market, chain_key),
-    KEY idx_rule_chains_market_enabled (market, enabled, priority)
+    UNIQUE KEY uk_rule_chains_market_timeframe_key (market, timeframe, chain_key),
+    KEY idx_rule_chains_market_timeframe_enabled (market, timeframe, enabled, priority)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 COMMENT='筛选规则使用链';
 
@@ -81,23 +82,23 @@ VALUES
     ('A', 'daily_rise_4_45', '当日涨 4%~4.5%', 'strategy', 'DailyRise4To45Strategizer', '{"pct_min": 4.0, "pct_max": 4.5}', 1, 170, '当日涨幅在指定区间');
 
 INSERT IGNORE INTO screening_rule_chains
-    (market, chain_key, chain_name, expression_json, enabled, priority, description)
+    (market, timeframe, chain_key, chain_name, expression_json, enabled, priority, description)
 VALUES
-    ('HK', 'default_zuoyi_and_other', '左一战法与其他策略默认链',
+    ('HK', '*', 'default_zuoyi_and_other', '左一战法与其他策略默认链',
      '{"and":[{"all_enabled":["market_cap_range","avg_daily_volume_range","price_range","pe_range","profitability"]},{"ref":"zuoyi_signal"},{"any_enabled":["ema_breakout","rsi_oversold","rsi_overbought","volume_spike_prior3","daily_drop_6_65","daily_rise_4_45"]}]}',
      1, 100, '启用硬筛选全部通过 && 左一战法命中 && 至少一个其他策略命中'),
-    ('HK', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
+    ('HK', '*', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
      '{"and":[{"all_enabled":["market_cap_range","avg_daily_volume_range","price_range","pe_range","profitability"]},{"ref":"zuoyi_signal"},{"any_enabled":["ema_breakout","volume_spike_prior3","daily_rise_4_45"]}]}',
      0, 300, '默认关闭的试跑链：基于现有上涨趋势/放量规则做观察，主力资金与热点板块原子规则接入后可扩展'),
-    ('US', 'default_zuoyi_and_other', '左一战法与其他策略默认链',
+    ('US', '*', 'default_zuoyi_and_other', '左一战法与其他策略默认链',
      '{"and":[{"all_enabled":["market_cap_range","avg_daily_volume_range","price_range","pe_range","profitability"]},{"ref":"zuoyi_signal"},{"any_enabled":["ema_breakout","rsi_oversold","rsi_overbought","volume_spike_prior3","daily_drop_6_65","daily_rise_4_45"]}]}',
      1, 100, '启用硬筛选全部通过 && 左一战法命中 && 至少一个其他策略命中'),
-    ('US', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
+    ('US', '*', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
      '{"and":[{"all_enabled":["market_cap_range","avg_daily_volume_range","price_range","pe_range","profitability"]},{"ref":"zuoyi_signal"},{"any_enabled":["ema_breakout","volume_spike_prior3","daily_rise_4_45"]}]}',
      0, 300, '默认关闭的试跑链：基于现有上涨趋势/放量规则做观察，主力资金与热点板块原子规则接入后可扩展'),
-    ('A', 'default_zuoyi_and_other', '左一战法与其他策略默认链',
+    ('A', '*', 'default_zuoyi_and_other', '左一战法与其他策略默认链',
      '{"and":[{"all_enabled":["market_cap_range","avg_daily_volume_range","price_range","pe_range","profitability"]},{"ref":"zuoyi_signal"},{"any_enabled":["ema_breakout","rsi_oversold","rsi_overbought","volume_spike_prior3","daily_drop_6_65","daily_rise_4_45"]}]}',
      1, 100, '启用硬筛选全部通过 && 左一战法命中 && 至少一个其他策略命中'),
-    ('A', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
+    ('A', '*', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
      '{"and":[{"all_enabled":["market_cap_range","avg_daily_volume_range","price_range","pe_range","profitability"]},{"ref":"zuoyi_signal"},{"any_enabled":["ema_breakout","volume_spike_prior3","daily_rise_4_45"]}]}',
      0, 300, '默认关闭的试跑链：基于现有上涨趋势/放量规则做观察，主力资金与热点板块原子规则接入后可扩展');

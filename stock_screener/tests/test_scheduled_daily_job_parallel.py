@@ -342,7 +342,9 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
         self.assertEqual(rows[1]["标的类型"], "ETF")
         self.assertIn("主力流出风险", rows[0])
         self.assertIn("主力风险信号", rows[0])
-        self.assertIn("筹码分布数据", rows[0])
+        self.assertIn("成交量分布数据", rows[0])
+        self.assertNotIn("筹码分布数据", rows[0])
+        self.assertNotIn("数据不足项", rows[0])
         self.assertEqual(rows[0]["左一支撑区间"], "8~10")
         self.assertEqual(rows[1]["左一支撑区间"], "12~14")
 

@@ -82,6 +82,7 @@ class RuleChainConfig:
     """一条市场级规则链配置。"""
 
     market: str
+    timeframe: str
     chain_key: str
     chain_name: str
     expression: Dict[str, Any]
@@ -96,6 +97,7 @@ class RuleChainConfig:
             expression = json.loads(expression) if expression else {}
         return cls(
             market=str(row.get("market") or ""),
+            timeframe=str(row.get("timeframe") or "*"),
             chain_key=str(row.get("chain_key") or ""),
             chain_name=str(row.get("chain_name") or ""),
             expression=expression if isinstance(expression, dict) else {},
@@ -118,28 +120,30 @@ class RuleRepository:
             key=lambda item: item.display_order,
         )
 
-    def load_active_chain(self, market: str) -> RuleChainConfig:
-        row = self.db.get_active_screening_rule_chain(market)
+    def load_active_chain(self, market: str, timeframe: str = "*") -> RuleChainConfig:
+        timeframe = str(timeframe or "*")
+        row = self.db.get_active_screening_rule_chain(market, timeframe)
         if not row:
-            raise ValueError(f"未找到启用的规则链: market={market}")
+            raise ValueError(f"未找到启用的规则链: market={market}, timeframe={timeframe}")
         chain = RuleChainConfig.from_row(row)
         if not chain.enabled:
-            raise ValueError(f"规则链未启用: market={market}, chain_key={chain.chain_key}")
+            raise ValueError(f"规则链未启用: market={market}, timeframe={timeframe}, chain_key={chain.chain_key}")
         if not chain.expression:
-            raise ValueError(f"规则链表达式为空: market={market}, chain_key={chain.chain_key}")
+            raise ValueError(f"规则链表达式为空: market={market}, timeframe={timeframe}, chain_key={chain.chain_key}")
         return chain
 
-    def load_chain(self, market: str, chain_key: str) -> RuleChainConfig:
-        row = self.db.get_screening_rule_chain(market, chain_key)
+    def load_chain(self, market: str, chain_key: str, timeframe: str = "*") -> RuleChainConfig:
+        timeframe = str(timeframe or "*")
+        row = self.db.get_screening_rule_chain(market, chain_key, timeframe)
         if not row:
-            raise ValueError(f"未找到规则链: market={market}, chain_key={chain_key}")
+            raise ValueError(f"未找到规则链: market={market}, timeframe={timeframe}, chain_key={chain_key}")
         chain = RuleChainConfig.from_row(row)
         if not chain.expression:
-            raise ValueError(f"规则链表达式为空: market={market}, chain_key={chain.chain_key}")
+            raise ValueError(f"规则链表达式为空: market={market}, timeframe={timeframe}, chain_key={chain.chain_key}")
         return chain
 
-    def load_chains(self, market: str) -> List[RuleChainConfig]:
-        rows = self.db.list_screening_rule_chains(market)
+    def load_chains(self, market: str, timeframe: Optional[str] = None) -> List[RuleChainConfig]:
+        rows = self.db.list_screening_rule_chains(market, timeframe)
         return [RuleChainConfig.from_row(row) for row in rows]
 
 

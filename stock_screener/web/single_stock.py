@@ -86,7 +86,7 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
 
         context = FilterContext(check_date=date.today(), market=market, db=db, verbose=False)
         context.timeframe = timeframe
-        rule_engine = create_rule_engine_from_db(db, market, request.chain_key)
+        rule_engine = create_rule_engine_from_db(db, market, timeframe, request.chain_key)
         result = rule_engine.evaluate_stock(stock, context)
         rule_details = _rule_details(rule_engine, result.filter_outputs)
 
@@ -119,6 +119,7 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
             "data_source": data_source,
             "rule_chain": {
                 "chain_key": rule_engine.chain_config.chain_key,
+                "chain_timeframe": rule_engine.chain_config.timeframe,
                 "chain_name": rule_engine.chain_config.chain_name,
                 "passed": bool(result.passed),
                 "details": rule_details,

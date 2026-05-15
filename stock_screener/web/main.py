@@ -235,7 +235,7 @@ def create_screening_task(
         raise BusinessError("INVALID_SCREENING_TASK", str(exc)) from exc
     enforce_rate_limit(f"user:{user.id}:create_task", CREATE_TASK_RULE)
     run_date = _run_date()
-    chain = resolve_rule_chain(db, markets, payload.chain_key)
+    chain = resolve_rule_chain(db, markets, timeframe=timeframe, chain_key=payload.chain_key)
     chain_key = chain["chain_key"]
     existing_locks = db.get_screening_run_locks(run_date, markets, timeframe, chain_key=chain_key)
     completed = [item for item in existing_locks if item.get("status") == "completed"]
@@ -258,6 +258,7 @@ def create_screening_task(
             "markets": job.get("markets") or sorted({item["market"] for item in active}),
             "timeframe": timeframe,
             "chain_key": chain_key,
+            "chain_timeframe": chain.get("chain_timeframe"),
             "chain_name": chain.get("chain_name"),
         }
     job_id = str(uuid.uuid4())
@@ -266,6 +267,7 @@ def create_screening_task(
         "send_feishu": bool(payload.send_feishu),
         "result_upload_scope": "passed_only",
         "chain_key": chain_key,
+        "chain_timeframe": chain.get("chain_timeframe"),
         "chain_name": chain.get("chain_name"),
     }
     db.create_web_screening_job(job_id=job_id, user_id=user.id, markets=markets, timeframe=timeframe, options=options)
@@ -290,6 +292,7 @@ def create_screening_task(
                 "markets": sorted({item["market"] for item in active_after_race}),
                 "timeframe": timeframe,
                 "chain_key": chain_key,
+                "chain_timeframe": chain.get("chain_timeframe"),
                 "chain_name": chain.get("chain_name"),
             }
         raise BusinessError("SCREENING_LOCK_CREATE_FAILED", f"创建筛选锁失败：{type(exc).__name__}: {exc}") from exc
@@ -300,6 +303,7 @@ def create_screening_task(
         "markets": markets,
         "timeframe": timeframe,
         "chain_key": chain_key,
+        "chain_timeframe": chain.get("chain_timeframe"),
         "chain_name": chain.get("chain_name"),
     }
 
@@ -317,7 +321,7 @@ def create_custom_list_task(
         parsed = CustomListCodeParser().parse(market, payload.codes)
     except ValueError as exc:
         raise BusinessError("INVALID_CUSTOM_LIST_TASK", str(exc)) from exc
-    chain = resolve_rule_chain(db, [market], payload.chain_key)
+    chain = resolve_rule_chain(db, [market], timeframe=timeframe, chain_key=payload.chain_key)
     try:
         return CustomListJobService(db).create_job(
             user_id=user.id,
@@ -425,7 +429,7 @@ def single_stock(payload: SingleStockApiRequest, user: CurrentUser = Depends(req
         normalized_code = normalize_stock_code(market, payload.code)
     except Exception as exc:
         raise BusinessError("INVALID_SINGLE_STOCK", f"单股参数不合法：{exc}") from exc
-    chain = resolve_rule_chain(db, [market], payload.chain_key)
+    chain = resolve_rule_chain(db, [market], timeframe=timeframe, chain_key=payload.chain_key)
     run_id = str(uuid.uuid4())
     db.create_single_stock_run({
         "run_id": run_id,
@@ -445,6 +449,7 @@ def single_stock(payload: SingleStockApiRequest, user: CurrentUser = Depends(req
         "code": normalized_code,
         "timeframe": timeframe,
         "chain_key": chain["chain_key"],
+        "chain_timeframe": chain.get("chain_timeframe"),
         "chain_name": chain.get("chain_name"),
     }
 

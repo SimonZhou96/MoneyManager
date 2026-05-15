@@ -30,7 +30,7 @@ cron 示例（每天 18:00 执行，收盘后）:
     CODEX_API_BASE, CODEX_API_KEY, CODEX_LLM_MODEL, CODEX_REASONING_EFFORT  Codex Responses 配置
     DEEPSEEK_API_BASE, DEEPSEEK_API_KEY, DEEPSEEK_LLM_MODEL  DeepSeek Chat Completions 配置
     ENABLE_MAIN_FORCE_RISK_ANALYSIS 是否启用主力流出风险分析，默认 1
-    MAIN_FORCE_ENABLE_EXTERNAL_DATA 是否启用资金/盘口/龙虎榜/筹码外部数据，默认 0
+    MAIN_FORCE_ENABLE_EXTERNAL_DATA 是否启用资金/盘口/龙虎榜/筹码外部数据，默认 1
     STOCK_NAME_ENABLE_EXTERNAL_ENRICHMENT  是否对通过股票调用外部名称补齐，默认 1
     SECTOR_SYNC_MEMBERSHIPS  是否同步完整行业板块成分，默认 1
     SECTOR_ENABLE_EXTERNAL_ENRICHMENT  是否对通过股票调用外部板块补齐，默认 1
@@ -582,11 +582,11 @@ MAIN_FORCE_CSV_COLUMNS = [
     ("主力风险分", "main_force_risk_score_text"),
     ("主力风险信号", "main_force_risk_signals_text"),
     ("主力风险说明", "main_force_risk_summary"),
+    ("资金与盘面观察", "main_force_market_data_observation_text"),
     ("资金流向数据", "main_force_fund_flow_data_text"),
     ("盘口数据", "main_force_order_book_data_text"),
     ("龙虎榜数据", "main_force_lhb_data_text"),
-    ("筹码分布数据", "main_force_chip_data_text"),
-    ("数据不足项", "main_force_missing_data_text"),
+    ("成交量分布数据", "main_force_chip_data_text"),
 ]
 
 

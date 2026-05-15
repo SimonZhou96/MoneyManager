@@ -214,11 +214,19 @@ def evaluate_strategy_gate(strategy_result, require_zuoyi_strategy: bool = True)
     return zuoyi_satisfied and other_strategy_satisfied
 
 
-def create_rule_engine_from_db(db: MarketDatabase, market: str, chain_key: Optional[str] = None) -> RuleEngine:
-    """按市场加载数据库规则引擎。"""
+def create_rule_engine_from_db(
+    db: MarketDatabase,
+    market: str,
+    timeframe: str = "1d",
+    chain_key: Optional[str] = None,
+) -> RuleEngine:
+    """按市场和周期加载数据库规则引擎。"""
     repository = RuleRepository(db)
     metadata = repository.load_metadata(market)
-    chain_config = repository.load_chain(market, chain_key) if chain_key else repository.load_active_chain(market)
+    chain_config = (
+        repository.load_chain(market, chain_key, timeframe)
+        if chain_key else repository.load_active_chain(market, timeframe)
+    )
     return RuleEngine(
         metadata=metadata,
         chain_config=chain_config,
@@ -339,7 +347,7 @@ def run_screening_task(
         filter_chain = None
         strategy_chain = None
         if use_db_rule_engine:
-            rule_engine = create_rule_engine_from_db(db, market, requested_chain_key)
+            rule_engine = create_rule_engine_from_db(db, market, timeframe, requested_chain_key)
             if not rule_engine.has_rules():
                 if verbose:
                     print("警告：数据库规则链未引用任何规则")
@@ -347,7 +355,7 @@ def run_screening_task(
                 return
             needs_kline = rule_engine.requires_kline()
             if verbose:
-                print(f"✓ 已加载数据库规则链: {rule_engine.chain_config.chain_key}")
+                print(f"✓ 已加载数据库规则链: {rule_engine.chain_config.chain_key} ({rule_engine.chain_config.timeframe})")
         else:
             filter_chain = create_filter_chain_from_params(params)
             strategy_chain = create_strategizer_chain_from_params(params)

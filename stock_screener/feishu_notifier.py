@@ -9,6 +9,7 @@
 
 import json
 import os
+import time
 from typing import List, Sequence, Union
 
 from network_preflight import format_resolution_failures
@@ -23,6 +24,40 @@ except Exception:
 
 # 飞书单条消息文本约 20KB 限制，预留安全余量
 FEISHU_TEXT_LIMIT = 15000
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _retry_attempts() -> int:
+    return max(1, _env_int("FEISHU_SEND_RETRY_ATTEMPTS", 3))
+
+
+def _retry_delay_sec() -> float:
+    return max(0.0, _env_float("FEISHU_SEND_RETRY_DELAY_SEC", 1.0))
+
+
+def _sleep_before_retry(attempt: int) -> None:
+    delay = _retry_delay_sec()
+    if delay > 0:
+        time.sleep(delay * (2 ** max(0, attempt - 1)))
 
 
 def send_feishu_text(webhook_url: str, text: str) -> bool:
@@ -49,24 +84,33 @@ def send_feishu_text(webhook_url: str, text: str) -> bool:
         return False
     payload = {"msg_type": "text", "content": {"text": text[:FEISHU_TEXT_LIMIT]}}
     headers = {"Content-Type": "application/json; charset=utf-8"}
-    try:
-        r = requests.post(
-            webhook_url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers=headers,
-            timeout=10,
-        )
-        body = r.json() or {}
-        if r.status_code != 200:
-            print(f"[Feishu] 摘要发送失败: HTTP {r.status_code} | {str(r.text)[:300]}")
-            return False
-        if body.get("code") != 0:
-            print(f"[Feishu] 摘要发送失败: code={body.get('code')} msg={body.get('msg') or body}")
-            return False
-        return True
-    except Exception as exc:
-        print(f"[Feishu] 摘要发送异常: {type(exc).__name__}: {exc}")
+    attempts = _retry_attempts()
+    for attempt in range(1, attempts + 1):
+        try:
+            r = requests.post(
+                webhook_url,
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers=headers,
+                timeout=10,
+            )
+            body = r.json() or {}
+            if r.status_code == 200 and body.get("code") == 0:
+                return True
+            if r.status_code != 200:
+                message = f"HTTP {r.status_code} | {str(r.text)[:300]}"
+            else:
+                message = f"code={body.get('code')} msg={body.get('msg') or body}"
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+
+        if attempt < attempts:
+            print(f"[Feishu] 摘要发送失败，准备重试 {attempt + 1}/{attempts}: {message}")
+            _sleep_before_retry(attempt)
+            continue
+        print(f"[Feishu] 摘要发送失败: {message}")
         return False
+
+    return False
 
 
 def _normalize_csv_paths(csv_paths: Union[str, Sequence[str]]) -> List[str]:
@@ -116,11 +160,19 @@ def send_screening_result(webhook_url: str, summary: str, csv_paths: Union[str, 
             send_feishu_text(webhook_url, f"CSV 文件不存在: {abs_path}")
             continue
 
-        try:
-            file_ok = send_file_to_chat(abs_path)
-        except Exception as e:
-            file_ok = False
-            print(f"[Feishu] 文件上传失败: {abs_path} | {e}")
+        file_ok = False
+        attempts = _retry_attempts()
+        for attempt in range(1, attempts + 1):
+            try:
+                file_ok = send_file_to_chat(abs_path)
+            except Exception as e:
+                file_ok = False
+                print(f"[Feishu] 文件上传失败: {abs_path} | {e}")
+            if file_ok:
+                break
+            if attempt < attempts:
+                print(f"[Feishu] 文件上传失败，准备重试 {attempt + 1}/{attempts}: {abs_path}")
+                _sleep_before_retry(attempt)
 
         if file_ok:
             print(f"[Feishu] 文件上传成功: {abs_path}")

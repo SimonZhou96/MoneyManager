@@ -68,6 +68,7 @@ class InteractiveScreeningOptions:
     require_fresh_pools: bool = False
     send_feishu: bool = False
     enable_ai_analysis: bool = True
+    enable_main_force_external_data: bool = True
     csv_path: str = "logs/screening_result.csv"
     market_workers: int = 3
     chain_key: Optional[str] = None
@@ -108,6 +109,10 @@ class ScreeningInteractiveApp:
             "是否启用搜索+模型辅助分析",
             env_flag("ENABLE_LLM_ANALYSIS", True),
         )
+        enable_main_force_external_data = self._prompt_bool(
+            "是否启用主力资金外部数据（资金流向/盘口等）",
+            env_flag("MAIN_FORCE_ENABLE_EXTERNAL_DATA", True),
+        )
         send_feishu = self._prompt_bool("是否发送飞书通知", False)
         csv_path = self._prompt_text(
             "CSV 输出路径",
@@ -128,6 +133,7 @@ class ScreeningInteractiveApp:
                 codes=codes,
                 timeframe=timeframe,
                 enable_ai_analysis=enable_ai_analysis,
+                enable_main_force_external_data=enable_main_force_external_data,
                 send_feishu=send_feishu,
                 csv_path=csv_path,
                 chain_key=chain_key,
@@ -155,6 +161,7 @@ class ScreeningInteractiveApp:
             require_fresh_pools=require_fresh_pools,
             send_feishu=send_feishu,
             enable_ai_analysis=enable_ai_analysis,
+            enable_main_force_external_data=enable_main_force_external_data,
             csv_path=csv_path,
             market_workers=market_workers,
             chain_key=chain_key,
@@ -163,6 +170,7 @@ class ScreeningInteractiveApp:
         )
 
     def run_full_market_screening(self, mysql_config: MySqlConfig, options: InteractiveScreeningOptions) -> int:
+        self._apply_main_force_external_data_env(options)
         db = MarketDatabase(mysql_config)
         db.init_stock_pool_schema()
         using_stale_pools = not options.fetch_pools
@@ -197,6 +205,7 @@ class ScreeningInteractiveApp:
         self.print("")
         self.print(f"[{datetime.now()}] 开始全市场筛选 | 市场: {options.markets} | 周期: {options.timeframe}")
         self.print(f"搜索+模型辅助分析: {'已启用' if options.enable_ai_analysis else '已关闭'}")
+        self.print(f"主力资金外部数据: {'已启用' if options.enable_main_force_external_data else '已关闭'}")
 
         processed: List[str] = []
         skipped: List[str] = []
@@ -241,6 +250,7 @@ class ScreeningInteractiveApp:
         return 0 if processed else 1
 
     def run_custom_code_screening(self, mysql_config: MySqlConfig, options: InteractiveScreeningOptions) -> int:
+        self._apply_main_force_external_data_env(options)
         market = normalize_market(options.market or "HK")
         parsed = CustomListCodeParser().parse(market, options.codes)
         self.print("")
@@ -276,6 +286,16 @@ class ScreeningInteractiveApp:
         self._print_custom_results(mysql_config, result.task_id)
         self._send_feishu_if_needed(options, today_str, result)
         return 0
+
+    @staticmethod
+    def _apply_main_force_external_data_env(options: InteractiveScreeningOptions) -> None:
+        os.environ["ENABLE_MAIN_FORCE_RISK_ANALYSIS"] = "1"
+        os.environ["MAIN_FORCE_ENABLE_EXTERNAL_DATA"] = "1" if options.enable_main_force_external_data else "0"
+        os.environ["MAIN_FORCE_ENABLE_FUTU_OPEND"] = "1" if options.enable_main_force_external_data else "0"
+        if options.futu_host:
+            os.environ["FUTU_HOST"] = options.futu_host
+        if options.futu_port:
+            os.environ["FUTU_PORT"] = str(options.futu_port)
 
     def _print_custom_results(self, mysql_config: MySqlConfig, task_id: Optional[str]) -> None:
         if not task_id:

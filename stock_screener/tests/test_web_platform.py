@@ -133,9 +133,10 @@ class WebPlatformTests(unittest.TestCase):
 
     def test_resolve_rule_chain_allows_disabled_explicit_trial_chain(self):
         class FakeDB:
-            def get_active_screening_rule_chain(self, market):
+            def get_active_screening_rule_chain(self, market, timeframe="*"):
                 return {
                     "market": market,
+                    "timeframe": timeframe,
                     "chain_key": "default_zuoyi_and_other",
                     "chain_name": "默认链",
                     "expression_json": {"ref": "zuoyi_signal"},
@@ -144,10 +145,11 @@ class WebPlatformTests(unittest.TestCase):
                     "description": "",
                 }
 
-            def get_screening_rule_chain(self, market, chain_key):
+            def get_screening_rule_chain(self, market, chain_key, timeframe="*"):
                 if chain_key == "trend_capital_accumulation_watch":
                     return {
                         "market": market,
+                        "timeframe": timeframe,
                         "chain_key": chain_key,
                         "chain_name": "趋势主力缩量试跑链",
                         "expression_json": {"ref": "zuoyi_signal"},
@@ -157,21 +159,22 @@ class WebPlatformTests(unittest.TestCase):
                     }
                 return None
 
-        chain = resolve_rule_chain(FakeDB(), ["HK", "US"], "trend_capital_accumulation_watch")
+        chain = resolve_rule_chain(FakeDB(), ["HK", "US"], timeframe="5m", chain_key="trend_capital_accumulation_watch")
 
         self.assertEqual(chain["chain_key"], "trend_capital_accumulation_watch")
+        self.assertEqual(chain["chain_timeframe"], "5m")
         self.assertFalse(chain["enabled"])
 
     def test_resolve_rule_chain_returns_business_error_for_missing_market_chain(self):
         class FakeDB:
-            def get_active_screening_rule_chain(self, market):
+            def get_active_screening_rule_chain(self, market, timeframe="*"):
                 return None
 
-            def get_screening_rule_chain(self, market, chain_key):
+            def get_screening_rule_chain(self, market, chain_key, timeframe="*"):
                 return None
 
         with self.assertRaises(BusinessError) as ctx:
-            resolve_rule_chain(FakeDB(), ["HK"], "missing_chain")
+            resolve_rule_chain(FakeDB(), ["HK"], timeframe="1d", chain_key="missing_chain")
 
         self.assertEqual(ctx.exception.error_code, "RULE_CHAIN_NOT_FOUND")
         self.assertIn("不适用于所选市场", ctx.exception.message)

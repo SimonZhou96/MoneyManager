@@ -57,7 +57,7 @@ class MainForceRiskAnalyzerTest(unittest.TestCase):
         self.assertGreaterEqual(result.risk_score, 30)
         self.assertIn(result.risk_level_text, {"中", "高"})
         self.assertNotIn("volume_profile", result.data_status_text("chip"))
-        self.assertEqual(result.data_status_text("chip"), "近似:成交量分布近似")
+        self.assertEqual(result.data_status_text("chip"), "可用:K线成交量分布")
 
     def test_service_updates_record_with_csv_ready_fields(self):
         service = MainForceRiskService(
@@ -71,10 +71,16 @@ class MainForceRiskAnalyzerTest(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertIn(records[0]["main_force_risk_level_text"], {"中", "高"})
         self.assertIn("放量下跌", records[0]["main_force_risk_signals_text"])
-        self.assertEqual(records[0]["main_force_chip_data_text"], "近似:成交量分布近似")
-        self.assertIn("筹码分布使用成交量分布近似", records[0]["main_force_missing_data_text"])
+        self.assertEqual(records[0]["main_force_chip_data_text"], "可用:K线成交量分布")
+        self.assertIn("资金流向: 暂无明细", records[0]["main_force_market_data_observation_text"])
+        self.assertIn("成交量分布: 现价", records[0]["main_force_market_data_observation_text"])
+        self.assertIn("近120日成交量加权价", records[0]["main_force_market_data_observation_text"])
+        self.assertIn("最大成交量区间", records[0]["main_force_market_data_observation_text"])
+        self.assertIn("样本80日", records[0]["main_force_market_data_observation_text"])
+        self.assertNotIn("筹码观察", records[0]["main_force_market_data_observation_text"])
+        self.assertNotIn("筹码分布使用成交量分布近似", records[0]["main_force_missing_data_text"])
 
-    def test_futu_provider_subscribes_before_order_book_and_broker_queue(self):
+    def test_futu_provider_subscribes_before_order_book_and_broker_queue_for_minute_timeframe(self):
         class FakeSubType:
             ORDER_BOOK = "ORDER_BOOK"
             BROKER = "BROKER"
@@ -118,12 +124,66 @@ class MainForceRiskAnalyzerTest(unittest.TestCase):
         provider = FutuOpenDMainForceDataProvider(quote_ctx=quote_ctx)
         provider.ft = FakeFutu
 
-        snapshot = provider.fetch("HK", "HK.00700")
+        snapshot = provider.fetch("HK", "HK.00700", timeframe="5m")
 
         self.assertIn((["HK.00700"], ["ORDER_BOOK"], False), quote_ctx.subscribe_calls)
         self.assertIn((["HK.00700"], ["BROKER"], False), quote_ctx.subscribe_calls)
         self.assertEqual(snapshot.statuses["order_book"].status, "available")
         self.assertTrue(any(signal.label == "盘口卖盘压制" for signal in snapshot.signals))
+        result = MainForceRiskAnalyzer().analyze(
+            record={"code": "HK.00700", "name": "腾讯控股"},
+            market="HK",
+            kline=make_drop_kline(),
+            external=snapshot,
+        )
+        self.assertIn("资金流向: 整体资金净流出1000", result.market_data_observation_text())
+        self.assertIn("盘口: 卖一量350股，买一量100股，卖一约为买一3.5倍", result.market_data_observation_text())
+        self.assertIn("经纪队列: 卖盘经纪5家，买盘经纪1家", result.market_data_observation_text())
+
+    def test_futu_provider_skips_order_book_for_daily_timeframe(self):
+        class FakeSubType:
+            ORDER_BOOK = "ORDER_BOOK"
+            BROKER = "BROKER"
+
+        class FakeFutu:
+            RET_OK = 0
+            SubType = FakeSubType
+
+        class FakeQuoteContext:
+            def __init__(self):
+                self.subscribe_calls = []
+
+            def get_capital_flow(self, code):
+                return 0, {"net_inflow": -1000}
+
+            def subscribe(self, codes, subtypes, subscribe_push=False):
+                self.subscribe_calls.append((list(codes), list(subtypes), subscribe_push))
+                return 0, None
+
+            def get_order_book(self, code, num=10):
+                raise AssertionError("daily timeframe must not fetch order book")
+
+            def get_broker_queue(self, code):
+                raise AssertionError("daily timeframe must not fetch broker queue")
+
+        quote_ctx = FakeQuoteContext()
+        provider = FutuOpenDMainForceDataProvider(quote_ctx=quote_ctx)
+        provider.ft = FakeFutu
+
+        snapshot = provider.fetch("HK", "HK.00700", timeframe="1d")
+
+        self.assertEqual(quote_ctx.subscribe_calls, [])
+        self.assertEqual(snapshot.statuses["order_book"].status, "not_applicable")
+        self.assertFalse(any(signal.source in {"盘口", "经纪队列"} for signal in snapshot.signals))
+        result = MainForceRiskAnalyzer().analyze(
+            record={"code": "HK.00700", "name": "腾讯控股"},
+            market="HK",
+            kline=make_drop_kline(),
+            external=snapshot,
+        )
+        self.assertIn("资金流向: 整体资金净流出1000", result.market_data_observation_text())
+        self.assertNotIn("盘口:", result.market_data_observation_text())
+        self.assertNotIn("经纪队列:", result.market_data_observation_text())
 
     def test_main_force_sql_exists(self):
         sql_path = Path(__file__).resolve().parents[1] / "sql" / "010_main_force_risk_analysis.sql"

@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import patch
 
-from interactive_screening import ScreeningInteractiveApp
+from interactive_screening import InteractiveScreeningOptions, ScreeningInteractiveApp
 
 
 class InteractiveScreeningTests(unittest.TestCase):
@@ -14,6 +15,7 @@ class InteractiveScreeningTests(unittest.TestCase):
             "2",        # 自选股票代码筛选
             "",         # timeframe
             "n",        # AI 分析
+            "y",        # 主力资金外部数据
             "n",        # 飞书
             "",         # CSV
             "",         # chain_key
@@ -28,6 +30,7 @@ class InteractiveScreeningTests(unittest.TestCase):
         self.assertEqual(options.market, "US")
         self.assertEqual(options.codes, ["AAPL", "MSFT"])
         self.assertFalse(options.enable_ai_analysis)
+        self.assertTrue(options.enable_main_force_external_data)
         self.assertFalse(options.send_feishu)
 
     def test_prompt_timeframe_lists_options_and_retries_invalid_value(self):
@@ -52,6 +55,7 @@ class InteractiveScreeningTests(unittest.TestCase):
             "",          # 默认全市场筛选
             "1d",
             "y",         # AI 分析
+            "n",         # 主力资金外部数据
             "n",         # 飞书
             "logs/x.csv",
             "trial_chain",
@@ -70,8 +74,28 @@ class InteractiveScreeningTests(unittest.TestCase):
         self.assertEqual(options.markets, ["HK", "A"])
         self.assertEqual(options.pools, ["best", "etf"])
         self.assertFalse(options.fetch_pools)
+        self.assertFalse(options.enable_main_force_external_data)
         self.assertEqual(options.market_workers, 2)
         self.assertEqual(options.chain_key, "trial_chain")
+
+    def test_apply_main_force_external_data_env(self):
+        options = InteractiveScreeningOptions(
+            mode="full",
+            enable_main_force_external_data=True,
+            futu_host="127.0.0.1",
+            futu_port=11111,
+        )
+
+        with patch.dict("os.environ", {}, clear=True):
+            ScreeningInteractiveApp._apply_main_force_external_data_env(options)
+
+            import os
+
+            self.assertEqual(os.environ["ENABLE_MAIN_FORCE_RISK_ANALYSIS"], "1")
+            self.assertEqual(os.environ["MAIN_FORCE_ENABLE_EXTERNAL_DATA"], "1")
+            self.assertEqual(os.environ["MAIN_FORCE_ENABLE_FUTU_OPEND"], "1")
+            self.assertEqual(os.environ["FUTU_HOST"], "127.0.0.1")
+            self.assertEqual(os.environ["FUTU_PORT"], "11111")
 
 
 if __name__ == "__main__":

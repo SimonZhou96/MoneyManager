@@ -60,6 +60,7 @@ def metadata(rule_key, rule_type, implementation, enabled=True, params=None, ord
 def chain(expression):
     return RuleChainConfig(
         market="HK",
+        timeframe="*",
         chain_key="test",
         chain_name="test",
         expression=expression,
@@ -211,9 +212,10 @@ class RuleEngineTest(unittest.TestCase):
                     "description": "desc",
                 }]
 
-            def get_active_screening_rule_chain(self, market):
+            def get_active_screening_rule_chain(self, market, timeframe="*"):
                 return {
                     "market": market,
+                    "timeframe": timeframe,
                     "chain_key": "default",
                     "chain_name": "默认",
                     "expression_json": {"ref": "zuoyi_signal"},
@@ -222,9 +224,10 @@ class RuleEngineTest(unittest.TestCase):
                     "description": "chain",
                 }
 
-            def get_screening_rule_chain(self, market, chain_key):
+            def get_screening_rule_chain(self, market, chain_key, timeframe="*"):
                 return {
                     "market": market,
+                    "timeframe": timeframe,
                     "chain_key": chain_key,
                     "chain_name": "试跑链",
                     "expression_json": {"ref": "zuoyi_signal"},
@@ -233,24 +236,38 @@ class RuleEngineTest(unittest.TestCase):
                     "description": "trial",
                 }
 
-            def list_screening_rule_chains(self, market):
+            def list_screening_rule_chains(self, market, timeframe=None):
                 return [
-                    self.get_active_screening_rule_chain(market),
-                    self.get_screening_rule_chain(market, "trial"),
+                    self.get_active_screening_rule_chain(market, timeframe or "*"),
+                    self.get_screening_rule_chain(market, "trial", timeframe or "*"),
                 ]
 
         repo = RuleRepository(FakeDB())
         metadata_items = repo.load_metadata("HK")
-        chain_config = repo.load_active_chain("HK")
-        trial_chain = repo.load_chain("HK", "trial")
-        all_chains = repo.load_chains("HK")
+        chain_config = repo.load_active_chain("HK", "1d")
+        trial_chain = repo.load_chain("HK", "trial", "5m")
+        all_chains = repo.load_chains("HK", "15m")
 
         self.assertEqual(metadata_items[0].rule_key, "zuoyi_signal")
         self.assertEqual(metadata_items[0].params["signal_window"], 3)
         self.assertEqual(chain_config.expression, {"ref": "zuoyi_signal"})
+        self.assertEqual(chain_config.timeframe, "1d")
         self.assertEqual(trial_chain.chain_key, "trial")
+        self.assertEqual(trial_chain.timeframe, "5m")
         self.assertFalse(trial_chain.enabled)
+        self.assertEqual([item.timeframe for item in all_chains], ["15m", "15m"])
         self.assertEqual([item.chain_key for item in all_chains], ["default", "trial"])
+
+    def test_rule_chain_from_row_defaults_to_wildcard_timeframe(self):
+        chain_config = RuleChainConfig.from_row({
+            "market": "HK",
+            "chain_key": "default",
+            "chain_name": "默认",
+            "expression_json": {"ref": "zuoyi_signal"},
+            "enabled": True,
+        })
+
+        self.assertEqual(chain_config.timeframe, "*")
 
     def test_deployment_sql_contains_tables_and_market_seed_data(self):
         sql_path = Path(__file__).resolve().parents[1] / "sql" / "001_screening_rules.sql"
@@ -258,10 +275,12 @@ class RuleEngineTest(unittest.TestCase):
 
         self.assertIn("CREATE TABLE IF NOT EXISTS screening_rule_metadata", content)
         self.assertIn("CREATE TABLE IF NOT EXISTS screening_rule_chains", content)
+        self.assertIn("timeframe VARCHAR(16) NOT NULL DEFAULT '*'", content)
+        self.assertIn("UNIQUE KEY uk_rule_chains_market_timeframe_key (market, timeframe, chain_key)", content)
         for market in ("HK", "US", "A"):
             self.assertIn(f"('{market}', 'zuoyi_signal'", content)
-            self.assertIn(f"('{market}', 'default_zuoyi_and_other'", content)
-            self.assertIn(f"('{market}', 'trend_capital_accumulation_watch'", content)
+            self.assertIn(f"('{market}', '*', 'default_zuoyi_and_other'", content)
+            self.assertIn(f"('{market}', '*', 'trend_capital_accumulation_watch'", content)
             self.assertIn(
                 f"('{market}', 'market_cap_range', '市值范围', 'filter', 'MarketCapFilter', "
                 """'{"min_cap": null, "max_cap": null}', 1,""",

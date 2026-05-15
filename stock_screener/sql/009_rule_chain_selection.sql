@@ -15,14 +15,14 @@ ALTER TABLE screening_run_locks
     ADD UNIQUE KEY uk_screening_run_lock_scope (run_date, market, timeframe, chain_key);
 
 INSERT IGNORE INTO screening_rule_chains
-    (market, chain_key, chain_name, expression_json, enabled, priority, description)
+    (market, timeframe, chain_key, chain_name, expression_json, enabled, priority, description)
 VALUES
-    ('HK', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
+    ('HK', '*', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
      '{"and":[{"all_enabled":["market_cap_range","avg_daily_volume_range","price_range","pe_range","profitability"]},{"ref":"zuoyi_signal"},{"any_enabled":["ema_breakout","volume_spike_prior3","daily_rise_4_45"]}]}',
      0, 300, '默认关闭的试跑链：基于现有上涨趋势/放量规则做观察，主力资金与热点板块原子规则接入后可扩展'),
-    ('US', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
+    ('US', '*', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
      '{"and":[{"all_enabled":["market_cap_range","avg_daily_volume_range","price_range","pe_range","profitability"]},{"ref":"zuoyi_signal"},{"any_enabled":["ema_breakout","volume_spike_prior3","daily_rise_4_45"]}]}',
      0, 300, '默认关闭的试跑链：基于现有上涨趋势/放量规则做观察，主力资金与热点板块原子规则接入后可扩展'),
-    ('A', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
+    ('A', '*', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
      '{"and":[{"all_enabled":["market_cap_range","avg_daily_volume_range","price_range","pe_range","profitability"]},{"ref":"zuoyi_signal"},{"any_enabled":["ema_breakout","volume_spike_prior3","daily_rise_4_45"]}]}',
      0, 300, '默认关闭的试跑链：基于现有上涨趋势/放量规则做观察，主力资金与热点板块原子规则接入后可扩展');

@@ -768,11 +768,11 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         "## 三、主力流出风险观察",
         "",
-        "| 股票代码 | 股票名称 | 风险等级 | 主要风险信号 | 数据覆盖 | 简短说明 |",
+        "| 股票代码 | 股票名称 | 风险等级 | 主要风险信号 | 资金与盘面观察 | 简短说明 |",
         "|---|---|---|---|---|---|",
     ])
     if not main_force_rows:
-        lines.append("| 本批标的 | - | 数据不足 | 暂无 | 外部数据未覆盖 | 主力流出风险数据不足，暂不单独判断 |")
+        lines.append("| 本批标的 | - | 数据不足 | 暂无 | 暂无资金与盘面明细 | 主力流出风险数据不足，暂不单独判断 |")
     for row in main_force_rows:
         lines.append(
             "| "
@@ -780,12 +780,12 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
             f"{row.name or '-'} | "
             f"{_table_text(row.main_force_risk_level or '数据不足')} | "
             f"{_table_text(row.main_force_risk_signals or '暂无明确主力流出信号')} | "
-            f"{_table_text(_main_force_data_coverage(row))} | "
+            f"{_table_text(_main_force_market_observation(row))} | "
             f"{_table_text(row.main_force_risk_summary or '暂无主力流出风险摘要')} |"
         )
     lines.extend([
         "",
-        "**解读：** 主力流出风险不是卖出结论，而是提醒当前买卖力量是否出现转弱迹象。港美股没有A股龙虎榜同口径数据；筹码分布在缺少真实数据时只按成交量分布近似观察。",
+        "**解读：** 主力流出风险不是卖出结论，而是提醒当前买卖力量是否出现转弱迹象。港美股没有A股龙虎榜同口径数据；成交量分布基于K线成交量按价格区间统计，反映历史成交集中区域，不等同于真实持仓成本。",
         "",
         "---",
         "",
@@ -1165,17 +1165,45 @@ def _main_force_top_signal_text(rows: List[ScreeningSignalRow]) -> str:
     return "；".join(deduped[:5]) if deduped else "暂无明确主力流出信号"
 
 
-def _main_force_data_coverage(row: Optional[ScreeningSignalRow]) -> str:
+def _main_force_market_observation(row: Optional[ScreeningSignalRow]) -> str:
     if row is None:
-        return "数据不足"
+        return "暂无资金与盘面明细"
+    if row.main_force_market_data_observation:
+        return row.main_force_market_data_observation
     items = [
-        row.main_force_fund_flow_data,
-        row.main_force_order_book_data,
-        row.main_force_lhb_data,
-        row.main_force_chip_data,
+        _main_force_readable_fund_flow(row.main_force_fund_flow_data),
+        _main_force_readable_order_book(row.main_force_order_book_data),
+        _main_force_readable_chip(row.main_force_chip_data),
     ]
     values = [item for item in items if item]
-    return "；".join(values) if values else "数据不足"
+    return "；".join(values) if values else "暂无资金与盘面明细"
+
+
+def _main_force_readable_fund_flow(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.startswith("可用"):
+        return "资金流向: 已取得明细"
+    return "资金流向: 暂无明细"
+
+
+def _main_force_readable_order_book(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.startswith("可用"):
+        return "盘口: 已取得买卖盘明细"
+    return "盘口: 暂无明细"
+
+
+def _main_force_readable_chip(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "成交量分布" in text:
+        return "成交量分布: 已取得K线成交量分布"
+    return ""
 
 
 def _append_main_force_detail(lines: List[str], row: Optional[ScreeningSignalRow]) -> None:

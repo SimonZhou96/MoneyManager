@@ -17,6 +17,7 @@ from market import normalize_market
 
 
 DATA_KEYS = ("fund_flow", "order_book", "lhb", "chip")
+MINUTE_TIMEFRAMES = {"1m", "2m", "5m", "15m", "30m", "60m", "90m"}
 
 DATA_LABELS = {
     "fund_flow": "资金流向",
@@ -42,7 +43,7 @@ PROVIDER_LABELS = {
     "futu": "富途OpenD",
     "akshare": "AkShare",
     "yfinance": "雅虎财经",
-    "volume_profile": "成交量分布近似",
+    "volume_profile": "K线成交量分布",
 }
 
 RISK_LEVEL_LABELS = {
@@ -84,12 +85,156 @@ def _safe_pct(current: float, previous: float) -> Optional[float]:
     return (current / previous - 1.0) * 100.0
 
 
+def _uses_realtime_order_book(timeframe: str) -> bool:
+    return str(timeframe or "").strip().lower() in MINUTE_TIMEFRAMES
+
+
 def _status_text(status: "DataStatus") -> str:
-    status_label = STATUS_LABELS.get(status.status, status.status)
+    if status.status == "proxy_only" and status.provider == "volume_profile":
+        status_label = "可用"
+    else:
+        status_label = STATUS_LABELS.get(status.status, status.status)
     provider_label = PROVIDER_LABELS.get(status.provider, status.provider)
     if status.provider and status.provider != "none":
         return f"{status_label}:{provider_label}"
     return status_label
+
+
+def _format_compact_number(value: Any, unit: str = "") -> str:
+    number = _to_float(value)
+    if number is None:
+        return ""
+    abs_number = abs(number)
+    if abs_number >= 100000000:
+        text = f"{abs_number / 100000000:.2f}亿"
+    elif abs_number >= 10000:
+        text = f"{abs_number / 10000:.2f}万"
+    else:
+        text = f"{abs_number:.0f}"
+    return f"{text}{unit}"
+
+
+def _net_amount_phrase(label: str, value: Any) -> str:
+    number = _to_float(value)
+    if number is None:
+        return ""
+    amount = _format_compact_number(number)
+    if number > 0:
+        return f"{label}净流入{amount}"
+    if number < 0:
+        return f"{label}净流出{amount}"
+    return f"{label}基本持平"
+
+
+def _fund_flow_observation(metrics: Dict[str, Any]) -> str:
+    if not metrics:
+        return "资金流向: 暂无明细"
+    parts = [
+        _net_amount_phrase("整体资金", metrics.get("in_flow") or metrics.get("net_inflow")),
+        _net_amount_phrase("主力资金", metrics.get("main_net_inflow") or metrics.get("main_in_flow")),
+        _net_amount_phrase("超大单", metrics.get("super_in_flow")),
+        _net_amount_phrase("大单", metrics.get("big_in_flow")),
+        _net_amount_phrase("中单", metrics.get("mid_in_flow")),
+        _net_amount_phrase("小单", metrics.get("sml_in_flow")),
+    ]
+    values = [part for part in parts if part]
+    if not values:
+        return "资金流向: 暂无明细"
+    time_text = str(metrics.get("capital_flow_item_time") or metrics.get("last_valid_time") or "").strip()
+    suffix = f"（{time_text}）" if time_text else ""
+    return f"资金流向: {'，'.join(values)}{suffix}"
+
+
+def _order_book_observation(metrics: Dict[str, Any]) -> str:
+    if not metrics:
+        return "盘口: 暂无明细"
+    buy1 = _to_float(metrics.get("buy1_volume"))
+    sell1 = _to_float(metrics.get("sell1_volume"))
+    ratio = _to_float(metrics.get("sell1_buy1_ratio"))
+    values = []
+    if sell1 is not None:
+        values.append(f"卖一量{_format_compact_number(sell1, '股')}")
+    if buy1 is not None:
+        values.append(f"买一量{_format_compact_number(buy1, '股')}")
+    if ratio is not None:
+        values.append(f"卖一约为买一{ratio:.1f}倍")
+    return f"盘口: {'，'.join(values)}" if values else "盘口: 暂无明细"
+
+
+def _broker_queue_observation(metrics: Dict[str, Any]) -> str:
+    if not metrics:
+        return ""
+    bid_count = _to_float(metrics.get("bid_broker_count"))
+    ask_count = _to_float(metrics.get("ask_broker_count"))
+    if bid_count is None and ask_count is None:
+        return ""
+    values = []
+    if ask_count is not None:
+        values.append(f"卖盘经纪{ask_count:.0f}家")
+    if bid_count is not None:
+        values.append(f"买盘经纪{bid_count:.0f}家")
+    return f"经纪队列: {'，'.join(values)}"
+
+
+def _volume_profile_observation(
+    data_status: Dict[str, "DataStatus"],
+    metrics: Dict[str, Any],
+    market: str,
+) -> str:
+    kline_metrics = metrics.get("kline") if isinstance(metrics.get("kline"), dict) else {}
+    volume_profile = kline_metrics.get("volume_profile_proxy") if isinstance(kline_metrics, dict) else None
+    if isinstance(volume_profile, dict):
+        latest_close = _to_float(volume_profile.get("latest_close"))
+        volume_weighted_price = _to_float(volume_profile.get("volume_weighted_price"))
+        vs_pct = _to_float(volume_profile.get("price_vs_volume_weighted_pct"))
+        top_low = _to_float(volume_profile.get("top_volume_price_low"))
+        top_high = _to_float(volume_profile.get("top_volume_price_high"))
+        top_share = _to_float(volume_profile.get("top_volume_share_pct"))
+        sample_days = _to_float(volume_profile.get("sample_days"))
+        total_volume = _to_float(volume_profile.get("total_volume"))
+        if latest_close is not None and volume_weighted_price is not None:
+            relation = "低于" if latest_close < volume_weighted_price else "高于"
+            parts = [
+                f"现价{latest_close:.2f}",
+                f"近120日成交量加权价{volume_weighted_price:.2f}",
+            ]
+            if vs_pct is not None:
+                parts.append(f"{relation}{abs(vs_pct):.1f}%")
+            if top_low is not None and top_high is not None:
+                bucket = f"最大成交量区间{top_low:.2f}~{top_high:.2f}"
+                if top_share is not None:
+                    bucket = f"{bucket}，占比{top_share:.1f}%"
+                parts.append(bucket)
+            if sample_days is not None:
+                sample_text = f"样本{sample_days:.0f}日"
+                if total_volume is not None:
+                    sample_text = f"{sample_text}，总成交量{_format_compact_number(total_volume, '股')}"
+                parts.append(sample_text)
+            return f"成交量分布: {'；'.join(parts)}"
+    status = data_status.get("chip")
+    if status and status.status == "proxy_only":
+        return "成交量分布: 暂无可展示明细"
+    if normalize_market(market) in {"HK", "US"}:
+        return "成交量分布: 暂无可展示明细"
+    return ""
+
+
+def _market_data_observation_text(
+    data_status: Dict[str, "DataStatus"],
+    metrics: Dict[str, Any],
+    market: str,
+) -> str:
+    fund_flow = metrics.get("fund_flow") if isinstance(metrics.get("fund_flow"), dict) else {}
+    order_book = metrics.get("order_book") if isinstance(metrics.get("order_book"), dict) else {}
+    broker_queue = metrics.get("broker_queue") if isinstance(metrics.get("broker_queue"), dict) else {}
+    parts = [_fund_flow_observation(fund_flow)]
+    if order_book:
+        parts.append(_order_book_observation(order_book))
+    if broker_queue:
+        parts.append(_broker_queue_observation(broker_queue))
+    parts.append(_volume_profile_observation(data_status, metrics, market))
+    values = [part for part in parts if part]
+    return "；".join(values) if values else "暂无资金与盘面明细"
 
 
 @dataclass(frozen=True)
@@ -106,7 +251,9 @@ class DataStatus:
             "key": self.key,
             "label": DATA_LABELS.get(self.key, self.key),
             "status": self.status,
-            "status_label": STATUS_LABELS.get(self.status, self.status),
+            "status_label": "可用"
+            if self.status == "proxy_only" and self.provider == "volume_profile"
+            else STATUS_LABELS.get(self.status, self.status),
             "provider": self.provider,
             "provider_label": PROVIDER_LABELS.get(self.provider, self.provider),
             "message": self.message,
@@ -162,7 +309,7 @@ class ExternalRiskSnapshot:
             snapshot.set_status(DataStatus("chip", "unsupported", "disabled", "外部筹码分布数据未启用"))
         else:
             snapshot.set_status(DataStatus("lhb", "not_applicable", "none", "港美股没有A股龙虎榜同口径数据"))
-            snapshot.set_status(DataStatus("chip", "proxy_only", "volume_profile", "使用成交量分布近似观察"))
+            snapshot.set_status(DataStatus("chip", "proxy_only", "volume_profile", "使用K线成交量分布观察"))
         return snapshot
 
 
@@ -204,6 +351,9 @@ class MainForceRiskResult:
     def missing_data_text(self) -> str:
         return "；".join(self.missing_data)
 
+    def market_data_observation_text(self) -> str:
+        return _market_data_observation_text(self.data_status, self.metrics, self.market)
+
     def to_record_fields(self) -> Dict[str, Any]:
         score_text = "" if self.risk_score is None else f"{self.risk_score:.2f}"
         return {
@@ -218,6 +368,7 @@ class MainForceRiskResult:
             "main_force_lhb_data_text": self.data_status_text("lhb"),
             "main_force_chip_data_text": self.data_status_text("chip"),
             "main_force_missing_data_text": self.missing_data_text(),
+            "main_force_market_data_observation_text": self.market_data_observation_text(),
             "main_force_risk_signals": [signal.to_dict() for signal in self.triggered_signals],
             "main_force_data_status": {
                 key: status.to_dict() for key, status in self.data_status.items()
@@ -257,7 +408,7 @@ class MainForceRiskResult:
 class MainForceDataProvider(Protocol):
     """Optional external-data boundary for main-force risk analysis."""
 
-    def fetch(self, market: str, code: str) -> ExternalRiskSnapshot:
+    def fetch(self, market: str, code: str, timeframe: str = "1d") -> ExternalRiskSnapshot:
         ...
 
     def close(self) -> None:
@@ -267,7 +418,7 @@ class MainForceDataProvider(Protocol):
 class NullMainForceDataProvider:
     """Provider used when optional external evidence is disabled."""
 
-    def fetch(self, market: str, code: str) -> ExternalRiskSnapshot:
+    def fetch(self, market: str, code: str, timeframe: str = "1d") -> ExternalRiskSnapshot:
         return ExternalRiskSnapshot.disabled(market)
 
     def close(self) -> None:
@@ -289,13 +440,16 @@ class AkShareMainForceDataProvider:
     def close(self) -> None:
         return None
 
-    def fetch(self, market: str, code: str) -> ExternalRiskSnapshot:
+    def fetch(self, market: str, code: str, timeframe: str = "1d") -> ExternalRiskSnapshot:
         if normalize_market(market) != "A":
             return ExternalRiskSnapshot.disabled(market)
         a_code = self._a_code(code)
         snapshot = ExternalRiskSnapshot()
         self._fetch_fund_flow(a_code, snapshot)
-        self._fetch_order_book(a_code, snapshot)
+        if _uses_realtime_order_book(timeframe):
+            self._fetch_order_book(a_code, snapshot)
+        else:
+            snapshot.set_status(DataStatus("order_book", "not_applicable", "none", "日线级别不使用盘口快照"))
         self._fetch_lhb(a_code, snapshot)
         self._fetch_chip(a_code, snapshot)
         return snapshot
@@ -408,17 +562,20 @@ class FutuOpenDMainForceDataProvider:
             except Exception:
                 pass
 
-    def fetch(self, market: str, code: str) -> ExternalRiskSnapshot:
+    def fetch(self, market: str, code: str, timeframe: str = "1d") -> ExternalRiskSnapshot:
         normalized = normalize_market(market)
         if normalized not in {"HK", "US"}:
             return ExternalRiskSnapshot.disabled(market)
         snapshot = ExternalRiskSnapshot()
         self._fetch_fund_flow(code, snapshot)
-        self._fetch_order_book(code, snapshot)
-        if normalized == "HK":
+        if _uses_realtime_order_book(timeframe):
+            self._fetch_order_book(code, snapshot)
+        else:
+            snapshot.set_status(DataStatus("order_book", "not_applicable", "none", "日线级别不使用盘口快照"))
+        if normalized == "HK" and _uses_realtime_order_book(timeframe):
             self._fetch_broker_queue(code, snapshot)
         snapshot.set_status(DataStatus("lhb", "not_applicable", "none", "港美股没有A股龙虎榜同口径数据"))
-        snapshot.set_status(DataStatus("chip", "proxy_only", "volume_profile", "使用成交量分布近似观察"))
+        snapshot.set_status(DataStatus("chip", "proxy_only", "volume_profile", "使用K线成交量分布观察"))
         return snapshot
 
     def _fetch_fund_flow(self, code: str, snapshot: ExternalRiskSnapshot) -> None:
@@ -538,7 +695,7 @@ class MainForceRiskAnalyzer:
         signals.extend(external.signals)
 
         if normalize_market(market) in {"HK", "US"} and "chip" not in statuses:
-            statuses["chip"] = DataStatus("chip", "proxy_only", "volume_profile", "使用成交量分布近似观察")
+            statuses["chip"] = DataStatus("chip", "proxy_only", "volume_profile", "使用K线成交量分布观察")
         if normalize_market(market) in {"HK", "US"} and "lhb" not in statuses:
             statuses["lhb"] = DataStatus("lhb", "not_applicable", "none", "港美股没有A股龙虎榜同口径数据")
         for key in DATA_KEYS:
@@ -708,28 +865,70 @@ class MainForceRiskAnalyzer:
 
     def _volume_profile_proxy(self, data: pd.DataFrame) -> tuple[Optional[RiskSignal], Dict[str, Any]]:
         recent = data.tail(120).copy()
-        volume = pd.to_numeric(recent["volume"], errors="coerce").fillna(0)
-        if volume.sum() <= 0:
+        recent["close"] = pd.to_numeric(recent["close"], errors="coerce")
+        recent["volume"] = pd.to_numeric(recent["volume"], errors="coerce")
+        recent = recent.dropna(subset=["close", "volume"])
+        recent = recent[recent["volume"] > 0]
+        total_volume = float(recent["volume"].sum()) if not recent.empty else 0.0
+        if total_volume <= 0:
             return None, {"status": "insufficient"}
         close = recent["close"].astype(float)
-        volume_weighted_price = float((close * volume).sum() / volume.sum())
+        volume = recent["volume"].astype(float)
+        volume_weighted_price = float((close * volume).sum() / total_volume)
         latest_close = float(close.iloc[-1])
+        price_vs_vwap_pct = _safe_pct(latest_close, volume_weighted_price)
+        top_low, top_high, top_share = self._top_volume_price_interval(close, volume, total_volume)
         metrics = {
             "status": "proxy_only",
-            "method": "成交量分布近似",
+            "method": "K线成交量分布",
             "volume_weighted_price": volume_weighted_price,
             "latest_close": latest_close,
+            "price_vs_volume_weighted_pct": price_vs_vwap_pct,
+            "top_volume_price_low": top_low,
+            "top_volume_price_high": top_high,
+            "top_volume_share_pct": top_share,
+            "sample_days": len(recent),
+            "total_volume": total_volume,
         }
         if latest_close < volume_weighted_price * 0.97:
+            bucket_text = ""
+            if top_low is not None and top_high is not None:
+                bucket_text = f"，最大成交量区间{top_low:.2f}~{top_high:.2f}"
+                if top_share is not None:
+                    bucket_text = f"{bucket_text}，占比{top_share:.1f}%"
             return RiskSignal(
                 key="volume_profile_pressure",
-                label="成交量分布近似显示上方压力",
+                label="成交量分布显示上方压力",
                 severity="low",
                 score=6,
-                source="筹码分布近似",
-                evidence=f"收盘价{latest_close:.2f}低于近120日成交量加权价格{volume_weighted_price:.2f}",
+                source="成交量分布",
+                evidence=(
+                    f"收盘价{latest_close:.2f}低于近120日成交量加权价"
+                    f"{volume_weighted_price:.2f}{bucket_text}"
+                ),
             ), metrics
         return None, metrics
+
+    @staticmethod
+    def _top_volume_price_interval(
+        close: pd.Series,
+        volume: pd.Series,
+        total_volume: float,
+    ) -> tuple[Optional[float], Optional[float], Optional[float]]:
+        if close.empty or total_volume <= 0:
+            return None, None, None
+        min_close = float(close.min())
+        max_close = float(close.max())
+        if min_close == max_close:
+            return min_close, max_close, 100.0
+        bucket_count = min(10, max(2, int(close.nunique())))
+        buckets = pd.cut(close, bins=bucket_count, include_lowest=True)
+        grouped = volume.groupby(buckets, observed=True).sum()
+        if grouped.empty:
+            return None, None, None
+        top_bucket = grouped.idxmax()
+        top_volume = float(grouped.max())
+        return float(top_bucket.left), float(top_bucket.right), top_volume / total_volume * 100.0
 
     @staticmethod
     def _score(signals: Iterable[RiskSignal]) -> Optional[float]:
@@ -773,8 +972,6 @@ class MainForceRiskAnalyzer:
             if status is None or status.status == "available":
                 continue
             if status.status == "proxy_only":
-                if key == "chip":
-                    missing.append("筹码分布使用成交量分布近似")
                 continue
             missing.append(f"{DATA_LABELS.get(key, key)}{STATUS_LABELS.get(status.status, status.status)}")
         return missing
@@ -814,7 +1011,7 @@ class MainForceRiskService:
             if not code:
                 continue
             kline = self._fetch_kline(code, market, timeframe)
-            external = self.data_provider.fetch(market, code)
+            external = self.data_provider.fetch(market, code, timeframe=timeframe)
             result = self.analyzer.analyze(
                 record=record,
                 market=market,
@@ -851,7 +1048,7 @@ class MainForceRiskServiceFactory:
 
     @staticmethod
     def _provider_from_env(market: str) -> MainForceDataProvider:
-        if not env_enabled("MAIN_FORCE_ENABLE_EXTERNAL_DATA", False):
+        if not env_enabled("MAIN_FORCE_ENABLE_EXTERNAL_DATA", True):
             return NullMainForceDataProvider()
         normalized = normalize_market(market)
         if normalized == "A":
@@ -970,4 +1167,3 @@ def _futu_error_status(key: str, provider: str, message: Any) -> DataStatus:
     if any(keyword in lowered for keyword in ("permission", "auth", "quota", "subscribe", "权限", "订阅", "额度")):
         return DataStatus(key, "permission_denied", provider, text[:120])
     return DataStatus(key, "provider_error", provider, text[:120])
-

@@ -10,13 +10,15 @@ from datetime import date
 from typing import List, Optional
 
 from db import MarketDatabase, MySqlConfig
-from network_preflight import format_resolution_failures
+from network_preflight import check_host_resolution
 
 from .chain import SignalAnalysisChain, SignalAnalysisContext
 from .factories import LLMProviderFactory, SearchProviderFactory
+from .llm_providers import FallbackLLMProvider, LLMProvider, NullLLMProvider
 from .hot_news import ManualHotNewsConfig
 from .hot_sectors import ManualHotSectorConfig
 from .models import AnalysisRunResult, AnalysisSettings
+from .search_providers import NullSearchProvider, SearchProvider
 
 
 def env_flag(name: str, default: bool) -> bool:
@@ -82,12 +84,12 @@ def run_signal_analysis_for_market(
         )
 
     search_provider = SearchProviderFactory.from_env(settings)
-    preflight_warnings = _analysis_network_preflight(search_provider, llm_provider)
-    if preflight_warnings:
+    search_provider, llm_provider, preflight_warnings = _prepare_analysis_providers(search_provider, llm_provider)
+    if not llm_provider.is_available:
         return AnalysisRunResult(
             success=False,
             warnings=preflight_warnings,
-            skipped_reason="网络预检失败，跳过 AI 辅助分析",
+            skipped_reason="LLM provider 网络预检失败，跳过 AI 辅助分析",
         )
 
     context = SignalAnalysisContext(
@@ -101,22 +103,76 @@ def run_signal_analysis_for_market(
         repository=MySqlSignalAnalysisRepository(mysql_config),
         manual_hot_news=ManualHotNewsConfig.from_env(market),
         manual_hot_sectors=ManualHotSectorConfig.from_env(market),
+        warnings=list(preflight_warnings),
     )
     return SignalAnalysisChain().run(context)
 
 
-def _analysis_network_preflight(search_provider, llm_provider) -> List[str]:
-    hosts: List[str] = []
+def _prepare_analysis_providers(
+    search_provider: SearchProvider,
+    llm_provider: LLMProvider,
+) -> tuple[SearchProvider, LLMProvider, List[str]]:
+    warnings: List[str] = []
+    search_provider, search_warnings = _filter_search_provider_by_preflight(search_provider)
+    llm_provider, llm_warnings = _filter_llm_provider_by_preflight(llm_provider)
+    warnings.extend(search_warnings)
+    warnings.extend(llm_warnings)
+    return search_provider, llm_provider, warnings
+
+
+def _filter_search_provider_by_preflight(search_provider: SearchProvider) -> tuple[SearchProvider, List[str]]:
+    warnings: List[str] = []
     endpoint = getattr(search_provider, "endpoint", "")
-    if getattr(search_provider, "is_available", False) and endpoint:
-        hosts.append(endpoint)
+    if not getattr(search_provider, "is_available", False) or not endpoint:
+        return search_provider, warnings
 
-    providers = getattr(llm_provider, "providers", None) or [llm_provider]
+    failures = check_host_resolution([endpoint])
+    if not failures:
+        return search_provider, warnings
+
+    for host, reason in failures:
+        warnings.append(
+            f"[AI分析] 联网检索预检失败: 域名解析失败 `{host}` | {reason}；"
+            "已降级为不联网分析"
+        )
+    return NullSearchProvider(), warnings
+
+
+def _filter_llm_provider_by_preflight(llm_provider: LLMProvider) -> tuple[LLMProvider, List[str]]:
+    warnings: List[str] = []
+    providers = [
+        provider
+        for provider in (getattr(llm_provider, "providers", None) or [llm_provider])
+        if getattr(provider, "is_available", False)
+    ]
+    if not providers:
+        return NullLLMProvider(), warnings
+
+    available: List[LLMProvider] = []
     for provider in providers:
-        if not getattr(provider, "is_available", False):
-            continue
         api_base = getattr(provider, "api_base", "")
-        if api_base:
-            hosts.append(api_base)
+        if not api_base:
+            available.append(provider)
+            continue
+        failures = check_host_resolution([api_base])
+        if not failures:
+            available.append(provider)
+            continue
+        label = getattr(provider, "name", provider.__class__.__name__)
+        for host, reason in failures:
+            warnings.append(
+                f"[AI分析] LLM provider {label} 预检失败: 域名解析失败 `{host}` | {reason}；"
+                "已跳过该 provider"
+            )
 
-    return format_resolution_failures("[AI分析] 网络预检失败", hosts)
+    if not available:
+        return NullLLMProvider(), warnings
+    if len(available) == 1:
+        return available[0], warnings
+    return FallbackLLMProvider(available), warnings
+
+
+def _analysis_network_preflight(search_provider, llm_provider) -> List[str]:
+    """Backward-compatible warning-only preflight helper for tests and scripts."""
+    _, _, warnings = _prepare_analysis_providers(search_provider, llm_provider)
+    return warnings

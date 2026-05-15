@@ -8,7 +8,12 @@ from rule_engine import RuleRepository
 from .business import BusinessError
 
 
-def resolve_rule_chain(db: MarketDatabase, markets: List[str], chain_key: Optional[str] = None) -> dict:
+def resolve_rule_chain(
+    db: MarketDatabase,
+    markets: List[str],
+    timeframe: str = "1d",
+    chain_key: Optional[str] = None,
+) -> dict:
     """Resolve the chain used by a Web-created job.
 
     Explicit chain_key may point to a disabled trial chain; active-chain loading
@@ -18,14 +23,15 @@ def resolve_rule_chain(db: MarketDatabase, markets: List[str], chain_key: Option
         raise BusinessError("INVALID_RULE_CHAIN", "至少选择一个市场后才能选择规则链")
     repository = RuleRepository(db)
     requested = str(chain_key or "").strip()
+    timeframe = str(timeframe or "1d")
     try:
         if requested:
-            chains = [repository.load_chain(market, requested) for market in markets]
+            chains = [repository.load_chain(market, requested, timeframe) for market in markets]
         else:
-            active = repository.load_active_chain(markets[0])
+            active = repository.load_active_chain(markets[0], timeframe)
             chains = [active]
             for market in markets[1:]:
-                chains.append(repository.load_chain(market, active.chain_key))
+                chains.append(repository.load_chain(market, active.chain_key, timeframe))
     except Exception as exc:
         label = requested or "默认生效链"
         raise BusinessError(
@@ -35,6 +41,7 @@ def resolve_rule_chain(db: MarketDatabase, markets: List[str], chain_key: Option
     first = chains[0]
     return {
         "chain_key": first.chain_key,
+        "chain_timeframe": first.timeframe,
         "chain_name": first.chain_name,
         "enabled": first.enabled,
         "description": first.description,

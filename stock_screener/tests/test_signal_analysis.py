@@ -170,16 +170,16 @@ class SignalAnalysisTest(unittest.TestCase):
             "主力风险分": "42.00",
             "主力风险信号": "放量下跌；盘口卖盘压制",
             "主力风险说明": "放量下跌且盘口卖盘压力偏高",
+            "资金与盘面观察": "资金流向: 整体资金净流入5.71万，超大单净流入69.55万，大单净流出30.02万；盘口: 卖一量2.82万股，买一量2.66万股，卖一约为买一1.1倍；成交量分布: 现价90.00，近120日成交量加权价101.55，低于11.4%；最大成交量区间100.00~101.00，占比21.3%；样本80日，总成交量8.25万股",
             "资金流向数据": "数据不足:未启用",
             "盘口数据": "数据不足:未启用",
             "龙虎榜数据": "不适用",
-            "筹码分布数据": "近似:成交量分布近似",
-            "数据不足项": "港股无龙虎榜；筹码分布使用成交量分布近似",
+            "成交量分布数据": "可用:K线成交量分布",
         }]
         fieldnames = [
             "股票代码", "市场", "名称", "标的类型", "pe", "市值", "所属板块", "满足的条件",
             "主力流出风险", "主力风险分", "主力风险信号", "主力风险说明",
-            "资金流向数据", "盘口数据", "龙虎榜数据", "筹码分布数据", "数据不足项",
+            "资金与盘面观察", "资金流向数据", "盘口数据", "龙虎榜数据", "成交量分布数据",
         ]
         for row in rows:
             for key in row:
@@ -859,6 +859,12 @@ class SignalAnalysisTest(unittest.TestCase):
             self.assertEqual(rows[0]["热点板块标记"], "重点")
             self.assertEqual(rows[0]["热点板块标记口径"], HOT_SECTOR_MARK_CRITERIA)
             self.assertEqual(result.results_by_code["HK.00001"].reliability_score, 82.5)
+            report = Path(result.artifact_paths[0]).read_text(encoding="utf-8")
+            self.assertIn("资金与盘面观察", report)
+            self.assertIn("整体资金净流入5.71万", report)
+            self.assertIn("卖一量2.82万股", report)
+            self.assertNotIn("外部数据状态", report)
+            self.assertNotIn("数据覆盖", report)
 
     def test_chain_batches_company_search_without_per_stock_search_calls(self):
         rows = []
@@ -1052,7 +1058,8 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertIn("## 三、主力流出风险观察", report)
         self.assertIn("## 六、个股观察", report)
         self.assertIn("主力流出风险", report)
-        self.assertIn("成交量分布近似", report)
+        self.assertIn("成交量分布", report)
+        self.assertIn("最大成交量区间", report)
         self.assertIn("信息缺口", report)
         self.assertIn("缺少明确公司事件", report)
         self.assertIn("目前信息不足，无法判断新闻方向", report)

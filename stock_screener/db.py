@@ -266,7 +266,7 @@ class MarketDatabase:
                     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
                     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_screening_market_code_date (market, code, check_date),
+                    UNIQUE KEY uk_screening_task_market_code (task_id, market, code),
                     KEY idx_screening_task_id (task_id),
                     KEY idx_screening_check_date (check_date),
                     KEY idx_screening_is_passed (is_passed),
@@ -274,6 +274,7 @@ class MarketDatabase:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            self._ensure_screening_results_task_scope(cursor)
 
             # watchlist_cache 表（自选股缓存，Futu 失败时兜底）
             cursor.execute(
@@ -330,6 +331,20 @@ class MarketDatabase:
                     except Exception:
                         pass
         self.init_rule_schema()
+
+    def _ensure_screening_results_task_scope(self, cursor):
+        """任务结果按 task_id 隔离，避免不同周期/规则链互相覆盖。"""
+        try:
+            cursor.execute("ALTER TABLE screening_results DROP INDEX uk_screening_market_code_date")
+        except Exception:
+            pass
+        try:
+            cursor.execute(
+                "ALTER TABLE screening_results "
+                "ADD UNIQUE KEY uk_screening_task_market_code (task_id, market, code)"
+            )
+        except Exception:
+            pass
 
     def init_web_schema(self):
         """初始化 Web、Agent、K 线缓存和 artifact 相关表。"""
@@ -1558,6 +1573,7 @@ class MarketDatabase:
                 "heartbeat_at": str(row[10]) if row[10] else None,
                 "options": _decode_json_field(row[11], {}),
                 "chain_key": _decode_json_field(row[11], {}).get("chain_key"),
+                "chain_timeframe": _decode_json_field(row[11], {}).get("chain_timeframe"),
                 "chain_name": _decode_json_field(row[11], {}).get("chain_name"),
                 "summary": _decode_json_field(row[12], {}),
                 "created_at": str(row[13]) if row[13] else None,
@@ -1595,6 +1611,7 @@ class MarketDatabase:
             "heartbeat_at": str(row[10]) if row[10] else None,
             "options": _decode_json_field(row[11], {}),
             "chain_key": _decode_json_field(row[11], {}).get("chain_key"),
+            "chain_timeframe": _decode_json_field(row[11], {}).get("chain_timeframe"),
             "chain_name": _decode_json_field(row[11], {}).get("chain_name"),
             "summary": _decode_json_field(row[12], {}),
             "created_at": str(row[13]) if row[13] else None,
@@ -1719,6 +1736,7 @@ class MarketDatabase:
                 "status": row[4],
                 "options": _decode_json_field(row[5], {}),
                 "chain_key": _decode_json_field(row[5], {}).get("chain_key"),
+                "chain_timeframe": _decode_json_field(row[5], {}).get("chain_timeframe"),
                 "chain_name": _decode_json_field(row[5], {}).get("chain_name"),
                 "created_at": str(row[6]) if row[6] else None,
             }
@@ -1734,6 +1752,7 @@ class MarketDatabase:
                 "status": row[4],
                 "options": _decode_json_field(row[5], {}),
                 "chain_key": _decode_json_field(row[5], {}).get("chain_key"),
+                "chain_timeframe": _decode_json_field(row[5], {}).get("chain_timeframe"),
                 "chain_name": _decode_json_field(row[5], {}).get("chain_name"),
                 "created_at": str(row[6]) if row[6] else None,
             }
@@ -2454,6 +2473,7 @@ class MarketDatabase:
                 CREATE TABLE IF NOT EXISTS screening_rule_chains (
                     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
                     market VARCHAR(8) NOT NULL COMMENT '市场: HK/US/A',
+                    timeframe VARCHAR(16) NOT NULL DEFAULT '*' COMMENT '适用周期，* 表示通用规则链',
                     chain_key VARCHAR(64) NOT NULL COMMENT '规则链键',
                     chain_name VARCHAR(128) NOT NULL COMMENT '规则链名称',
                     expression_json JSON NOT NULL COMMENT '规则链 JSON DSL',
@@ -2463,13 +2483,50 @@ class MarketDatabase:
                     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
                     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_rule_chains_market_key (market, chain_key),
-                    KEY idx_rule_chains_market_enabled (market, enabled, priority)
+                    UNIQUE KEY uk_rule_chains_market_timeframe_key (market, timeframe, chain_key),
+                    KEY idx_rule_chains_market_timeframe_enabled (market, timeframe, enabled, priority)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 COMMENT='筛选规则使用链'
                 """
             )
+            self._ensure_rule_chain_timeframe_scope(cursor)
         self.seed_default_screening_rules()
+
+    def _ensure_rule_chain_timeframe_scope(self, cursor):
+        """兼容旧库：为规则链补齐 timeframe 维度和索引。"""
+        try:
+            cursor.execute("SELECT `timeframe` FROM screening_rule_chains LIMIT 1")
+        except Exception:
+            try:
+                cursor.execute(
+                    "ALTER TABLE screening_rule_chains "
+                    "ADD COLUMN timeframe VARCHAR(16) NOT NULL DEFAULT '*' "
+                    "COMMENT '适用周期，* 表示通用规则链' AFTER market"
+                )
+            except Exception:
+                pass
+        try:
+            cursor.execute("ALTER TABLE screening_rule_chains DROP INDEX uk_rule_chains_market_key")
+        except Exception:
+            pass
+        try:
+            cursor.execute(
+                "ALTER TABLE screening_rule_chains "
+                "ADD UNIQUE KEY uk_rule_chains_market_timeframe_key (market, timeframe, chain_key)"
+            )
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE screening_rule_chains DROP INDEX idx_rule_chains_market_enabled")
+        except Exception:
+            pass
+        try:
+            cursor.execute(
+                "ALTER TABLE screening_rule_chains "
+                "ADD KEY idx_rule_chains_market_timeframe_enabled (market, timeframe, enabled, priority)"
+            )
+        except Exception:
+            pass
 
     def seed_default_screening_rules(self):
         """写入默认规则配置；已有配置保持不变。"""
@@ -2501,6 +2558,7 @@ class MarketDatabase:
         for market in DEFAULT_RULE_MARKETS:
             chain_rows.append((
                 market,
+                "*",
                 DEFAULT_RULE_CHAIN_KEY,
                 "左一战法与其他策略默认链",
                 json.dumps(DEFAULT_RULE_CHAIN_EXPRESSION, ensure_ascii=False),
@@ -2510,6 +2568,7 @@ class MarketDatabase:
             ))
             chain_rows.append((
                 market,
+                "*",
                 "trend_capital_accumulation_watch",
                 "趋势主力缩量观察链",
                 json.dumps(TREND_CAPITAL_ACCUMULATION_WATCH_EXPRESSION, ensure_ascii=False),
@@ -2531,8 +2590,8 @@ class MarketDatabase:
             cursor.executemany(
                 """
                 INSERT IGNORE INTO screening_rule_chains
-                    (market, chain_key, chain_name, expression_json, enabled, priority, description)
-                VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    (market, timeframe, chain_key, chain_name, expression_json, enabled, priority, description)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 chain_rows,
             )
@@ -2564,78 +2623,96 @@ class MarketDatabase:
             for row in rows
         ]
 
-    def get_active_screening_rule_chain(self, market: str) -> Optional[dict]:
-        """读取某个市场优先级最高的启用规则链。"""
+    def get_active_screening_rule_chain(self, market: str, timeframe: str = "*") -> Optional[dict]:
+        """读取某个市场和周期优先级最高的启用规则链，精确周期优先。"""
+        timeframe = str(timeframe or "*")
         sql = """
-            SELECT market, chain_key, chain_name, expression_json,
+            SELECT market, timeframe, chain_key, chain_name, expression_json,
                    enabled, priority, description
             FROM screening_rule_chains
-            WHERE market=%s AND enabled=1
-            ORDER BY priority ASC, id ASC
+            WHERE market=%s AND enabled=1 AND timeframe IN (%s, '*')
+            ORDER BY CASE WHEN timeframe=%s THEN 0 ELSE 1 END, priority ASC, id ASC
             LIMIT 1
         """
         with self.conn.cursor() as cursor:
-            cursor.execute(sql, (market,))
+            cursor.execute(sql, (market, timeframe, timeframe))
             row = cursor.fetchone()
         if not row:
             return None
         return {
             "market": row[0],
-            "chain_key": row[1],
-            "chain_name": row[2],
-            "expression_json": _decode_json_field(row[3], {}),
-            "enabled": bool(row[4]),
-            "priority": int(row[5] or 100),
-            "description": row[6],
+            "timeframe": row[1],
+            "chain_key": row[2],
+            "chain_name": row[3],
+            "expression_json": _decode_json_field(row[4], {}),
+            "enabled": bool(row[5]),
+            "priority": int(row[6] or 100),
+            "description": row[7],
         }
 
-    def list_screening_rule_chains(self, market: str) -> List[dict]:
-        """读取某个市场的全部规则链，包含未启用的试跑链。"""
-        sql = """
-            SELECT market, chain_key, chain_name, expression_json,
-                   enabled, priority, description
-            FROM screening_rule_chains
-            WHERE market=%s
-            ORDER BY enabled DESC, priority ASC, id ASC
-        """
+    def list_screening_rule_chains(self, market: str, timeframe: Optional[str] = None) -> List[dict]:
+        """读取某个市场的规则链，包含未启用的试跑链。"""
+        if timeframe:
+            timeframe = str(timeframe or "*")
+            sql = """
+                SELECT market, timeframe, chain_key, chain_name, expression_json,
+                       enabled, priority, description
+                FROM screening_rule_chains
+                WHERE market=%s AND timeframe IN (%s, '*')
+                ORDER BY CASE WHEN timeframe=%s THEN 0 ELSE 1 END, enabled DESC, priority ASC, id ASC
+            """
+            params = (market, timeframe, timeframe)
+        else:
+            sql = """
+                SELECT market, timeframe, chain_key, chain_name, expression_json,
+                       enabled, priority, description
+                FROM screening_rule_chains
+                WHERE market=%s
+                ORDER BY timeframe ASC, enabled DESC, priority ASC, id ASC
+            """
+            params = (market,)
         with self.conn.cursor() as cursor:
-            cursor.execute(sql, (market,))
+            cursor.execute(sql, params)
             rows = cursor.fetchall() or []
         return [
             {
                 "market": row[0],
-                "chain_key": row[1],
-                "chain_name": row[2],
-                "expression_json": _decode_json_field(row[3], {}),
-                "enabled": bool(row[4]),
-                "priority": int(row[5] or 100),
-                "description": row[6],
+                "timeframe": row[1],
+                "chain_key": row[2],
+                "chain_name": row[3],
+                "expression_json": _decode_json_field(row[4], {}),
+                "enabled": bool(row[5]),
+                "priority": int(row[6] or 100),
+                "description": row[7],
             }
             for row in rows
         ]
 
-    def get_screening_rule_chain(self, market: str, chain_key: str) -> Optional[dict]:
-        """按 key 读取某个市场规则链；显式试跑允许读取未启用链。"""
+    def get_screening_rule_chain(self, market: str, chain_key: str, timeframe: str = "*") -> Optional[dict]:
+        """按 key 读取某个市场和周期规则链；显式试跑允许读取未启用链。"""
+        timeframe = str(timeframe or "*")
         sql = """
-            SELECT market, chain_key, chain_name, expression_json,
+            SELECT market, timeframe, chain_key, chain_name, expression_json,
                    enabled, priority, description
             FROM screening_rule_chains
-            WHERE market=%s AND chain_key=%s
+            WHERE market=%s AND chain_key=%s AND timeframe IN (%s, '*')
+            ORDER BY CASE WHEN timeframe=%s THEN 0 ELSE 1 END, id ASC
             LIMIT 1
         """
         with self.conn.cursor() as cursor:
-            cursor.execute(sql, (market, chain_key))
+            cursor.execute(sql, (market, chain_key, timeframe, timeframe))
             row = cursor.fetchone()
         if not row:
             return None
         return {
             "market": row[0],
-            "chain_key": row[1],
-            "chain_name": row[2],
-            "expression_json": _decode_json_field(row[3], {}),
-            "enabled": bool(row[4]),
-            "priority": int(row[5] or 100),
-            "description": row[6],
+            "timeframe": row[1],
+            "chain_key": row[2],
+            "chain_name": row[3],
+            "expression_json": _decode_json_field(row[4], {}),
+            "enabled": bool(row[5]),
+            "priority": int(row[6] or 100),
+            "description": row[7],
         }
 
     # ------------------------------------------------------------------
