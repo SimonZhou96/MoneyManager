@@ -10,6 +10,7 @@ from datetime import date
 from typing import List, Optional
 
 from db import MarketDatabase, MySqlConfig
+from network_preflight import format_resolution_failures
 
 from .chain import SignalAnalysisChain, SignalAnalysisContext
 from .factories import LLMProviderFactory, SearchProviderFactory
@@ -81,6 +82,14 @@ def run_signal_analysis_for_market(
         )
 
     search_provider = SearchProviderFactory.from_env(settings)
+    preflight_warnings = _analysis_network_preflight(search_provider, llm_provider)
+    if preflight_warnings:
+        return AnalysisRunResult(
+            success=False,
+            warnings=preflight_warnings,
+            skipped_reason="网络预检失败，跳过 AI 辅助分析",
+        )
+
     context = SignalAnalysisContext(
         task_id=task_id,
         market=market,
@@ -94,3 +103,20 @@ def run_signal_analysis_for_market(
         manual_hot_sectors=ManualHotSectorConfig.from_env(market),
     )
     return SignalAnalysisChain().run(context)
+
+
+def _analysis_network_preflight(search_provider, llm_provider) -> List[str]:
+    hosts: List[str] = []
+    endpoint = getattr(search_provider, "endpoint", "")
+    if getattr(search_provider, "is_available", False) and endpoint:
+        hosts.append(endpoint)
+
+    providers = getattr(llm_provider, "providers", None) or [llm_provider]
+    for provider in providers:
+        if not getattr(provider, "is_available", False):
+            continue
+        api_base = getattr(provider, "api_base", "")
+        if api_base:
+            hosts.append(api_base)
+
+    return format_resolution_failures("[AI分析] 网络预检失败", hosts)

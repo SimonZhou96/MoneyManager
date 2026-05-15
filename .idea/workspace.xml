@@ -6,16 +6,7 @@
   <component name="ChangeListManager">
     <list default="true" id="0bf7b9ee-c261-4d26-a715-0c09e20aab7a" name="更改" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/db.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/db.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/deploy/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/deploy/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/local_agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/local_agent.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/scripts/run_local_agent.sh" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/scripts/run_local_agent.sh" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/sql/005_web_platform.sql" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/sql/005_web_platform.sql" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/tests/test_web_platform.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/tests/test_web_platform.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web/single_stock.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web/single_stock.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web/validation.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web/validation.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/main.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/main.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/run_all_market_screening.sh" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/run_all_market_screening.sh" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple
 
+from network_preflight import format_resolution_failures
+
 try:
     import requests
     _HAS_REQUESTS = True
@@ -49,12 +51,19 @@ def get_tenant_access_token(app_id: str, app_secret: str) -> Optional[str]:
         return _token_cache[0]
 
     if not _HAS_REQUESTS:
+        print("获取 token 失败: requests 不可用", file=__import__("sys").stderr)
+        return None
+    for message in format_resolution_failures("[Feishu] token 获取预检失败", ["https://open.feishu.cn"]):
+        print(message, file=__import__("sys").stderr)
         return None
     url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
     payload = {"app_id": app_id, "app_secret": app_secret}
     try:
         r = requests.post(url, json=payload, timeout=10)
         data = r.json() or {}
+        if r.status_code != 200:
+            print(f"获取 token 失败: HTTP {r.status_code} | {str(r.text)[:300]}", file=__import__("sys").stderr)
+            return None
         if data.get("code") != 0:
             print(f"获取 token 失败: {data}", file=__import__("sys").stderr)
             return None
@@ -74,6 +83,7 @@ def upload_file(token: str, file_path: str, file_name: Optional[str] = None) -> 
     限制: ≤30MB，不允许空文件
     """
     if not _HAS_REQUESTS:
+        print("上传文件失败: requests 不可用", file=__import__("sys").stderr)
         return None
     path = Path(file_path)
     if not path.exists():
@@ -90,12 +100,18 @@ def upload_file(token: str, file_path: str, file_name: Optional[str] = None) -> 
     name = file_name or path.name
     url = "https://open.feishu.cn/open-apis/im/v1/files"
     headers = {"Authorization": f"Bearer {token}"}
+    for message in format_resolution_failures("[Feishu] 文件上传预检失败", [url]):
+        print(message, file=__import__("sys").stderr)
+        return None
     try:
         with open(path, "rb") as f:
             files = {"file": (name, f, "text/csv" if name.lower().endswith(".csv") else "application/octet-stream")}
             data = {"file_type": "stream", "file_name": name}
             r = requests.post(url, headers=headers, data=data, files=files, timeout=60)
         resp = r.json() or {}
+        if r.status_code != 200:
+            print(f"上传文件失败: HTTP {r.status_code} | {str(r.text)[:300]}", file=__import__("sys").stderr)
+            return None
         if resp.get("code") != 0:
             print(f"上传文件失败: {resp}", file=__import__("sys").stderr)
             return None
@@ -111,6 +127,7 @@ def send_file_message(token: str, chat_id: str, file_key: str) -> bool:
     文档: https://open.feishu.cn/document/server-docs/im-v1/message/create
     """
     if not _HAS_REQUESTS:
+        print("发送消息失败: requests 不可用", file=__import__("sys").stderr)
         return False
     url = "https://open.feishu.cn/open-apis/im/v1/messages"
     params = {"receive_id_type": "chat_id"}
@@ -124,9 +141,15 @@ def send_file_message(token: str, chat_id: str, file_key: str) -> bool:
         "msg_type": "file",
         "content": content,
     }
+    for message in format_resolution_failures("[Feishu] 文件消息发送预检失败", [url]):
+        print(message, file=__import__("sys").stderr)
+        return False
     try:
         r = requests.post(url, params=params, headers=headers, json=payload, timeout=10)
         data = r.json() or {}
+        if r.status_code != 200:
+            print(f"发送消息失败: HTTP {r.status_code} | {str(r.text)[:300]}", file=__import__("sys").stderr)
+            return False
         if data.get("code") != 0:
             print(f"发送消息失败: {data}", file=__import__("sys").stderr)
             return False

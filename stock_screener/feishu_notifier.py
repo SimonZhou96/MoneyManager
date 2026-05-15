@@ -11,6 +11,8 @@ import json
 import os
 from typing import List, Sequence, Union
 
+from network_preflight import format_resolution_failures
+
 # requests 为常见依赖，若无则静默跳过
 try:
     import requests
@@ -35,8 +37,15 @@ def send_feishu_text(webhook_url: str, text: str) -> bool:
         是否发送成功
     """
     if not _HAS_REQUESTS:
+        print("[Feishu] requests 不可用，无法发送摘要")
         return False
     if not webhook_url or not text:
+        print("[Feishu] 缺少 webhook_url 或文本内容，无法发送摘要")
+        return False
+    preflight_errors = format_resolution_failures("[Feishu] 摘要发送预检失败", [webhook_url])
+    if preflight_errors:
+        for message in preflight_errors:
+            print(message)
         return False
     payload = {"msg_type": "text", "content": {"text": text[:FEISHU_TEXT_LIMIT]}}
     headers = {"Content-Type": "application/json; charset=utf-8"}
@@ -47,8 +56,16 @@ def send_feishu_text(webhook_url: str, text: str) -> bool:
             headers=headers,
             timeout=10,
         )
-        return r.status_code == 200 and (r.json() or {}).get("code") == 0
-    except Exception:
+        body = r.json() or {}
+        if r.status_code != 200:
+            print(f"[Feishu] 摘要发送失败: HTTP {r.status_code} | {str(r.text)[:300]}")
+            return False
+        if body.get("code") != 0:
+            print(f"[Feishu] 摘要发送失败: code={body.get('code')} msg={body.get('msg') or body}")
+            return False
+        return True
+    except Exception as exc:
+        print(f"[Feishu] 摘要发送异常: {type(exc).__name__}: {exc}")
         return False
 
 
@@ -73,6 +90,15 @@ def send_screening_result(webhook_url: str, summary: str, csv_paths: Union[str, 
     if not paths:
         print("[Feishu] 未提供 CSV 文件路径")
         return ok
+
+    preflight_errors = format_resolution_failures(
+        "[Feishu] 文件发送预检失败",
+        [webhook_url, "https://open.feishu.cn"],
+    )
+    if preflight_errors:
+        for message in preflight_errors:
+            print(message)
+        return False
 
     try:
         from feishu_app_client import send_file_to_chat

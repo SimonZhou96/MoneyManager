@@ -11,7 +11,7 @@ import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Dict, List, Optional, Protocol
+from typing import Dict, List, Optional, Protocol, Tuple
 
 from .llm_providers import LLMProvider
 from .hot_news import ManualHotNewsConfig
@@ -642,52 +642,285 @@ def write_analysis_columns_to_csv(
 
 def _render_markdown_report(context: SignalAnalysisContext) -> str:
     market_name = MARKET_NAMES.get(context.market, context.market)
+    report_title = f"{market_name}观察池信号复核报告"
     results = [context.results_by_code[row.code] for row in context.rows]
+    rows_by_code = {row.code: row for row in context.rows}
     ranked = sorted(
         results,
         key=lambda item: -1 if item.reliability_score is None else item.reliability_score,
         reverse=True,
     )
+    attention = [item for item in ranked if _numeric(item.reliability_score) >= 60]
+    cautious = [
+        item for item in ranked
+        if _numeric(item.reliability_score) < 40 or item.signal_bias in {"avoid", "unknown"}
+    ]
+    insufficient = [item for item in ranked if _has_information_gap(item, rows_by_code.get(item.code))]
+    hot_matched = [item for item in ranked if item.hot_sector_mark in {"重点", "相关"}]
+    event_supported = [item for item in ranked if _meaningful_company_items(item)]
+    confirmed_timing = [
+        item for item in ranked
+        if _has_clear_entry_exit_timing(rows_by_code.get(item.code).conditions_met if rows_by_code.get(item.code) else "")
+    ]
+    overall_strength = _overall_strength(ranked)
+    pool_category = _pool_category(ranked, attention, cautious, insufficient)
+    hot_sector_text = "；".join(context.hot_sectors) if context.hot_sectors else "暂未识别到明确市场热点"
 
     lines = [
-        f"# {market_name}选股信号 AI 辅助分析",
+        f"# {report_title}",
         "",
-        f"- 任务 ID: `{context.task_id}`",
-        f"- 日期: {context.check_date.isoformat()}",
-        f"- 模型: `{context.llm_provider.model_name}`",
-        f"- 股票数: {len(context.rows)}",
+        f"**报告日期：** {context.check_date.strftime('%Y年%m月%d日')}",
+        f"**覆盖股票数量：** {len(context.rows)}只",
+        "**报告用途：** 辅助判断 / 观察池复核 / 信号解释",
+        "**适用读者：** 投研、业务负责人、非技术背景读者",
         "",
-        "## 字段口径",
+        "> 本报告基于市场信号、热点方向、公司事件和宏观环境进行综合复核，仅用于辅助判断，不构成投资建议。",
         "",
-        f"- 信号可靠性评分: {RELIABILITY_SCORE_CRITERIA}",
-        f"- 模型置信度: {CONFIDENCE_SCORE_CRITERIA}",
-        f"- 辅助方向判断: {SIGNAL_BIAS_CRITERIA}",
-        f"- 热点板块标记: {HOT_SECTOR_MARK_CRITERIA}",
+        "---",
         "",
-        "## 评分较高的信号",
+        "## 一、核心结论",
+        "",
+        f"本次共复核 **{len(context.rows)}只股票**。整体来看，当前信号强度为：**{overall_strength}**。",
+        "",
+        "本批股票的主要特点是：",
+        "",
+        f"1. **买卖点确认：** 明确出现买入/卖出提示的股票为 **{len(confirmed_timing)}只**；其余股票暂未看到足够明确的买卖点。",
+        f"2. **热点匹配：** 与当前热点方向直接或较强相关的股票为 **{len(hot_matched)}只**；当前识别热点为：**{hot_sector_text}**。",
+        f"3. **公司催化：** 有明确公司新闻、公告或事件支撑的股票为 **{len(event_supported)}只**。",
+        f"4. **信息充分度：** 存在信息缺口或判断依据偏弱的股票为 **{len(insufficient)}只**。",
+        "",
+        f"**综合判断：** 本批股票更适合归类为：**{pool_category}**。",
+        "",
+        "---",
+        "",
+        "## 二、本次复核结果总览",
+        "",
+        "| 股票代码 | 股票名称 | 综合评分 | 方向判断 | 热点匹配 | 简明结论 |",
+        "|---|---|---:|---|---|---|",
     ]
-    for item in ranked[:10]:
-        score = "" if item.reliability_score is None else f"{item.reliability_score:.2f}"
-        lines.append(f"- `{item.code}` {item.name}: {score} | {item.signal_bias} | {item.summary}")
+    for item in ranked:
+        lines.append(
+            "| "
+            f"`{item.code}` | "
+            f"{item.name or '-'} | "
+            f"{_format_score(item.reliability_score)} | "
+            f"{_direction_label(item.signal_bias)} | "
+            f"{_hot_mark_label(item.hot_sector_mark)} | "
+            f"{_table_text(_friendly_text(item.summary or _brief_conclusion(item, rows_by_code.get(item.code))))} |"
+        )
 
-    lines.extend(["", "## 热点新闻影响"])
-    for item in ranked[:10]:
-        news = "；".join(item.market_hot_news + item.company_hot_news) or "无明确热点新闻摘要"
-        impact = item.news_impact or "未明确判断"
-        lines.append(f"- `{item.code}`: {impact} | {news}")
+    lines.extend([
+        "",
+        "---",
+        "",
+        "## 三、整体信号解读",
+        "",
+        "### 1. 买卖点确认情况",
+        "",
+        f"- 已看到较明确买入/卖出提示的股票：{len(confirmed_timing)}只",
+        f"- 暂未看到明确买入/卖出提示的股票：{max(0, len(context.rows) - len(confirmed_timing))}只",
+        f"- 综合评分较高、可重点跟踪的股票：{len(attention)}只",
+        f"- 评分偏低或信息不足的股票：{len(cautious)}只",
+        "",
+        "**解读：** 如果多数股票暂未出现明确买卖点，说明当前更适合观察，不宜只凭放量、上涨或短期异动做判断。",
+        "",
+        "### 2. 热点板块匹配情况",
+        "",
+        f"本次识别的市场热点包括：**{hot_sector_text}**",
+        "",
+        "| 股票名称 | 所属方向 | 热点匹配情况 | 解读 |",
+        "|---|---|---|---|",
+    ])
+    for item in ranked:
+        row = rows_by_code.get(item.code)
+        lines.append(
+            "| "
+            f"{item.name or item.code} | "
+            f"{_table_text((row.sector if row else '') or '未补齐')} | "
+            f"{_hot_mark_label(item.hot_sector_mark)} | "
+            f"{_table_text(_friendly_text(item.hot_sector_reason or '暂未看到与热点方向的明确关系'))} |"
+        )
 
-    lines.extend(["", "## 热点板块标注"])
-    hot_sector_text = "；".join(context.hot_sectors) if context.hot_sectors else "未识别到明确热点板块"
-    lines.append(f"- 识别热点板块: {hot_sector_text}")
-    for item in ranked[:10]:
-        matched = "；".join(item.matched_hot_sectors) or "无直接匹配"
-        mark = item.hot_sector_mark or "未知"
-        lines.append(f"- `{item.code}` {item.name}: {mark} | {matched} | {item.hot_sector_reason}")
+    lines.extend([
+        "",
+        "**解读：** 热点匹配度越高，越可能受到市场资金关注；如果不在当前主线上，即使出现短期异动，也需要降低预期。",
+        "",
+        "### 3. 公司事件支撑情况",
+        "",
+        "| 股票名称 | 是否有明确事件 | 事件类型 | 影响判断 |",
+        "|---|---|---|---|",
+    ])
+    for item in ranked:
+        lines.append(
+            "| "
+            f"{item.name or item.code} | "
+            f"{_event_status(item)} | "
+            f"{_table_text(_event_type(item))} | "
+            f"{_news_impact_label(item.news_impact)} |"
+        )
 
-    lines.extend(["", "## 风险提示"])
-    for item in ranked[:10]:
-        risks = "；".join(item.risk_factors) or item.error_message or "无明确风险摘要"
-        lines.append(f"- `{item.code}`: {risks}")
+    lines.extend([
+        "",
+        "**解读：** 有明确公司事件支撑的信号，通常可信度更高；如果只有市场异动、缺少事件解释，后续持续性需要谨慎评估。",
+        "",
+        "---",
+        "",
+        "## 四、宏观与市场环境影响",
+        "",
+        "### 1. 当前宏观背景",
+        "",
+    ])
+    macro_items = _top_macro_items(ranked)
+    if macro_items:
+        for item in macro_items:
+            lines.append(f"- {_friendly_text(item)}")
+    else:
+        lines.append("- 暂未提炼出对本批股票有明确影响的宏观变量。")
+
+    lines.extend([
+        "",
+        "### 2. 对本批股票的影响",
+        "",
+        "| 影响因素 | 可能影响方向 | 相关股票 | 判断 |",
+        "|---|---|---|---|",
+    ])
+    if macro_items:
+        for factor in macro_items[:5]:
+            related = _related_stocks_for_factor(factor, ranked)
+            lines.append(
+                f"| {_table_text(_friendly_text(factor))} | 间接影响 | {_table_text(related)} | 需要结合热点方向和公司事件继续确认 |"
+            )
+    else:
+        lines.append("| 暂无明确宏观变量 | 不明确 | - | 影响有限，暂不作为主要判断依据 |")
+
+    lines.extend([
+        "",
+        "**解读：** 宏观因素如果只是间接影响，不应单独作为买入依据。只有当市场环境、热点方向、公司事件和买卖点提示共同出现时，信号可信度才会明显提高。",
+        "",
+        "---",
+        "",
+        "## 五、个股简评",
+    ])
+
+    for index, item in enumerate(ranked[:20], start=1):
+        row = rows_by_code.get(item.code)
+        score = _format_score(item.reliability_score)
+        positives = [_friendly_text(value) for value in (item.positive_factors or ["暂无明确支持因素"])]
+        risks = [_friendly_text(value) for value in (item.risk_factors or ["暂无明确风险摘要"])]
+        events = _join_or_default(_meaningful_company_items(item), "无明确公司事件")
+        gap_reasons = _information_gap_reasons(item, row)
+        timing_text = _entry_exit_timing_text(row.conditions_met if row else "")
+        lines.extend([
+            "",
+            f"### {index}. {item.name or item.code}：{_one_line_position(item, row)}",
+            "",
+            f"**股票代码：** `{item.code}`",
+            f"**综合评分：** {score}",
+            f"**方向判断：** {_direction_label(item.signal_bias)}",
+            f"**热点匹配：** {_hot_mark_label(item.hot_sector_mark)}",
+            "",
+            "**核心结论：**",
+            "",
+            _friendly_text(item.summary or _brief_conclusion(item, row)),
+            "",
+            "**主要支持因素：**",
+        ])
+        for value in positives[:5]:
+            lines.append(f"- {value}")
+        lines.extend(["", "**主要风险因素：**"])
+        for value in risks[:5]:
+            lines.append(f"- {value}")
+        if gap_reasons:
+            lines.extend(["", "**信息缺口：**"])
+            for value in gap_reasons[:5]:
+                lines.append(f"- {value}")
+        lines.extend([
+            "",
+            f"**买卖点判断：** {timing_text}",
+            f"**公司事件：** {events}",
+            f"**跟踪建议：** {_tracking_suggestion(item, row)}",
+        ])
+
+    lines.extend([
+        "",
+        "---",
+        "",
+        "## 六、风险提示",
+        "",
+        "本次报告需要重点关注以下风险：",
+        "",
+        "1. **买卖点未确认风险**  ",
+        "   个股虽然可能出现异动，但如果暂未看到明确买入/卖出提示，信号可靠性需要打折。",
+        "",
+        "2. **热点不匹配风险**  ",
+        "   如果个股不属于当前市场主线，短期资金关注度可能不足。",
+        "",
+        "3. **公司事件缺失风险**  ",
+        "   缺少公告、订单、业绩或政策催化时，股价异动持续性较难判断。",
+        "",
+        "4. **宏观扰动风险**  ",
+        "   海外利率、通胀、汇率、大宗商品价格波动，可能影响市场风险偏好。",
+        "",
+        "5. **信息不足风险**  ",
+        "   对于缺少有效新闻、公告或数据支撑的个股，应降低判断权重。",
+        "",
+        "---",
+        "",
+        "## 七、后续跟踪计划",
+        "",
+        "后续建议重点跟踪以下三类变化：",
+        "",
+        "### 1. 买卖点是否重新确认",
+        "",
+        "观察个股是否重新出现明确买入/卖出提示。如果重新确认，可进入下一轮复核。",
+        "",
+        "### 2. 板块主线是否发生切换",
+        "",
+        "如果市场热点切换到样本股票所在行业，需要重新评估这些股票的关注优先级。",
+        "",
+        "### 3. 公司事件是否出现催化",
+        "",
+        "重点关注公告、业绩、订单、政策、并购重组等事件。如果出现明确催化，可提高个股跟踪优先级。",
+        "",
+        "---",
+        "",
+        "## 八、最终判断",
+        "",
+        "**操作建议分类：**",
+        "",
+        f"- {'[x]' if pool_category == '操作池' else '[ ]'} 可进入操作池",
+        f"- {'[x]' if pool_category == '重点观察池' else '[ ]'} 重点观察",
+        f"- {'[x]' if pool_category == '普通观察池' else '[ ]'} 普通观察",
+        f"- {'[x]' if pool_category == '暂不跟踪池' else '[ ]'} 暂不跟踪",
+        f"- {'[x]' if pool_category == '剔除观察池' else '[ ]'} 剔除观察池",
+        "",
+        "**一句话总结：**",
+        "",
+        f"本批股票当前信号为 **{overall_strength}**，主要原因是：买卖点确认数量为 {len(confirmed_timing)} 只，热点匹配数量为 {len(hot_matched)} 只，公司事件支撑数量为 {len(event_supported)} 只。",
+        "",
+        "**当前建议：**",
+        "",
+        "等待更明确的买卖点、板块共振或公司事件催化后，再做进一步判断。",
+        "",
+        "---",
+        "",
+        "## 附录：评分与字段说明",
+        "",
+        "### 1. 综合评分",
+        "",
+        "- **80-100分：** 信号较强，可重点关注",
+        "- **60-79分：** 信号可关注，需要结合其他因素确认",
+        "- **40-59分：** 信号偏弱，信息较混杂",
+        "- **20-39分：** 可靠性较低，仅作观察",
+        "- **0-19分：** 风险明显或信息不足，建议回避",
+        "",
+        "### 2. 方向判断",
+        "",
+        "- **看涨：** 综合因素偏正面",
+        "- **中性：** 方向不明确，需继续观察",
+        "- **看跌：** 综合因素偏负面",
+        "- **回避：** 风险明显，不建议纳入跟踪重点",
+    ])
 
     if context.warnings:
         lines.extend(["", "## 执行警告"])
@@ -696,3 +929,256 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
 
     lines.extend(["", "> 该分析仅用于辅助判断，不构成投资建议。", ""])
     return "\n".join(lines)
+
+
+def _numeric(value: Optional[float]) -> float:
+    return -1.0 if value is None else float(value)
+
+
+def _format_score(value: Optional[float]) -> str:
+    return "无评分" if value is None else f"{value:.2f}"
+
+
+def _overall_strength(results: List[SignalAnalysisResult]) -> str:
+    if not results:
+        return "信息不足"
+    scores = [_numeric(item.reliability_score) for item in results if item.reliability_score is not None]
+    if not scores:
+        return "信息不足"
+    average = sum(scores) / len(scores)
+    if average >= 70:
+        return "偏强"
+    if average >= 50:
+        return "中性"
+    if average >= 25:
+        return "偏弱"
+    return "风险较高"
+
+
+def _pool_category(
+    results: List[SignalAnalysisResult],
+    attention: List[SignalAnalysisResult],
+    cautious: List[SignalAnalysisResult],
+    insufficient: List[SignalAnalysisResult],
+) -> str:
+    if not results:
+        return "暂不跟踪池"
+    if len(attention) >= max(1, len(results) // 2):
+        return "重点观察池"
+    if attention:
+        return "普通观察池"
+    if len(cautious) == len(results) or len(insufficient) == len(results):
+        return "暂不跟踪池"
+    return "普通观察池"
+
+
+def _direction_label(value: str) -> str:
+    mapping = {
+        "bullish": "看涨",
+        "bearish": "看跌",
+        "neutral": "中性",
+        "avoid": "回避",
+        "unknown": "信息不足",
+    }
+    return mapping.get((value or "").strip(), value or "信息不足")
+
+
+def _hot_mark_label(value: str) -> str:
+    if not value:
+        return "未知"
+    return value
+
+
+def _event_status(item: SignalAnalysisResult) -> str:
+    if _meaningful_company_items(item):
+        return "是"
+    return "否"
+
+
+def _event_type(item: SignalAnalysisResult) -> str:
+    text = "；".join(_meaningful_company_items(item))
+    if not text:
+        return "无"
+    labels = []
+    checks = [
+        ("业绩", ("业绩", "财报", "盈利", "亏损", "增长")),
+        ("订单", ("订单", "合同", "中标")),
+        ("政策", ("政策", "补贴", "监管", "许可")),
+        ("并购", ("并购", "收购", "重组")),
+        ("产品/技术", ("产品", "技术", "研发", "突破")),
+        ("增持/回购", ("增持", "回购")),
+        ("风险事件", ("处罚", "诉讼", "减持", "违约", "亏损")),
+    ]
+    for label, keywords in checks:
+        if any(keyword in text for keyword in keywords):
+            labels.append(label)
+    return "；".join(labels) if labels else "其他事件"
+
+
+def _meaningful_company_items(item: SignalAnalysisResult) -> List[str]:
+    invalid = {"无重大事件", "无明确公司事件", "无相关新闻", "无明确事件", "暂无", "无"}
+    values = []
+    for value in [*item.company_events, *item.company_hot_news]:
+        text = (value or "").strip()
+        if not text:
+            continue
+        if text in invalid:
+            continue
+        if text.startswith("无") and len(text) <= 8:
+            continue
+        values.append(text)
+    return values
+
+
+def _news_impact_label(value: str) -> str:
+    if not value:
+        return "未明确判断"
+    if value == "信息不足":
+        return "信息不足"
+    return value
+
+
+def _join_or_default(items: List[str], default: str) -> str:
+    return "；".join(item for item in items if item) or default
+
+
+def _signal_brief(item: SignalAnalysisResult) -> str:
+    return (
+        f"`{item.code}`{item.name}"
+        f"({ _format_score(item.reliability_score) }/{item.signal_bias or 'unknown'})"
+    )
+
+
+def _entry_exit_timing_text(conditions_met: str) -> str:
+    text = _friendly_text(conditions_met or "")
+    if not text:
+        return "暂未提供买卖点信息"
+    text = text.replace("|", "；")
+    if "暂未找到明确买入点" in text or "暂未找到明确卖出点" in text:
+        return text
+    return text
+
+
+def _has_clear_entry_exit_timing(conditions_met: str) -> bool:
+    text = _friendly_text(conditions_met or "")
+    return "出现看涨买点" in text or "出现看跌卖点" in text
+
+
+def _one_line_position(
+    item: SignalAnalysisResult,
+    row: Optional[ScreeningSignalRow],
+) -> str:
+    if item.reliability_score is not None and item.reliability_score >= 60:
+        return "信号值得继续跟踪"
+    if item.hot_sector_mark in {"重点", "相关"}:
+        return "热点方向可关注"
+    if _has_clear_entry_exit_timing(row.conditions_met if row else ""):
+        return "出现买卖点提示但仍需确认"
+    if _has_information_gap(item, row):
+        return "信息不足，先观察"
+    return "普通观察"
+
+
+def _brief_conclusion(
+    item: SignalAnalysisResult,
+    row: Optional[ScreeningSignalRow],
+) -> str:
+    timing = _entry_exit_timing_text(row.conditions_met if row else "")
+    hot = item.hot_sector_reason or "热点方向暂未形成明确支撑"
+    event = _join_or_default(item.company_events, "公司事件暂不明确")
+    return f"{timing}；{_friendly_text(hot)}；{event}。"
+
+
+def _tracking_suggestion(
+    item: SignalAnalysisResult,
+    row: Optional[ScreeningSignalRow],
+) -> str:
+    score = _numeric(item.reliability_score)
+    if score >= 80 and item.hot_sector_mark in {"重点", "相关"}:
+        return "重点跟踪，等待买卖点和公司事件继续确认"
+    if score >= 60:
+        return "普通观察，关注后续是否有热点或公司事件支撑"
+    if _has_clear_entry_exit_timing(row.conditions_met if row else ""):
+        return "普通观察，暂不提高优先级"
+    if score < 20 or item.signal_bias in {"avoid", "unknown"}:
+        return "暂不跟踪，等待更多信息"
+    return "普通观察，等待更明确的触发因素"
+
+
+def _top_macro_items(results: List[SignalAnalysisResult]) -> List[str]:
+    items: List[str] = []
+    for result in results:
+        items.extend(result.macro_factors)
+        items.extend(result.market_hot_news)
+    return _dedupe([_friendly_text(item) for item in items if item])[:8]
+
+
+def _related_stocks_for_factor(factor: str, results: List[SignalAnalysisResult]) -> str:
+    related = []
+    for item in results:
+        joined = "；".join([*item.macro_factors, *item.market_hot_news])
+        if factor and factor in joined:
+            related.append(item.name or item.code)
+    return "；".join(related[:8]) if related else "本批股票"
+
+
+def _table_text(text: str) -> str:
+    return (text or "-").replace("|", "/").replace("\n", " ").strip()
+
+
+def _friendly_text(text: str) -> str:
+    """Translate internal strategy wording into report-friendly language."""
+    if not text:
+        return ""
+    replacements: List[Tuple[str, str]] = [
+        ("默认规则链未通过：左一及其他策略未命中", "暂未找到明确买入点，其他辅助信号也不够强"),
+        ("默认规则链未通过：左一战法未命中", "暂未找到明确买入点"),
+        ("默认规则链未通过", "暂未找到明确买入点"),
+        ("规则链未通过左一战法", "暂未找到明确买入点"),
+        ("规则链未形成强确认", "买卖点尚未形成较强确认"),
+        ("规则链未通过", "暂未找到明确买入点"),
+        ("左一战法未命中", "暂未找到明确买入点"),
+        ("左一及其他策略未命中", "暂未找到明确买入点，其他辅助信号也不够强"),
+        ("左一战法-看涨", "出现看涨买点"),
+        ("左一战法-看跌", "出现看跌卖点"),
+        ("EMA突破", "趋势信号改善"),
+        ("其他策略", "其他辅助信号"),
+        ("策略", "辅助信号"),
+        ("量化信号", "市场信号"),
+        ("核心规则", "核心条件"),
+    ]
+    result = text
+    for old, new in replacements:
+        result = result.replace(old, new)
+    return result
+
+
+def _has_information_gap(
+    item: SignalAnalysisResult,
+    row: Optional[ScreeningSignalRow],
+) -> bool:
+    return bool(_information_gap_reasons(item, row))
+
+
+def _information_gap_reasons(
+    item: SignalAnalysisResult,
+    row: Optional[ScreeningSignalRow],
+) -> List[str]:
+    reasons: List[str] = []
+    if not item.company_hot_news:
+        reasons.append("缺少明确公司新闻")
+    if not item.company_events:
+        reasons.append("缺少明确公司事件")
+    if item.news_impact == "信息不足":
+        reasons.append("目前信息不足，无法判断新闻方向")
+    if not item.news_sources and not item.source_urls:
+        reasons.append("缺少可追溯新闻来源")
+    if item.hot_sector_mark in {"未知", "无明确关联"} or (
+        not item.matched_hot_sectors and item.hot_sector_mark not in {"重点", "相关"}
+    ):
+        reasons.append("热点板块未直接匹配")
+    if row is not None and not row.sector:
+        reasons.append("原始 CSV 缺少所属板块")
+    if item.confidence_score is not None and item.confidence_score < 40:
+        reasons.append("判断信心偏低")
+    return _dedupe(reasons)

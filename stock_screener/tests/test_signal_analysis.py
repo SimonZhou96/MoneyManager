@@ -926,6 +926,63 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertTrue(any("模型批量分析失败" in warning for warning in result.warnings))
         self.assertTrue(any("模型分析没有成功返回任何股票结果" in warning for warning in result.warnings))
 
+    def test_markdown_report_explains_information_gap_reasons(self):
+        class GapLLMProvider(FakeLLMProvider):
+            def analyze_batch(self, market, signals, market_documents, sector_documents, hot_sectors, company_documents):
+                return [
+                    SignalAnalysisResult(
+                        code=row.code,
+                        name=row.name,
+                        reliability_score=20.0,
+                        confidence_score=18.0,
+                        signal_bias="unknown",
+                        summary="搜索信息不足，无法形成明确判断",
+                        positive_factors=[],
+                        risk_factors=["规则链未形成强确认"],
+                        macro_factors=["市场波动"],
+                        company_events=[],
+                        market_hot_news=["市场宏观新闻"],
+                        company_hot_news=[],
+                        news_impact="信息不足",
+                        news_sources=[],
+                        hot_sectors=hot_sectors or ["创新药"],
+                        hot_sector_mark="无明确关联",
+                        matched_hot_sectors=[],
+                        hot_sector_relevance="0",
+                        hot_sector_reason="所属板块与热点板块无直接匹配",
+                        model=self.model_name,
+                    )
+                    for row in signals
+                ]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            context = SignalAnalysisContext(
+                task_id="task-HK",
+                market="HK",
+                csv_path=csv_path,
+                check_date=date(2026, 5, 9),
+                settings=AnalysisSettings(batch_size=20, search_max_results=2),
+                search_provider=FakeSearchProvider(),
+                llm_provider=GapLLMProvider(),
+                manual_hot_sectors=ManualHotSectorConfig(hot_sectors=["创新药"], sources=["manual_config"]),
+            )
+
+            with patch.dict(os.environ, {"SIGNAL_ENABLE_API_HOT_SECTORS": "0"}):
+                result = SignalAnalysisChain().run(context)
+
+            report_path = result.artifact_paths[0]
+            report = Path(report_path).read_text(encoding="utf-8")
+
+        self.assertIn("## 一、核心结论", report)
+        self.assertIn("## 五、个股简评", report)
+        self.assertIn("信息缺口", report)
+        self.assertIn("缺少明确公司事件", report)
+        self.assertIn("目前信息不足，无法判断新闻方向", report)
+        self.assertIn("热点板块未直接匹配", report)
+        self.assertIn("判断信心偏低", report)
+        self.assertNotIn("规则链", report)
+
     def test_write_analysis_columns_refreshes_existing_ai_columns_in_place(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             csv_path = self.write_csv(tmp_dir)

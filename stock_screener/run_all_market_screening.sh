@@ -14,6 +14,7 @@ fi
 RUNTIME_HOME="${RUNTIME_HOME:-$SCRIPT_DIR/.runtime_home}"
 mkdir -p "$RUNTIME_HOME"
 export HOME="$RUNTIME_HOME"
+export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 
 if [[ -z "${PYTHON_BIN:-}" ]]; then
   if [[ -x ".venv/bin/python" ]]; then
