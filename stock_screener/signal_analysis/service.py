@@ -67,6 +67,7 @@ def run_signal_analysis_for_market(
     market: str,
     csv_path: str,
     check_date: Optional[date] = None,
+    timeframe: str = "1d",
     enabled: Optional[bool] = None,
 ) -> AnalysisRunResult:
     """Run optional post-screening analysis without affecting the main screening flow."""
@@ -100,6 +101,7 @@ def run_signal_analysis_for_market(
         settings=settings,
         search_provider=search_provider,
         llm_provider=llm_provider,
+        timeframe=timeframe,
         repository=MySqlSignalAnalysisRepository(mysql_config),
         manual_hot_news=ManualHotNewsConfig.from_env(market),
         manual_hot_sectors=ManualHotSectorConfig.from_env(market),

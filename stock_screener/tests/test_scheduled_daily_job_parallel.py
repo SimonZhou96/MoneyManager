@@ -104,8 +104,8 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with patch.object(job, "run_screening_for_market", side_effect=fake_run_screening):
                 exit_code = self.run_main(tmp_dir, markets="HK,A", workers=2)
-            hk_csv = Path(tmp_dir) / f"screening_result_{job.date.today():%Y-%m-%d}_HK.csv"
-            a_csv = Path(tmp_dir) / f"screening_result_{job.date.today():%Y-%m-%d}_A.csv"
+            hk_csv = Path(tmp_dir) / "港股市场信号1d复核报告.csv"
+            a_csv = Path(tmp_dir) / "A股市场信号1d复核报告.csv"
 
             self.assertEqual(exit_code, 0)
             self.assertTrue(hk_csv.exists())
@@ -173,14 +173,14 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
                     )
 
             expected_paths = [
-                str(Path(tmp_dir) / "screening_result_2026-05-08_US.csv"),
+                str(Path(tmp_dir) / "美股市场信号1d复核报告.csv"),
             ]
             self.assertFalse(result.skipped)
             self.assertEqual(result.csv_paths, expected_paths)
             for path in expected_paths:
                 self.assertTrue(Path(path).exists())
-            self.assertFalse((Path(tmp_dir) / "screening_result_2026-05-08_US_no_etf.csv").exists())
-            self.assertFalse((Path(tmp_dir) / "screening_result_2026-05-08_US_etf_only.csv").exists())
+            self.assertFalse((Path(tmp_dir) / "美股市场信号1d复核报告_no_etf.csv").exists())
+            self.assertFalse((Path(tmp_dir) / "美股市场信号1d复核报告_etf_only.csv").exists())
             with open(expected_paths[0], "r", encoding="utf-8-sig", newline="") as f:
                 rows = list(csv.DictReader(f))
             self.assertEqual(rows[0]["标的类型"], "股票")
@@ -383,7 +383,7 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             csv_base = str(Path(tmp_dir) / "screening_result")
-            report_path = str(Path(tmp_dir) / "screening_result_2026-05-08_US_ai_report.md")
+            report_path = str(Path(tmp_dir) / "美股市场信号1d复核报告.md")
             results_by_code = {
                 "US.TEST": SignalAnalysisResult(
                     code="US.TEST",
@@ -433,13 +433,13 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
 
             self.assertFalse(result.skipped)
             self.assertEqual(result.csv_paths, [
-                str(Path(tmp_dir) / "screening_result_2026-05-08_US.csv"),
+                str(Path(tmp_dir) / "美股市场信号1d复核报告.csv"),
                 report_path,
             ])
-            self.assertFalse(Path(tmp_dir, "screening_result_2026-05-08_US_ai.csv").exists())
-            self.assertFalse((Path(tmp_dir) / "screening_result_2026-05-08_US_no_etf.csv").exists())
-            self.assertFalse((Path(tmp_dir) / "screening_result_2026-05-08_US_etf_only.csv").exists())
-            with open(Path(tmp_dir) / "screening_result_2026-05-08_US.csv", "r", encoding="utf-8-sig", newline="") as f:
+            self.assertFalse(Path(tmp_dir, "美股市场信号1d复核报告_ai.csv").exists())
+            self.assertFalse((Path(tmp_dir) / "美股市场信号1d复核报告_no_etf.csv").exists())
+            self.assertFalse((Path(tmp_dir) / "美股市场信号1d复核报告_etf_only.csv").exists())
+            with open(Path(tmp_dir) / "美股市场信号1d复核报告.csv", "r", encoding="utf-8-sig", newline="") as f:
                 rows = list(csv.DictReader(f))
             self.assertEqual(rows[0]["股票代码"], "US.TEST")
             self.assertEqual(rows[0]["标的类型"], "股票")
@@ -455,6 +455,7 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
             self.assertIn("bearish偏看跌", rows[1]["辅助方向判断口径"])
             self.assertEqual(rows[1]["新闻影响判断"], "利空")
             analyze.assert_called_once()
+            self.assertEqual(analyze.call_args.kwargs["timeframe"], "1d")
 
     def test_ai_analysis_failure_keeps_original_csv_paths(self):
         FakeMarketDatabase.pools_by_market = {
@@ -491,7 +492,7 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
                     )
 
             expected_paths = [
-                str(Path(tmp_dir) / "screening_result_2026-05-08_US.csv"),
+                str(Path(tmp_dir) / "美股市场信号1d复核报告.csv"),
             ]
             self.assertIsNone(result.error)
             self.assertEqual(result.csv_paths, expected_paths)

@@ -93,7 +93,7 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
         db.insert_single_stock_rule_details(run_id, rule_details)
 
         if result.passed:
-            ai_analysis, ai_warnings = _run_single_ai(mysql_config, run_id, market, stock, result.filter_outputs)
+            ai_analysis, ai_warnings = _run_single_ai(mysql_config, run_id, market, timeframe, stock, result.filter_outputs)
             warnings.extend(ai_warnings)
 
         db.finish_single_stock_run(
@@ -248,7 +248,14 @@ def _zuoyi_summary(outputs) -> dict:
     return {}
 
 
-def _run_single_ai(mysql_config: MySqlConfig, run_id: str, market: str, stock: StockInfo, outputs) -> tuple[Optional[dict], List[str]]:
+def _run_single_ai(
+    mysql_config: MySqlConfig,
+    run_id: str,
+    market: str,
+    timeframe: str,
+    stock: StockInfo,
+    outputs,
+) -> tuple[Optional[dict], List[str]]:
     warnings: List[str] = []
     with tempfile.TemporaryDirectory(prefix="single_stock_ai_") as tmp_dir:
         csv_path = Path(tmp_dir) / f"{run_id}.csv"
@@ -273,6 +280,7 @@ def _run_single_ai(mysql_config: MySqlConfig, run_id: str, market: str, stock: S
             market=market,
             csv_path=str(csv_path),
             check_date=date.today(),
+            timeframe=timeframe,
             enabled=True,
         )
         warnings.extend(result.warnings or [])

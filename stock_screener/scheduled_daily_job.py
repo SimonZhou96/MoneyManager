@@ -76,6 +76,7 @@ from kline_fetcher import KlineFetcherFactory
 from main_force_risk import MainForceRiskServiceFactory
 from market import market_label, normalize_market
 from api.screen_service import get_strategy_condition_labels, run_screening_task
+from report_naming import market_signal_report_path
 from signal_analysis.service import env_flag, run_signal_analysis_for_market
 from signal_analysis.chain import write_analysis_columns_to_csv
 from sector_resolver import (
@@ -763,7 +764,7 @@ class ScreeningPostProcessor:
         enrich_records_with_sectors(self.mysql_config, task_id, market, passed)
         etf_codes = get_market_etf_codes(self.mysql_config, market)
         annotate_records_with_instrument_type(passed, etf_codes)
-        csv_path = f"{self.csv_base}_{self.today_str}_{market}.csv"
+        csv_path = market_signal_report_path(self.csv_base, market, timeframe, ".csv")
         check_date = date.fromisoformat(self.today_str)
         enrich_records_with_main_force_risks(
             mysql_config=self.mysql_config,
@@ -779,12 +780,13 @@ class ScreeningPostProcessor:
         print(f"✓ CSV 已导出: {csv_path}")
 
         if self.enable_ai_analysis:
-            self._run_ai_analysis(market, task_id, csv_path, check_date, csv_paths)
+            self._run_ai_analysis(market, timeframe, task_id, csv_path, check_date, csv_paths)
         return csv_paths
 
     def _run_ai_analysis(
         self,
         market: str,
+        timeframe: str,
         task_id: str,
         csv_path: str,
         check_date: date,
@@ -797,6 +799,7 @@ class ScreeningPostProcessor:
                 market=market,
                 csv_path=csv_path,
                 check_date=check_date,
+                timeframe=timeframe,
                 enabled=True,
             )
             for warning in analysis_result.warnings:
@@ -904,7 +907,7 @@ def main():
     parser.add_argument("--markets", default="HK,A,US", help="市场列表，逗号分隔")
     parser.add_argument("--pools", default="best,index,industry,ipo,etf", help="股票池类型")
     parser.add_argument("--timeframe", default="1d", help="K线周期")
-    parser.add_argument("--csv", default="logs/screening_result.csv", help="CSV 输出路径（会按日期+市场生成 screening_result_2026-02-27_HK.csv，主表内用“标的类型”区分股票/ETF）")
+    parser.add_argument("--csv", default="logs/screening_result.csv", help="CSV 输出目录基准（会生成 {股票类型}市场信号{timeframe}复核报告.csv，主表内用“标的类型”区分股票/ETF）")
     parser.add_argument("--market-workers", type=int, default=3, help="并行筛选市场的 worker 数量")
     parser.add_argument("--chain-key", default=None, help="筛选规则链 key（默认使用各市场启用的默认链）")
     ai_group = parser.add_mutually_exclusive_group()

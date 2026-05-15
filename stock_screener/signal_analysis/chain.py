@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Dict, List, Optional, Protocol, Tuple
 
+from report_naming import analysis_report_path_for_csv, market_signal_report_stem
+
 from .llm_providers import LLMProvider
 from .hot_news import ManualHotNewsConfig
 from .hot_sectors import AkshareHotSectorProvider, ManualHotSectorConfig
@@ -80,6 +82,7 @@ class SignalAnalysisContext:
     settings: AnalysisSettings
     search_provider: SearchProvider
     llm_provider: LLMProvider
+    timeframe: str = "1d"
     repository: Optional[SignalAnalysisRepository] = None
     manual_hot_news: ManualHotNewsConfig = field(default_factory=ManualHotNewsConfig)
     manual_hot_sectors: ManualHotSectorConfig = field(default_factory=ManualHotSectorConfig)
@@ -394,7 +397,7 @@ class WriteArtifactsStep(AnalysisStep):
     name = "WriteArtifactsStep"
 
     def run(self, context: SignalAnalysisContext) -> None:
-        report_path = _derive_artifact_path(context.csv_path, "_ai_report.md")
+        report_path = analysis_report_path_for_csv(context.csv_path)
 
         write_analysis_columns_to_csv(context.csv_path, context.results_by_code)
 
@@ -440,12 +443,6 @@ class SignalAnalysisChain:
             analyzed_count=len(context.results_by_code),
             skipped_reason=context.skipped_reason,
         )
-
-
-def _derive_artifact_path(csv_path: str, suffix: str) -> str:
-    if csv_path.endswith(".csv"):
-        return f"{csv_path[:-4]}{suffix}"
-    return f"{csv_path}{suffix}"
 
 
 def _drain_llm_provider_warnings(provider: LLMProvider) -> List[str]:
@@ -686,8 +683,7 @@ def write_analysis_columns_to_csv(
 
 
 def _render_markdown_report(context: SignalAnalysisContext) -> str:
-    market_name = MARKET_NAMES.get(context.market, context.market)
-    report_title = f"{market_name}观察池信号复核报告"
+    report_title = market_signal_report_stem(context.market, context.timeframe)
     results = [context.results_by_code[row.code] for row in context.rows]
     rows_by_code = {row.code: row for row in context.rows}
     ranked = sorted(
