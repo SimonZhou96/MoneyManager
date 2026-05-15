@@ -174,13 +174,17 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
 
             expected_paths = [
                 str(Path(tmp_dir) / "screening_result_2026-05-08_US.csv"),
-                str(Path(tmp_dir) / "screening_result_2026-05-08_US_no_etf.csv"),
-                str(Path(tmp_dir) / "screening_result_2026-05-08_US_etf_only.csv"),
             ]
             self.assertFalse(result.skipped)
             self.assertEqual(result.csv_paths, expected_paths)
             for path in expected_paths:
                 self.assertTrue(Path(path).exists())
+            self.assertFalse((Path(tmp_dir) / "screening_result_2026-05-08_US_no_etf.csv").exists())
+            self.assertFalse((Path(tmp_dir) / "screening_result_2026-05-08_US_etf_only.csv").exists())
+            with open(expected_paths[0], "r", encoding="utf-8-sig", newline="") as f:
+                rows = list(csv.DictReader(f))
+            self.assertEqual(rows[0]["标的类型"], "股票")
+            self.assertEqual(rows[1]["标的类型"], "ETF")
 
     def test_default_screening_params_use_zuoyi_window_15(self):
         params = job.get_default_screening_params()
@@ -289,7 +293,7 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
         self.assertEqual(zuoyi_rows[0]["左一底"], "8")
         self.assertEqual(zuoyi_rows[0]["左一支撑区间"], "8~10")
 
-    def test_split_screening_csvs_inherit_zuoyi_columns_per_file(self):
+    def test_write_screening_csv_includes_instrument_type_and_zuoyi_columns(self):
         records = [
             {
                 "code": "US.TEST",
@@ -328,18 +332,19 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
         ]
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            no_etf_path, etf_only_path = job.write_split_screening_csvs(
-                records,
-                str(Path(tmp_dir) / "screening_result.csv"),
-                {"US.ETF"},
-            )
-            with open(no_etf_path, "r", encoding="utf-8-sig", newline="") as f:
-                no_etf_rows = list(csv.DictReader(f))
-            with open(etf_only_path, "r", encoding="utf-8-sig", newline="") as f:
-                etf_rows = list(csv.DictReader(f))
+            csv_path = Path(tmp_dir) / "screening_result.csv"
+            job.annotate_records_with_instrument_type(records, {"US.ETF"})
+            job.write_screening_csv(records, str(csv_path))
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+                rows = list(csv.DictReader(f))
 
-        self.assertEqual(no_etf_rows[0]["左一支撑区间"], "8~10")
-        self.assertEqual(etf_rows[0]["左一支撑区间"], "12~14")
+        self.assertEqual(rows[0]["标的类型"], "股票")
+        self.assertEqual(rows[1]["标的类型"], "ETF")
+        self.assertIn("主力流出风险", rows[0])
+        self.assertIn("主力风险信号", rows[0])
+        self.assertIn("筹码分布数据", rows[0])
+        self.assertEqual(rows[0]["左一支撑区间"], "8~10")
+        self.assertEqual(rows[1]["左一支撑区间"], "12~14")
 
     def test_ai_analysis_success_appends_artifact_paths(self):
         FakeMarketDatabase.pools_by_market = {
@@ -427,26 +432,26 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
             self.assertFalse(result.skipped)
             self.assertEqual(result.csv_paths, [
                 str(Path(tmp_dir) / "screening_result_2026-05-08_US.csv"),
-                str(Path(tmp_dir) / "screening_result_2026-05-08_US_no_etf.csv"),
-                str(Path(tmp_dir) / "screening_result_2026-05-08_US_etf_only.csv"),
                 report_path,
             ])
             self.assertFalse(Path(tmp_dir, "screening_result_2026-05-08_US_ai.csv").exists())
-            with open(Path(tmp_dir) / "screening_result_2026-05-08_US_no_etf.csv", "r", encoding="utf-8-sig", newline="") as f:
-                no_etf_rows = list(csv.DictReader(f))
-            with open(Path(tmp_dir) / "screening_result_2026-05-08_US_etf_only.csv", "r", encoding="utf-8-sig", newline="") as f:
-                etf_rows = list(csv.DictReader(f))
-            self.assertEqual(no_etf_rows[0]["股票代码"], "US.TEST")
-            self.assertEqual(no_etf_rows[0]["信号可靠性评分"], "82.00")
-            self.assertIn("80-100", no_etf_rows[0]["信号可靠性评分口径"])
-            self.assertEqual(no_etf_rows[0]["市场热点新闻"], "美股市场热点")
-            self.assertEqual(no_etf_rows[0]["公司热点新闻"], "Test Inc 新闻")
-            self.assertEqual(no_etf_rows[0]["新闻影响判断"], "利好")
-            self.assertEqual(no_etf_rows[0]["新闻来源"], "https://example.com/us-test")
-            self.assertEqual(etf_rows[0]["股票代码"], "US.ETF")
-            self.assertEqual(etf_rows[0]["辅助方向判断"], "bearish")
-            self.assertIn("bearish偏看跌", etf_rows[0]["辅助方向判断口径"])
-            self.assertEqual(etf_rows[0]["新闻影响判断"], "利空")
+            self.assertFalse((Path(tmp_dir) / "screening_result_2026-05-08_US_no_etf.csv").exists())
+            self.assertFalse((Path(tmp_dir) / "screening_result_2026-05-08_US_etf_only.csv").exists())
+            with open(Path(tmp_dir) / "screening_result_2026-05-08_US.csv", "r", encoding="utf-8-sig", newline="") as f:
+                rows = list(csv.DictReader(f))
+            self.assertEqual(rows[0]["股票代码"], "US.TEST")
+            self.assertEqual(rows[0]["标的类型"], "股票")
+            self.assertEqual(rows[0]["信号可靠性评分"], "82.00")
+            self.assertIn("80-100", rows[0]["信号可靠性评分口径"])
+            self.assertEqual(rows[0]["市场热点新闻"], "美股市场热点")
+            self.assertEqual(rows[0]["公司热点新闻"], "Test Inc 新闻")
+            self.assertEqual(rows[0]["新闻影响判断"], "利好")
+            self.assertEqual(rows[0]["新闻来源"], "https://example.com/us-test")
+            self.assertEqual(rows[1]["股票代码"], "US.ETF")
+            self.assertEqual(rows[1]["标的类型"], "ETF")
+            self.assertEqual(rows[1]["辅助方向判断"], "bearish")
+            self.assertIn("bearish偏看跌", rows[1]["辅助方向判断口径"])
+            self.assertEqual(rows[1]["新闻影响判断"], "利空")
             analyze.assert_called_once()
 
     def test_ai_analysis_failure_keeps_original_csv_paths(self):
@@ -485,8 +490,6 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
 
             expected_paths = [
                 str(Path(tmp_dir) / "screening_result_2026-05-08_US.csv"),
-                str(Path(tmp_dir) / "screening_result_2026-05-08_US_no_etf.csv"),
-                str(Path(tmp_dir) / "screening_result_2026-05-08_US_etf_only.csv"),
             ]
             self.assertIsNone(result.error)
             self.assertEqual(result.csv_paths, expected_paths)

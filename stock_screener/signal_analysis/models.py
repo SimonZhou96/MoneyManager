@@ -36,6 +36,26 @@ def _optional_float(value: Any) -> Optional[float]:
         return None
 
 
+def _normalize_instrument_type(row: Dict[str, Any]) -> str:
+    value = _string(row.get("标的类型") or row.get("instrument_type")).upper()
+    if value in {"ETF", "基金", "FUND"}:
+        return "ETF"
+    if value in {"股票", "STOCK"}:
+        return "股票"
+
+    legacy_etf = _string(row.get("是否ETF") or row.get("is_etf")).lower()
+    if legacy_etf in {"1", "true", "yes", "y", "是", "etf"}:
+        return "ETF"
+
+    sector = _string(row.get("所属板块") or row.get("sector") or row.get("industry")).upper()
+    name = _string(row.get("名称") or row.get("name")).upper()
+    if sector == "ETF" or " ETF" in f" {sector} ":
+        return "ETF"
+    if any(keyword in name for keyword in ("ETF", "ETN", "基金", "EXCHANGE TRADED FUND")):
+        return "ETF"
+    return "股票"
+
+
 RELIABILITY_SCORE_CRITERIA = (
     "0-100；80-100信号较强，60-79可关注，40-59偏弱或信息混杂，"
     "20-39可靠性低，0-19明显风险或外部信息否定信号"
@@ -67,6 +87,16 @@ class ScreeningSignalRow:
     market_cap: str
     sector: str
     conditions_met: str
+    instrument_type: str = "股票"
+    main_force_risk_level: str = ""
+    main_force_risk_score: str = ""
+    main_force_risk_signals: str = ""
+    main_force_risk_summary: str = ""
+    main_force_fund_flow_data: str = ""
+    main_force_order_book_data: str = ""
+    main_force_lhb_data: str = ""
+    main_force_chip_data: str = ""
+    main_force_missing_data: str = ""
     raw: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
@@ -82,9 +112,23 @@ class ScreeningSignalRow:
             pe_ratio=_string(row.get("pe") or row.get("pe_ratio")),
             market_cap=_string(row.get("市值") or row.get("market_cap")),
             sector=_string(row.get("所属板块") or row.get("sector") or row.get("industry")),
+            instrument_type=_normalize_instrument_type(row),
             conditions_met=_string(row.get("满足的条件") or row.get("conditions_met")),
+            main_force_risk_level=_string(row.get("主力流出风险") or row.get("main_force_risk_level")),
+            main_force_risk_score=_string(row.get("主力风险分") or row.get("main_force_risk_score")),
+            main_force_risk_signals=_string(row.get("主力风险信号") or row.get("main_force_risk_signals")),
+            main_force_risk_summary=_string(row.get("主力风险说明") or row.get("main_force_risk_summary")),
+            main_force_fund_flow_data=_string(row.get("资金流向数据") or row.get("main_force_fund_flow_data")),
+            main_force_order_book_data=_string(row.get("盘口数据") or row.get("main_force_order_book_data")),
+            main_force_lhb_data=_string(row.get("龙虎榜数据") or row.get("main_force_lhb_data")),
+            main_force_chip_data=_string(row.get("筹码分布数据") or row.get("main_force_chip_data")),
+            main_force_missing_data=_string(row.get("数据不足项") or row.get("main_force_missing_data")),
             raw={_string(k): _string(v) for k, v in row.items()},
         )
+
+    @property
+    def is_etf(self) -> bool:
+        return self.instrument_type == "ETF"
 
     def to_prompt_dict(self) -> Dict[str, Any]:
         return {
@@ -93,9 +137,15 @@ class ScreeningSignalRow:
             "market": self.market,
             "market_label": self.market_label,
             "sector": self.sector,
+            "instrument_type": self.instrument_type,
             "pe_ratio": self.pe_ratio,
             "market_cap": self.market_cap,
             "conditions_met": self.conditions_met,
+            "main_force_risk_level": self.main_force_risk_level,
+            "main_force_risk_score": self.main_force_risk_score,
+            "main_force_risk_signals": self.main_force_risk_signals,
+            "main_force_risk_summary": self.main_force_risk_summary,
+            "main_force_data_gap": self.main_force_missing_data,
         }
 
 

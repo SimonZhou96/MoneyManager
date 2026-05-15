@@ -161,15 +161,34 @@ class SignalAnalysisTest(unittest.TestCase):
             "股票代码": "HK.00001",
             "市场": "港股",
             "名称": "Test HK",
+            "标的类型": "股票",
             "pe": "10",
             "市值": "1000",
             "所属板块": "Finance",
             "满足的条件": "左一战法-看涨|EMA突破",
+            "主力流出风险": "中",
+            "主力风险分": "42.00",
+            "主力风险信号": "放量下跌；盘口卖盘压制",
+            "主力风险说明": "放量下跌且盘口卖盘压力偏高",
+            "资金流向数据": "数据不足:未启用",
+            "盘口数据": "数据不足:未启用",
+            "龙虎榜数据": "不适用",
+            "筹码分布数据": "近似:成交量分布近似",
+            "数据不足项": "港股无龙虎榜；筹码分布使用成交量分布近似",
         }]
+        fieldnames = [
+            "股票代码", "市场", "名称", "标的类型", "pe", "市值", "所属板块", "满足的条件",
+            "主力流出风险", "主力风险分", "主力风险信号", "主力风险说明",
+            "资金流向数据", "盘口数据", "龙虎榜数据", "筹码分布数据", "数据不足项",
+        ]
+        for row in rows:
+            for key in row:
+                if key not in fieldnames:
+                    fieldnames.append(key)
         with open(path, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(
                 f,
-                fieldnames=["股票代码", "市场", "名称", "pe", "市值", "所属板块", "满足的条件"],
+                fieldnames=fieldnames,
             )
             writer.writeheader()
             writer.writerows(rows)
@@ -876,6 +895,61 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertEqual(len(result.results_by_code), 23)
         self.assertFalse(any("公司事件批量搜索未匹配" in warning for warning in result.warnings))
 
+    def test_chain_searches_company_events_only_for_stocks_and_reports_etf_theme(self):
+        rows = [
+            {
+                "股票代码": "HK.00001",
+                "市场": "港股",
+                "名称": "Company One",
+                "标的类型": "股票",
+                "pe": "10",
+                "市值": "1000",
+                "所属板块": "Finance",
+                "满足的条件": "左一战法-看涨|EMA突破",
+            },
+            {
+                "股票代码": "HK.03033",
+                "市场": "港股",
+                "名称": "Hang Seng Tech ETF",
+                "标的类型": "ETF",
+                "pe": "",
+                "市值": "",
+                "所属板块": "",
+                "满足的条件": "左一战法-看涨|EMA突破",
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir, rows=rows)
+            provider = FakeSearchProvider()
+            context = SignalAnalysisContext(
+                task_id="task-HK",
+                market="HK",
+                csv_path=csv_path,
+                check_date=date(2026, 5, 9),
+                settings=AnalysisSettings(batch_size=20, search_max_results=2),
+                search_provider=provider,
+                llm_provider=FakeLLMProvider(),
+            )
+
+            with patch.dict(os.environ, {"SIGNAL_COMPANY_SEARCH_BATCH_SIZE": "10", "SIGNAL_ENABLE_API_HOT_SECTORS": "0"}):
+                result = SignalAnalysisChain().run(context)
+
+            report = Path(result.artifact_paths[0]).read_text(encoding="utf-8")
+
+        self.assertTrue(result.success)
+        self.assertEqual(provider.company_batch_calls, [["HK.00001"]])
+        self.assertTrue(any("ETF 基金 跟踪指数" in query for query in provider.search_queries))
+        self.assertNotIn("执行警告", report)
+        self.assertNotIn("所属方向", report)
+        self.assertNotIn("未补齐", report)
+        self.assertIn("## 三、主力流出风险观察", report)
+        self.assertIn("## 六、个股观察", report)
+        self.assertIn("## 七、ETF/基金观察", report)
+        self.assertIn("不适用，按基金/ETF主题观察", report)
+        self.assertIn("主题资料暂缺", report)
+        self.assertFalse(any("HK.03033" in warning and "公司事件批量搜索" in warning for warning in result.warnings))
+
     def test_chain_batch_search_failure_does_not_fallback_to_per_stock_search(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             csv_path = self.write_csv(tmp_dir)
@@ -975,7 +1049,10 @@ class SignalAnalysisTest(unittest.TestCase):
             report = Path(report_path).read_text(encoding="utf-8")
 
         self.assertIn("## 一、核心结论", report)
-        self.assertIn("## 五、个股简评", report)
+        self.assertIn("## 三、主力流出风险观察", report)
+        self.assertIn("## 六、个股观察", report)
+        self.assertIn("主力流出风险", report)
+        self.assertIn("成交量分布近似", report)
         self.assertIn("信息缺口", report)
         self.assertIn("缺少明确公司事件", report)
         self.assertIn("目前信息不足，无法判断新闻方向", report)

@@ -141,7 +141,10 @@ def _build_company_batch_query(
     max_chars: Optional[int] = None,
 ) -> str:
     max_chars = max_chars or _company_search_query_max_chars()
-    prefix = f"{market} stocks latest news earnings events: "
+    if rows and all(getattr(row, "is_etf", False) for row in rows):
+        prefix = f"{market} ETF fund tracking index theme sector macro news: "
+    else:
+        prefix = f"{market} stocks latest news earnings events: "
     if not rows:
         return prefix.rstrip()
 

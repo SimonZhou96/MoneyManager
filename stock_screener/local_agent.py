@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from custom_list import CustomListScreeningRunner, is_custom_list_job
 from db import MarketDatabase
 from feishu_notifier import send_screening_result
 from fetch_stock_pools import get_db_config
@@ -368,6 +369,13 @@ def process_pending_jobs_once(args, client: CloudClient) -> int:
             continue
         if job.get("job_type") == "single_stock":
             process_single_stock_job(args, client, job)
+        elif is_custom_list_job(job):
+            try:
+                process_custom_list_job(args, client, job)
+            except Exception as exc:
+                message = f"{type(exc).__name__}: {exc}"
+                print(f"custom list job {job_id} failed: {message}")
+                client.complete_job(job_id, "failed", [], {"warnings": [message]}, error_message=message)
         else:
             try:
                 process_screening_job(args, client, job)
@@ -436,6 +444,7 @@ def process_screening_job(args, client: CloudClient, job: dict) -> None:
                 market=market,
                 task_id=result.task_id,
                 csv_paths=result.csv_paths,
+                result_upload_scope="passed_only",
             )
             task_ids.append(result.task_id)
             market_statuses[market] = {"status": "completed", "task_id": result.task_id}
@@ -468,6 +477,7 @@ def upload_market_result(
     market: str,
     task_id: str,
     csv_paths: List[str],
+    result_upload_scope: str = "passed_only",
 ) -> None:
     db = MarketDatabase(mysql_config)
     try:
@@ -479,12 +489,18 @@ def upload_market_result(
         task["job_id"] = job_id
         task["passed_count"] = passed_count
         task["failed_count"] = max(0, total_count - passed_count)
-        task["uploaded_result_scope"] = "passed_only"
+        task["uploaded_result_scope"] = result_upload_scope
         client.push_screening_task(job_id, task)
 
         offset = 0
+        passed_only = result_upload_scope != "all"
         while True:
-            rows = db.get_screening_results_by_task(task_id, limit=args.result_batch_size, offset=offset, passed_only=True)
+            rows = db.get_screening_results_by_task(
+                task_id,
+                limit=args.result_batch_size,
+                offset=offset,
+                passed_only=passed_only,
+            )
             if not rows:
                 break
             for chunk in chunk_rows_by_payload_budget(
@@ -512,6 +528,65 @@ def upload_market_result(
                 print(f"artifact upload failed: {path}: {type(exc).__name__}: {exc}")
     finally:
         db.close()
+
+
+def process_custom_list_job(args, client: CloudClient, job: dict) -> None:
+    job_id = job["job_id"]
+    options = job.get("options") or {}
+    market = normalize_market((job.get("markets") or [None])[0] or "HK")
+    timeframe = str(job.get("timeframe") or "1d")
+    enable_ai_analysis = bool(options.get("enable_ai_analysis", True))
+    send_feishu = bool(options.get("send_feishu", False))
+    mysql_config = get_db_config()
+    csv_base = args.screening_csv[:-4] if args.screening_csv.endswith(".csv") else args.screening_csv
+    today_str = date.today().strftime("%Y-%m-%d")
+    webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
+    summary: Dict[str, Any] = {
+        "markets": [market],
+        "timeframe": timeframe,
+        "chain_key": job.get("chain_key") or options.get("chain_key"),
+        "chain_name": job.get("chain_name") or options.get("chain_name"),
+        "result_upload_scope": "all",
+        "input_summary": options.get("input_summary") or {},
+        "market_statuses": {},
+        "warnings": [],
+    }
+
+    client.heartbeat_job(job_id, args.agent_id, {"current_market": market, "stage": "custom_list_screening"})
+    result = CustomListScreeningRunner(mysql_config).run(
+        job=job,
+        csv_base=csv_base,
+        today_str=today_str,
+        enable_ai_analysis=enable_ai_analysis,
+    )
+    if not result.task_id:
+        raise RuntimeError("自定义股票列表未生成筛选任务")
+
+    upload_market_result(
+        args=args,
+        client=client,
+        mysql_config=mysql_config,
+        job_id=job_id,
+        market=market,
+        task_id=result.task_id,
+        csv_paths=result.csv_paths,
+        result_upload_scope="all",
+    )
+    summary["task_ids"] = [result.task_id]
+    summary["market_statuses"] = {market: {"status": "completed", "task_id": result.task_id}}
+    summary["passed_count"] = len(result.passed)
+    summary["total_count"] = result.total_count
+
+    if send_feishu and webhook_url and result.csv_paths:
+        sent = send_screening_result(
+            webhook_url,
+            f"【Web自定义列表筛选】{today_str} - {market_label(market)}\n通过: {len(result.passed)} 只",
+            result.csv_paths,
+        )
+        if not sent:
+            summary["warnings"].append(f"{market}: 飞书发送不完整")
+    client.complete_job(job_id, "completed", [result.task_id], summary, error_message=None)
+    print(f"custom list job {job_id} finished: completed, task={result.task_id}")
 
 
 def process_single_stock_job(args, client: CloudClient, job: dict) -> None:

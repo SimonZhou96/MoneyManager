@@ -226,9 +226,10 @@ screening and must never block the original CSV or Feishu delivery path.
 ## Runtime Flow
 
 - Scheduler integration lives in `scheduled_daily_job.py`, immediately after
-  the market CSV, `_no_etf.csv`, and `_etf_only.csv` files are written.
+  the market CSV is written. New exports should not create `_no_etf.csv` or
+  `_etf_only.csv`; the main CSV uses `标的类型` to distinguish `股票` and `ETF`.
 - The scheduler calls `signal_analysis.service.run_signal_analysis_for_market`
-  only for the base market CSV. Original CSV paths must always remain in
+  for the market CSV. Original CSV paths must always remain in
   `MarketScreeningResult.csv_paths`; AI artifacts may only be appended.
 - If analysis fails, log a warning and continue. Do not set
   `MarketScreeningResult.error` for AI-analysis failures.
@@ -335,8 +336,12 @@ screening and must never block the original CSV or Feishu delivery path.
 - The screening CSV must be generated before AI analysis starts. After a
   successful analysis, append or refresh AI columns in that existing CSV.
   Failures must preserve the original CSV for Feishu sending.
+- The main screening CSV should include `标的类型` with only `股票` or `ETF`.
+  AI analysis must treat them differently: `股票` uses company events/news,
+  while `ETF` uses tracking theme, index/sector exposure, and macro context.
+  ETF rows should not trigger company-event missing warnings.
 - Successful analysis appends or refreshes AI columns in the existing market
-  CSV and split CSV files; it must not create `<base>_ai.csv`.
+  CSV; it must not create `<base>_ai.csv` or split CSV files.
 - Successful analysis may write `<base>_ai_report.md` as an extra Feishu
   attachment.
 - Enhanced CSV columns are: `AI分析状态`, `信号可靠性评分`, `模型置信度`,

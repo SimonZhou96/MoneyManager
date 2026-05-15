@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from db import MarketDatabase
+from custom_list import CustomListCodeParser, CustomListJobService
 from market import normalize_market
 from rule_engine import RuleRepository
 from .auth import (
@@ -80,6 +81,15 @@ class SingleStockApiRequest(BaseModel):
     code: str
     timeframe: str = "1d"
     chain_key: Optional[str] = None
+
+
+class CustomListScreeningTaskRequest(BaseModel):
+    market: str
+    codes: List[str]
+    timeframe: str = "1d"
+    chain_key: Optional[str] = None
+    enable_ai_analysis: bool = True
+    send_feishu: bool = False
 
 
 class SyncRunRequest(BaseModel):
@@ -292,6 +302,49 @@ def create_screening_task(
         "chain_key": chain_key,
         "chain_name": chain.get("chain_name"),
     }
+
+
+@app.post("/api/screening/custom-list-tasks")
+def create_custom_list_task(
+    payload: CustomListScreeningTaskRequest,
+    user: CurrentUser = Depends(require_user),
+    db: MarketDatabase = Depends(get_db),
+):
+    enforce_rate_limit(f"user:{user.id}:create_task", CREATE_TASK_RULE)
+    try:
+        market = normalize_market(payload.market)
+        timeframe = validate_timeframe(payload.timeframe)
+        parsed = CustomListCodeParser().parse(market, payload.codes)
+    except ValueError as exc:
+        raise BusinessError("INVALID_CUSTOM_LIST_TASK", str(exc)) from exc
+    chain = resolve_rule_chain(db, [market], payload.chain_key)
+    try:
+        return CustomListJobService(db).create_job(
+            user_id=user.id,
+            market=market,
+            timeframe=timeframe,
+            chain=chain,
+            parse_result=parsed,
+            enable_ai_analysis=payload.enable_ai_analysis,
+            send_feishu=payload.send_feishu,
+        )
+    except ValueError as exc:
+        raise BusinessError("CUSTOM_LIST_NO_RESOLVED_STOCKS", str(exc)) from exc
+
+
+@app.get("/api/screening/custom-list-tasks/{job_id}/results")
+def get_custom_list_task_results(
+    job_id: str,
+    _: CurrentUser = Depends(require_read_user),
+    db: MarketDatabase = Depends(get_db),
+):
+    job = db.get_web_screening_job(job_id)
+    if not job:
+        raise BusinessError("CUSTOM_LIST_JOB_NOT_FOUND", "自定义股票列表筛选任务不存在")
+    try:
+        return CustomListJobService(db).build_results(job)
+    except ValueError as exc:
+        raise BusinessError("CUSTOM_LIST_JOB_INVALID", str(exc)) from exc
 
 
 @app.get("/api/screening/tasks")

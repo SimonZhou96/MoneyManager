@@ -23,6 +23,11 @@ if [[ -z "${PYTHON_BIN:-}" ]]; then
     PYTHON_BIN="python3"
   fi
 fi
+
+if [[ $# -eq 0 && "${INTERACTIVE:-1}" == "1" && -t 0 && -t 1 ]]; then
+  exec "$PYTHON_BIN" "interactive_screening.py"
+fi
+
 MARKETS="${MARKETS:-HK,US,A}"
 TIMEFRAME="${TIMEFRAME:-1d}"
 CSV_PATH="${CSV_PATH:-logs/screening_result.csv}"

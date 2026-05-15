@@ -179,8 +179,12 @@ class SearchContextStep(AnalysisStep):
             context.warnings.append(f"热点板块搜索失败: {type(exc).__name__}: {exc}")
             context.sector_documents = []
 
+        for row in context.rows:
+            context.company_documents.setdefault(row.code, [])
+
         batch_size = _company_search_batch_size()
-        for batch in _chunk_rows(context.rows, batch_size):
+        stock_rows = [row for row in context.rows if not row.is_etf]
+        for batch in _chunk_rows(stock_rows, batch_size):
             try:
                 batch_documents = context.search_provider.search_companies_batch(
                     context.market,
@@ -206,6 +210,22 @@ class SearchContextStep(AnalysisStep):
                 context.warnings.append(
                     f"公司事件批量搜索未匹配到 {len(missing_codes)} 只股票: {','.join(missing_codes)}"
                 )
+
+        etf_rows = [row for row in context.rows if row.is_etf]
+        for batch in _chunk_rows(etf_rows, batch_size):
+            try:
+                documents = context.search_provider.search(
+                    _build_etf_theme_query(context.market, batch),
+                    context.settings.search_max_results,
+                )
+            except Exception as exc:
+                codes = [row.code for row in batch]
+                context.warnings.append(
+                    f"ETF主题批量搜索失败: {type(exc).__name__}: {exc}; codes={','.join(codes)}"
+                )
+                documents = []
+            for row in batch:
+                context.company_documents[row.code] = list(documents)
 
 
 class ApplyManualHotNewsStep(AnalysisStep):
@@ -443,6 +463,30 @@ def _company_search_batch_size() -> int:
         return 10
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _build_etf_theme_query(market: str, rows: List[ScreeningSignalRow]) -> str:
+    max_chars = _env_int("SIGNAL_COMPANY_SEARCH_QUERY_MAX_CHARS", 390)
+    max_chars = min(400, max(120, max_chars))
+    prefix = f"{MARKET_NAMES.get(market, market)} ETF 基金 跟踪指数 投资主题 板块 宏观影响: "
+    items = []
+    for row in rows:
+        name = " ".join((row.name or "").split())
+        item = f"{row.code} {name}".strip()
+        if item:
+            items.append(item)
+    query = f"{prefix}{'；'.join(items)}".strip()
+    if len(query) <= max_chars:
+        return query
+    return query[:max_chars].rstrip("；,; ")
+
+
 def _chunk_rows(rows: List[ScreeningSignalRow], batch_size: int) -> List[List[ScreeningSignalRow]]:
     return [rows[start:start + batch_size] for start in range(0, len(rows), batch_size)]
 
@@ -504,15 +548,16 @@ def _fill_hot_sector_fallbacks(
         result.hot_sector_mark = "重点"
         result.matched_hot_sectors = matched
         result.hot_sector_relevance = "100"
-        result.hot_sector_reason = f"股票所属板块/名称与热点板块直接匹配: {'；'.join(matched)}"
+        subject = "ETF/基金主题" if row.is_etf else "股票所属板块/名称"
+        result.hot_sector_reason = f"{subject}与热点板块直接匹配: {'；'.join(matched)}"
     elif result.hot_sectors and row.sector:
         result.hot_sector_mark = "观察"
         result.hot_sector_relevance = "30"
-        result.hot_sector_reason = "当前所属板块未直接匹配热点板块，但保留观察市场轮动"
+        result.hot_sector_reason = "当前所属板块/主题未直接匹配热点板块，但保留观察市场轮动"
     elif result.hot_sectors:
         result.hot_sector_mark = "未知"
         result.hot_sector_relevance = ""
-        result.hot_sector_reason = "股票缺少所属板块，无法稳定判断热点板块归属"
+        result.hot_sector_reason = "缺少所属板块/主题资料，无法稳定判断热点板块归属"
     else:
         result.hot_sector_mark = "未知"
         result.hot_sector_relevance = ""
@@ -650,6 +695,8 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         key=lambda item: -1 if item.reliability_score is None else item.reliability_score,
         reverse=True,
     )
+    stock_ranked = [item for item in ranked if not _is_etf_result(item, rows_by_code)]
+    etf_ranked = [item for item in ranked if _is_etf_result(item, rows_by_code)]
     attention = [item for item in ranked if _numeric(item.reliability_score) >= 60]
     cautious = [
         item for item in ranked
@@ -657,7 +704,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
     ]
     insufficient = [item for item in ranked if _has_information_gap(item, rows_by_code.get(item.code))]
     hot_matched = [item for item in ranked if item.hot_sector_mark in {"重点", "相关"}]
-    event_supported = [item for item in ranked if _meaningful_company_items(item)]
+    event_supported = [item for item in stock_ranked if _meaningful_company_items(item)]
     confirmed_timing = [
         item for item in ranked
         if _has_clear_entry_exit_timing(rows_by_code.get(item.code).conditions_met if rows_by_code.get(item.code) else "")
@@ -665,12 +712,16 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
     overall_strength = _overall_strength(ranked)
     pool_category = _pool_category(ranked, attention, cautious, insufficient)
     hot_sector_text = "；".join(context.hot_sectors) if context.hot_sectors else "暂未识别到明确市场热点"
+    main_force_rows = [row for row in context.rows if _has_main_force_risk(row)]
+    main_force_high = [row for row in main_force_rows if row.main_force_risk_level == "高"]
+    main_force_medium = [row for row in main_force_rows if row.main_force_risk_level == "中"]
+    main_force_signal_text = _main_force_top_signal_text(main_force_rows)
 
     lines = [
         f"# {report_title}",
         "",
         f"**报告日期：** {context.check_date.strftime('%Y年%m月%d日')}",
-        f"**覆盖股票数量：** {len(context.rows)}只",
+        f"**覆盖标的数量：** {len(context.rows)}个（个股 {len(stock_ranked)} 个，ETF/基金 {len(etf_ranked)} 个）",
         "**报告用途：** 辅助判断 / 观察池复核 / 信号解释",
         "**适用读者：** 投研、业务负责人、非技术背景读者",
         "",
@@ -680,14 +731,15 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         "## 一、核心结论",
         "",
-        f"本次共复核 **{len(context.rows)}只股票**。整体来看，当前信号强度为：**{overall_strength}**。",
+        f"本次共复核 **{len(context.rows)}个标的**。整体来看，当前信号强度为：**{overall_strength}**。",
         "",
         "本批股票的主要特点是：",
         "",
-        f"1. **买卖点确认：** 明确出现买入/卖出提示的股票为 **{len(confirmed_timing)}只**；其余股票暂未看到足够明确的买卖点。",
-        f"2. **热点匹配：** 与当前热点方向直接或较强相关的股票为 **{len(hot_matched)}只**；当前识别热点为：**{hot_sector_text}**。",
-        f"3. **公司催化：** 有明确公司新闻、公告或事件支撑的股票为 **{len(event_supported)}只**。",
-        f"4. **信息充分度：** 存在信息缺口或判断依据偏弱的股票为 **{len(insufficient)}只**。",
+        f"1. **买卖点确认：** 明确出现买入/卖出提示的标的为 **{len(confirmed_timing)}个**；其余标的暂未看到足够明确的买卖点。",
+        f"2. **热点匹配：** 与当前热点方向直接或较强相关的标的为 **{len(hot_matched)}个**；当前识别热点为：**{hot_sector_text}**。",
+        f"3. **公司催化：** 有明确公司新闻、公告或事件支撑的个股为 **{len(event_supported)}个**；ETF/基金按主题、指数和宏观环境观察。",
+        f"4. **信息充分度：** 存在信息缺口或判断依据偏弱的标的为 **{len(insufficient)}个**。",
+        f"5. **主力流出风险：** 高风险标的 **{len(main_force_high)}个**，中风险标的 **{len(main_force_medium)}个**；主要风险信号为：**{main_force_signal_text}**。",
         "",
         f"**综合判断：** 本批股票更适合归类为：**{pool_category}**。",
         "",
@@ -695,8 +747,8 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         "## 二、本次复核结果总览",
         "",
-        "| 股票代码 | 股票名称 | 综合评分 | 方向判断 | 热点匹配 | 简明结论 |",
-        "|---|---|---:|---|---|---|",
+        "| 股票代码 | 股票名称 | 综合评分 | 方向判断 | 主力流出风险 | 热点匹配 | 简明结论 |",
+        "|---|---|---:|---|---|---|---|",
     ]
     for item in ranked:
         lines.append(
@@ -705,7 +757,8 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
             f"{item.name or '-'} | "
             f"{_format_score(item.reliability_score)} | "
             f"{_direction_label(item.signal_bias)} | "
-            f"{_hot_mark_label(item.hot_sector_mark)} | "
+            f"{_main_force_risk_for_table(rows_by_code.get(item.code))} | "
+            f"{_hot_mark_label_for_row(item.hot_sector_mark, rows_by_code.get(item.code))} | "
             f"{_table_text(_friendly_text(item.summary or _brief_conclusion(item, rows_by_code.get(item.code))))} |"
         )
 
@@ -713,7 +766,30 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         "---",
         "",
-        "## 三、整体信号解读",
+        "## 三、主力流出风险观察",
+        "",
+        "| 股票代码 | 股票名称 | 风险等级 | 主要风险信号 | 数据覆盖 | 简短说明 |",
+        "|---|---|---|---|---|---|",
+    ])
+    if not main_force_rows:
+        lines.append("| 本批标的 | - | 数据不足 | 暂无 | 外部数据未覆盖 | 主力流出风险数据不足，暂不单独判断 |")
+    for row in main_force_rows:
+        lines.append(
+            "| "
+            f"`{row.code}` | "
+            f"{row.name or '-'} | "
+            f"{_table_text(row.main_force_risk_level or '数据不足')} | "
+            f"{_table_text(row.main_force_risk_signals or '暂无明确主力流出信号')} | "
+            f"{_table_text(_main_force_data_coverage(row))} | "
+            f"{_table_text(row.main_force_risk_summary or '暂无主力流出风险摘要')} |"
+        )
+    lines.extend([
+        "",
+        "**解读：** 主力流出风险不是卖出结论，而是提醒当前买卖力量是否出现转弱迹象。港美股没有A股龙虎榜同口径数据；筹码分布在缺少真实数据时只按成交量分布近似观察。",
+        "",
+        "---",
+        "",
+        "## 四、整体信号解读",
         "",
         "### 1. 买卖点确认情况",
         "",
@@ -728,7 +804,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         f"本次识别的市场热点包括：**{hot_sector_text}**",
         "",
-        "| 股票名称 | 所属方向 | 热点匹配情况 | 解读 |",
+        "| 股票名称 | 所属板块/主题 | 热点匹配情况 | 解读 |",
         "|---|---|---|---|",
     ])
     for item in ranked:
@@ -736,21 +812,23 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         lines.append(
             "| "
             f"{item.name or item.code} | "
-            f"{_table_text((row.sector if row else '') or '未补齐')} | "
-            f"{_hot_mark_label(item.hot_sector_mark)} | "
+            f"{_table_text(_display_sector_theme(row))} | "
+            f"{_hot_mark_label_for_row(item.hot_sector_mark, row)} | "
             f"{_table_text(_friendly_text(item.hot_sector_reason or '暂未看到与热点方向的明确关系'))} |"
         )
 
     lines.extend([
         "",
-        "**解读：** 热点匹配度越高，越可能受到市场资金关注；如果不在当前主线上，即使出现短期异动，也需要降低预期。",
+        "**解读：** 热点匹配度越高，越可能受到市场资金关注；如果不在当前主线上，即使出现短期异动，也需要降低预期。ETF/基金按跟踪主题和板块暴露观察。",
         "",
         "### 3. 公司事件支撑情况",
         "",
         "| 股票名称 | 是否有明确事件 | 事件类型 | 影响判断 |",
         "|---|---|---|---|",
     ])
-    for item in ranked:
+    if not stock_ranked:
+        lines.append("| 无个股样本 | 不适用 | - | - |")
+    for item in stock_ranked:
         lines.append(
             "| "
             f"{item.name or item.code} | "
@@ -761,11 +839,11 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
 
     lines.extend([
         "",
-        "**解读：** 有明确公司事件支撑的信号，通常可信度更高；如果只有市场异动、缺少事件解释，后续持续性需要谨慎评估。",
+        "**解读：** 有明确公司事件支撑的个股信号，通常可信度更高；ETF/基金不按公司事件判断，而是看跟踪主题、行业景气和宏观环境。",
         "",
         "---",
         "",
-        "## 四、宏观与市场环境影响",
+        "## 五、宏观与市场环境影响",
         "",
         "### 1. 当前宏观背景",
         "",
@@ -799,10 +877,13 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         "---",
         "",
-        "## 五、个股简评",
+        "## 六、个股观察",
     ])
 
-    for index, item in enumerate(ranked[:20], start=1):
+    if not stock_ranked:
+        lines.extend(["", "本次没有普通股票样本。"])
+
+    for index, item in enumerate(stock_ranked[:20], start=1):
         row = rows_by_code.get(item.code)
         score = _format_score(item.reliability_score)
         positives = [_friendly_text(value) for value in (item.positive_factors or ["暂无明确支持因素"])]
@@ -815,9 +896,10 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
             f"### {index}. {item.name or item.code}：{_one_line_position(item, row)}",
             "",
             f"**股票代码：** `{item.code}`",
+            f"**所属板块/主题：** {_display_sector_theme(row)}",
             f"**综合评分：** {score}",
             f"**方向判断：** {_direction_label(item.signal_bias)}",
-            f"**热点匹配：** {_hot_mark_label(item.hot_sector_mark)}",
+            f"**热点匹配：** {_hot_mark_label_for_row(item.hot_sector_mark, row)}",
             "",
             "**核心结论：**",
             "",
@@ -830,6 +912,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         lines.extend(["", "**主要风险因素：**"])
         for value in risks[:5]:
             lines.append(f"- {value}")
+        _append_main_force_detail(lines, row)
         if gap_reasons:
             lines.extend(["", "**信息缺口：**"])
             for value in gap_reasons[:5]:
@@ -845,7 +928,57 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         "---",
         "",
-        "## 六、风险提示",
+        "## 七、ETF/基金观察",
+    ])
+
+    if not etf_ranked:
+        lines.extend(["", "本次没有 ETF/基金样本。"])
+
+    for index, item in enumerate(etf_ranked[:20], start=1):
+        row = rows_by_code.get(item.code)
+        score = _format_score(item.reliability_score)
+        positives = [_friendly_text(value) for value in (item.positive_factors or ["暂无明确支持因素"])]
+        risks = [_friendly_text(value) for value in (item.risk_factors or ["暂无明确风险摘要"])]
+        timing_text = _entry_exit_timing_text(row.conditions_met if row else "")
+        lines.extend([
+            "",
+            f"### {index}. {item.name or item.code}：{_one_line_position(item, row)}",
+            "",
+            f"**代码：** `{item.code}`",
+            f"**所属板块/主题：** {_display_sector_theme(row)}",
+            f"**综合评分：** {score}",
+            f"**方向判断：** {_direction_label(item.signal_bias)}",
+            f"**热点匹配：** {_hot_mark_label_for_row(item.hot_sector_mark, row)}",
+            "",
+            "**核心结论：**",
+            "",
+            _friendly_text(item.summary or _brief_conclusion(item, row)),
+            "",
+            "**主要支持因素：**",
+        ])
+        for value in positives[:5]:
+            lines.append(f"- {value}")
+        lines.extend(["", "**主要风险因素：**"])
+        for value in risks[:5]:
+            lines.append(f"- {value}")
+        _append_main_force_detail(lines, row)
+        gap_reasons = _information_gap_reasons(item, row)
+        if gap_reasons:
+            lines.extend(["", "**信息缺口：**"])
+            for value in gap_reasons[:5]:
+                lines.append(f"- {value}")
+        lines.extend([
+            "",
+            f"**买卖点判断：** {timing_text}",
+            "**公司事件：** 不适用，按基金/ETF主题观察",
+            f"**跟踪建议：** {_tracking_suggestion(item, row)}",
+        ])
+
+    lines.extend([
+        "",
+        "---",
+        "",
+        "## 八、风险提示",
         "",
         "本次报告需要重点关注以下风险：",
         "",
@@ -864,9 +997,12 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "5. **信息不足风险**  ",
         "   对于缺少有效新闻、公告或数据支撑的个股，应降低判断权重。",
         "",
+        "6. **主力资金流出风险**  ",
+        "   如果同时出现放量下跌、资金净流出、盘口卖盘压制或高位筹码松动，需要降低追高权重，等待卖压缓和后再观察。",
+        "",
         "---",
         "",
-        "## 七、后续跟踪计划",
+        "## 九、后续跟踪计划",
         "",
         "后续建议重点跟踪以下三类变化：",
         "",
@@ -884,7 +1020,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         "---",
         "",
-        "## 八、最终判断",
+        "## 十、最终判断",
         "",
         "**操作建议分类：**",
         "",
@@ -896,7 +1032,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         "**一句话总结：**",
         "",
-        f"本批股票当前信号为 **{overall_strength}**，主要原因是：买卖点确认数量为 {len(confirmed_timing)} 只，热点匹配数量为 {len(hot_matched)} 只，公司事件支撑数量为 {len(event_supported)} 只。",
+        f"本批标的当前信号为 **{overall_strength}**，主要原因是：买卖点确认数量为 {len(confirmed_timing)} 个，热点匹配数量为 {len(hot_matched)} 个，公司事件支撑的个股数量为 {len(event_supported)} 个。",
         "",
         "**当前建议：**",
         "",
@@ -921,11 +1057,6 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "- **看跌：** 综合因素偏负面",
         "- **回避：** 风险明显，不建议纳入跟踪重点",
     ])
-
-    if context.warnings:
-        lines.extend(["", "## 执行警告"])
-        for warning in context.warnings:
-            lines.append(f"- {warning}")
 
     lines.extend(["", "> 该分析仅用于辅助判断，不构成投资建议。", ""])
     return "\n".join(lines)
@@ -987,6 +1118,97 @@ def _hot_mark_label(value: str) -> str:
     if not value:
         return "未知"
     return value
+
+
+def _is_etf_result(
+    item: SignalAnalysisResult,
+    rows_by_code: Dict[str, ScreeningSignalRow],
+) -> bool:
+    row = rows_by_code.get(item.code)
+    return bool(row and row.is_etf)
+
+
+def _display_sector_theme(row: Optional[ScreeningSignalRow]) -> str:
+    if row is None:
+        return "资料暂缺"
+    value = (row.sector or "").strip()
+    if value:
+        return value
+    return "主题资料暂缺" if row.is_etf else "资料暂缺"
+
+
+def _has_main_force_risk(row: Optional[ScreeningSignalRow]) -> bool:
+    if row is None:
+        return False
+    return any([
+        row.main_force_risk_level,
+        row.main_force_risk_score,
+        row.main_force_risk_signals,
+        row.main_force_risk_summary,
+        row.main_force_missing_data,
+    ])
+
+
+def _main_force_risk_for_table(row: Optional[ScreeningSignalRow]) -> str:
+    if not _has_main_force_risk(row):
+        return "数据不足"
+    score = f"（{row.main_force_risk_score}分）" if row and row.main_force_risk_score else ""
+    return f"{row.main_force_risk_level or '数据不足'}{score}"
+
+
+def _main_force_top_signal_text(rows: List[ScreeningSignalRow]) -> str:
+    signals: List[str] = []
+    for row in rows:
+        if row.main_force_risk_signals:
+            signals.extend([item.strip() for item in row.main_force_risk_signals.split("；") if item.strip()])
+    deduped = _dedupe(signals)
+    return "；".join(deduped[:5]) if deduped else "暂无明确主力流出信号"
+
+
+def _main_force_data_coverage(row: Optional[ScreeningSignalRow]) -> str:
+    if row is None:
+        return "数据不足"
+    items = [
+        row.main_force_fund_flow_data,
+        row.main_force_order_book_data,
+        row.main_force_lhb_data,
+        row.main_force_chip_data,
+    ]
+    values = [item for item in items if item]
+    return "；".join(values) if values else "数据不足"
+
+
+def _append_main_force_detail(lines: List[str], row: Optional[ScreeningSignalRow]) -> None:
+    if row is None or not _has_main_force_risk(row):
+        lines.extend(["", "**主力流出风险：** 数据不足"])
+        return
+    score = f"（{row.main_force_risk_score}分）" if row.main_force_risk_score else ""
+    lines.extend([
+        "",
+        f"**主力流出风险：** {row.main_force_risk_level or '数据不足'}{score}",
+    ])
+    if row.main_force_risk_signals:
+        lines.extend(["", "**触发信号：**"])
+        for value in row.main_force_risk_signals.split("；")[:5]:
+            value = value.strip()
+            if value:
+                lines.append(f"- {value}")
+    if row.main_force_risk_summary:
+        lines.extend(["", f"**风险说明：** {_friendly_text(row.main_force_risk_summary)}"])
+    gap_items = [item.strip() for item in row.main_force_missing_data.split("；") if item.strip()]
+    if gap_items:
+        lines.extend(["", "**数据缺口：**"])
+        for value in gap_items[:5]:
+            lines.append(f"- {value}")
+
+
+def _hot_mark_label_for_row(value: str, row: Optional[ScreeningSignalRow]) -> str:
+    label = _hot_mark_label(value)
+    if label != "未知":
+        return label
+    if row is not None and row.is_etf:
+        return "主题资料暂缺"
+    return "行业资料不足"
 
 
 def _event_status(item: SignalAnalysisResult) -> str:
@@ -1085,6 +1307,9 @@ def _brief_conclusion(
 ) -> str:
     timing = _entry_exit_timing_text(row.conditions_met if row else "")
     hot = item.hot_sector_reason or "热点方向暂未形成明确支撑"
+    if row is not None and row.is_etf:
+        theme = _display_sector_theme(row)
+        return f"{timing}；{_friendly_text(hot)}；按ETF/基金主题观察，当前主题为{theme}。"
     event = _join_or_default(item.company_events, "公司事件暂不明确")
     return f"{timing}；{_friendly_text(hot)}；{event}。"
 
@@ -1094,6 +1319,12 @@ def _tracking_suggestion(
     row: Optional[ScreeningSignalRow],
 ) -> str:
     score = _numeric(item.reliability_score)
+    if row is not None and row.is_etf:
+        if score >= 80 and item.hot_sector_mark in {"重点", "相关"}:
+            return "重点跟踪，观察主题热度、指数走势和宏观环境是否继续共振"
+        if score >= 60:
+            return "普通观察，关注跟踪主题是否持续受到资金关注"
+        return "暂不提高优先级，等待主题热度或买卖点进一步确认"
     if score >= 80 and item.hot_sector_mark in {"重点", "相关"}:
         return "重点跟踪，等待买卖点和公司事件继续确认"
     if score >= 60:
@@ -1165,10 +1396,15 @@ def _information_gap_reasons(
     row: Optional[ScreeningSignalRow],
 ) -> List[str]:
     reasons: List[str] = []
-    if not item.company_hot_news:
-        reasons.append("缺少明确公司新闻")
-    if not item.company_events:
-        reasons.append("缺少明确公司事件")
+    is_etf = bool(row is not None and row.is_etf)
+    if is_etf:
+        if not item.company_hot_news and not item.market_hot_news:
+            reasons.append("缺少明确ETF主题或基金新闻")
+    else:
+        if not item.company_hot_news:
+            reasons.append("缺少明确公司新闻")
+        if not item.company_events:
+            reasons.append("缺少明确公司事件")
     if item.news_impact == "信息不足":
         reasons.append("目前信息不足，无法判断新闻方向")
     if not item.news_sources and not item.source_urls:
@@ -1176,9 +1412,9 @@ def _information_gap_reasons(
     if item.hot_sector_mark in {"未知", "无明确关联"} or (
         not item.matched_hot_sectors and item.hot_sector_mark not in {"重点", "相关"}
     ):
-        reasons.append("热点板块未直接匹配")
+        reasons.append("热点主题未直接匹配" if is_etf else "热点板块未直接匹配")
     if row is not None and not row.sector:
-        reasons.append("原始 CSV 缺少所属板块")
+        reasons.append("原始 CSV 缺少主题资料" if is_etf else "原始 CSV 缺少所属板块")
     if item.confidence_score is not None and item.confidence_score < 40:
         reasons.append("判断信心偏低")
     return _dedupe(reasons)

@@ -6,7 +6,7 @@
 流程：
 1. 捞取港股、A股、美股股票池数据，写入数据库
 2. 对每个市场的股票池分别执行筛选逻辑
-3. 将满足条件的股票导出为 CSV，并额外拆分非 ETF / ETF 两份 CSV
+3. 将满足条件的股票导出为主 CSV，并标注标的类型（股票 / ETF）
 4. 通过飞书 Webhook 发送结果
 
 用法:
@@ -29,6 +29,9 @@ cron 示例（每天 18:00 执行，收盘后）:
     LLM_API_BASE, LLM_API_KEY, LLM_MODEL  OpenAI-compatible 模型配置
     CODEX_API_BASE, CODEX_API_KEY, CODEX_LLM_MODEL, CODEX_REASONING_EFFORT  Codex Responses 配置
     DEEPSEEK_API_BASE, DEEPSEEK_API_KEY, DEEPSEEK_LLM_MODEL  DeepSeek Chat Completions 配置
+    ENABLE_MAIN_FORCE_RISK_ANALYSIS 是否启用主力流出风险分析，默认 1
+    MAIN_FORCE_ENABLE_EXTERNAL_DATA 是否启用资金/盘口/龙虎榜/筹码外部数据，默认 0
+    STOCK_NAME_ENABLE_EXTERNAL_ENRICHMENT  是否对通过股票调用外部名称补齐，默认 1
     SECTOR_SYNC_MEMBERSHIPS  是否同步完整行业板块成分，默认 1
     SECTOR_ENABLE_EXTERNAL_ENRICHMENT  是否对通过股票调用外部板块补齐，默认 1
 """
@@ -69,6 +72,8 @@ from fetch_stock_pools import (
     fetch_and_save_recent_ipos,
     get_db_config,
 )
+from kline_fetcher import KlineFetcherFactory
+from main_force_risk import MainForceRiskServiceFactory
 from market import market_label, normalize_market
 from api.screen_service import get_strategy_condition_labels, run_screening_task
 from signal_analysis.service import env_flag, run_signal_analysis_for_market
@@ -79,6 +84,7 @@ from sector_resolver import (
     sector_info_to_membership_rows,
     sector_info_to_stock_row,
 )
+from stock_name_resolver import StockNameResolver
 from timeframe import parse_timeframe
 
 
@@ -208,7 +214,7 @@ def has_merged_pool_stocks(db: MarketDatabase, market: str) -> bool:
 
 
 def get_etf_codes(db: MarketDatabase, market: str) -> set[str]:
-    """获取指定市场 ETF 股票池中的代码集合，用于导出拆分。"""
+    """获取指定市场 ETF 股票池中的代码集合，用于标注标的类型。"""
     return {
         (s.get("code") or "").strip()
         for s in db.get_stock_pool(market, "etf", limit=None)
@@ -223,6 +229,49 @@ def get_market_etf_codes(mysql_config: MySqlConfig, market: str) -> set[str]:
         return get_etf_codes(db, market)
     finally:
         db.close()
+
+
+ETF_NAME_KEYWORDS = (
+    "ETF",
+    "ETN",
+    "基金",
+    "指数基金",
+    "交易型开放式指数基金",
+    "Exchange Traded Fund",
+)
+
+
+def infer_instrument_type(record: dict, etf_codes: Optional[set[str]] = None) -> str:
+    """Infer whether the screening record is a stock or ETF/fund-like target."""
+    code = (record.get("code") or record.get("股票代码") or "").strip()
+    if etf_codes and code in etf_codes:
+        return "ETF"
+
+    explicit = (record.get("instrument_type") or record.get("标的类型") or "").strip().upper()
+    if explicit in {"ETF", "基金", "FUND"}:
+        return "ETF"
+    if explicit in {"股票", "STOCK"}:
+        return "股票"
+
+    sector_text = " ".join(
+        str(record.get(key) or "")
+        for key in ("sector", "industry", "所属板块")
+    ).upper()
+    if sector_text.strip() == "ETF" or " ETF" in f" {sector_text} ":
+        return "ETF"
+
+    name_text = str(record.get("name") or record.get("名称") or "")
+    name_upper = name_text.upper()
+    if any(keyword.upper() in name_upper for keyword in ETF_NAME_KEYWORDS):
+        return "ETF"
+    return "股票"
+
+
+def annotate_records_with_instrument_type(records: List[dict], etf_codes: Optional[set[str]] = None) -> List[dict]:
+    """Fill records with a stable CSV-facing instrument type."""
+    for record in records:
+        record["instrument_type"] = infer_instrument_type(record, etf_codes)
+    return records
 
 
 def _apply_sector_info_to_records(records: List[dict], sector_map: dict[str, SectorInfo]) -> List[dict]:
@@ -240,6 +289,53 @@ def _apply_sector_info_to_records(records: List[dict], sector_map: dict[str, Sec
             record["industry"] = industry
         if info.source:
             record["sector_source"] = info.source
+    return records
+
+
+def enrich_records_with_names(
+    mysql_config: MySqlConfig,
+    task_id: str,
+    market: str,
+    records: List[dict],
+) -> List[dict]:
+    """
+    Best-effort display-name enrichment for passed records.
+
+    HK/A names are shown in Chinese when a Chinese source is available; the
+    original provider name is retained when no Chinese name can be found.
+    """
+    if not records:
+        return records
+    if normalize_market(market) not in {"A", "HK"}:
+        return records
+
+    db = MarketDatabase(mysql_config)
+    try:
+        resolver = StockNameResolver.default(
+            db=db,
+            include_external=env_flag("STOCK_NAME_ENABLE_EXTERNAL_ENRICHMENT", True),
+        )
+        before = {record.get("code"): record.get("name") for record in records}
+        resolver.enrich_records(market, records)
+
+        update_rows = []
+        stock_rows = []
+        for record in records:
+            code = (record.get("code") or "").strip()
+            name = (record.get("name") or "").strip()
+            if not code or not name or name == before.get(code):
+                continue
+            update_rows.append({"code": code, "name": name})
+            stock_rows.append({"code": code, "name": name, "source": record.get("name_source") or "name_resolver"})
+
+        if update_rows:
+            db.update_screening_result_names(task_id, market, update_rows)
+            db.upsert_stocks(market, stock_rows)
+            print(f"[名称补齐] {market_label(market)} 已补齐中文名称: {len(update_rows)} 条")
+    except Exception as exc:
+        print(f"[名称补齐] {market_label(market)} 失败但不影响 CSV/飞书发送: {type(exc).__name__}: {exc}")
+    finally:
+        db.close()
     return records
 
 
@@ -297,6 +393,122 @@ def enrich_records_with_sectors(
     return records
 
 
+def enrich_records_with_main_force_risks(
+    mysql_config: MySqlConfig,
+    task_id: str,
+    market: str,
+    timeframe: str,
+    records: List[dict],
+    csv_path: str,
+    check_date: date,
+) -> List[dict]:
+    """Best-effort main-force outflow risk enrichment for passed records."""
+    if not records:
+        return records
+    if not env_flag("ENABLE_MAIN_FORCE_RISK_ANALYSIS", True):
+        return records
+
+    db = MarketDatabase(mysql_config)
+    service = None
+    try:
+        db.init_main_force_risk_schema()
+        fetchers = KlineFetcherFactory.create_fetcher_chain(db=db)
+        service = MainForceRiskServiceFactory.from_env(kline_fetchers=fetchers, market=market)
+        results = service.analyze_records(
+            market=market,
+            timeframe=timeframe,
+            records=records,
+        )
+        detail_rows = [
+            result.to_db_row(
+                task_id=task_id,
+                check_date=check_date,
+                csv_path=csv_path,
+            )
+            for result in results
+        ]
+        db.upsert_main_force_risk_results(detail_rows)
+        db.update_screening_result_main_force_risks(
+            task_id,
+            market,
+            [
+                {
+                    "code": result.code,
+                    "risk_level": result.risk_level,
+                    "risk_score": result.risk_score,
+                    "risk_summary": result.risk_summary,
+                    "triggered_signals": [signal.to_dict() for signal in result.triggered_signals],
+                    "provider_status": {
+                        key: status.to_dict() for key, status in result.data_status.items()
+                    },
+                }
+                for result in results
+            ],
+        )
+        print(f"[主力风险] {market_label(market)} 已分析: {len(results)} 条")
+    except Exception as exc:
+        print(f"[主力风险] {market_label(market)} 失败但不影响 CSV/飞书发送: {type(exc).__name__}: {exc}")
+    finally:
+        if service is not None:
+            service.close()
+        db.close()
+    return records
+
+
+def load_passed_screening_records(mysql_config: MySqlConfig, task_id: str, market: str) -> List[dict]:
+    """Load passed screening rows and convert rule details into CSV-facing fields."""
+    db = MarketDatabase(mysql_config)
+    sql = """
+        SELECT code, name, filter_details, sector, industry, market_cap, pe_ratio
+        FROM screening_results
+        WHERE task_id=%s AND is_passed=1
+        ORDER BY code
+    """
+    try:
+        with db.conn.cursor() as cursor:
+            cursor.execute(sql, (task_id,))
+            rows = cursor.fetchall() or []
+    finally:
+        db.close()
+
+    passed = []
+    for row in rows:
+        code, name, fd_raw, sector, industry, market_cap, pe_ratio = row
+        conditions = []
+        zuoyi_summary = {}
+        if fd_raw:
+            try:
+                fd = json.loads(fd_raw) if isinstance(fd_raw, str) else fd_raw
+                if isinstance(fd, list):
+                    for d in fd:
+                        if d.get("result") == "pass":
+                            conditions.extend(
+                                get_strategy_condition_labels(
+                                    d.get("filter_name", ""),
+                                    d.get("details") if isinstance(d.get("details"), dict) else {},
+                                )
+                            )
+                        if d.get("filter_name") == "ZuoYiStrategizer":
+                            extracted_zuoyi = _extract_zuoyi_csv_fields(d)
+                            if extracted_zuoyi:
+                                zuoyi_summary = extracted_zuoyi
+            except Exception:
+                pass
+        record = {
+            "code": code,
+            "name": name or code,
+            "market": market,
+            "sector": sector or industry or "",
+            "industry": industry or "",
+            "market_cap": market_cap,
+            "pe_ratio": pe_ratio,
+            "conditions_met": "|".join(conditions) if conditions else "",
+        }
+        record.update(zuoyi_summary)
+        passed.append(record)
+    return passed
+
+
 def run_screening_for_market(
     mysql_config: MySqlConfig,
     market: str,
@@ -345,56 +557,7 @@ def run_screening_for_market(
         chain_key=chain_key,
     )
 
-    # 查询通过筛选的股票
-    db2 = MarketDatabase(mysql_config)
-    sql = """
-        SELECT code, name, filter_details, sector, industry, market_cap, pe_ratio
-        FROM screening_results
-        WHERE task_id=%s AND is_passed=1
-        ORDER BY code
-    """
-    with db2.conn.cursor() as cursor:
-        cursor.execute(sql, (task_id,))
-        rows = cursor.fetchall() or []
-    db2.close()
-
-    passed = []
-    for row in rows:
-        code, name, fd_raw, sector, industry, market_cap, pe_ratio = row
-        conditions = []
-        zuoyi_summary = {}
-        if fd_raw:
-            try:
-                fd = json.loads(fd_raw) if isinstance(fd_raw, str) else fd_raw
-                if isinstance(fd, list):
-                    for d in fd:
-                        if d.get("result") == "pass":
-                            conditions.extend(
-                                get_strategy_condition_labels(
-                                    d.get("filter_name", ""),
-                                    d.get("details") if isinstance(d.get("details"), dict) else {},
-                                )
-                            )
-                        if d.get("filter_name") == "ZuoYiStrategizer":
-                            extracted_zuoyi = _extract_zuoyi_csv_fields(d)
-                            if extracted_zuoyi:
-                                zuoyi_summary = extracted_zuoyi
-            except Exception:
-                pass
-        record = {
-            "code": code,
-            "name": name or code,
-            "market": market,
-            "sector": sector or industry or "",
-            "industry": industry or "",
-            "market_cap": market_cap,
-            "pe_ratio": pe_ratio,
-            "conditions_met": "|".join(conditions) if conditions else "",
-        }
-        record.update(zuoyi_summary)
-        passed.append(record)
-    enrich_records_with_sectors(mysql_config, task_id, market, passed)
-    return task_id, passed
+    return task_id, load_passed_screening_records(mysql_config, task_id, market)
 
 
 # ------------------------------------------------------------------
@@ -411,6 +574,19 @@ ZUOYI_CSV_COLUMNS = [
     ("左一中位线日期", "zuoyi_median_date"),
     ("左一突破日期", "zuoyi_breakout_date"),
     ("左一突破用时", "zuoyi_bars_to_breakout"),
+]
+
+
+MAIN_FORCE_CSV_COLUMNS = [
+    ("主力流出风险", "main_force_risk_level_text"),
+    ("主力风险分", "main_force_risk_score_text"),
+    ("主力风险信号", "main_force_risk_signals_text"),
+    ("主力风险说明", "main_force_risk_summary"),
+    ("资金流向数据", "main_force_fund_flow_data_text"),
+    ("盘口数据", "main_force_order_book_data_text"),
+    ("龙虎榜数据", "main_force_lhb_data_text"),
+    ("筹码分布数据", "main_force_chip_data_text"),
+    ("数据不足项", "main_force_missing_data_text"),
 ]
 
 
@@ -489,7 +665,7 @@ def _extract_zuoyi_csv_fields(filter_detail: dict) -> dict:
 def write_screening_csv(records: List[dict], csv_path: str) -> None:
     """
     将满足条件的股票写入 CSV。
-    列：code, 市场, 名称, pe, 市值, 所属板块, 满足的条件。
+    列：code, 市场, 名称, 标的类型, pe, 市值, 所属板块, 满足的条件。
     若本次 records 中存在左一战法命中明细，则追加左一支撑区间列。
     """
     os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
@@ -497,11 +673,13 @@ def write_screening_csv(records: List[dict], csv_path: str) -> None:
         ("股票代码", "code"),
         ("市场", "market_label"),
         ("名称", "name"),
+        ("标的类型", "instrument_type"),
         ("pe", "pe_ratio"),
         ("市值", "market_cap"),
         ("所属板块", "sector"),
         ("满足的条件", "conditions_met"),
     ]
+    columns.extend(MAIN_FORCE_CSV_COLUMNS)
     if any(r.get("zuoyi_support_zone") for r in records):
         columns.extend(ZUOYI_CSV_COLUMNS)
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
@@ -512,6 +690,8 @@ def write_screening_csv(records: List[dict], csv_path: str) -> None:
             for _, key in columns:
                 if key == "market_label":
                     val = market_label(r.get("market", ""))
+                elif key == "instrument_type":
+                    val = infer_instrument_type(r)
                 else:
                     val = r.get(key)
                 if val is None:
@@ -520,26 +700,6 @@ def write_screening_csv(records: List[dict], csv_path: str) -> None:
                     val = f"{val:.4g}" if val == val else ""  # 避免 nan
                 row.append(str(val) if val != "" else "")
             w.writerow(row)
-
-
-def write_split_screening_csvs(records: List[dict], csv_base_path: str, etf_codes: set[str]) -> Tuple[str, str]:
-    """
-    按 ETF 归属拆分写入两份 CSV。
-
-    Returns:
-        (no_etf_csv_path, etf_only_csv_path)
-    """
-    no_etf_records = [r for r in records if (r.get("code") or "").strip() not in etf_codes]
-    etf_records = [r for r in records if (r.get("code") or "").strip() in etf_codes]
-
-    if csv_base_path.endswith(".csv"):
-        csv_base_path = csv_base_path[:-4]
-    no_etf_path = f"{csv_base_path}_no_etf.csv"
-    etf_only_path = f"{csv_base_path}_etf_only.csv"
-
-    write_screening_csv(no_etf_records, no_etf_path)
-    write_screening_csv(etf_records, etf_only_path)
-    return no_etf_path, etf_only_path
 
 
 # ------------------------------------------------------------------
@@ -570,6 +730,92 @@ def get_default_screening_params() -> dict:
         "rsi_oversold_threshold": 30.0,
         "rsi_overbought_threshold": 70.0,
     }
+
+
+class ScreeningPostProcessor:
+    """Shared passed-stock CSV, main-force risk, and AI report processing."""
+
+    def __init__(
+        self,
+        mysql_config: MySqlConfig,
+        csv_base: str,
+        today_str: str,
+        enable_ai_analysis: bool = False,
+    ):
+        self.mysql_config = mysql_config
+        self.csv_base = csv_base
+        self.today_str = today_str
+        self.enable_ai_analysis = bool(enable_ai_analysis)
+
+    def process(
+        self,
+        market: str,
+        timeframe: str,
+        task_id: str,
+        passed: List[dict],
+    ) -> List[str]:
+        csv_paths: List[str] = []
+        if not passed:
+            print(f"  {market_label(market)} 无满足条件的股票，不生成 CSV")
+            return csv_paths
+
+        enrich_records_with_names(self.mysql_config, task_id, market, passed)
+        enrich_records_with_sectors(self.mysql_config, task_id, market, passed)
+        etf_codes = get_market_etf_codes(self.mysql_config, market)
+        annotate_records_with_instrument_type(passed, etf_codes)
+        csv_path = f"{self.csv_base}_{self.today_str}_{market}.csv"
+        check_date = date.fromisoformat(self.today_str)
+        enrich_records_with_main_force_risks(
+            mysql_config=self.mysql_config,
+            task_id=task_id,
+            market=market,
+            timeframe=timeframe,
+            records=passed,
+            csv_path=csv_path,
+            check_date=check_date,
+        )
+        write_screening_csv(passed, csv_path)
+        csv_paths.append(csv_path)
+        print(f"✓ CSV 已导出: {csv_path}")
+
+        if self.enable_ai_analysis:
+            self._run_ai_analysis(market, task_id, csv_path, check_date, csv_paths)
+        return csv_paths
+
+    def _run_ai_analysis(
+        self,
+        market: str,
+        task_id: str,
+        csv_path: str,
+        check_date: date,
+        csv_paths: List[str],
+    ) -> None:
+        try:
+            analysis_result = run_signal_analysis_for_market(
+                mysql_config=self.mysql_config,
+                task_id=task_id,
+                market=market,
+                csv_path=csv_path,
+                check_date=check_date,
+                enabled=True,
+            )
+            for warning in analysis_result.warnings:
+                print(f"[AI分析] {market_label(market)}: {warning}")
+            results_by_code = getattr(analysis_result, "results_by_code", {}) or {}
+            if results_by_code:
+                try:
+                    write_analysis_columns_to_csv(csv_path, results_by_code)
+                    print(f"✓ AI 辅助分析已写回主 CSV: {csv_path}")
+                except Exception as e:
+                    print(f"[AI分析] {market_label(market)} 主 CSV 写回失败但不影响飞书发送: {type(e).__name__}: {e}")
+            if analysis_result.artifact_paths:
+                csv_paths.extend(analysis_result.artifact_paths)
+                for artifact_path in analysis_result.artifact_paths:
+                    print(f"✓ AI 辅助分析文件已导出: {artifact_path}")
+            elif analysis_result.skipped_reason:
+                print(f"[AI分析] {market_label(market)} 跳过: {analysis_result.skipped_reason}")
+        except Exception as e:
+            print(f"[AI分析] {market_label(market)} 失败但不影响 CSV/飞书发送: {type(e).__name__}: {e}")
 
 
 def run_market_screening_worker(
@@ -616,52 +862,17 @@ def run_market_screening_worker(
 
         print(f"  {market_label(market)}: {len(passed)} 只通过")
 
-        csv_paths: List[str] = []
-        if passed:
-            csv_path = f"{csv_base}_{today_str}_{market}.csv"
-            write_screening_csv(passed, csv_path)
-            csv_paths.append(csv_path)
-            print(f"✓ CSV 已导出: {csv_path}")
-
-            no_etf_path, etf_only_path = write_split_screening_csvs(
-                records=passed,
-                csv_base_path=csv_path,
-                etf_codes=get_market_etf_codes(mysql_config, market),
-            )
-            csv_paths.extend([no_etf_path, etf_only_path])
-            print(f"✓ 非 ETF CSV 已导出: {no_etf_path}")
-            print(f"✓ ETF CSV 已导出: {etf_only_path}")
-
-            if enable_ai_analysis:
-                try:
-                    analysis_result = run_signal_analysis_for_market(
-                        mysql_config=mysql_config,
-                        task_id=task_id,
-                        market=market,
-                        csv_path=csv_path,
-                        check_date=date.fromisoformat(today_str),
-                        enabled=True,
-                    )
-                    for warning in analysis_result.warnings:
-                        print(f"[AI分析] {market_label(market)}: {warning}")
-                    results_by_code = getattr(analysis_result, "results_by_code", {}) or {}
-                    if results_by_code:
-                        try:
-                            write_analysis_columns_to_csv(no_etf_path, results_by_code)
-                            write_analysis_columns_to_csv(etf_only_path, results_by_code)
-                            print(f"✓ AI 辅助分析已同步到拆分 CSV: {no_etf_path}, {etf_only_path}")
-                        except Exception as e:
-                            print(f"[AI分析] {market_label(market)} 拆分 CSV 写回失败但不影响飞书发送: {type(e).__name__}: {e}")
-                    if analysis_result.artifact_paths:
-                        csv_paths.extend(analysis_result.artifact_paths)
-                        for artifact_path in analysis_result.artifact_paths:
-                            print(f"✓ AI 辅助分析文件已导出: {artifact_path}")
-                    elif analysis_result.skipped_reason:
-                        print(f"[AI分析] {market_label(market)} 跳过: {analysis_result.skipped_reason}")
-                except Exception as e:
-                    print(f"[AI分析] {market_label(market)} 失败但不影响 CSV/飞书发送: {type(e).__name__}: {e}")
-        else:
-            print(f"  {market_label(market)} 无满足条件的股票，不生成 CSV")
+        csv_paths = ScreeningPostProcessor(
+            mysql_config=mysql_config,
+            csv_base=csv_base,
+            today_str=today_str,
+            enable_ai_analysis=enable_ai_analysis,
+        ).process(
+            market=market,
+            timeframe=timeframe,
+            task_id=task_id,
+            passed=passed,
+        )
 
         return MarketScreeningResult(
             market=market,
@@ -693,8 +904,9 @@ def main():
     parser.add_argument("--markets", default="HK,A,US", help="市场列表，逗号分隔")
     parser.add_argument("--pools", default="best,index,industry,ipo,etf", help="股票池类型")
     parser.add_argument("--timeframe", default="1d", help="K线周期")
-    parser.add_argument("--csv", default="logs/screening_result.csv", help="CSV 输出路径（会按日期+市场拆分为 screening_result_2026-02-27_HK.csv，并额外生成 _no_etf/_etf_only 两份）")
+    parser.add_argument("--csv", default="logs/screening_result.csv", help="CSV 输出路径（会按日期+市场生成 screening_result_2026-02-27_HK.csv，主表内用“标的类型”区分股票/ETF）")
     parser.add_argument("--market-workers", type=int, default=3, help="并行筛选市场的 worker 数量")
+    parser.add_argument("--chain-key", default=None, help="筛选规则链 key（默认使用各市场启用的默认链）")
     ai_group = parser.add_mutually_exclusive_group()
     ai_group.add_argument("--ai-analysis", dest="enable_ai_analysis", action="store_true", default=None, help="启用搜索+模型辅助分析")
     ai_group.add_argument("--no-ai-analysis", dest="enable_ai_analysis", action="store_false", help="关闭搜索+模型辅助分析")
@@ -740,6 +952,8 @@ def main():
 
     # 2. 对每个市场筛选 + 分市场导出 CSV + 分市场发送飞书
     params = get_default_screening_params()
+    if args.chain_key:
+        params["chain_key"] = args.chain_key
     webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
 
     # 解析 CSV 输出路径：logs/screening_result.csv -> logs/screening_result
@@ -773,6 +987,7 @@ def main():
                 today_str,
                 False,
                 enable_ai_analysis,
+                args.chain_key,
             ): market
             for market in markets
         }

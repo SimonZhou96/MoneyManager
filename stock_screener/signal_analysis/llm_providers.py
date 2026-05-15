@@ -174,7 +174,11 @@ class SignalAnalysisPromptBuilder:
             "market": market,
             "task": (
                 "评估这些已经通过技术规则筛选的股票信号可靠性；不要改变筛选结果，只做辅助判断。"
-                "请从 market_context 提炼市场热点新闻，从 company_context 提炼公司热点新闻，"
+                "每条 signal 都包含 instrument_type，取值为 股票 或 ETF。"
+                "股票需要重点看公司新闻、公告、业绩、订单、监管、并购等公司事件；"
+                "ETF 不做公司事件判断，请按跟踪指数、投资主题、板块暴露和宏观环境判断，"
+                "ETF 的 company_events 和 company_hot_news 如无明确基金/主题新闻可以留空。"
+                "请从 market_context 提炼市场热点新闻，从 company_context 提炼股票公司新闻或 ETF 主题上下文，"
                 "并判断这些新闻对当前买入/卖出信号是利好、利空、中性、混合、无明显新闻还是信息不足。"
                 "请从 hot_sector_candidates 和 sector_context 识别热点板块，并结合每只股票的 sector/name "
                 "标注热点板块关系；所有股票都要保留，非热点股票也标注为观察、无明确关联或未知。"

@@ -337,6 +337,7 @@ class MarketDatabase:
         self.init_stock_pool_schema()
         self.init_sector_schema()
         self.init_signal_analysis_schema()
+        self.init_main_force_risk_schema()
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -981,6 +982,57 @@ class MarketDatabase:
             UPDATE screening_results
             SET sector=COALESCE(%s, sector),
                 industry=COALESCE(%s, industry)
+            WHERE task_id=%s AND market=%s AND code=%s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.executemany(sql, values)
+
+    def update_screening_result_names(self, task_id: str, market: str, rows: Iterable[dict]):
+        """补写已生成筛选结果的展示名称。"""
+        values = []
+        for item in rows:
+            code = str(item.get("code") or "").strip()
+            name = str(item.get("name") or "").strip()
+            if not code or not name:
+                continue
+            values.append((name, task_id, market, code))
+        if not values:
+            return
+        sql = """
+            UPDATE screening_results
+            SET name=%s
+            WHERE task_id=%s AND market=%s AND code=%s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.executemany(sql, values)
+
+    def update_screening_result_main_force_risks(self, task_id: str, market: str, rows: Iterable[dict]):
+        """补写已生成筛选结果的主力流出风险摘要。"""
+        values = []
+        for item in rows:
+            code = str(item.get("code") or "").strip()
+            if not code:
+                continue
+            values.append((
+                item.get("risk_level"),
+                item.get("risk_score"),
+                item.get("risk_summary"),
+                _json_or_none(item.get("triggered_signals")),
+                _json_or_none(item.get("provider_status")),
+                task_id,
+                market,
+                code,
+            ))
+        if not values:
+            return
+        sql = """
+            UPDATE screening_results
+            SET main_force_risk_level=%s,
+                main_force_risk_score=%s,
+                main_force_risk_summary=%s,
+                main_force_risk_signals=%s,
+                main_force_data_status=%s,
+                main_force_risk_updated_at=NOW(6)
             WHERE task_id=%s AND market=%s AND code=%s
         """
         with self.conn.cursor() as cursor:
@@ -1634,6 +1686,19 @@ class MarketDatabase:
             screening_rows = cursor.fetchall() or []
             cursor.execute(
                 """
+                SELECT j.job_id, j.user_id, j.markets, j.timeframe, j.status,
+                       j.options_json, j.created_at
+                FROM web_screening_jobs j
+                WHERE j.status IN ('queued','expired')
+                  AND JSON_UNQUOTE(JSON_EXTRACT(j.options_json, '$.job_kind')) = 'custom_list'
+                ORDER BY j.created_at ASC
+                LIMIT %s
+                """,
+                (int(limit),),
+            )
+            custom_rows = cursor.fetchall() or []
+            cursor.execute(
+                """
                 SELECT run_id, user_id, market, code, normalized_code, timeframe,
                        chain_key, status, created_at
                 FROM single_stock_runs
@@ -1659,6 +1724,21 @@ class MarketDatabase:
             }
             for row in screening_rows
         ]
+        jobs.extend(
+            {
+                "job_type": "screening",
+                "job_id": row[0],
+                "user_id": row[1],
+                "markets": _decode_json_field(row[2], []),
+                "timeframe": row[3],
+                "status": row[4],
+                "options": _decode_json_field(row[5], {}),
+                "chain_key": _decode_json_field(row[5], {}).get("chain_key"),
+                "chain_name": _decode_json_field(row[5], {}).get("chain_name"),
+                "created_at": str(row[6]) if row[6] else None,
+            }
+            for row in custom_rows
+        )
         jobs.extend(
             {
                 "job_type": "single_stock",
@@ -1699,6 +1779,20 @@ class MarketDatabase:
                     """,
                     (agent_id, now, now, job_id),
                 )
+                return self.get_web_screening_job(job_id)
+
+            cursor.execute(
+                """
+                UPDATE web_screening_jobs
+                SET status='running', agent_id=%s, claimed_at=COALESCE(claimed_at,%s),
+                    heartbeat_at=%s, error_message=NULL
+                WHERE job_id=%s
+                  AND status IN ('queued','expired')
+                  AND JSON_UNQUOTE(JSON_EXTRACT(options_json, '$.job_kind')) = 'custom_list'
+                """,
+                (agent_id, now, now, job_id),
+            )
+            if cursor.rowcount:
                 return self.get_web_screening_job(job_id)
 
             cursor.execute(
@@ -1818,7 +1912,20 @@ class MarketDatabase:
                 """,
                 (cutoff,),
             )
-            return int(expired_locks + cursor.rowcount)
+            expired_single_runs = cursor.rowcount
+            cursor.execute(
+                """
+                UPDATE web_screening_jobs
+                SET status='expired', error_message='Agent heartbeat timeout'
+                WHERE status='running'
+                  AND heartbeat_at IS NOT NULL
+                  AND heartbeat_at < %s
+                  AND JSON_UNQUOTE(JSON_EXTRACT(options_json, '$.job_kind')) = 'custom_list'
+                """,
+                (cutoff,),
+            )
+            expired_custom_jobs = cursor.rowcount
+            return int(expired_locks + expired_single_runs + expired_custom_jobs)
 
     def create_screening_artifact(self, item: dict) -> str:
         artifact_id = item.get("artifact_id") or secrets.token_hex(16)
@@ -2798,6 +2905,172 @@ class MarketDatabase:
                 "model": row[22],
                 "raw_response": _decode_json_field(row[23], None),
                 "error_message": row[24],
+            }
+            for row in rows
+        ]
+
+    # ------------------------------------------------------------------
+    # Main-force risk analysis
+    # ------------------------------------------------------------------
+
+    def init_main_force_risk_schema(self):
+        """初始化主力流出风险分析表和筛选结果摘要列。"""
+        with self.conn.cursor() as cursor:
+            result_alters = [
+                (
+                    "main_force_risk_level",
+                    "ALTER TABLE screening_results ADD COLUMN main_force_risk_level VARCHAR(16) NULL COMMENT 'low/medium/high/unknown' AFTER close_price",
+                ),
+                (
+                    "main_force_risk_score",
+                    "ALTER TABLE screening_results ADD COLUMN main_force_risk_score DECIMAL(6,2) NULL COMMENT '主力流出风险分 0-100，越高风险越大' AFTER main_force_risk_level",
+                ),
+                (
+                    "main_force_risk_summary",
+                    "ALTER TABLE screening_results ADD COLUMN main_force_risk_summary VARCHAR(512) NULL COMMENT '主力流出风险摘要' AFTER main_force_risk_score",
+                ),
+                (
+                    "main_force_risk_signals",
+                    "ALTER TABLE screening_results ADD COLUMN main_force_risk_signals JSON NULL COMMENT '触发的主要风险信号摘要' AFTER main_force_risk_summary",
+                ),
+                (
+                    "main_force_data_status",
+                    "ALTER TABLE screening_results ADD COLUMN main_force_data_status JSON NULL COMMENT '资金/盘口/龙虎榜/筹码数据状态' AFTER main_force_risk_signals",
+                ),
+                (
+                    "main_force_risk_updated_at",
+                    "ALTER TABLE screening_results ADD COLUMN main_force_risk_updated_at DATETIME(6) NULL COMMENT '主力流出风险更新时间' AFTER main_force_data_status",
+                ),
+            ]
+            for column, alter_sql in result_alters:
+                try:
+                    cursor.execute(f"SELECT `{column}` FROM screening_results LIMIT 1")
+                except Exception:
+                    try:
+                        cursor.execute(alter_sql)
+                    except Exception:
+                        pass
+            try:
+                cursor.execute("SHOW INDEX FROM screening_results WHERE Key_name='idx_screening_main_force_risk'")
+                if not cursor.fetchall():
+                    cursor.execute(
+                        "ALTER TABLE screening_results ADD KEY idx_screening_main_force_risk "
+                        "(main_force_risk_level, main_force_risk_score)"
+                    )
+            except Exception:
+                pass
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS screening_main_force_risks (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    task_id VARCHAR(36) NOT NULL,
+                    market VARCHAR(8) NOT NULL,
+                    code VARCHAR(32) NOT NULL,
+                    name VARCHAR(255) NULL,
+                    check_date DATE NOT NULL,
+                    csv_path VARCHAR(1024) NULL,
+                    analysis_status VARCHAR(32) NOT NULL DEFAULT 'success',
+                    risk_level VARCHAR(16) NOT NULL DEFAULT 'unknown',
+                    risk_score DECIMAL(6,2) NULL,
+                    risk_summary TEXT NULL,
+                    triggered_signals JSON NULL COMMENT '触发信号列表',
+                    missing_data JSON NULL COMMENT '缺失/不适用/无权限数据项',
+                    provider_status JSON NULL COMMENT '各数据源状态',
+                    metrics_json JSON NULL COMMENT '归一化后的关键指标，不存完整盘口大对象',
+                    error_message TEXT NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_main_force_task_market_code (task_id, market, code),
+                    KEY idx_main_force_market_date (market, check_date),
+                    KEY idx_main_force_risk (risk_level, risk_score),
+                    KEY idx_main_force_status (analysis_status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='主力流出风险分析明细'
+                """
+            )
+
+    def upsert_main_force_risk_results(self, results: Iterable[dict]):
+        """写入或更新主力流出风险分析明细。"""
+        rows = []
+        for item in results:
+            code = str(item.get("code") or "").strip()
+            task_id = str(item.get("task_id") or "").strip()
+            market = str(item.get("market") or "").strip()
+            if not (task_id and market and code):
+                continue
+            rows.append((
+                task_id,
+                market,
+                code,
+                item.get("name"),
+                item.get("check_date"),
+                item.get("csv_path"),
+                item.get("analysis_status") or "success",
+                item.get("risk_level") or "unknown",
+                item.get("risk_score"),
+                item.get("risk_summary"),
+                _json_or_none(item.get("triggered_signals")),
+                _json_or_none(item.get("missing_data")),
+                _json_or_none(item.get("provider_status")),
+                _json_or_none(item.get("metrics_json")),
+                item.get("error_message"),
+            ))
+        if not rows:
+            return
+        sql = """
+            INSERT INTO screening_main_force_risks
+                (task_id, market, code, name, check_date, csv_path, analysis_status,
+                 risk_level, risk_score, risk_summary, triggered_signals, missing_data,
+                 provider_status, metrics_json, error_message)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                name=VALUES(name),
+                check_date=VALUES(check_date),
+                csv_path=VALUES(csv_path),
+                analysis_status=VALUES(analysis_status),
+                risk_level=VALUES(risk_level),
+                risk_score=VALUES(risk_score),
+                risk_summary=VALUES(risk_summary),
+                triggered_signals=VALUES(triggered_signals),
+                missing_data=VALUES(missing_data),
+                provider_status=VALUES(provider_status),
+                metrics_json=VALUES(metrics_json),
+                error_message=VALUES(error_message)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.executemany(sql, rows)
+
+    def get_main_force_risk_results_by_task(self, task_id: str) -> List[dict]:
+        sql = """
+            SELECT task_id, market, code, name, check_date, csv_path, analysis_status,
+                   risk_level, risk_score, risk_summary, triggered_signals, missing_data,
+                   provider_status, metrics_json, error_message
+            FROM screening_main_force_risks
+            WHERE task_id=%s
+            ORDER BY code ASC
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (task_id,))
+            rows = cursor.fetchall() or []
+        return [
+            {
+                "task_id": row[0],
+                "market": row[1],
+                "code": row[2],
+                "name": row[3],
+                "check_date": str(row[4]) if row[4] else None,
+                "csv_path": row[5],
+                "analysis_status": row[6],
+                "risk_level": row[7],
+                "risk_score": float(row[8]) if row[8] is not None else None,
+                "risk_summary": row[9],
+                "triggered_signals": _decode_json_field(row[10], []),
+                "missing_data": _decode_json_field(row[11], []),
+                "provider_status": _decode_json_field(row[12], {}),
+                "metrics_json": _decode_json_field(row[13], {}),
+                "error_message": row[14],
             }
             for row in rows
         ]
