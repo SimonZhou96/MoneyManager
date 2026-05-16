@@ -144,7 +144,7 @@ def _build_company_batch_query(
     if rows and all(getattr(row, "is_etf", False) for row in rows):
         prefix = f"{market} ETF fund tracking index theme sector macro news: "
     else:
-        prefix = f"{market} stocks latest news earnings events: "
+        prefix = f"{market} stocks latest news earnings events {_market_authoritative_source_terms(market)}: "
     if not rows:
         return prefix.rstrip()
 
@@ -157,6 +157,17 @@ def _build_company_batch_query(
         return _build_single_company_query(prefix, rows[0], max_chars)
 
     return _compose_company_batch_query(prefix, rows, 8)
+
+
+def _market_authoritative_source_terms(market: str) -> str:
+    key = str(market or "").upper()
+    if key == "HK":
+        return "HKEX announcement annual report"
+    if key == "US":
+        return "SEC filing"
+    if key == "A":
+        return "巨潮资讯 上交所 深交所"
+    return "official filing annual report investor relations"
 
 
 def _split_rows_by_query_budget(

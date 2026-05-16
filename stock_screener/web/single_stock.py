@@ -289,29 +289,45 @@ def _run_single_ai(
             if result.skipped_reason:
                 warnings.append(result.skipped_reason)
             return None, warnings
-        return {
-            "code": analysis.code,
-            "name": analysis.name,
-            "analysis_status": analysis.analysis_status,
-            "reliability_score": analysis.reliability_score,
-            "confidence_score": analysis.confidence_score,
-            "signal_bias": analysis.signal_bias,
-            "summary": analysis.summary,
-            "positive_factors": analysis.positive_factors,
-            "risk_factors": analysis.risk_factors,
-            "macro_factors": analysis.macro_factors,
-            "company_events": analysis.company_events,
-            "market_hot_news": analysis.market_hot_news,
-            "company_hot_news": analysis.company_hot_news,
-            "news_impact": analysis.news_impact,
-            "news_sources": analysis.news_sources,
-            "hot_sectors": analysis.hot_sectors,
-            "hot_sector_mark": analysis.hot_sector_mark,
-            "matched_hot_sectors": analysis.matched_hot_sectors,
-            "hot_sector_relevance": analysis.hot_sector_relevance,
-            "hot_sector_reason": analysis.hot_sector_reason,
-            "hot_sector_sources": analysis.hot_sector_sources,
-            "source_urls": analysis.source_urls,
-            "model": analysis.model,
-            "error_message": analysis.error_message,
-        }, warnings
+        return _analysis_to_response_dict(analysis), warnings
+
+
+def _analysis_to_response_dict(analysis) -> dict:
+    return {
+        "code": analysis.code,
+        "name": analysis.name,
+        "analysis_status": analysis.analysis_status,
+        "reliability_score": analysis.reliability_score,
+        "confidence_score": analysis.confidence_score,
+        "signal_bias": analysis.signal_bias,
+        "summary": analysis.summary,
+        "positive_factors": analysis.positive_factors,
+        "risk_factors": analysis.risk_factors,
+        "macro_factors": analysis.macro_factors,
+        "company_events": analysis.company_events,
+        "market_hot_news": analysis.market_hot_news,
+        "company_hot_news": analysis.company_hot_news,
+        "news_impact": analysis.news_impact,
+        "news_sources": analysis.news_sources,
+        "hot_sectors": analysis.hot_sectors,
+        "hot_sector_mark": analysis.hot_sector_mark,
+        "matched_hot_sectors": analysis.matched_hot_sectors,
+        "hot_sector_relevance": analysis.hot_sector_relevance,
+        "hot_sector_reason": analysis.hot_sector_reason,
+        "hot_sector_sources": analysis.hot_sector_sources,
+        "source_urls": analysis.source_urls,
+        "data_gaps": list(getattr(analysis, "data_gaps", []) or []),
+        "evidence_links": [dict(item) for item in (getattr(analysis, "evidence_links", []) or [])],
+        "factor_citations": {
+            str(key): [dict(item) for item in value]
+            for key, value in (getattr(analysis, "factor_citations", {}) or {}).items()
+        },
+        "数据缺失原因": list(getattr(analysis, "data_gaps", []) or []),
+        "引用来源": [dict(item) for item in (getattr(analysis, "evidence_links", []) or [])],
+        "因素引用": {
+            str(key): [dict(item) for item in value]
+            for key, value in (getattr(analysis, "factor_citations", {}) or {}).items()
+        },
+        "model": analysis.model,
+        "error_message": analysis.error_message,
+    }

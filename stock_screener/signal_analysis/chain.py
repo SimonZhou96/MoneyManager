@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Protocol, Tuple
 
 from report_naming import analysis_report_path_for_csv, market_signal_report_stem
 
+from .evidence import apply_evidence_to_result, dedupe_documents, expand_company_documents
 from .llm_providers import LLMProvider
 from .hot_news import ManualHotNewsConfig
 from .hot_sectors import AkshareHotSectorProvider, ManualHotSectorConfig
@@ -56,6 +57,9 @@ AI_CSV_COLUMNS = [
     "热点板块来源",
     "热点板块标记口径",
     "信息来源",
+    "数据缺失原因",
+    "引用来源",
+    "因素引用",
 ]
 
 
@@ -250,6 +254,44 @@ class ApplyManualHotNewsStep(AnalysisStep):
             context.warnings.append(f"{row.code} 已使用手动配置的公司热点信息覆盖搜索热点信息")
 
 
+class ExpandCompanyEvidenceStep(AnalysisStep):
+    name = "ExpandCompanyEvidenceStep"
+
+    def run(self, context: SignalAnalysisContext) -> None:
+        if not context.search_provider.is_available:
+            return
+        if not _env_bool("SIGNAL_ENABLE_EVIDENCE_EXPANSION", False):
+            return
+        stock_rows = [row for row in context.rows if not row.is_etf]
+        max_rows = _env_int("SIGNAL_EVIDENCE_EXPANSION_MAX_ROWS", 30)
+        if max_rows <= 0:
+            return
+        selected_rows = stock_rows[:max_rows]
+        if len(stock_rows) > len(selected_rows):
+            context.warnings.append(
+                f"证据来源拓展仅处理前 {len(selected_rows)} 只股票；"
+                "可通过 SIGNAL_EVIDENCE_EXPANSION_MAX_ROWS 调整上限"
+            )
+        max_results = _env_int("SIGNAL_EVIDENCE_EXPANSION_MAX_RESULTS", min(context.settings.search_max_results, 2))
+        for row in selected_rows:
+            try:
+                expanded = expand_company_documents(
+                    search_provider=context.search_provider,
+                    market=context.market,
+                    row=row,
+                    max_results=max_results,
+                )
+            except Exception as exc:
+                context.warnings.append(f"{row.code} 证据来源拓展搜索失败: {type(exc).__name__}: {exc}")
+                continue
+            if not expanded:
+                continue
+            context.company_documents[row.code] = dedupe_documents([
+                *(context.company_documents.get(row.code) or []),
+                *expanded,
+            ])
+
+
 class ResolveHotSectorsStep(AnalysisStep):
     name = "ResolveHotSectorsStep"
 
@@ -370,6 +412,16 @@ class NormalizeAnalysisStep(AnalysisStep):
                     hot_sector_sources=context.hot_sector_sources,
                     sector_documents=context.sector_documents,
                 )
+                apply_evidence_to_result(
+                    result=result,
+                    row=row,
+                    source_documents=[
+                        *context.market_documents,
+                        *context.sector_documents,
+                        *(context.company_documents.get(row.code) or []),
+                    ],
+                    main_force_context_label="股票筛选",
+                )
 
 
 class PersistAnalysisStep(AnalysisStep):
@@ -416,6 +468,7 @@ class SignalAnalysisChain:
             BuildSearchQueriesStep(),
             SearchContextStep(),
             ApplyManualHotNewsStep(),
+            ExpandCompanyEvidenceStep(),
             ResolveHotSectorsStep(),
             LLMBatchAnalysisStep(),
             NormalizeAnalysisStep(),
@@ -466,6 +519,13 @@ def _env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _build_etf_theme_query(market: str, rows: List[ScreeningSignalRow]) -> str:

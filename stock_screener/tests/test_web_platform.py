@@ -5,7 +5,8 @@ from kline_fetcher import DatabaseKlineFetcher, KlineFetcherFactory
 from web.business import BusinessError
 from web.rate_limit import InMemorySlidingWindowRateLimiter, RateLimitRule, rate_limiter
 from web.rule_chains import resolve_rule_chain
-from web.single_stock import _load_stock_info, normalize_stock_code
+from signal_analysis.models import SignalAnalysisResult
+from web.single_stock import _analysis_to_response_dict, _load_stock_info, normalize_stock_code
 from web.validation import (
     validate_agent_artifact_size,
     validate_agent_bulk_size,
@@ -79,6 +80,38 @@ class WebPlatformTests(unittest.TestCase):
         self.assertEqual(stock.pe_ratio, 18.5)
         self.assertEqual(stock.sector, "Biotechnology")
         self.assertEqual(stock.industry, "Biotechnology")
+
+    def test_single_stock_ai_response_includes_evidence_fields(self):
+        response = _analysis_to_response_dict(SignalAnalysisResult(
+            code="US.AAPL",
+            name="Apple",
+            reliability_score=82.0,
+            confidence_score=76.0,
+            signal_bias="bullish",
+            positive_factors=["AI strategy"],
+            data_gaps=["主力资金/盘口数据不足"],
+            evidence_links=[{
+                "label": "SEC",
+                "url": "https://www.sec.gov/example",
+                "title": "10-K",
+                "domain": "www.sec.gov",
+                "source_type": "公告",
+            }],
+            factor_citations={
+                "AI strategy": [{
+                    "label": "SEC",
+                    "url": "https://www.sec.gov/example",
+                    "title": "10-K",
+                    "domain": "www.sec.gov",
+                    "source_type": "公告",
+                }]
+            },
+        ))
+
+        self.assertEqual(response["data_gaps"], ["主力资金/盘口数据不足"])
+        self.assertEqual(response["数据缺失原因"], ["主力资金/盘口数据不足"])
+        self.assertEqual(response["evidence_links"][0]["label"], "SEC")
+        self.assertEqual(response["因素引用"]["AI strategy"][0]["source_type"], "公告")
 
     def test_business_error_carries_chinese_message_and_retry_after(self):
         error = BusinessError(

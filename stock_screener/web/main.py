@@ -36,6 +36,7 @@ from .errors import (
     http_exception_handler,
     request_validation_exception_handler,
 )
+from .options import router as options_router
 from .rate_limit import (
     ARTIFACT_DOWNLOAD_RULE,
     CREATE_TASK_RULE,
@@ -61,6 +62,7 @@ app = FastAPI(title="MoneyManager Stock Screener", version="0.1.0")
 app.add_exception_handler(BusinessError, business_error_handler)
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
+app.include_router(options_router)
 
 
 class LoginRequest(BaseModel):

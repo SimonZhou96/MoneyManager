@@ -92,8 +92,93 @@ type RulesResponse = {
   chain: RuleChain
   chains: RuleChain[]
 }
+type EvidenceLink = {
+  label?: string
+  url?: string
+  title?: string
+  domain?: string
+  source_type?: string
+}
+type FactorCitations = Record<string, EvidenceLink[]>
+type OptionCandidate = {
+  candidate_id: string
+  策略名称: string
+  评分: number
+  期权评分?: number
+  宏观分析评分?: number
+  综合评分?: number
+  宏观方向?: string
+  新闻影响?: string
+  热点匹配?: string
+  主力资金风险?: string
+  宏观摘要?: string
+  关键利好因素?: string[]
+  关键风险因素?: string[]
+  '宏观/政策因素'?: string[]
+  信息来源?: string[]
+  数据缺失原因?: string[]
+  引用来源?: EvidenceLink[]
+  因素引用?: FactorCitations
+  适用理由?: string
+  合约明细?: Record<string, unknown>[]
+  risk_metrics?: Record<string, unknown>
+  order_suggestion?: Record<string, unknown>
+  warnings?: string[]
+  数据质量?: Record<string, unknown>
+}
+type OptionEvaluationResponse = {
+  run_id: string
+  market: string
+  code: string
+  status: string
+  risk_profile?: string
+  risk_profile_label?: string
+  风险偏好?: string
+  warnings?: string[]
+  data_quality?: Record<string, unknown>
+  candidates?: OptionCandidate[]
+  macro_analysis?: Record<string, unknown>
+}
+type OptionBatchRow = {
+  market?: string
+  code?: string
+  status?: string
+  run_id?: string
+  最佳策略?: string
+  评分?: number
+  期权评分?: number
+  宏观分析评分?: number
+  综合评分?: number
+  candidates?: OptionCandidate[]
+  macro_analysis?: Record<string, unknown>
+  data_quality?: Record<string, unknown>
+  warnings?: string[]
+}
+type OptionPosition = {
+  position_id: string
+  market?: string
+  code?: string
+  strategy_name?: string
+  filled_price?: number
+  quantity?: number
+  status?: string
+  current_action?: string
+}
+type OptionMonitorEvent = {
+  event_id?: string
+  position_id?: string
+  提醒级别?: string
+  事件类型?: string
+  提醒内容?: string
+  created_at?: string
+}
 
 const MARKET_OPTIONS = ['HK', 'US', 'A']
+const OPTION_MARKET_OPTIONS = [
+  { value: 'US', label: '美股' },
+  { value: 'HK', label: '港股' },
+  { value: 'A', label: 'A股' }
+]
 const TIMEFRAME_OPTIONS = ['1d', '1wk', '1mo', '3mo', '1m', '3m', '5m', '15m', '30m', '60m']
 
 const COLUMN_LABELS: Record<string, string> = {
@@ -105,6 +190,7 @@ const COLUMN_LABELS: Record<string, string> = {
   created_at: '创建时间',
   current_stock_code: '当前股票',
   current_stock_name: '当前股票名',
+  current_action: '当前动作',
   display_order: '排序',
   enabled: '启用状态',
   error_message: '错误信息',
@@ -119,14 +205,21 @@ const COLUMN_LABELS: Record<string, string> = {
   markets: '市场',
   name: '名称',
   reason: '原因',
+  risk_profile_label: '风险偏好',
   result: '结果',
+  run_id: '评估编号',
   rule_key: '规则 Key',
   rule_name: '规则名',
   rule_type: '规则类型',
   sector: '所属板块',
   status: '状态',
   task_id: '任务 ID',
-  timeframe: '周期'
+  timeframe: '周期',
+  position_id: '持仓编号',
+  strategy_name: '策略名称',
+  filled_price: '成交价格',
+  quantity: '数量',
+  event_id: '提醒编号'
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -252,6 +345,7 @@ function App() {
           <button className={page === 'dashboard' ? 'active' : ''} onClick={() => setPage('dashboard')}>总览</button>
           <button className={page === 'screening' ? 'active' : ''} onClick={() => setPage('screening')}>全市场筛选</button>
           <button className={page === 'single' ? 'active' : ''} onClick={() => setPage('single')}>单股选股</button>
+          <button className={page === 'options' ? 'active' : ''} onClick={() => setPage('options')}>期权实验室</button>
           <button className={page === 'rules' ? 'active' : ''} onClick={() => setPage('rules')}>规则链</button>
         </nav>
         <div className="sidebar-footer">
@@ -266,11 +360,347 @@ function App() {
         />}
         {page === 'screening' && <Screening />}
         {page === 'single' && <SingleStock />}
+        {page === 'options' && <OptionLab />}
         {page === 'rules' && <Rules />}
         {page === 'task' && <TaskDetail taskId={selectedTaskId} />}
         {page === 'singleRun' && <SingleRunDetail runId={selectedSingleRunId} />}
       </main>
     </div>
+  )
+}
+
+function OptionLab() {
+  const [mode, setMode] = useState<'single' | 'batch'>('single')
+  const [market, setMarket] = useState('US')
+  const [code, setCode] = useState('AAPL')
+  const [codes, setCodes] = useState('AAPL,MSFT')
+  const [riskProfile, setRiskProfile] = useState('均衡')
+  const [capital, setCapital] = useState('')
+  const [maxLoss, setMaxLoss] = useState('')
+  const [holdingDays, setHoldingDays] = useState('30')
+  const [enableMacroAnalysis, setEnableMacroAnalysis] = useState(false)
+  const [forceMacroRefresh, setForceMacroRefresh] = useState(false)
+  const [result, setResult] = useState<OptionEvaluationResponse | null>(null)
+  const [batchRows, setBatchRows] = useState<OptionBatchRow[]>([])
+  const [selected, setSelected] = useState<OptionCandidate | null>(null)
+  const [savedPlanId, setSavedPlanId] = useState('')
+  const [fillPrice, setFillPrice] = useState('')
+  const [fillQuantity, setFillQuantity] = useState('1')
+  const [fillFee, setFillFee] = useState('')
+  const [fillAt, setFillAt] = useState(defaultDateTimeInput())
+  const [positions, setPositions] = useState<OptionPosition[]>([])
+  const [events, setEvents] = useState<OptionMonitorEvent[]>([])
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    loadPositions().catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    if (!enableMacroAnalysis) setForceMacroRefresh(false)
+  }, [enableMacroAnalysis])
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    setError('')
+    setMessage('')
+    setLoading(true)
+    selectCandidate(null)
+    try {
+      const base = {
+        market,
+        risk_profile: riskProfile,
+        capital: parseOptionalNumber(capital),
+        max_loss: parseOptionalNumber(maxLoss),
+        planned_holding_days: parseOptionalNumber(holdingDays),
+        enable_macro_analysis: enableMacroAnalysis,
+        force_macro_refresh: enableMacroAnalysis ? forceMacroRefresh : false,
+        macro_cache_ttl_minutes: 60
+      }
+      if (mode === 'single') {
+        const data = await api<OptionEvaluationResponse>('/api/options/evaluate', {
+          method: 'POST',
+          body: JSON.stringify({ ...base, code })
+        })
+        const candidates = data.candidates || []
+        setResult(data)
+        setBatchRows([])
+        selectCandidate(candidates[0] || null)
+      } else {
+        const data = await api<any>('/api/options/evaluate-batch', {
+          method: 'POST',
+          body: JSON.stringify({ ...base, codes: splitCodes(codes) })
+        })
+        const rows = normalizeOptionBatchRows(data)
+        setBatchRows(rows)
+        setResult(null)
+        selectCandidate(firstBatchCandidate(rows))
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '期权评估失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function savePlan(candidate: OptionCandidate) {
+    setError('')
+    setMessage('')
+    try {
+      const data = await api<any>('/api/options/order-plans', {
+        method: 'POST',
+        body: JSON.stringify({ candidate_id: candidate.candidate_id })
+      })
+      setSavedPlanId(data.plan_id || '')
+      setMessage(`已保存订单建议 ${data.plan_id || '成功'}。系统不会自动下单，请在富途手动下单后回填成交信息。`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存订单建议失败')
+    }
+  }
+
+  async function recordFill() {
+    setError('')
+    setMessage('')
+    if (!savedPlanId) {
+      setError('请先保存订单建议，或输入订单建议编号')
+      return
+    }
+    if (!fillPrice || Number(fillPrice) <= 0) {
+      setError('请输入有效的成交价格')
+      return
+    }
+    try {
+      const position = await api<OptionPosition>(`/api/options/order-plans/${savedPlanId}/fills`, {
+        method: 'POST',
+        body: JSON.stringify({
+          filled_price: Number(fillPrice),
+          quantity: Number(fillQuantity || '1'),
+          filled_at: fillAt.replace('T', ' '),
+          fee: parseOptionalNumber(fillFee)
+        })
+      })
+      setMessage(`已回填成交并加入监控 ${position.position_id}`)
+      await loadPositions()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '回填成交失败')
+    }
+  }
+
+  async function loadPositions() {
+    const data = await api<{ positions: OptionPosition[] }>('/api/options/positions')
+    setPositions(data.positions || [])
+  }
+
+  async function refreshMonitor(positionId: string) {
+    setError('')
+    setMessage('')
+    try {
+      const data = await api<{ events: OptionMonitorEvent[] }>(`/api/options/positions/${positionId}/refresh`, { method: 'POST' })
+      setEvents(data.events || [])
+      setMessage('监控已刷新')
+      await loadPositions()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '刷新监控失败')
+    }
+  }
+
+  function selectCandidate(candidate: OptionCandidate | null) {
+    setSelected(candidate)
+    setSavedPlanId('')
+    setFillPrice('')
+    setFillFee('')
+    setFillQuantity('1')
+    setFillAt(defaultDateTimeInput())
+  }
+
+  const selectedOrderSuggestion = selected?.order_suggestion || {}
+  const selectedRiskMetrics = selected?.risk_metrics || {}
+  const selectedRows = selected ? [optionDetailSummary(selected)] : []
+  const batchCandidateRows = batchRows.flatMap(row => row.candidates || [])
+  const resultCandidateRows = result?.candidates || []
+  const macroColumnsVisible = resultCandidateRows.some(hasOptionMacroFields) || batchCandidateRows.some(hasOptionMacroFields)
+  const candidateColumns = macroColumnsVisible
+    ? ['策略名称', '期权评分', '宏观分析评分', '综合评分', '宏观方向', '新闻影响', '热点匹配', '主力资金风险', '适用理由']
+    : ['策略名称', '期权评分', '适用理由']
+  const batchCandidateColumns = macroColumnsVisible
+    ? ['market', 'code', '策略名称', '期权评分', '宏观分析评分', '综合评分', '宏观方向', '新闻影响', '热点匹配', '主力资金风险', '适用理由']
+    : ['market', 'code', '策略名称', '期权评分', '适用理由']
+  const batchResultColumns = macroColumnsVisible
+    ? ['market', 'code', 'status', 'run_id', '最佳策略', '期权评分', '宏观分析评分', '综合评分']
+    : ['market', 'code', 'status', 'run_id', '最佳策略', '评分']
+  const detailColumns = selected && hasOptionMacroFields(selected)
+    ? ['策略名称', '期权评分', '宏观分析评分', '综合评分', '宏观方向', '新闻影响', '热点匹配', '主力资金风险', '建议限价', '允许滑点', '建议数量', '最大亏损', '目标收益', '盈亏平衡点', '止损价', '止盈价', '计划持有期', '退出条件']
+    : ['策略名称', '期权评分', '建议限价', '允许滑点', '建议数量', '最大亏损', '目标收益', '盈亏平衡点', '止损价', '止盈价', '计划持有期', '退出条件']
+
+  return (
+    <section>
+      <Header title="期权实验室" subtitle="评估期权策略、生成订单建议、回填成交并监控风险" />
+      <form className="form-grid option-form" onSubmit={submit}>
+        <Field label="评估模式">
+          <div className="segmented">
+            <button type="button" className={mode === 'single' ? 'selected' : ''} onClick={() => setMode('single')}>单标的评估</button>
+            <button type="button" className={mode === 'batch' ? 'selected' : ''} onClick={() => setMode('batch')}>批量评估</button>
+          </div>
+        </Field>
+        <Field label="市场">
+          <select value={market} onChange={event => setMarket(event.target.value)}>
+            {OPTION_MARKET_OPTIONS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+        </Field>
+        {mode === 'single' ? (
+          <Field label="标的代码"><input value={code} onChange={event => setCode(event.target.value)} /></Field>
+        ) : (
+          <Field label="标的代码列表"><input value={codes} onChange={event => setCodes(event.target.value)} /></Field>
+        )}
+        <Field label="风险偏好">
+          <select value={riskProfile} onChange={event => setRiskProfile(event.target.value)}>
+            <option>保守</option>
+            <option>均衡</option>
+            <option>进取</option>
+          </select>
+        </Field>
+        <Field label="资金规模"><input value={capital} onChange={event => setCapital(event.target.value)} placeholder="可留空" inputMode="decimal" /></Field>
+        <Field label="最大可接受亏损"><input value={maxLoss} onChange={event => setMaxLoss(event.target.value)} placeholder="可留空" inputMode="decimal" /></Field>
+        <Field label="计划持有期"><input value={holdingDays} onChange={event => setHoldingDays(event.target.value)} inputMode="numeric" /></Field>
+        <Field label="宏观层面分析">
+          <label className="check">
+            <input type="checkbox" checked={enableMacroAnalysis} onChange={event => setEnableMacroAnalysis(event.target.checked)} />
+            开启宏观层面分析
+          </label>
+        </Field>
+        <Field label="宏观缓存">
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={forceMacroRefresh}
+              disabled={!enableMacroAnalysis}
+              onChange={event => setForceMacroRefresh(event.target.checked)}
+            />
+            强制重新分析
+          </label>
+        </Field>
+        <button className="primary" disabled={loading}>{loading ? '评估中...' : '开始评估'}</button>
+      </form>
+      {error && <div className="error">{error}</div>}
+      {message && <div className="notice">{message}</div>}
+      {result && (
+        <>
+          <div className="option-layout">
+            <Panel title="推荐结论">
+              <dl className="info-list">
+                <div><dt>评估编号</dt><dd>{result.run_id}</dd></div>
+                <div><dt>市场</dt><dd>{optionMarketLabel(result.market)}</dd></div>
+                <div><dt>标的代码</dt><dd>{result.code}</dd></div>
+                <div><dt>状态</dt><dd><StatusBadge value={result.status} /></dd></div>
+                <div><dt>风险偏好</dt><dd>{result.风险偏好 || result.risk_profile_label || riskProfile}</dd></div>
+              </dl>
+            </Panel>
+            <Panel title="期权数据质量">
+              <dl className="info-list">
+                <div><dt>状态</dt><dd>{displayMissing(result.data_quality?.status)}</dd></div>
+                <div><dt>报价时间</dt><dd>{displayMissing(result.data_quality?.quote_time)}</dd></div>
+                <div><dt>风险提示</dt><dd>{displayWarnings(result.warnings || result.data_quality?.warnings)}</dd></div>
+              </dl>
+            </Panel>
+          </div>
+          {result.macro_analysis && (
+            <Panel title="宏观层面分析">
+              <dl className="info-list option-macro-info">
+                <div><dt>宏观分析评分</dt><dd>{displayMissing(result.macro_analysis['宏观分析评分'])}</dd></div>
+                <div><dt>宏观方向</dt><dd>{displayMissing(result.macro_analysis['宏观方向'])}</dd></div>
+                <div><dt>新闻影响</dt><dd>{displayMissing(result.macro_analysis['新闻影响'])}</dd></div>
+                <div><dt>热点匹配</dt><dd>{displayMissing(result.macro_analysis['热点匹配'])}</dd></div>
+                <div><dt>主力资金风险</dt><dd>{displayMissing(result.macro_analysis['主力资金风险'])}</dd></div>
+                <div><dt>宏观摘要</dt><dd>{displayMissing(result.macro_analysis['宏观摘要'])}</dd></div>
+                <div><dt>数据缺失原因</dt><dd>{displayWarnings(result.macro_analysis['数据缺失原因'])}</dd></div>
+                <div><dt>关键利好因素</dt><dd><FactorList factors={asStringList(result.macro_analysis['关键利好因素'])} citations={asFactorCitations(result.macro_analysis['因素引用'])} /></dd></div>
+                <div><dt>关键风险因素</dt><dd><FactorList factors={asStringList(result.macro_analysis['关键风险因素'])} citations={asFactorCitations(result.macro_analysis['因素引用'])} /></dd></div>
+                <div><dt>宏观/政策因素</dt><dd><FactorList factors={asStringList(result.macro_analysis['宏观/政策因素'])} citations={asFactorCitations(result.macro_analysis['因素引用'])} /></dd></div>
+                <div><dt>信息来源</dt><dd><CitationTags links={asEvidenceLinks(result.macro_analysis['引用来源'], asStringList(result.macro_analysis['信息来源']))} /></dd></div>
+              </dl>
+            </Panel>
+          )}
+          <Panel title="策略候选排行">
+            <Table rows={result.candidates || []} columns={candidateColumns} onRowClick={(row) => selectCandidate(row as OptionCandidate)} />
+          </Panel>
+        </>
+      )}
+      {batchRows.length > 0 && (
+        <Panel title="批量评估结果">
+          <Table rows={batchRows} columns={batchResultColumns} onRowClick={(row) => selectCandidate(firstBatchCandidate([row as OptionBatchRow]))} />
+        </Panel>
+      )}
+      {!result && batchCandidateRows.length > 0 && (
+        <Panel title="策略候选排行">
+          <Table rows={batchCandidateRows} columns={batchCandidateColumns} onRowClick={(row) => selectCandidate(row as OptionCandidate)} />
+        </Panel>
+      )}
+      {selected && (
+        <Panel title="建议详情">
+          <div className="option-detail">
+            <div className="option-detail-heading">
+              <div>
+                <h3>{selected.策略名称}</h3>
+                <p>{selected.适用理由 || '暂无适用理由'}</p>
+              </div>
+              <button className="primary" onClick={() => savePlan(selected)}>保存订单建议</button>
+            </div>
+            <Table rows={selectedRows} columns={detailColumns} />
+            {hasOptionMacroFields(selected) && (
+              <section className="option-subsection">
+                <h4>宏观分析</h4>
+                <dl className="info-list option-macro-info">
+                  <div><dt>宏观摘要</dt><dd>{displayMissing(selected.宏观摘要)}</dd></div>
+                  <div><dt>数据缺失原因</dt><dd>{displayWarnings(selected.数据缺失原因)}</dd></div>
+                  <div><dt>关键利好因素</dt><dd><FactorList factors={asStringList(selected.关键利好因素)} citations={selected.因素引用 || {}} /></dd></div>
+                  <div><dt>关键风险因素</dt><dd><FactorList factors={asStringList(selected.关键风险因素)} citations={selected.因素引用 || {}} /></dd></div>
+                  <div><dt>宏观/政策因素</dt><dd><FactorList factors={asStringList(selected['宏观/政策因素'])} citations={selected.因素引用 || {}} /></dd></div>
+                  <div><dt>信息来源</dt><dd><CitationTags links={asEvidenceLinks(selected.引用来源, selected.信息来源)} /></dd></div>
+                </dl>
+              </section>
+            )}
+            <section className="option-subsection">
+              <h4>合约明细</h4>
+              <Table rows={selected.合约明细 || []} columns={['买卖方向', '期权类型', '合约代码', '到期日', '行权价', '建议价格', '数量']} />
+            </section>
+            <div className="option-summary-grid">
+              <div>
+                <h4>订单建议</h4>
+                <pre>{JSON.stringify(selectedOrderSuggestion, null, 2)}</pre>
+              </div>
+              <div>
+                <h4>风险指标</h4>
+                <pre>{JSON.stringify(selectedRiskMetrics, null, 2)}</pre>
+              </div>
+            </div>
+            <div className="table-note">系统不会自动下单，请在富途手动下单后回填成交信息。</div>
+            <section className="option-subsection">
+              <h4>成交回填</h4>
+              <div className="form-grid option-fill-form">
+                <Field label="订单建议编号"><input value={savedPlanId} onChange={event => setSavedPlanId(event.target.value)} placeholder="保存订单建议后自动填入" /></Field>
+                <Field label="成交价格"><input value={fillPrice} onChange={event => setFillPrice(event.target.value)} inputMode="decimal" /></Field>
+                <Field label="成交数量"><input value={fillQuantity} onChange={event => setFillQuantity(event.target.value)} inputMode="numeric" /></Field>
+                <Field label="成交时间"><input type="datetime-local" value={fillAt} onChange={event => setFillAt(event.target.value)} /></Field>
+                <Field label="手续费"><input value={fillFee} onChange={event => setFillFee(event.target.value)} placeholder="可留空" inputMode="decimal" /></Field>
+                <button className="primary" type="button" onClick={recordFill}>回填成交并加入监控</button>
+              </div>
+            </section>
+            {selected.warnings && selected.warnings.length > 0 && <div className="notice">{displayWarnings(selected.warnings)}</div>}
+          </div>
+        </Panel>
+      )}
+      <Panel title="持仓监控">
+        <Table rows={positions} columns={['position_id', 'market', 'code', 'strategy_name', 'filled_price', 'quantity', 'status', 'current_action']} onRowClick={(row) => refreshMonitor((row as OptionPosition).position_id)} />
+        {events.length > 0 && (
+          <div className="option-subsection">
+            <h4>监控提醒</h4>
+            <Table rows={events} columns={['提醒级别', '事件类型', '提醒内容', 'created_at']} />
+          </div>
+        )}
+      </Panel>
+    </section>
   )
 }
 
@@ -572,11 +1002,37 @@ function SingleResult({ result }: { result: any }) {
           <div><dt>PE</dt><dd>{displayMissing(result.pe_ratio)}</dd></div>
         </dl>
         <p>命中条件：{(result.conditions_met || []).join(' | ') || '无'}</p>
-        {result.ai_analysis && <pre>{JSON.stringify(result.ai_analysis, null, 2)}</pre>}
+        {result.ai_analysis && <SingleAiAnalysis analysis={result.ai_analysis} />}
       </Panel>
       <Panel title="规则明细">
         <Table rows={details} columns={['rule_name', 'rule_type', 'result', 'reason']} />
       </Panel>
+    </div>
+  )
+}
+
+function SingleAiAnalysis({ analysis }: { analysis: any }) {
+  const citations = asFactorCitations(analysis.因素引用 || analysis.factor_citations)
+  const sourceLinks = asEvidenceLinks(
+    analysis.引用来源 || analysis.evidence_links,
+    asStringList(analysis.source_urls)
+  )
+  return (
+    <div className="subsection">
+      <h4>AI 辅助分析</h4>
+      <dl className="info-list compact">
+        <div><dt>信号可靠性评分</dt><dd>{displayMissing(analysis.reliability_score)}</dd></div>
+        <div><dt>模型置信度</dt><dd>{displayMissing(analysis.confidence_score)}</dd></div>
+        <div><dt>辅助方向判断</dt><dd>{displayMissing(analysis.signal_bias)}</dd></div>
+        <div><dt>新闻影响</dt><dd>{displayMissing(analysis.news_impact)}</dd></div>
+        <div><dt>热点匹配</dt><dd>{displayMissing(analysis.hot_sector_mark)}</dd></div>
+        <div><dt>摘要</dt><dd>{displayMissing(analysis.summary)}</dd></div>
+        <div><dt>数据缺失原因</dt><dd>{displayWarnings(analysis.数据缺失原因 || analysis.data_gaps)}</dd></div>
+        <div><dt>关键利好因素</dt><dd><FactorList factors={asStringList(analysis.positive_factors)} citations={citations} /></dd></div>
+        <div><dt>关键风险因素</dt><dd><FactorList factors={asStringList(analysis.risk_factors)} citations={citations} /></dd></div>
+        <div><dt>宏观/政策因素</dt><dd><FactorList factors={asStringList(analysis.macro_factors)} citations={citations} /></dd></div>
+        <div><dt>信息来源</dt><dd><CitationTags links={sourceLinks} /></dd></div>
+      </dl>
     </div>
   )
 }
@@ -783,7 +1239,40 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return <label className="field"><span>{label}</span>{children}</label>
 }
 
-function Table({ rows, columns }: { rows: any[]; columns: string[] }) {
+function FactorList({ factors, citations }: { factors: string[]; citations: FactorCitations }) {
+  if (!factors.length) return <>无</>
+  return (
+    <ul className="factor-list">
+      {factors.map(factor => (
+        <li key={factor} className="factor-item">
+          <span>{factor}</span>
+          <CitationTags links={citations[factor] || []} />
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function CitationTags({ links }: { links: EvidenceLink[] }) {
+  if (!links.length) return null
+  return (
+    <span className="citation-tags">
+      {links.map((link, index) => {
+        const url = link.url || ''
+        const label = link.label || link.domain || `来源${index + 1}`
+        const title = link.title || url || label
+        if (!url) return <span key={`${label}-${index}`} className="citation-tag">{label}</span>
+        return (
+          <a key={`${url}-${index}`} className="citation-tag" href={url} target="_blank" rel="noreferrer" title={title}>
+            {label}
+          </a>
+        )
+      })}
+    </span>
+  )
+}
+
+function Table({ rows, columns, onRowClick }: { rows: any[]; columns: string[]; onRowClick?: (row: any) => void }) {
   if (!rows || rows.length === 0) return <div className="empty">暂无数据</div>
   return (
     <div className="table-wrap">
@@ -791,7 +1280,9 @@ function Table({ rows, columns }: { rows: any[]; columns: string[] }) {
         <thead><tr>{columns.map(column => <th key={column}>{columnLabel(column)}</th>)}</tr></thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={index}>{columns.map(column => <td key={column}>{formatCell(row[column], column)}</td>)}</tr>
+            <tr key={index} onClick={() => onRowClick?.(row)} className={onRowClick ? 'clickable-row' : ''}>
+              {columns.map(column => <td key={column}>{formatCell(row[column], column)}</td>)}
+            </tr>
           ))}
         </tbody>
       </table>
@@ -891,12 +1382,164 @@ function statusLabel(value: string | boolean) {
   return STATUS_LABELS[key] || String(value || '未补齐')
 }
 
+function parseOptionalNumber(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  const parsed = Number(trimmed)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function defaultDateTimeInput() {
+  const now = new Date()
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset())
+  return now.toISOString().slice(0, 16)
+}
+
+function splitCodes(value: string) {
+  return value
+    .split(/[,，\s]+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+}
+
+function normalizeOptionBatchRows(data: any): OptionBatchRow[] {
+  if (Array.isArray(data?.items)) return data.items
+  if (Array.isArray(data?.results)) return data.results
+  if (Array.isArray(data?.evaluations)) return data.evaluations
+  if (Array.isArray(data)) return data
+  return []
+}
+
+function firstBatchCandidate(rows: OptionBatchRow[]) {
+  return rows.find(row => row.candidates && row.candidates.length > 0)?.candidates?.[0] || null
+}
+
+function hasOptionMacroFields(candidate: OptionCandidate) {
+  return candidate.宏观分析评分 !== undefined && candidate.宏观分析评分 !== null
+}
+
+function optionMarketLabel(value?: string) {
+  return OPTION_MARKET_OPTIONS.find(item => item.value === value)?.label || displayMissing(value)
+}
+
+function displayWarnings(value: any) {
+  if (Array.isArray(value)) return value.length > 0 ? value.join('；') : '无'
+  return displayMissing(value)
+}
+
+function asStringList(value: any): string[] {
+  if (!value) return []
+  if (Array.isArray(value)) return value.map(item => String(item)).filter(Boolean)
+  return [String(value)].filter(Boolean)
+}
+
+function asEvidenceLinks(value: any, fallbackUrls: string[] = []): EvidenceLink[] {
+  const links: EvidenceLink[] = []
+  if (typeof value === 'string' && value.trim().startsWith('[')) {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      value = []
+    }
+  }
+  if (Array.isArray(value)) {
+    value.forEach(item => {
+      if (typeof item === 'string') {
+        links.push({ label: sourceLabelFromUrl(item), url: item, title: item })
+      } else if (item && typeof item === 'object') {
+        const link = item as EvidenceLink
+        if (link.url || link.label) links.push(link)
+      }
+    })
+  }
+  fallbackUrls.forEach(url => {
+    if (!links.some(link => link.url === url)) {
+      links.push({ label: sourceLabelFromUrl(url), url, title: url })
+    }
+  })
+  return links
+}
+
+function asFactorCitations(value: any): FactorCitations {
+  if (typeof value === 'string' && value.trim().startsWith('{')) {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      value = {}
+    }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const result: FactorCitations = {}
+  Object.entries(value).forEach(([factor, links]) => {
+    result[factor] = asEvidenceLinks(links)
+  })
+  return result
+}
+
+function sourceLabelFromUrl(url: string) {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, '')
+    if (host.includes('ir.mi.com')) return '小米IR'
+    if (host.includes('xiaomi.gcs-web.com')) return '小米公告'
+    if (host.includes('hkexnews.hk')) return 'HKEX公告'
+    if (host.includes('sec.gov')) return 'SEC'
+    if (host.includes('cninfo.com.cn')) return '巨潮资讯'
+    if (host.includes('sse.com.cn')) return '上交所公告'
+    if (host.includes('szse.cn')) return '深交所公告'
+    if (host.includes('arxiv.org')) return 'arXiv'
+    if (host.includes('reuters.com')) return 'Reuters'
+    if (host.includes('cnbc.com')) return 'CNBC'
+    return host.split('.')[0] || '来源'
+  } catch {
+    return '来源'
+  }
+}
+
+function pickOptionValue(sources: Record<string, unknown>[], keys: string[]) {
+  for (const key of keys) {
+    for (const source of sources) {
+      const value = source?.[key]
+      if (value !== undefined && value !== null && value !== '') return value
+    }
+  }
+  return undefined
+}
+
+function optionDetailSummary(candidate: OptionCandidate) {
+  const order = candidate.order_suggestion || {}
+  const risk = candidate.risk_metrics || {}
+  const row: Record<string, unknown> = {
+    策略名称: candidate.策略名称,
+    期权评分: candidate.期权评分 ?? candidate.评分,
+    建议限价: pickOptionValue([order, risk], ['建议限价', 'limit_price', 'suggested_limit_price', 'planned_limit_price']),
+    允许滑点: pickOptionValue([order, risk], ['允许滑点', 'allowed_slippage', 'slippage']),
+    建议数量: pickOptionValue([order, risk], ['建议数量', 'quantity', 'suggested_quantity']),
+    最大亏损: pickOptionValue([risk, order], ['最大亏损', 'max_loss', 'maximum_loss']),
+    目标收益: pickOptionValue([risk, order], ['目标收益', 'target_profit', 'target_return']),
+    盈亏平衡点: pickOptionValue([risk, order], ['盈亏平衡点', 'breakeven', 'break_even']),
+    止损价: pickOptionValue([risk, order], ['止损价', 'stop_loss', 'stop_loss_price']),
+    止盈价: pickOptionValue([risk, order], ['止盈价', 'take_profit', 'take_profit_price']),
+    计划持有期: pickOptionValue([order, risk], ['计划持有期', 'planned_holding_days', 'max_holding_days']),
+    退出条件: pickOptionValue([order, risk], ['退出条件', 'exit_conditions', 'exit_condition'])
+  }
+  if (hasOptionMacroFields(candidate)) {
+    row.宏观分析评分 = candidate.宏观分析评分
+    row.综合评分 = candidate.综合评分
+    row.宏观方向 = candidate.宏观方向
+    row.新闻影响 = candidate.新闻影响
+    row.热点匹配 = candidate.热点匹配
+    row.主力资金风险 = candidate.主力资金风险
+  }
+  return row
+}
+
 function columnLabel(column: string) {
   return COLUMN_LABELS[column] || column
 }
 
 function formatCell(value: any, column?: string): React.ReactNode {
   if (column === 'status' || column === 'is_passed' || column === 'result') return <StatusBadge value={value} />
+  if (column === 'market') return optionMarketLabel(value)
   if (column === 'enabled') return typeof value === 'string' ? value : (value ? '启用' : '停用')
   if ((column === 'sector' || column === 'industry') && (value === undefined || value === null || value === '')) return '未补齐'
   if (Array.isArray(value)) return value.join(', ')

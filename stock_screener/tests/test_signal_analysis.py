@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from signal_analysis.chain import SignalAnalysisChain, SignalAnalysisContext, write_analysis_columns_to_csv
+from signal_analysis.evidence import expand_company_documents
 from signal_analysis.hot_news import ManualHotNewsConfig
 from signal_analysis.hot_sectors import ManualHotSectorConfig
 from signal_analysis.factories import LLMProviderFactory, SearchProviderFactory
@@ -30,7 +31,7 @@ from signal_analysis.models import (
     SearchDocument,
     SignalAnalysisResult,
 )
-from signal_analysis.search_providers import NullSearchProvider, TavilySearchProvider
+from signal_analysis.search_providers import NullSearchProvider, TavilySearchProvider, _build_company_batch_query
 
 
 class FakeSearchProvider:
@@ -199,6 +200,41 @@ class SignalAnalysisTest(unittest.TestCase):
             settings = AnalysisSettings()
             self.assertIsInstance(SearchProviderFactory.from_env(settings), NullSearchProvider)
             self.assertIsInstance(LLMProviderFactory.from_env(settings), NullLLMProvider)
+
+    def test_expand_company_documents_adds_market_specific_authoritative_queries(self):
+        provider = FakeSearchProvider()
+        rows = [
+            ScreeningSignalRow(0, "HK.01810", "HK", "港股", "小米集团-W", "", "", "消费电子", "左一战法"),
+            ScreeningSignalRow(1, "US.AAPL", "US", "美股", "Apple Inc.", "", "", "Technology", "左一战法"),
+            ScreeningSignalRow(2, "SH.600519", "A", "A股", "贵州茅台", "", "", "白酒", "左一战法"),
+        ]
+
+        for row in rows:
+            expand_company_documents(provider, row.market, row, 2)
+
+        joined_queries = "\n".join(provider.search_queries).lower()
+        self.assertIn("hkexnews.hk", joined_queries)
+        self.assertIn("sec.gov", joined_queries)
+        self.assertIn("cninfo.com.cn", joined_queries)
+        self.assertIn("sse.com.cn", joined_queries)
+        self.assertIn("szse.cn", joined_queries)
+
+    def test_company_batch_query_includes_market_authoritative_source_terms_without_extra_calls(self):
+        hk_query = _build_company_batch_query("HK", [self.signal_rows()[0]], max_chars=390)
+        us_query = _build_company_batch_query(
+            "US",
+            [ScreeningSignalRow(0, "US.AAPL", "US", "美股", "Apple", "", "", "Technology", "左一战法")],
+            max_chars=390,
+        )
+        a_query = _build_company_batch_query(
+            "A",
+            [ScreeningSignalRow(0, "SH.600519", "A", "A股", "贵州茅台", "", "", "白酒", "左一战法")],
+            max_chars=390,
+        )
+
+        self.assertIn("HKEX announcement", hk_query)
+        self.assertIn("SEC filing", us_query)
+        self.assertIn("巨潮资讯", a_query)
 
     def test_factory_selects_default_openai_compatible_provider(self):
         with patch.dict(os.environ, {"LLM_API_KEY": "key", "LLM_MODEL": "model-x"}, clear=True):
@@ -1138,6 +1174,114 @@ class SignalAnalysisTest(unittest.TestCase):
             self.assertEqual(rows[0]["热点板块关联度"], "100")
             self.assertEqual(rows[0]["热点板块匹配理由"], "新理由")
             self.assertEqual(rows[0]["热点板块来源"], "new_source")
+
+    def test_write_analysis_columns_includes_evidence_gap_and_factor_citation_fields(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            write_analysis_columns_to_csv(
+                csv_path,
+                {
+                    "HK.00001": SignalAnalysisResult(
+                        code="HK.00001",
+                        name="Test HK",
+                        analysis_status="success",
+                        reliability_score=80.0,
+                        confidence_score=70.0,
+                        signal_bias="bullish",
+                        positive_factors=["AI 机器人业务推进"],
+                        data_gaps=["部分宏观因素缺少可追溯来源"],
+                        evidence_links=[{
+                            "label": "公司IR",
+                            "url": "https://example.com/ir",
+                            "title": "AI Robotics",
+                            "domain": "example.com",
+                            "source_type": "官方",
+                        }],
+                        factor_citations={
+                            "AI 机器人业务推进": [{
+                                "label": "公司IR",
+                                "url": "https://example.com/ir",
+                                "title": "AI Robotics",
+                                "domain": "example.com",
+                                "source_type": "官方",
+                            }]
+                        },
+                    )
+                },
+            )
+
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(rows[0]["数据缺失原因"], "部分宏观因素缺少可追溯来源")
+            self.assertIn("https://example.com/ir", rows[0]["引用来源"])
+            self.assertIn("AI 机器人业务推进", rows[0]["因素引用"])
+
+    def test_chain_populates_evidence_fields_from_search_documents(self):
+        class EvidenceSearchProvider(FakeSearchProvider):
+            def search(self, query, max_results):
+                self.search_queries.append(query)
+                return [
+                    SearchDocument(
+                        title="Company IR AI Robotics Strategy",
+                        url="https://ir.example.com/annual-report",
+                        content="AI robotics strategy and policy stability support this company",
+                        query=query,
+                    )
+                ]
+
+            def search_companies_batch(self, market, rows, max_results):
+                self.company_batch_calls.append([row.code for row in rows])
+                return {
+                    row.code: [
+                        SearchDocument(
+                            title="Company IR AI Robotics Strategy",
+                            url="https://ir.example.com/annual-report",
+                            content="AI robotics strategy and policy stability support this company",
+                        )
+                    ]
+                    for row in rows
+                }
+
+        class EvidenceLLMProvider(FakeLLMProvider):
+            def analyze_batch(self, market, signals, market_documents, sector_documents, hot_sectors, company_documents):
+                return [
+                    SignalAnalysisResult(
+                        code=row.code,
+                        name=row.name,
+                        reliability_score=82.5,
+                        confidence_score=76.0,
+                        signal_bias="bullish",
+                        summary="信号与事件共振",
+                        positive_factors=["AI robotics strategy"],
+                        risk_factors=[],
+                        macro_factors=["policy stability"],
+                        news_impact="利好",
+                        source_urls=[],
+                        model=self.model_name,
+                    )
+                    for row in signals
+                ]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            context = SignalAnalysisContext(
+                task_id="task-HK",
+                market="HK",
+                csv_path=csv_path,
+                check_date=date(2026, 5, 9),
+                settings=AnalysisSettings(batch_size=20, search_max_results=2),
+                search_provider=EvidenceSearchProvider(),
+                llm_provider=EvidenceLLMProvider(),
+            )
+
+            with patch.dict(os.environ, {"SIGNAL_ENABLE_API_HOT_SECTORS": "0"}):
+                result = SignalAnalysisChain().run(context)
+
+            analysis = result.results_by_code["HK.00001"]
+            self.assertTrue(analysis.evidence_links)
+            self.assertIn("AI robotics strategy", analysis.factor_citations)
+            self.assertIn("policy stability", analysis.factor_citations)
 
     def test_chain_skips_artifacts_when_llm_is_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

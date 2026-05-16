@@ -18,6 +18,7 @@ import re
 import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
@@ -66,8 +67,78 @@ def _json_or_none(value: Any):
     return json.dumps(value, ensure_ascii=False)
 
 
+def _option_payload(item: Any) -> dict:
+    """Normalize option_lab dataclasses or dicts to repository payloads."""
+    if isinstance(item, dict):
+        payload = dict(item)
+    elif hasattr(item, "to_dict"):
+        payload = dict(item.to_dict())
+    else:
+        payload = {}
+    for key in (
+        "candidate_id", "run_id", "market", "code", "strategy_key", "strategy_name",
+        "score", "recommendation_status", "fit_reason", "snapshot_id", "plan_id",
+        "position_id", "status", "event_id", "event_type", "message", "severity", "provider",
+    ):
+        if key not in payload and hasattr(item, key):
+            payload[key] = getattr(item, key)
+    for key in ("contract_details", "warnings"):
+        if key not in payload and hasattr(item, key):
+            values = getattr(item, key) or []
+            payload[key] = [value.to_dict() if hasattr(value, "to_dict") else value for value in values]
+    if "data_quality" not in payload and hasattr(item, "data_quality"):
+        value = getattr(item, "data_quality")
+        payload["data_quality"] = value.to_dict() if hasattr(value, "to_dict") else value
+    return payload
+
+
+OPTION_CANDIDATE_MACRO_FIELD_KEYS = (
+    "期权评分",
+    "宏观分析评分",
+    "综合评分",
+    "宏观方向",
+    "新闻影响",
+    "热点匹配",
+    "主力资金风险",
+    "宏观摘要",
+    "关键利好因素",
+    "关键风险因素",
+    "宏观/政策因素",
+    "信息来源",
+    "数据缺失原因",
+    "引用来源",
+    "因素引用",
+)
+
+
+def _option_candidate_macro_fields(item: dict) -> dict:
+    return {
+        key: item.get(key)
+        for key in OPTION_CANDIDATE_MACRO_FIELD_KEYS
+        if item.get(key) not in (None, "", [])
+    }
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _mysql_datetime_or_none(value: Any):
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return value
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+    return value
 
 
 def hash_password(password: str, *, iterations: int = 260_000) -> str:
@@ -349,6 +420,7 @@ class MarketDatabase:
     def init_web_schema(self):
         """初始化 Web、Agent、K 线缓存和 artifact 相关表。"""
         self.init_schema("1d")
+        self.init_option_lab_schema()
         self.init_stock_pool_schema()
         self.init_sector_schema()
         self.init_signal_analysis_schema()
@@ -2211,6 +2283,814 @@ class MarketDatabase:
             cursor.execute(sql, (market, code, timeframe, market, code, timeframe, int(max_bars)))
 
     # ------------------------------------------------------------------
+    # Option Lab
+    # ------------------------------------------------------------------
+
+    def init_option_lab_schema(self) -> None:
+        schema_path = Path(__file__).parent / "sql" / "013_option_lab.sql"
+        sql_text = schema_path.read_text(encoding="utf-8")
+        statements = [stmt.strip() for stmt in sql_text.split(";") if stmt.strip()]
+        with self.conn.cursor() as cursor:
+            for statement in statements:
+                cursor.execute(statement)
+            self._ensure_option_lab_schema_migrations(cursor)
+
+    def _ensure_option_lab_schema_migrations(self, cursor) -> None:
+        try:
+            cursor.execute("SELECT macro_fields_json FROM option_strategy_candidates LIMIT 1")
+        except Exception:
+            cursor.execute(
+                """
+                ALTER TABLE option_strategy_candidates
+                ADD COLUMN macro_fields_json JSON NULL COMMENT '宏观分析与综合评分展示字段'
+                AFTER data_quality_json
+                """
+            )
+
+    def create_option_evaluation_run(self, item: dict) -> None:
+        item = _option_payload(item)
+        sql = """
+            INSERT INTO option_evaluation_runs
+                (run_id, mode, user_id, market, code, risk_profile, request_json, status,
+                 warnings_json, data_quality_json)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                mode=VALUES(mode),
+                user_id=VALUES(user_id),
+                market=VALUES(market),
+                code=VALUES(code),
+                risk_profile=VALUES(risk_profile),
+                request_json=VALUES(request_json),
+                status=VALUES(status),
+                warnings_json=VALUES(warnings_json),
+                data_quality_json=VALUES(data_quality_json)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (
+                item.get("run_id"),
+                item.get("mode") or "single",
+                item.get("user_id"),
+                item.get("market"),
+                item.get("code"),
+                item.get("risk_profile") or "balanced",
+                _json_or_none(item.get("request") or item.get("request_json") or {}),
+                item.get("status") or "running",
+                _json_or_none(item.get("warnings") or []),
+                _json_or_none(item.get("data_quality") or {}),
+            ))
+
+    def finish_option_evaluation_run(
+        self,
+        run_id: str,
+        status: str = "completed",
+        warnings: Optional[List[str]] = None,
+        data_quality: Optional[dict] = None,
+    ) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE option_evaluation_runs
+                SET status=%s, warnings_json=%s, data_quality_json=%s, finished_at=%s
+                WHERE run_id=%s
+                """,
+                (status, _json_or_none(warnings or []), _json_or_none(data_quality or {}), _utcnow(), run_id),
+            )
+
+    def fail_option_evaluation_run(
+        self,
+        run_id: str,
+        error_message: str,
+        warnings: Optional[List[str]] = None,
+        data_quality: Optional[dict] = None,
+    ) -> None:
+        merged_warnings = list(warnings or [])
+        if error_message:
+            merged_warnings.append(error_message)
+        self.finish_option_evaluation_run(run_id, "failed", merged_warnings, data_quality or {})
+
+    def get_option_evaluation_run(self, run_id: str) -> Optional[dict]:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT run_id, mode, user_id, market, code, risk_profile, request_json, status,
+                       warnings_json, data_quality_json, created_at, finished_at
+                FROM option_evaluation_runs
+                WHERE run_id=%s
+                LIMIT 1
+                """,
+                (run_id,),
+            )
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "run_id": row[0],
+            "mode": row[1],
+            "user_id": row[2],
+            "market": row[3],
+            "code": row[4],
+            "risk_profile": row[5],
+            "request": _decode_json_field(row[6], {}),
+            "status": row[7],
+            "warnings": _decode_json_field(row[8], []),
+            "data_quality": _decode_json_field(row[9], {}),
+            "created_at": str(row[10]) if row[10] else None,
+            "finished_at": str(row[11]) if row[11] else None,
+        }
+
+    def insert_option_evaluation_items(self, items: Iterable[dict]) -> None:
+        values = []
+        for raw_item in items:
+            item = _option_payload(raw_item)
+            best_strategy = item.get("best_strategy") or {}
+            if item.get("child_run_id"):
+                best_strategy = {**best_strategy, "child_run_id": item.get("child_run_id")}
+            if item.get("candidates") is not None:
+                best_strategy = {**best_strategy, "candidates": item.get("candidates") or []}
+            values.append((
+                item.get("run_id"),
+                item.get("market"),
+                item.get("code"),
+                item.get("name"),
+                item.get("status") or "running",
+                _json_or_none(best_strategy),
+                _json_or_none(item.get("data_quality") or {}),
+                item.get("error_message"),
+            ))
+        if not values:
+            return
+        with self.conn.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO option_evaluation_items
+                    (run_id, market, code, name, status, best_strategy_json, data_quality_json, error_message)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                values,
+            )
+
+    def list_option_evaluation_items(self, run_id: str) -> List[dict]:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT run_id, market, code, name, status, best_strategy_json,
+                       data_quality_json, error_message, created_at
+                FROM option_evaluation_items
+                WHERE run_id=%s
+                ORDER BY id ASC
+                """,
+                (run_id,),
+            )
+            rows = cursor.fetchall() or []
+        return [
+            {
+                "run_id": row[0],
+                "market": row[1],
+                "code": row[2],
+                "name": row[3],
+                "status": row[4],
+                "best_strategy": _decode_json_field(row[5], {}),
+                "data_quality": _decode_json_field(row[6], {}),
+                "error_message": row[7],
+                "created_at": str(row[8]) if row[8] else None,
+            }
+            for row in rows
+        ]
+
+    def insert_option_strategy_candidates(self, candidates: Iterable[dict]) -> None:
+        values = []
+        for raw_item in candidates:
+            item = _option_payload(raw_item)
+            values.append((
+                item.get("candidate_id"),
+                item.get("run_id"),
+                item.get("market"),
+                item.get("code"),
+                item.get("strategy_key"),
+                item.get("strategy_name") or item.get("策略名称"),
+                item.get("score") if item.get("score") is not None else item.get("评分", 0),
+                item.get("recommendation_status") or "observe",
+                item.get("fit_reason") or item.get("适用理由"),
+                _json_or_none(item.get("contract_details") or item.get("合约明细") or []),
+                _json_or_none(item.get("risk_metrics") or {}),
+                _json_or_none(item.get("order_suggestion") or {}),
+                _json_or_none(item.get("warnings") or []),
+                _json_or_none(item.get("data_quality") or item.get("数据质量") or {}),
+                _json_or_none(_option_candidate_macro_fields(item)),
+                item.get("snapshot_id"),
+            ))
+        if not values:
+            return
+        with self.conn.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO option_strategy_candidates
+                    (candidate_id, run_id, market, code, strategy_key, strategy_name, score,
+                     recommendation_status, fit_reason, contract_details_json, risk_metrics_json,
+                     order_suggestion_json, warnings_json, data_quality_json, macro_fields_json, snapshot_id)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON DUPLICATE KEY UPDATE
+                    run_id=VALUES(run_id),
+                    market=VALUES(market),
+                    code=VALUES(code),
+                    strategy_key=VALUES(strategy_key),
+                    strategy_name=VALUES(strategy_name),
+                    score=VALUES(score),
+                    recommendation_status=VALUES(recommendation_status),
+                    fit_reason=VALUES(fit_reason),
+                    contract_details_json=VALUES(contract_details_json),
+                    risk_metrics_json=VALUES(risk_metrics_json),
+                    order_suggestion_json=VALUES(order_suggestion_json),
+                    warnings_json=VALUES(warnings_json),
+                    data_quality_json=VALUES(data_quality_json),
+                    macro_fields_json=VALUES(macro_fields_json),
+                    snapshot_id=VALUES(snapshot_id)
+                """,
+                values,
+            )
+
+    def get_option_strategy_candidate(self, candidate_id: str) -> Optional[dict]:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT candidate_id, run_id, market, code, strategy_key, strategy_name, score,
+                       recommendation_status, fit_reason, contract_details_json, risk_metrics_json,
+                       order_suggestion_json, warnings_json, data_quality_json, macro_fields_json,
+                       snapshot_id, created_at
+                FROM option_strategy_candidates
+                WHERE candidate_id=%s
+                LIMIT 1
+                """,
+                (candidate_id,),
+            )
+            row = cursor.fetchone()
+        return self._option_candidate_from_row(row) if row else None
+
+    def list_option_strategy_candidates(self, run_id: str) -> List[dict]:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT candidate_id, run_id, market, code, strategy_key, strategy_name, score,
+                       recommendation_status, fit_reason, contract_details_json, risk_metrics_json,
+                       order_suggestion_json, warnings_json, data_quality_json, macro_fields_json,
+                       snapshot_id, created_at
+                FROM option_strategy_candidates
+                WHERE run_id=%s
+                ORDER BY score DESC, id ASC
+                """,
+                (run_id,),
+            )
+            rows = cursor.fetchall() or []
+        return [self._option_candidate_from_row(row) for row in rows]
+
+    def _option_candidate_from_row(self, row) -> dict:
+        has_macro_fields = len(row) >= 17
+        macro_fields = _decode_json_field(row[14], {}) if has_macro_fields else {}
+        snapshot_index = 15 if has_macro_fields else 14
+        created_index = 16 if has_macro_fields else 15
+        payload = {
+            "candidate_id": row[0],
+            "run_id": row[1],
+            "market": row[2],
+            "code": row[3],
+            "strategy_key": row[4],
+            "strategy_name": row[5],
+            "score": float(row[6] or 0),
+            "recommendation_status": row[7],
+            "fit_reason": row[8],
+            "contract_details": _decode_json_field(row[9], []),
+            "risk_metrics": _decode_json_field(row[10], {}),
+            "order_suggestion": _decode_json_field(row[11], {}),
+            "warnings": _decode_json_field(row[12], []),
+            "data_quality": _decode_json_field(row[13], {}),
+            "snapshot_id": row[snapshot_index],
+            "created_at": str(row[created_index]) if row[created_index] else None,
+        }
+        if isinstance(macro_fields, dict):
+            payload.update(macro_fields)
+        payload.setdefault("期权评分", payload["score"])
+        payload.setdefault("评分", payload["score"])
+        return payload
+
+    def create_option_order_plan(self, item: dict) -> None:
+        item = _option_payload(item)
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO option_order_plans
+                    (plan_id, candidate_id, user_id, status, contract_details_json,
+                     order_suggestion_json, risk_metrics_json, warnings_json)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                ON DUPLICATE KEY UPDATE
+                    candidate_id=VALUES(candidate_id),
+                    user_id=VALUES(user_id),
+                    status=VALUES(status),
+                    contract_details_json=VALUES(contract_details_json),
+                    order_suggestion_json=VALUES(order_suggestion_json),
+                    risk_metrics_json=VALUES(risk_metrics_json),
+                    warnings_json=VALUES(warnings_json)
+                """,
+                (
+                    item.get("plan_id"),
+                    item.get("candidate_id"),
+                    item.get("user_id"),
+                    item.get("status") or "planned",
+                    _json_or_none(item.get("contract_details") or item.get("合约明细") or []),
+                    _json_or_none(item.get("order_suggestion") or {}),
+                    _json_or_none(item.get("risk_metrics") or {}),
+                    _json_or_none(item.get("warnings") or []),
+                ),
+            )
+
+    def get_option_order_plan(self, plan_id: str) -> Optional[dict]:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT plan_id, candidate_id, user_id, status, contract_details_json,
+                       order_suggestion_json, risk_metrics_json, warnings_json,
+                       created_at, updated_at
+                FROM option_order_plans
+                WHERE plan_id=%s
+                LIMIT 1
+                """,
+                (plan_id,),
+            )
+            row = cursor.fetchone()
+        return self._option_order_plan_from_row(row) if row else None
+
+    def list_option_order_plans(self, user_id: Optional[int] = None, limit: int = 50) -> List[dict]:
+        if user_id is None:
+            sql = """
+                SELECT plan_id, candidate_id, user_id, status, contract_details_json,
+                       order_suggestion_json, risk_metrics_json, warnings_json,
+                       created_at, updated_at
+                FROM option_order_plans
+                ORDER BY created_at DESC
+                LIMIT %s
+            """
+            params = (int(limit),)
+        else:
+            sql = """
+                SELECT plan_id, candidate_id, user_id, status, contract_details_json,
+                       order_suggestion_json, risk_metrics_json, warnings_json,
+                       created_at, updated_at
+                FROM option_order_plans
+                WHERE user_id=%s
+                ORDER BY created_at DESC
+                LIMIT %s
+            """
+            params = (user_id, int(limit))
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall() or []
+        return [self._option_order_plan_from_row(row) for row in rows]
+
+    def _option_order_plan_from_row(self, row) -> dict:
+        return {
+            "plan_id": row[0],
+            "candidate_id": row[1],
+            "user_id": row[2],
+            "status": row[3],
+            "contract_details": _decode_json_field(row[4], []),
+            "order_suggestion": _decode_json_field(row[5], {}),
+            "risk_metrics": _decode_json_field(row[6], {}),
+            "warnings": _decode_json_field(row[7], []),
+            "created_at": str(row[8]) if row[8] else None,
+            "updated_at": str(row[9]) if row[9] else None,
+        }
+
+    def create_option_tracked_position(self, item: dict) -> None:
+        item = _option_payload(item)
+        current_state = item.get("current_state") or {}
+        if item.get("order_suggestion"):
+            current_state.setdefault("订单建议", item.get("order_suggestion"))
+        if item.get("止损价") is not None:
+            current_state.setdefault("止损价", item.get("止损价"))
+        if item.get("止盈价") is not None:
+            current_state.setdefault("止盈价", item.get("止盈价"))
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO option_tracked_positions
+                    (position_id, plan_id, user_id, market, code, strategy_name,
+                     contract_details_json, filled_price, quantity, filled_at, fee,
+                     status, current_state_json, current_action, closed_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON DUPLICATE KEY UPDATE
+                    plan_id=VALUES(plan_id),
+                    user_id=VALUES(user_id),
+                    market=VALUES(market),
+                    code=VALUES(code),
+                    strategy_name=VALUES(strategy_name),
+                    contract_details_json=VALUES(contract_details_json),
+                    filled_price=VALUES(filled_price),
+                    quantity=VALUES(quantity),
+                    filled_at=VALUES(filled_at),
+                    fee=VALUES(fee),
+                    status=VALUES(status),
+                    current_state_json=VALUES(current_state_json),
+                    current_action=VALUES(current_action),
+                    closed_at=VALUES(closed_at)
+                """,
+                (
+                    item.get("position_id"),
+                    item.get("plan_id"),
+                    item.get("user_id"),
+                    item.get("market"),
+                    item.get("code"),
+                    item.get("strategy_name") or item.get("策略名称"),
+                    _json_or_none(item.get("contract_details") or item.get("合约明细") or []),
+                    item.get("filled_price"),
+                    int(item.get("quantity") or 1),
+                    item.get("filled_at"),
+                    item.get("fee"),
+                    item.get("status") or "active",
+                    _json_or_none(current_state),
+                    item.get("current_action"),
+                    item.get("closed_at"),
+                ),
+            )
+
+    def update_option_tracked_position_state(
+        self,
+        position_id: str,
+        current_state: Optional[dict],
+        current_action: Optional[str],
+        status: Optional[str] = None,
+        closed_at: Optional[datetime] = None,
+    ) -> None:
+        assignments = ["current_state_json=%s", "current_action=%s"]
+        params: List[Any] = [_json_or_none(current_state or {}), current_action]
+        if status is not None:
+            assignments.append("status=%s")
+            params.append(status)
+        if closed_at is not None:
+            assignments.append("closed_at=%s")
+            params.append(closed_at)
+        params.append(position_id)
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE option_tracked_positions SET {', '.join(assignments)} WHERE position_id=%s",
+                tuple(params),
+            )
+
+    def get_option_tracked_position(self, position_id: str) -> Optional[dict]:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT position_id, plan_id, user_id, market, code, strategy_name,
+                       contract_details_json, filled_price, quantity, filled_at, fee,
+                       status, current_state_json, current_action, created_at, updated_at, closed_at
+                FROM option_tracked_positions
+                WHERE position_id=%s
+                LIMIT 1
+                """,
+                (position_id,),
+            )
+            row = cursor.fetchone()
+        return self._option_position_from_row(row) if row else None
+
+    def list_option_tracked_positions(
+        self,
+        user_id: Optional[int] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[dict]:
+        where_parts = []
+        params: List[Any] = []
+        if user_id is not None:
+            where_parts.append("user_id=%s")
+            params.append(user_id)
+        if status is not None:
+            where_parts.append("status=%s")
+            params.append(status)
+        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        params.append(int(limit))
+        sql = f"""
+            SELECT position_id, plan_id, user_id, market, code, strategy_name,
+                   contract_details_json, filled_price, quantity, filled_at, fee,
+                   status, current_state_json, current_action, created_at, updated_at, closed_at
+            FROM option_tracked_positions
+            {where_sql}
+            ORDER BY updated_at DESC
+            LIMIT %s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, tuple(params))
+            rows = cursor.fetchall() or []
+        return [self._option_position_from_row(row) for row in rows]
+
+    def _option_position_from_row(self, row) -> dict:
+        current_state = _decode_json_field(row[12], {})
+        return {
+            "position_id": row[0],
+            "plan_id": row[1],
+            "user_id": row[2],
+            "market": row[3],
+            "code": row[4],
+            "strategy_name": row[5],
+            "contract_details": _decode_json_field(row[6], []),
+            "filled_price": float(row[7]) if row[7] is not None else None,
+            "quantity": int(row[8] or 0),
+            "filled_at": str(row[9]) if row[9] else None,
+            "fee": float(row[10]) if row[10] is not None else None,
+            "status": row[11],
+            "current_state": current_state,
+            "current_action": row[13],
+            "order_suggestion": current_state.get("订单建议") or {},
+            "止损价": current_state.get("止损价"),
+            "止盈价": current_state.get("止盈价"),
+            "created_at": str(row[14]) if row[14] else None,
+            "updated_at": str(row[15]) if row[15] else None,
+            "closed_at": str(row[16]) if row[16] else None,
+        }
+
+    def insert_option_monitor_events(self, events: Iterable[dict]) -> None:
+        values = []
+        for raw_item in events:
+            item = _option_payload(raw_item)
+            severity = item.get("severity") or "info"
+            if hasattr(severity, "value_key"):
+                severity = severity.value_key
+            values.append((
+                item.get("event_id"),
+                item.get("position_id"),
+                severity,
+                item.get("event_type"),
+                item.get("message"),
+                item.get("snapshot_id"),
+                1 if item.get("pushed_feishu") else 0,
+            ))
+        if not values:
+            return
+        with self.conn.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO option_monitor_events
+                    (event_id, position_id, severity, event_type, message, snapshot_id, pushed_feishu)
+                VALUES (%s,%s,%s,%s,%s,%s,%s)
+                ON DUPLICATE KEY UPDATE
+                    severity=VALUES(severity),
+                    event_type=VALUES(event_type),
+                    message=VALUES(message),
+                    snapshot_id=VALUES(snapshot_id),
+                    pushed_feishu=VALUES(pushed_feishu)
+                """,
+                values,
+            )
+
+    def list_option_monitor_events(
+        self,
+        position_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[dict]:
+        if position_id:
+            sql = """
+                SELECT event_id, position_id, severity, event_type, message,
+                       snapshot_id, pushed_feishu, created_at
+                FROM option_monitor_events
+                WHERE position_id=%s
+                ORDER BY created_at DESC
+                LIMIT %s
+            """
+            params = (position_id, int(limit))
+        else:
+            sql = """
+                SELECT event_id, position_id, severity, event_type, message,
+                       snapshot_id, pushed_feishu, created_at
+                FROM option_monitor_events
+                ORDER BY created_at DESC
+                LIMIT %s
+            """
+            params = (int(limit),)
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall() or []
+        return [
+            {
+                "event_id": row[0],
+                "position_id": row[1],
+                "severity": row[2],
+                "event_type": row[3],
+                "message": row[4],
+                "snapshot_id": row[5],
+                "pushed_feishu": bool(row[6]),
+                "created_at": str(row[7]) if row[7] else None,
+            }
+            for row in rows
+        ]
+
+    def create_option_market_snapshot(self, item: dict) -> None:
+        item = _option_payload(item)
+        underlying = item.get("underlying") or {}
+        market = item.get("market") or underlying.get("market")
+        code = item.get("code") or underlying.get("code")
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO option_market_snapshots
+                    (snapshot_id, provider, market, code, underlying_json, option_chain_json,
+                     selected_quotes_json, data_quality_json, raw_payload_json, quote_time)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON DUPLICATE KEY UPDATE
+                    provider=VALUES(provider),
+                    market=VALUES(market),
+                    code=VALUES(code),
+                    underlying_json=VALUES(underlying_json),
+                    option_chain_json=VALUES(option_chain_json),
+                    selected_quotes_json=VALUES(selected_quotes_json),
+                    data_quality_json=VALUES(data_quality_json),
+                    raw_payload_json=VALUES(raw_payload_json),
+                    quote_time=VALUES(quote_time)
+                """,
+                (
+                    item.get("snapshot_id"),
+                    item.get("provider"),
+                    market,
+                    code,
+                    _json_or_none(underlying),
+                    _json_or_none(item.get("option_chain") or item.get("option_quotes") or []),
+                    _json_or_none(item.get("selected_quotes") or []),
+                    _json_or_none(item.get("data_quality") or {}),
+                    _json_or_none(item.get("raw_payload") or {}),
+                    item.get("quote_time"),
+                ),
+            )
+
+    def get_option_market_snapshot(self, snapshot_id: str) -> Optional[dict]:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT snapshot_id, provider, market, code, underlying_json, option_chain_json,
+                       selected_quotes_json, data_quality_json, raw_payload_json, quote_time, created_at
+                FROM option_market_snapshots
+                WHERE snapshot_id=%s
+                LIMIT 1
+                """,
+                (snapshot_id,),
+            )
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "snapshot_id": row[0],
+            "provider": row[1],
+            "market": row[2],
+            "code": row[3],
+            "underlying": _decode_json_field(row[4], {}),
+            "option_chain": _decode_json_field(row[5], []),
+            "selected_quotes": _decode_json_field(row[6], []),
+            "data_quality": _decode_json_field(row[7], {}),
+            "raw_payload": _decode_json_field(row[8], {}),
+            "quote_time": str(row[9]) if row[9] else None,
+            "created_at": str(row[10]) if row[10] else None,
+        }
+
+    def upsert_option_macro_analysis_cache(self, item: dict) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO option_macro_analysis_cache
+                    (cache_key, market, code, analysis_profile, macro_score, macro_direction,
+                     news_impact, hot_sector_mark, main_force_risk_level, summary,
+                     positive_factors_json, risk_factors_json, macro_factors_json,
+                     source_urls_json, warnings_json, provider, expires_at, raw_payload_json)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON DUPLICATE KEY UPDATE
+                    market=VALUES(market),
+                    code=VALUES(code),
+                    analysis_profile=VALUES(analysis_profile),
+                    macro_score=VALUES(macro_score),
+                    macro_direction=VALUES(macro_direction),
+                    news_impact=VALUES(news_impact),
+                    hot_sector_mark=VALUES(hot_sector_mark),
+                    main_force_risk_level=VALUES(main_force_risk_level),
+                    summary=VALUES(summary),
+                    positive_factors_json=VALUES(positive_factors_json),
+                    risk_factors_json=VALUES(risk_factors_json),
+                    macro_factors_json=VALUES(macro_factors_json),
+                    source_urls_json=VALUES(source_urls_json),
+                    warnings_json=VALUES(warnings_json),
+                    provider=VALUES(provider),
+                    expires_at=VALUES(expires_at),
+                    raw_payload_json=VALUES(raw_payload_json)
+                """,
+                (
+                    item.get("cache_key"),
+                    item.get("market"),
+                    item.get("code"),
+                    item.get("analysis_profile") or "default",
+                    item.get("macro_score") if item.get("macro_score") is not None else item.get("宏观分析评分"),
+                    item.get("macro_direction") or item.get("宏观方向"),
+                    item.get("news_impact") or item.get("新闻影响"),
+                    item.get("hot_sector_mark") or item.get("热点匹配"),
+                    item.get("main_force_risk_level") or item.get("主力资金风险"),
+                    item.get("summary") or item.get("宏观摘要"),
+                    _json_or_none(item.get("positive_factors") or item.get("关键利好因素") or []),
+                    _json_or_none(item.get("risk_factors") or item.get("关键风险因素") or []),
+                    _json_or_none(item.get("macro_factors") or item.get("宏观/政策因素") or []),
+                    _json_or_none(item.get("source_urls") or item.get("信息来源") or []),
+                    _json_or_none(item.get("warnings") or []),
+                    item.get("provider"),
+                    _mysql_datetime_or_none(item.get("expires_at")),
+                    _json_or_none(item.get("raw_payload") or item),
+                ),
+            )
+
+    def save_option_macro_analysis_cache(self, cache_key: str, row: dict) -> None:
+        self.upsert_option_macro_analysis_cache({**row, "cache_key": cache_key})
+
+    def get_option_macro_analysis_cache(self, cache_key: str) -> Optional[dict]:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT cache_key, market, code, analysis_profile, macro_score, macro_direction,
+                       news_impact, hot_sector_mark, main_force_risk_level, summary,
+                       positive_factors_json, risk_factors_json, macro_factors_json,
+                       source_urls_json, warnings_json, provider, created_at, expires_at,
+                       raw_payload_json
+                FROM option_macro_analysis_cache
+                WHERE cache_key=%s
+                LIMIT 1
+                """,
+                (cache_key,),
+            )
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "cache_key": row[0],
+            "market": row[1],
+            "code": row[2],
+            "analysis_profile": row[3],
+            "macro_score": float(row[4]) if row[4] is not None else None,
+            "macro_direction": row[5],
+            "news_impact": row[6],
+            "hot_sector_mark": row[7],
+            "main_force_risk_level": row[8],
+            "summary": row[9],
+            "positive_factors": _decode_json_field(row[10], []),
+            "risk_factors": _decode_json_field(row[11], []),
+            "macro_factors": _decode_json_field(row[12], []),
+            "source_urls": _decode_json_field(row[13], []),
+            "warnings": _decode_json_field(row[14], []),
+            "provider": row[15],
+            "created_at": str(row[16]) if row[16] else None,
+            "expires_at": str(row[17]) if row[17] else None,
+            "raw_payload": _decode_json_field(row[18], {}),
+        }
+
+    def save_run(self, run_id: str, item: dict) -> None:
+        payload = _option_payload(item)
+        payload.setdefault("run_id", run_id)
+        self.create_option_evaluation_run(payload)
+
+    def save_candidates(self, run_id: str, candidates: Iterable[Any]) -> None:
+        payloads = []
+        for candidate in candidates:
+            payload = _option_payload(candidate)
+            payload.setdefault("run_id", run_id)
+            payloads.append(payload)
+        self.insert_option_strategy_candidates(payloads)
+
+    def get_candidate(self, candidate_id: str) -> Optional[dict]:
+        return self.get_option_strategy_candidate(candidate_id)
+
+    def save_order_plan(self, plan_or_candidate_id: Any, user_id: Optional[int] = None) -> dict:
+        if isinstance(plan_or_candidate_id, dict) or hasattr(plan_or_candidate_id, "to_dict"):
+            payload = _option_payload(plan_or_candidate_id)
+        else:
+            candidate = self.get_option_strategy_candidate(str(plan_or_candidate_id))
+            if not candidate:
+                raise ValueError(f"option candidate not found: {plan_or_candidate_id}")
+            payload = {
+                "plan_id": f"oplan_{secrets.token_hex(12)}",
+                "candidate_id": candidate["candidate_id"],
+                "user_id": user_id,
+                "status": "planned",
+                "contract_details": candidate.get("contract_details") or [],
+                "order_suggestion": candidate.get("order_suggestion") or {},
+                "risk_metrics": candidate.get("risk_metrics") or {},
+                "warnings": candidate.get("warnings") or [],
+            }
+        self.create_option_order_plan(payload)
+        return self.get_option_order_plan(payload["plan_id"]) or payload
+
+    def save_position(self, position: dict) -> None:
+        self.create_option_tracked_position(position)
+
+    def get_position(self, position_id: str) -> Optional[dict]:
+        return self.get_option_tracked_position(position_id)
+
+    def save_events(self, position_id: str, events: Iterable[Any]) -> None:
+        payloads = []
+        for event in events:
+            payload = _option_payload(event)
+            payload.setdefault("position_id", position_id)
+            payloads.append(payload)
+        self.insert_option_monitor_events(payloads)
+
+    # ------------------------------------------------------------------
     # Single stock runs
     # ------------------------------------------------------------------
 
@@ -2834,6 +3714,9 @@ class MarketDatabase:
                     hot_sector_reason TEXT NULL COMMENT '热点板块匹配理由',
                     hot_sector_sources JSON NULL COMMENT '热点板块来源',
                     source_urls JSON NULL COMMENT '信息来源 URL',
+                    data_gaps JSON NULL COMMENT '数据缺失原因',
+                    evidence_links JSON NULL COMMENT '引用来源明细',
+                    factor_citations JSON NULL COMMENT '因素到引用来源的映射',
                     model VARCHAR(128) NULL COMMENT '模型名',
                     raw_response JSON NULL COMMENT '模型原始结构化响应',
                     error_message TEXT NULL COMMENT '错误信息',
@@ -2855,6 +3738,9 @@ class MarketDatabase:
                 ("hot_sector_relevance", "ALTER TABLE screening_signal_analysis ADD COLUMN hot_sector_relevance VARCHAR(64) NULL COMMENT '热点板块关联度' AFTER matched_hot_sectors"),
                 ("hot_sector_reason", "ALTER TABLE screening_signal_analysis ADD COLUMN hot_sector_reason TEXT NULL COMMENT '热点板块匹配理由' AFTER hot_sector_relevance"),
                 ("hot_sector_sources", "ALTER TABLE screening_signal_analysis ADD COLUMN hot_sector_sources JSON NULL COMMENT '热点板块来源' AFTER hot_sector_reason"),
+                ("data_gaps", "ALTER TABLE screening_signal_analysis ADD COLUMN data_gaps JSON NULL COMMENT '数据缺失原因' AFTER source_urls"),
+                ("evidence_links", "ALTER TABLE screening_signal_analysis ADD COLUMN evidence_links JSON NULL COMMENT '引用来源明细' AFTER data_gaps"),
+                ("factor_citations", "ALTER TABLE screening_signal_analysis ADD COLUMN factor_citations JSON NULL COMMENT '因素到引用来源的映射' AFTER evidence_links"),
             ]
             for column, alter_sql in signal_analysis_alters:
                 try:
@@ -2897,6 +3783,9 @@ class MarketDatabase:
                 item.get("hot_sector_reason"),
                 _json_or_none(item.get("hot_sector_sources")),
                 _json_or_none(item.get("source_urls")),
+                _json_or_none(item.get("data_gaps")),
+                _json_or_none(item.get("evidence_links")),
+                _json_or_none(item.get("factor_citations")),
                 item.get("model"),
                 _json_or_none(item.get("raw_response")),
                 item.get("error_message"),
@@ -2910,9 +3799,10 @@ class MarketDatabase:
                  reliability_score, confidence_score, signal_bias, summary,
                  positive_factors, risk_factors, macro_factors, company_events,
                  hot_sectors, hot_sector_mark, matched_hot_sectors, hot_sector_relevance,
-                 hot_sector_reason, hot_sector_sources, source_urls, model, raw_response,
+                 hot_sector_reason, hot_sector_sources, source_urls, data_gaps,
+                 evidence_links, factor_citations, model, raw_response,
                  error_message)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
                 name=VALUES(name),
                 check_date=VALUES(check_date),
@@ -2933,6 +3823,9 @@ class MarketDatabase:
                 hot_sector_reason=VALUES(hot_sector_reason),
                 hot_sector_sources=VALUES(hot_sector_sources),
                 source_urls=VALUES(source_urls),
+                data_gaps=VALUES(data_gaps),
+                evidence_links=VALUES(evidence_links),
+                factor_citations=VALUES(factor_citations),
                 model=VALUES(model),
                 raw_response=VALUES(raw_response),
                 error_message=VALUES(error_message)
@@ -2946,7 +3839,8 @@ class MarketDatabase:
                    reliability_score, confidence_score, signal_bias, summary,
                    positive_factors, risk_factors, macro_factors, company_events,
                    hot_sectors, hot_sector_mark, matched_hot_sectors, hot_sector_relevance,
-                   hot_sector_reason, hot_sector_sources, source_urls, model, raw_response,
+                   hot_sector_reason, hot_sector_sources, source_urls, data_gaps,
+                   evidence_links, factor_citations, model, raw_response,
                    error_message
             FROM screening_signal_analysis
             WHERE task_id=%s
@@ -2979,9 +3873,12 @@ class MarketDatabase:
                 "hot_sector_reason": row[19],
                 "hot_sector_sources": _decode_json_field(row[20], []),
                 "source_urls": _decode_json_field(row[21], []),
-                "model": row[22],
-                "raw_response": _decode_json_field(row[23], None),
-                "error_message": row[24],
+                "data_gaps": _decode_json_field(row[22], []),
+                "evidence_links": _decode_json_field(row[23], []),
+                "factor_citations": _decode_json_field(row[24], {}),
+                "model": row[25],
+                "raw_response": _decode_json_field(row[26], None),
+                "error_message": row[27],
             }
             for row in rows
         ]

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Dict, List, Optional
@@ -25,6 +26,27 @@ def _list_of_strings(value: Any) -> List[str]:
         text = value.strip()
         return [text] if text else []
     return [_string(value)] if _string(value) else []
+
+
+def _list_of_dicts(value: Any) -> List[dict]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _dict_of_link_lists(value: Any) -> Dict[str, List[dict]]:
+    if not isinstance(value, dict):
+        return {}
+    result: Dict[str, List[dict]] = {}
+    for key, links in value.items():
+        result[str(key)] = _list_of_dicts(links)
+    return result
+
+
+def _json_string(value: Any) -> str:
+    if value in (None, [], {}):
+        return ""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 def _optional_float(value: Any) -> Optional[float]:
@@ -205,6 +227,9 @@ class SignalAnalysisResult:
     hot_sector_reason: str = ""
     hot_sector_sources: List[str] = field(default_factory=list)
     source_urls: List[str] = field(default_factory=list)
+    data_gaps: List[str] = field(default_factory=list)
+    evidence_links: List[dict] = field(default_factory=list)
+    factor_citations: Dict[str, List[dict]] = field(default_factory=dict)
     model: str = ""
     raw_response: Any = None
     error_message: str = ""
@@ -234,6 +259,9 @@ class SignalAnalysisResult:
             hot_sector_reason=_string(item.get("hot_sector_reason")),
             hot_sector_sources=_list_of_strings(item.get("hot_sector_sources")),
             source_urls=_list_of_strings(item.get("source_urls")),
+            data_gaps=_list_of_strings(item.get("data_gaps") or item.get("数据缺失原因")),
+            evidence_links=_list_of_dicts(item.get("evidence_links") or item.get("引用来源")),
+            factor_citations=_dict_of_link_lists(item.get("factor_citations") or item.get("因素引用")),
             model=model,
             raw_response=item,
             error_message=_string(item.get("error_message")),
@@ -275,6 +303,9 @@ class SignalAnalysisResult:
             "热点板块来源": "；".join(self.hot_sector_sources),
             "热点板块标记口径": HOT_SECTOR_MARK_CRITERIA,
             "信息来源": "；".join(self.source_urls),
+            "数据缺失原因": "；".join(self.data_gaps),
+            "引用来源": _json_string(self.evidence_links),
+            "因素引用": _json_string(self.factor_citations),
         }
 
     def to_db_row(
@@ -311,6 +342,9 @@ class SignalAnalysisResult:
             "hot_sector_reason": self.hot_sector_reason,
             "hot_sector_sources": self.hot_sector_sources,
             "source_urls": self.source_urls,
+            "data_gaps": self.data_gaps,
+            "evidence_links": self.evidence_links,
+            "factor_citations": self.factor_citations,
             "model": self.model,
             "raw_response": self.raw_response,
             "error_message": self.error_message,
