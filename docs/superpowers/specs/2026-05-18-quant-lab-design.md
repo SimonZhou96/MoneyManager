@@ -77,6 +77,13 @@ Add the following modules under `stock_screener/quant_lab/`:
   - Wraps existing screening strategies into a backtestable strategy interface.
   - Initial candidates include ZuoYi, RSI, EMA, volume, and rule-chain based
     strategies.
+- `rule_chain_adapter.py`
+  - Treats existing rule chains and combinations of meta-rules as first-class
+    Quant Lab strategies.
+  - Evaluates rule chains on historical bars and emits normalized buy, sell, or
+    hold signals.
+  - Records which meta-rules passed, which meta-rules failed, and why the final
+    chain result produced a trade signal.
 - `option_adapter.py`
   - Converts Option Lab strategy candidates and `合约明细` into Quant Lab
     signals.
@@ -101,6 +108,47 @@ The existing boundaries remain:
 - `Quant Lab` answers whether a strategy has historically worked and how it
   behaves in simulation.
 
+## Rule Chain Backtesting
+
+The first implementation priority is to reuse MoneyManager's existing rule
+chains as quantitative strategies.
+
+This means a rule chain is not only a screening condition. In Quant Lab it
+becomes a historical strategy definition:
+
+`meta-rules -> rule chain -> buy/sell/hold signal -> simulated order -> simulated trade -> position -> equity curve -> metrics`
+
+Examples:
+
+- A ZuoYi rule chain can be replayed over historical bars to find every date
+  where the chain would have emitted a buy or bearish signal.
+- A combined chain such as `ZuoYi + RSI + volume` can be replayed as a stricter
+  strategy.
+- Multiple existing meta-rules can be assembled into different rule chains and
+  compared by return, drawdown, win rate, expected value, and trade count.
+
+The rule-chain adapter must distinguish between two concepts:
+
+- **Entry signal**: a rule-chain pass that opens or increases a simulated
+  position.
+- **Exit signal**: a rule-chain pass, inverse signal, or configured risk rule
+  that closes or reduces a simulated position.
+
+If a rule chain only defines entry conditions, the backtest request must specify
+an exit policy. Supported first-version exit policies are:
+
+- inverse signal exit;
+- fixed holding period exit;
+- take-profit exit;
+- stop-loss exit;
+- trailing drawdown exit;
+- end-of-backtest forced close.
+
+Quant Lab must not report a complete trade-level backtest from entry signals
+alone. If no exit policy exists, the system can report signal-forward returns
+over fixed horizons, but the UI must label that as signal analysis rather than
+full simulated trading.
+
 ## Data Flow
 
 ### Backtest Flow
@@ -117,6 +165,22 @@ The existing boundaries remain:
 9. The metrics layer writes a metric snapshot.
 10. The frontend displays charts, metrics, trade details, and data-quality
     warnings.
+
+### Rule Chain Backtest Flow
+
+1. The user selects an existing rule chain or creates a backtest configuration
+   from selected meta-rules.
+2. The backend snapshots the rule-chain definition and stores it with the
+   backtest run so future rule edits do not rewrite historical results.
+3. The data layer loads historical bars for the selected symbol pool.
+4. The rule-chain adapter evaluates the chain on each bar.
+5. Passing entry rules emit normalized entry signals.
+6. Exit rules or the configured exit policy emit normalized exit signals.
+7. Signals create simulated orders through the broker layer.
+8. Orders become simulated trades only if price, liquidity, slippage, and risk
+   checks allow the fill.
+9. Every signal event stores the rule-chain key, rule-chain snapshot, triggered
+   meta-rules, failed meta-rules, signal direction, and signal reason.
 
 ### Limited Option Backtest Flow
 
@@ -146,12 +210,14 @@ Add a new migration such as `sql/014_quant_lab.sql` with these tables:
 
 - `quant_strategy_configs`
   - Stores strategy type, params JSON, market scope, symbol scope, risk config,
-    and paper-trading enabled state.
+    entry rule-chain key, exit policy, and paper-trading enabled state.
 - `quant_backtest_runs`
   - Stores one backtest request, status, data source, request JSON, warning JSON,
-    error message, start/end timestamps, and ownership.
+    error message, start/end timestamps, rule-chain snapshot JSON, and
+    ownership.
 - `quant_signal_events`
-  - Stores normalized signal events and the reason each signal fired.
+  - Stores normalized signal events, rule-chain key, meta-rule results, signal
+    direction, signal strength, and the reason each signal fired.
 - `quant_backtest_orders`
   - Stores simulated orders, order status, limit price, rejected reason, and
     linked signal.
@@ -226,7 +292,9 @@ Layout:
 - Left configuration panel:
   - Market.
   - Symbol pool.
-  - Strategy.
+  - Strategy source: existing rule chain, selected meta-rules, or Option Lab.
+  - Entry rule-chain selection.
+  - Exit policy selection.
   - Date range.
   - Initial cash.
   - Commission.
@@ -248,6 +316,7 @@ Layout:
 - Detail sections:
   - Trade table.
   - Signal-event table.
+  - Rule-chain trigger details.
   - Rejected-order table.
   - Paper orders and positions.
 - Option-only section:
@@ -313,6 +382,9 @@ Backend tests:
   orders, and risk limits.
 - `backtest.py` integration tests for signal, order, trade, position, equity,
   and metric generation.
+- `rule_chain_adapter.py` tests for historical rule evaluation, meta-rule
+  trigger recording, buy/sell/hold signal generation, and missing exit-policy
+  handling.
 - `option_adapter.py` tests for Option Lab candidate conversion and limited
   backtest warnings.
 - API tests for backtest submission, result loading, and paper-trading enable /
@@ -335,7 +407,8 @@ Cost-control tests:
 
 The implementation should be split into phases:
 
-1. Backend data model, metrics, broker, and stock/ETF backtest engine.
+1. Backend data model, metrics, broker, rule-chain adapter, and stock/ETF
+   backtest engine.
 2. FastAPI endpoints and database persistence.
 3. Quant Lab frontend page.
 4. Paper-trading simulation.
