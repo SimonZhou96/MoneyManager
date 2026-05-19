@@ -10,3 +10,4 @@ stock_screener/web_frontend/node_modules/
 stock_screener/web_frontend/dist/
 stock_screener/web_frontend/.npm-cache/
 stock_screener/web_frontend/.vite/
+.worktrees/
