@@ -83,7 +83,7 @@ class OptionLabModelTests(unittest.TestCase):
             option_score=82.5,
             macro_score=70,
             composite_score=78.75,
-            macro_data_gaps=["主力资金/盘口数据未接入期权实验室"],
+            macro_data_gaps=["主力资金/盘口数据缺失或不足"],
             macro_evidence_links=[{"label": "小米年报", "url": "https://ir.mi.com/annual-report"}],
             macro_factor_citations={
                 "小米在AI、机器人领域有业务布局": [
@@ -94,7 +94,7 @@ class OptionLabModelTests(unittest.TestCase):
 
         payload = candidate.to_dict()
 
-        self.assertEqual(payload["数据缺失原因"], ["主力资金/盘口数据未接入期权实验室"])
+        self.assertEqual(payload["数据缺失原因"], ["主力资金/盘口数据缺失或不足"])
         self.assertEqual(payload["引用来源"][0]["label"], "小米年报")
         self.assertEqual(
             payload["因素引用"]["小米在AI、机器人领域有业务布局"][0]["url"],

@@ -3,12 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Protocol
-from urllib.parse import urlparse
 
 from signal_analysis.evidence import (
     build_data_gaps,
     build_evidence_links,
     build_factor_citations,
+    clean_result_factors,
     dedupe,
     dedupe_documents,
     expand_company_documents,
@@ -281,6 +281,7 @@ def macro_analysis_from_signal_result(
     source_documents: Optional[List[SearchDocument]] = None,
 ) -> OptionMacroAnalysis:
     now = _now()
+    clean_result_factors(result)
     evidence_links = build_evidence_links(source_documents or [], result.source_urls or result.news_sources)
     source_urls = dedupe([item["url"] for item in evidence_links] or list(result.source_urls or result.news_sources))
     factor_citations = build_factor_citations(
@@ -358,244 +359,6 @@ def expand_option_company_documents(
     max_results: int,
 ) -> List[SearchDocument]:
     return expand_company_documents(search_provider, market, row, max_results)
-
-
-def _build_option_company_source_queries(market: str, row: ScreeningSignalRow) -> List[str]:
-    subject = " ".join(_option_subject_terms(market, row))
-    queries = [
-        f"{subject} official investor relations annual report business strategy AI robotics large model",
-        f"{subject} annual results announcement AI robotics MiMo CyberDog CyberOne Xiaomi-Robotics-0 VLA",
-    ]
-    if str(market or "").upper() == "HK":
-        digits = "".join(ch for ch in row.code if ch.isdigit()).lstrip("0") or row.code
-        queries.append(f"site:hkexnews.hk/listedco/listconews/sehk {digits} {row.name} annual results AI robotics")
-    return queries
-
-
-def _option_subject_terms(market: str, row: ScreeningSignalRow) -> List[str]:
-    terms = []
-    for value in (row.code, row.name):
-        text = str(value or "").strip()
-        if text and text not in terms:
-            terms.append(text)
-    if str(market or "").upper() == "HK":
-        digits = "".join(ch for ch in str(row.code or "") if ch.isdigit())
-        if digits:
-            padded = digits.zfill(5)
-            no_zero = padded.lstrip("0") or padded
-            for value in (f"{padded}.HK", f"{no_zero}.HK", no_zero):
-                if value not in terms:
-                    terms.append(value)
-    return terms or [row.code]
-
-
-def _build_evidence_links(source_documents: List[SearchDocument], source_urls: List[str]) -> List[dict]:
-    links: List[dict] = []
-    for doc in source_documents:
-        if not (doc.url or "").strip():
-            continue
-        links.append(_evidence_link_from_document(doc))
-    for url in source_urls or []:
-        links.append(_evidence_link_from_url(str(url)))
-    return _dedupe_links(links)
-
-
-def _build_factor_citations(
-    factors: List[str],
-    source_documents: List[SearchDocument],
-    evidence_links: List[dict],
-) -> Dict[str, List[dict]]:
-    documents = [doc for doc in source_documents if (doc.url or "").strip()]
-    links_by_url = {item["url"]: item for item in evidence_links if item.get("url")}
-    citations: Dict[str, List[dict]] = {}
-    for factor in factors:
-        factor_text = str(factor or "").strip()
-        if not factor_text:
-            continue
-        terms = _factor_terms(factor_text)
-        matched: List[dict] = []
-        for doc in documents:
-            haystack = f"{doc.title} {doc.content} {doc.url}".lower()
-            if terms and any(term in haystack for term in terms):
-                link = links_by_url.get(doc.url) or _evidence_link_from_document(doc)
-                matched.append(link)
-        if matched:
-            citations[factor_text] = _dedupe_links(_sort_evidence_links(matched))[:3]
-    return citations
-
-
-def _build_data_gaps(
-    row: Optional[ScreeningSignalRow],
-    result: SignalAnalysisResult,
-    source_documents: List[SearchDocument],
-    factor_citations: Dict[str, List[dict]],
-) -> List[str]:
-    gaps: List[str] = []
-    if not source_documents:
-        gaps.append("公司新闻及事件信息不足")
-    elif _generic_only_sources(source_documents, result.source_urls or result.news_sources):
-        gaps.append("本次检索主要命中行情/公司概览页，缺少公告、年报或公司新闻级来源")
-    if not row or not _has_main_force_context(row):
-        gaps.append("主力资金/盘口数据未接入期权实验室")
-    if str(result.news_impact or "") in {"信息不足", "无明显新闻"} or any("公司新闻" in item for item in result.risk_factors):
-        gaps.append("公司新闻及事件信息不足")
-    uncited = [
-        item for item in [*result.positive_factors, *result.risk_factors, *result.macro_factors]
-        if str(item or "").strip() and str(item or "").strip() not in factor_citations
-    ]
-    if uncited:
-        gaps.append("部分宏观因素缺少可追溯来源")
-    return _dedupe(gaps)
-
-
-def _evidence_link_from_document(doc: SearchDocument) -> dict:
-    url = (doc.url or "").strip()
-    title = (doc.title or "").strip()
-    return {
-        "label": _source_label(url=url, title=title),
-        "url": url,
-        "title": title or url,
-        "domain": _domain(url),
-        "source_type": _source_type(url=url, title=title),
-    }
-
-
-def _evidence_link_from_url(url: str) -> dict:
-    clean_url = str(url or "").strip()
-    return {
-        "label": _source_label(url=clean_url, title=""),
-        "url": clean_url,
-        "title": clean_url,
-        "domain": _domain(clean_url),
-        "source_type": _source_type(url=clean_url, title=""),
-    }
-
-
-def _source_label(url: str, title: str) -> str:
-    host = _domain(url)
-    text = f"{url} {title}".lower()
-    if "ir.mi.com" in host or "xiaomi.gcs-web.com" in host:
-        if "annual" in text or "report" in text or "业绩" in text:
-            return "小米年报"
-        return "小米IR"
-    if "hkexnews.hk" in host:
-        return "HKEX公告"
-    if "arxiv.org" in host:
-        return "arXiv"
-    if "reuters.com" in host:
-        return "Reuters"
-    if "cnbc.com" in host:
-        return "CNBC"
-    if "sec.gov" in host:
-        return "SEC"
-    if "cninfo.com.cn" in host:
-        return "巨潮资讯"
-    if host:
-        return host.replace("www.", "").split(".")[0][:12]
-    return (title or "来源")[:12]
-
-
-def _source_type(url: str, title: str) -> str:
-    host = _domain(url)
-    text = f"{url} {title}".lower()
-    if any(value in host for value in ("ir.mi.com", "xiaomi.gcs-web.com")):
-        return "官方"
-    if any(value in host for value in ("hkexnews.hk", "sec.gov", "cninfo.com.cn", "sse.com.cn", "szse.cn")):
-        return "公告"
-    if "arxiv.org" in host or "paper" in text or "technical report" in text:
-        return "论文"
-    if _is_generic_market_source(url):
-        return "行情"
-    return "新闻"
-
-
-def _domain(url: str) -> str:
-    try:
-        return urlparse(str(url or "")).netloc.lower()
-    except Exception:
-        return ""
-
-
-def _factor_terms(factor: str) -> List[str]:
-    text = str(factor or "").lower()
-    terms: List[str] = []
-    for term in ("ai", "人工智能", "机器人", "robot", "robotics", "mimo", "vla", "cyberdog", "cyberone", "xiaomi-robotics", "大模型"):
-        if term in text or (term in {"robot", "robotics", "vla", "cyberdog", "cyberone", "xiaomi-robotics"} and "机器人" in text):
-            terms.append(term)
-    if "港股" in text or "ipo" in text:
-        terms.extend(["港股", "ipo", "hkex", "listing", "上市"])
-    if "公司新闻" in text or "事件" in text:
-        terms.extend(["news", "event", "announcement", "公告"])
-    if not terms:
-        terms = [part for part in text.replace("；", " ").replace("，", " ").replace(",", " ").split() if len(part) >= 3]
-    return _dedupe(terms)
-
-
-def _has_main_force_context(row: ScreeningSignalRow) -> bool:
-    values = [
-        row.main_force_risk_level,
-        row.main_force_risk_score,
-        row.main_force_risk_signals,
-        row.main_force_risk_summary,
-        row.main_force_market_data_observation,
-        row.main_force_fund_flow_data,
-        row.main_force_order_book_data,
-        row.main_force_lhb_data,
-        row.main_force_chip_data,
-    ]
-    normalized = [str(value or "").strip() for value in values]
-    return any(value and value not in {"数据不足", "暂无", "无"} for value in normalized)
-
-
-def _generic_only_sources(source_documents: List[SearchDocument], source_urls: List[str]) -> bool:
-    urls = [(doc.url or "").strip() for doc in source_documents if (doc.url or "").strip()]
-    urls.extend(str(url or "").strip() for url in source_urls or [] if str(url or "").strip())
-    if not urls:
-        return False
-    return all(_is_generic_market_source(url) for url in urls)
-
-
-def _is_generic_market_source(url: str) -> bool:
-    text = str(url or "").lower()
-    return any(
-        pattern in text
-        for pattern in (
-            "reuters.com/markets/companies",
-            "cnbc.com/quotes",
-            "finance.yahoo.com/quote",
-            "google.com/finance",
-            "marketwatch.com/investing",
-        )
-    )
-
-
-def _dedupe_documents(documents: List[SearchDocument]) -> List[SearchDocument]:
-    rows: List[SearchDocument] = []
-    seen = set()
-    for doc in documents:
-        key = (doc.url or doc.title or doc.content or "").strip()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        rows.append(doc)
-    return rows
-
-
-def _sort_evidence_links(links: List[dict]) -> List[dict]:
-    priority = {"官方": 0, "公告": 1, "论文": 2, "新闻": 3, "行情": 4}
-    return sorted(links, key=lambda item: (priority.get(str(item.get("source_type") or ""), 9), str(item.get("label") or "")))
-
-
-def _dedupe_links(links: List[dict]) -> List[dict]:
-    rows: List[dict] = []
-    seen = set()
-    for link in links:
-        url = str(link.get("url") or "").strip()
-        if not url or url in seen:
-            continue
-        seen.add(url)
-        rows.append(link)
-    return _sort_evidence_links(rows)
 
 
 def _list_of_dicts(value: Any) -> List[dict]:

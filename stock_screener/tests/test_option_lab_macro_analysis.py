@@ -280,10 +280,55 @@ class OptionLabMacroAnalysisTests(unittest.TestCase):
         )
         payload = analysis.to_dict()
 
-        self.assertIn("主力资金/盘口数据未接入期权实验室", payload["数据缺失原因"])
+        self.assertIn("主力资金/盘口数据缺失或不足", payload["数据缺失原因"])
         self.assertIn("引用来源", payload)
         self.assertEqual(payload["因素引用"]["小米在AI、机器人领域有业务布局"][0]["label"], "小米年报")
         self.assertEqual(payload["因素引用"]["小米在AI、机器人领域有业务布局"][0]["url"], "https://ir.mi.com/annual-report")
+
+    def test_macro_analysis_filters_source_labels_from_factors_and_dedupes_same_source_tags(self):
+        row = screening_row_from_snapshot(
+            "HK",
+            "HK.01810",
+            FakeOptionMarketDataProvider().fetch_snapshot("HK", "HK.01810"),
+        )
+        result = SignalAnalysisResult(
+            code="HK.01810",
+            name="小米集团",
+            reliability_score=70,
+            signal_bias="bullish",
+            summary="技术信号偏多",
+            positive_factors=["涉及AI和机器人热点板块", "HKEX公告", "HKEX公告"],
+            risk_factors=[],
+            macro_factors=[],
+            news_impact="中性",
+            hot_sector_mark="观察",
+        )
+        docs = [
+            SearchDocument(
+                title="HKEX announcement one",
+                url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/one.pdf",
+                content="AI robotics announcement",
+            ),
+            SearchDocument(
+                title="HKEX announcement two",
+                url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/two.pdf",
+                content="AI robotics annual results",
+            ),
+        ]
+
+        analysis = macro_analysis_from_signal_result(
+            result=result,
+            warnings=[],
+            provider="fake-model",
+            ttl_minutes=60,
+            row=row,
+            source_documents=docs,
+        )
+        payload = analysis.to_dict()
+
+        self.assertEqual(payload["关键利好因素"], ["涉及AI和机器人热点板块"])
+        self.assertEqual(len(payload["因素引用"]["涉及AI和机器人热点板块"]), 1)
+        self.assertEqual(payload["因素引用"]["涉及AI和机器人热点板块"][0]["label"], "HKEX公告")
 
     def test_expand_option_company_documents_adds_official_and_filing_queries(self):
         row = screening_row_from_snapshot(

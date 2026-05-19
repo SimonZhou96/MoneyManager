@@ -1283,6 +1283,76 @@ class SignalAnalysisTest(unittest.TestCase):
             self.assertIn("AI robotics strategy", analysis.factor_citations)
             self.assertIn("policy stability", analysis.factor_citations)
 
+    def test_chain_filters_source_labels_from_factors_and_dedupes_same_source_tags(self):
+        class HkexSearchProvider(FakeSearchProvider):
+            def search(self, query, max_results):
+                self.search_queries.append(query)
+                return [
+                    SearchDocument(
+                        title="HKEX announcement market",
+                        url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/market.pdf",
+                        content="AI robotics strategy and policy stability",
+                        query=query,
+                    )
+                ]
+
+            def search_companies_batch(self, market, rows, max_results):
+                self.company_batch_calls.append([row.code for row in rows])
+                return {
+                    row.code: [
+                        SearchDocument(
+                            title="HKEX announcement one",
+                            url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/one.pdf",
+                            content="AI robotics strategy",
+                        ),
+                        SearchDocument(
+                            title="HKEX announcement two",
+                            url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/two.pdf",
+                            content="AI robotics strategy",
+                        ),
+                    ]
+                    for row in rows
+                }
+
+        class SourceLabelLLMProvider(FakeLLMProvider):
+            def analyze_batch(self, market, signals, market_documents, sector_documents, hot_sectors, company_documents):
+                return [
+                    SignalAnalysisResult(
+                        code=row.code,
+                        name=row.name,
+                        reliability_score=70,
+                        confidence_score=60,
+                        signal_bias="bullish",
+                        summary="信号偏多",
+                        positive_factors=["AI robotics strategy", "HKEX公告", "HKEX公告"],
+                        risk_factors=[],
+                        macro_factors=[],
+                        news_impact="中性",
+                        model=self.model_name,
+                    )
+                    for row in signals
+                ]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            context = SignalAnalysisContext(
+                task_id="task-HK",
+                market="HK",
+                csv_path=csv_path,
+                check_date=date(2026, 5, 9),
+                settings=AnalysisSettings(batch_size=20, search_max_results=2),
+                search_provider=HkexSearchProvider(),
+                llm_provider=SourceLabelLLMProvider(),
+            )
+
+            with patch.dict(os.environ, {"SIGNAL_ENABLE_API_HOT_SECTORS": "0"}):
+                result = SignalAnalysisChain().run(context)
+
+            analysis = result.results_by_code["HK.00001"]
+            self.assertEqual(analysis.positive_factors, ["AI robotics strategy"])
+            self.assertEqual(len(analysis.factor_citations["AI robotics strategy"]), 1)
+            self.assertEqual(analysis.factor_citations["AI robotics strategy"][0]["label"], "HKEX公告")
+
     def test_chain_skips_artifacts_when_llm_is_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             csv_path = self.write_csv(tmp_dir)

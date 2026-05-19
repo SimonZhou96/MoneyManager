@@ -1,0 +1,52 @@
+<h2>量化实验室页面结构</h2>
+<p class="subtitle">低保真布局：第一版重点是配置、结果、交易明细、纸面交易状态，而不是营销式页面。</p>
+
+<div class="mockup">
+  <div class="mockup-header">MoneyManager / 量化实验室</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:260px 1fr;gap:14px;min-height:430px">
+      <div class="mock-sidebar">
+        <div class="label">回测配置</div>
+        <div class="placeholder">市场：US / HK / A</div>
+        <div class="placeholder">标的池：股票 / ETF / 自选列表</div>
+        <div class="placeholder">策略：左一 / RSI / EMA / Option Lab</div>
+        <div class="placeholder">时间范围 / 初始资金</div>
+        <div class="placeholder">手续费 / 滑点 / 风险</div>
+        <button class="mock-button">开始回测</button>
+      </div>
+      <div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px">
+          <div class="placeholder">总收益</div>
+          <div class="placeholder">最大回撤</div>
+          <div class="placeholder">胜率</div>
+          <div class="placeholder">盈亏比</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1.3fr .7fr;gap:12px;margin-bottom:12px">
+          <div class="placeholder" style="height:150px">净值曲线 + 回撤曲线</div>
+          <div class="placeholder" style="height:150px">策略诊断<br>样本数 / 连亏 / 风险提示</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="placeholder" style="height:120px">交易明细<br>信号 -> 订单 -> 成交</div>
+          <div class="placeholder" style="height:120px">纸面交易<br>模拟订单 / 持仓 / 当前风险</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="approve" onclick="toggleSelect(this)">
+    <div class="letter">OK</div>
+    <div class="content">
+      <h3>认可这个页面组织</h3>
+      <p>左侧配置，右侧结果总览、曲线、诊断、交易明细和纸面交易。</p>
+    </div>
+  </div>
+  <div class="option" data-choice="revise" onclick="toggleSelect(this)">
+    <div class="letter">改</div>
+    <div class="content">
+      <h3>需要调整</h3>
+      <p>例如优先展示纸面交易、期权策略，或拆成多个子页面。</p>
+    </div>
+  </div>
+</div>

@@ -12,6 +12,23 @@ from urllib.parse import urlparse
 from .models import ScreeningSignalRow, SearchDocument, SignalAnalysisResult
 
 
+SOURCE_LABEL_FACTORS = {
+    "HKEX公告",
+    "SEC",
+    "巨潮资讯",
+    "上交所公告",
+    "深交所公告",
+    "Reuters",
+    "CNBC",
+    "Yahoo Finance",
+    "arXiv",
+    "小米IR",
+    "小米年报",
+    "小米公告",
+    "公司IR",
+}
+
+
 def expand_company_documents(
     search_provider,
     market: str,
@@ -119,7 +136,7 @@ def build_factor_citations(
                 link = links_by_url.get(doc.url) or evidence_link_from_document(doc)
                 matched.append(link)
         if matched:
-            citations[factor_text] = dedupe_links(sort_evidence_links(matched))[:3]
+            citations[factor_text] = dedupe_links_by_label(dedupe_links(sort_evidence_links(matched)))[:3]
     return citations
 
 
@@ -136,10 +153,7 @@ def build_data_gaps(
     elif generic_only_sources(source_documents, result.source_urls or result.news_sources):
         gaps.append("本次检索主要命中行情/公司概览页，缺少公告、年报或公司新闻级来源")
     if not row or not has_main_force_context(row):
-        if main_force_context_label == "期权实验室":
-            gaps.append("主力资金/盘口数据未接入期权实验室")
-        else:
-            gaps.append(f"主力资金/盘口数据未完整接入{main_force_context_label}")
+        gaps.append("主力资金/盘口数据缺失或不足")
     if str(result.news_impact or "") in {"信息不足", "无明显新闻"} or any("公司新闻" in item for item in result.risk_factors):
         gaps.append("公司新闻及事件信息不足")
     uncited = [
@@ -158,6 +172,7 @@ def apply_evidence_to_result(
     source_documents: List[SearchDocument],
     main_force_context_label: str = "股票筛选",
 ) -> None:
+    clean_result_factors(result)
     evidence_links = build_evidence_links(source_documents, result.source_urls or result.news_sources)
     result.evidence_links = evidence_links
     if not result.source_urls:
@@ -174,6 +189,29 @@ def apply_evidence_to_result(
         factor_citations=result.factor_citations,
         main_force_context_label=main_force_context_label,
     )
+
+
+def clean_result_factors(result: SignalAnalysisResult) -> None:
+    result.positive_factors = clean_factor_list(result.positive_factors)
+    result.risk_factors = clean_factor_list(result.risk_factors)
+    result.macro_factors = clean_factor_list(result.macro_factors)
+
+
+def clean_factor_list(factors: List[str]) -> List[str]:
+    rows: List[str] = []
+    seen = set()
+    for item in factors or []:
+        text = str(item or "").strip()
+        if not text or is_source_label_factor(text) or text in seen:
+            continue
+        seen.add(text)
+        rows.append(text)
+    return rows
+
+
+def is_source_label_factor(value: str) -> bool:
+    text = str(value or "").strip()
+    return text in SOURCE_LABEL_FACTORS
 
 
 def evidence_link_from_document(doc: SearchDocument) -> dict:
@@ -335,6 +373,21 @@ def dedupe_links(links: List[dict]) -> List[dict]:
         seen.add(url)
         rows.append(link)
     return sort_evidence_links(rows)
+
+
+def dedupe_links_by_label(links: List[dict]) -> List[dict]:
+    rows: List[dict] = []
+    seen = set()
+    for link in links:
+        key = (
+            str(link.get("label") or "").strip(),
+            str(link.get("source_type") or "").strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(link)
+    return rows
 
 
 def list_of_dicts(value: Any) -> List[dict]:

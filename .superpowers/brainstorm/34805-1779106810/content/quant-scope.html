@@ -1,0 +1,37 @@
+<h2>量化框架第一阶段范围</h2>
+<p class="subtitle">先选一个 MVP 边界。后续设计会围绕这个边界展开，避免一次性把研究、回测、实盘和期权全量能力混在一起。</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>股票优先回测</h3>
+      <p>先把股票/ETF 策略的历史回测、胜率、盈亏比、净值曲线和交易明细跑通，再接期权。实现最快，数据最稳定。</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>股票 + 期权统一框架</h3>
+      <p>第一版就建立统一信号、撮合、绩效模型；股票先完整落地，期权支持策略回放和受限回测。架构更稳，复杂度中等。</p>
+    </div>
+  </div>
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>期权优先完整回测</h3>
+      <p>围绕期权链、Greeks、IV、DTE、多合约组合、最大亏损和行权风险设计。价值高，但历史期权数据质量是最大风险。</p>
+    </div>
+  </div>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">建议架构方向</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div class="placeholder">行情源<br>Futu / AKShare / yfinance</div>
+      <div class="placeholder">回测引擎<br>信号 -> 撮合 -> 持仓</div>
+      <div class="placeholder">结果分析<br>胜率 / 回撤 / 净值</div>
+    </div>
+  </div>
+</div>
