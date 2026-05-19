@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { api } from './api'
+import { QuantLab } from './features/quant/QuantLab'
 import './styles.css'
 
 type User = { id: number; username: string; role: string }
@@ -236,22 +238,6 @@ const STATUS_LABELS: Record<string, string> = {
   true: '通过'
 }
 
-async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options
-  })
-  const payload = await response.json().catch(() => null)
-  if (payload?.ok === false) {
-    throw new Error(payload.message || '请求失败，请稍后重试')
-  }
-  if (!response.ok) {
-    throw new Error(payload?.detail || payload?.message || `${response.status} ${response.statusText}`)
-  }
-  return payload as T
-}
-
 function chainDisplay(chain?: Partial<RuleChain> | null) {
   if (!chain?.chain_key) return '默认链/历史任务'
   return chain.chain_name ? `${chain.chain_name} (${chain.chain_key})` : chain.chain_key
@@ -346,6 +332,7 @@ function App() {
           <button className={page === 'screening' ? 'active' : ''} onClick={() => setPage('screening')}>全市场筛选</button>
           <button className={page === 'single' ? 'active' : ''} onClick={() => setPage('single')}>单股选股</button>
           <button className={page === 'options' ? 'active' : ''} onClick={() => setPage('options')}>期权实验室</button>
+          <button className={page === 'quant' ? 'active' : ''} onClick={() => setPage('quant')}>量化实验室</button>
           <button className={page === 'rules' ? 'active' : ''} onClick={() => setPage('rules')}>规则链</button>
         </nav>
         <div className="sidebar-footer">
@@ -361,6 +348,7 @@ function App() {
         {page === 'screening' && <Screening />}
         {page === 'single' && <SingleStock />}
         {page === 'options' && <OptionLab />}
+        {page === 'quant' && <QuantLab />}
         {page === 'rules' && <Rules />}
         {page === 'task' && <TaskDetail taskId={selectedTaskId} />}
         {page === 'singleRun' && <SingleRunDetail runId={selectedSingleRunId} />}

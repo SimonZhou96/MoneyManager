@@ -294,9 +294,56 @@ pre { overflow: auto; background: #0f172a; color: #e2e8f0; padding: 12px; border
   background: #f8fbff;
 }
 
+.quant-lab {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.quant-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.quant-config {
+  display: grid;
+  gap: 10px;
+}
+
+.quant-config textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.quant-results {
+  display: grid;
+  gap: 16px;
+}
+
+.metric-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metric-card {
+  border: 1px solid var(--border-color, #d8dee4);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chart-placeholder {
+  min-height: 180px;
+}
+
 @media (max-width: 900px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: static; }
-  .metric-grid, .form-grid, .result-layout, .option-form, .option-fill-form, .option-layout, .option-summary-grid { grid-template-columns: 1fr; }
+  .metric-grid, .form-grid, .result-layout, .option-form, .option-fill-form, .option-layout, .option-summary-grid, .quant-grid, .metric-row { grid-template-columns: 1fr; }
   .option-detail-heading { display: grid; }
 }
