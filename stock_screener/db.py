@@ -119,6 +119,23 @@ def _option_candidate_macro_fields(item: dict) -> dict:
     }
 
 
+class InMemoryQuantRepository:
+    def __init__(self):
+        self.runs = {}
+
+    def create_quant_backtest_run(self, row: dict) -> None:
+        self.runs[row["run_id"]] = {**row, "metrics": {}, "warnings": []}
+
+    def finish_quant_backtest_run(self, run_id: str, metrics: dict, warnings: list[str]) -> None:
+        row = self.runs[run_id]
+        row["status"] = "completed"
+        row["metrics"] = metrics
+        row["warnings"] = warnings
+
+    def get_quant_backtest_run(self, run_id: str) -> dict | None:
+        return self.runs.get(run_id)
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -421,6 +438,7 @@ class MarketDatabase:
         """初始化 Web、Agent、K 线缓存和 artifact 相关表。"""
         self.init_schema("1d")
         self.init_option_lab_schema()
+        self.init_quant_lab_schema()
         self.init_stock_pool_schema()
         self.init_sector_schema()
         self.init_signal_analysis_schema()
@@ -2285,6 +2303,80 @@ class MarketDatabase:
     # ------------------------------------------------------------------
     # Option Lab
     # ------------------------------------------------------------------
+
+    def init_quant_lab_schema(self) -> None:
+        schema_path = Path(__file__).parent / "sql" / "014_quant_lab.sql"
+        sql_text = schema_path.read_text(encoding="utf-8")
+        statements = [stmt.strip() for stmt in sql_text.split(";") if stmt.strip()]
+        with self.conn.cursor() as cursor:
+            for statement in statements:
+                cursor.execute(statement)
+
+    def create_quant_backtest_run(self, row: dict) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO quant_backtest_runs
+                    (run_id, user_id, status, request_json, rule_chain_snapshot_json, warnings_json)
+                VALUES (%s,%s,%s,%s,%s,%s)
+                ON DUPLICATE KEY UPDATE
+                    user_id=VALUES(user_id),
+                    status=VALUES(status),
+                    request_json=VALUES(request_json),
+                    rule_chain_snapshot_json=VALUES(rule_chain_snapshot_json),
+                    warnings_json=VALUES(warnings_json)
+                """,
+                (
+                    row["run_id"],
+                    row.get("user_id"),
+                    row.get("status", "running"),
+                    _json_or_none(row.get("request") or {}),
+                    _json_or_none(row.get("rule_chain_snapshot") or {}),
+                    _json_or_none(row.get("warnings") or []),
+                ),
+            )
+
+    def finish_quant_backtest_run(self, run_id: str, metrics: dict, warnings: list[str]) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE quant_backtest_runs
+                SET status='completed',
+                    metrics_json=%s,
+                    warnings_json=%s,
+                    finished_at=%s
+                WHERE run_id=%s
+                """,
+                (_json_or_none(metrics or {}), _json_or_none(warnings or []), _utcnow(), run_id),
+            )
+
+    def get_quant_backtest_run(self, run_id: str) -> Optional[dict]:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT run_id, user_id, status, request_json, rule_chain_snapshot_json,
+                       metrics_json, warnings_json, error_message, created_at, finished_at
+                FROM quant_backtest_runs
+                WHERE run_id=%s
+                LIMIT 1
+                """,
+                (run_id,),
+            )
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "run_id": row[0],
+            "user_id": row[1],
+            "status": row[2],
+            "request": _decode_json_field(row[3], {}),
+            "rule_chain_snapshot": _decode_json_field(row[4], {}),
+            "metrics": _decode_json_field(row[5], {}),
+            "warnings": _decode_json_field(row[6], []),
+            "error_message": row[7],
+            "created_at": str(row[8]) if row[8] else None,
+            "finished_at": str(row[9]) if row[9] else None,
+        }
 
     def init_option_lab_schema(self) -> None:
         schema_path = Path(__file__).parent / "sql" / "013_option_lab.sql"
