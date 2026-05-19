@@ -98,3 +98,42 @@ class MetricSnapshot:
     capital_utilization: float = 0
     max_position_weight: float = 0
     option_metrics: Dict[str, Any] = field(default_factory=dict)
+
+
+def bar_to_dict(bar: Bar) -> Dict[str, Any]:
+    return {
+        "date": bar.ts.isoformat(),
+        "open": float(bar.open),
+        "high": float(bar.high),
+        "low": float(bar.low),
+        "close": float(bar.close),
+        "volume": float(bar.volume),
+    }
+
+
+def signal_to_dict(signal: Signal, price: Optional[float] = None) -> Dict[str, Any]:
+    return {
+        "signal_id": signal.signal_id,
+        "date": signal.ts.isoformat(),
+        "market": signal.market,
+        "symbol": signal.symbol,
+        "direction": signal.direction,
+        "reason": signal.reason,
+        "strength": float(signal.strength),
+        "rule_chain_key": signal.rule_chain_key,
+        "price": price,
+    }
+
+
+def trade_to_dict(trade: Trade) -> Dict[str, Any]:
+    return {
+        "trade_id": trade.trade_id,
+        "order_id": trade.order_id,
+        "date": trade.ts.isoformat() if trade.ts else None,
+        "symbol": trade.symbol,
+        "side": trade.side,
+        "quantity": int(trade.quantity),
+        "price": float(trade.price),
+        "fee": float(trade.fee),
+        "slippage": float(trade.slippage),
+    }

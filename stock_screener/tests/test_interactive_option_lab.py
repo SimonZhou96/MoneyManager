@@ -76,7 +76,7 @@ class InteractiveOptionLabTests(unittest.TestCase):
         self.assertGreaterEqual(len(app.repository.order_plans), 1)
 
     def test_shell_script_starts_persistent_cli(self):
-        script_path = Path(__file__).resolve().parents[1] / "run_option_lab_shell.sh"
+        script_path = Path(__file__).resolve().parents[1] / "scripts" / "run_option_lab_shell.sh"
         env = os.environ.copy()
         env["OPTION_LAB_MARKET_DATA_MODE"] = "fake"
         env["PYTHONDONTWRITEBYTECODE"] = "1"

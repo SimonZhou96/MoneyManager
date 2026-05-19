@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+STOCK_SCREENER_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "$STOCK_SCREENER_DIR"
 
 if [[ -f ".env" ]]; then
   set -a
@@ -11,7 +12,7 @@ if [[ -f ".env" ]]; then
   set +a
 fi
 
-RUNTIME_HOME="${RUNTIME_HOME:-$SCRIPT_DIR/.runtime_home}"
+RUNTIME_HOME="${RUNTIME_HOME:-$STOCK_SCREENER_DIR/.runtime_home}"
 mkdir -p "$RUNTIME_HOME"
 export HOME="$RUNTIME_HOME"
 export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"

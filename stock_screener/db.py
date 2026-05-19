@@ -124,13 +124,55 @@ class InMemoryQuantRepository:
         self.runs = {}
 
     def create_quant_backtest_run(self, row: dict) -> None:
-        self.runs[row["run_id"]] = {**row, "metrics": {}, "warnings": []}
+        self.runs[row["run_id"]] = {
+            **row,
+            "metrics": {},
+            "chart": {},
+            "warnings": list(row.get("warnings") or []),
+            "progress_pct": int(row.get("progress_pct") or 0),
+            "current_stage": row.get("current_stage") or "",
+            "progress_logs": list(row.get("progress_logs") or []),
+            "error_message": row.get("error_message"),
+        }
 
-    def finish_quant_backtest_run(self, run_id: str, metrics: dict, warnings: list[str]) -> None:
+    def update_quant_backtest_progress(
+        self,
+        run_id: str,
+        *,
+        status: str | None = None,
+        progress_pct: int | None = None,
+        current_stage: str | None = None,
+        log_message: str | None = None,
+    ) -> None:
+        row = self.runs[run_id]
+        if status is not None:
+            row["status"] = status
+        if progress_pct is not None:
+            row["progress_pct"] = max(0, min(100, int(progress_pct)))
+        if current_stage is not None:
+            row["current_stage"] = current_stage
+        if log_message:
+            row.setdefault("progress_logs", []).append(_progress_log_entry(log_message))
+
+    def finish_quant_backtest_run(self, run_id: str, metrics: dict, warnings: list[str], chart: dict | None = None) -> None:
         row = self.runs[run_id]
         row["status"] = "completed"
+        row["progress_pct"] = 100
+        row["current_stage"] = "回测完成"
         row["metrics"] = metrics
+        row["chart"] = chart or {}
         row["warnings"] = warnings
+        row.setdefault("progress_logs", []).append(_progress_log_entry("回测完成"))
+
+    def fail_quant_backtest_run(self, run_id: str, error_message: str, warnings: list[str] | None = None) -> None:
+        row = self.runs[run_id]
+        row["status"] = "failed"
+        row["progress_pct"] = max(int(row.get("progress_pct") or 0), 100)
+        row["current_stage"] = "执行失败"
+        row["error_message"] = error_message
+        if warnings is not None:
+            row["warnings"] = warnings
+        row.setdefault("progress_logs", []).append(_progress_log_entry(error_message))
 
     def get_quant_backtest_run(self, run_id: str) -> dict | None:
         return self.runs.get(run_id)
@@ -138,6 +180,10 @@ class InMemoryQuantRepository:
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _progress_log_entry(message: str) -> dict:
+    return {"time": _utcnow().isoformat(timespec="seconds"), "message": str(message)}
 
 
 def _mysql_datetime_or_none(value: Any):
@@ -2311,51 +2357,139 @@ class MarketDatabase:
         with self.conn.cursor() as cursor:
             for statement in statements:
                 cursor.execute(statement)
+            self._ensure_quant_lab_schema_migrations(cursor)
+
+    def _ensure_quant_lab_schema_migrations(self, cursor) -> None:
+        try:
+            cursor.execute("SELECT progress_pct FROM quant_backtest_runs LIMIT 1")
+        except Exception:
+            cursor.execute("ALTER TABLE quant_backtest_runs ADD COLUMN progress_pct INT NOT NULL DEFAULT 0 AFTER status")
+        try:
+            cursor.execute("SELECT current_stage FROM quant_backtest_runs LIMIT 1")
+        except Exception:
+            cursor.execute("ALTER TABLE quant_backtest_runs ADD COLUMN current_stage VARCHAR(64) NULL AFTER progress_pct")
+        try:
+            cursor.execute("SELECT chart_json FROM quant_backtest_runs LIMIT 1")
+        except Exception:
+            cursor.execute("ALTER TABLE quant_backtest_runs ADD COLUMN chart_json JSON NULL AFTER metrics_json")
+        try:
+            cursor.execute("SELECT progress_logs_json FROM quant_backtest_runs LIMIT 1")
+        except Exception:
+            cursor.execute(
+                "ALTER TABLE quant_backtest_runs ADD COLUMN progress_logs_json JSON NULL AFTER warnings_json"
+            )
 
     def create_quant_backtest_run(self, row: dict) -> None:
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
                 INSERT INTO quant_backtest_runs
-                    (run_id, user_id, status, request_json, rule_chain_snapshot_json, warnings_json)
-                VALUES (%s,%s,%s,%s,%s,%s)
+                    (run_id, user_id, status, progress_pct, current_stage, request_json,
+                     rule_chain_snapshot_json, warnings_json, progress_logs_json)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON DUPLICATE KEY UPDATE
                     user_id=VALUES(user_id),
                     status=VALUES(status),
+                    progress_pct=VALUES(progress_pct),
+                    current_stage=VALUES(current_stage),
                     request_json=VALUES(request_json),
                     rule_chain_snapshot_json=VALUES(rule_chain_snapshot_json),
-                    warnings_json=VALUES(warnings_json)
+                    warnings_json=VALUES(warnings_json),
+                    progress_logs_json=VALUES(progress_logs_json)
                 """,
                 (
                     row["run_id"],
                     row.get("user_id"),
                     row.get("status", "running"),
+                    int(row.get("progress_pct") or 0),
+                    row.get("current_stage"),
                     _json_or_none(row.get("request") or {}),
                     _json_or_none(row.get("rule_chain_snapshot") or {}),
                     _json_or_none(row.get("warnings") or []),
+                    _json_or_none(row.get("progress_logs") or []),
                 ),
             )
 
-    def finish_quant_backtest_run(self, run_id: str, metrics: dict, warnings: list[str]) -> None:
+    def update_quant_backtest_progress(
+        self,
+        run_id: str,
+        *,
+        status: str | None = None,
+        progress_pct: int | None = None,
+        current_stage: str | None = None,
+        log_message: str | None = None,
+    ) -> None:
+        current = self.get_quant_backtest_run(run_id) or {}
+        logs = list(current.get("progress_logs") or [])
+        if log_message:
+            logs.append(_progress_log_entry(log_message))
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE quant_backtest_runs
+                SET status=COALESCE(%s, status),
+                    progress_pct=COALESCE(%s, progress_pct),
+                    current_stage=COALESCE(%s, current_stage),
+                    progress_logs_json=%s
+                WHERE run_id=%s
+                """,
+                (
+                    status,
+                    None if progress_pct is None else max(0, min(100, int(progress_pct))),
+                    current_stage,
+                    _json_or_none(logs),
+                    run_id,
+                ),
+            )
+
+    def finish_quant_backtest_run(self, run_id: str, metrics: dict, warnings: list[str], chart: dict | None = None) -> None:
+        current = self.get_quant_backtest_run(run_id) or {}
+        logs = list(current.get("progress_logs") or [])
+        logs.append(_progress_log_entry("回测完成"))
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE quant_backtest_runs
                 SET status='completed',
+                    progress_pct=100,
+                    current_stage='回测完成',
                     metrics_json=%s,
+                    chart_json=%s,
                     warnings_json=%s,
+                    progress_logs_json=%s,
                     finished_at=%s
                 WHERE run_id=%s
                 """,
-                (_json_or_none(metrics or {}), _json_or_none(warnings or []), _utcnow(), run_id),
+                (_json_or_none(metrics or {}), _json_or_none(chart or {}), _json_or_none(warnings or []), _json_or_none(logs), _utcnow(), run_id),
+            )
+
+    def fail_quant_backtest_run(self, run_id: str, error_message: str, warnings: list[str] | None = None) -> None:
+        current = self.get_quant_backtest_run(run_id) or {}
+        logs = list(current.get("progress_logs") or [])
+        logs.append(_progress_log_entry(error_message))
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE quant_backtest_runs
+                SET status='failed',
+                    progress_pct=100,
+                    current_stage='执行失败',
+                    warnings_json=%s,
+                    progress_logs_json=%s,
+                    error_message=%s,
+                    finished_at=%s
+                WHERE run_id=%s
+                """,
+                (_json_or_none(warnings or current.get("warnings") or []), _json_or_none(logs), error_message, _utcnow(), run_id),
             )
 
     def get_quant_backtest_run(self, run_id: str) -> Optional[dict]:
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT run_id, user_id, status, request_json, rule_chain_snapshot_json,
-                       metrics_json, warnings_json, error_message, created_at, finished_at
+                SELECT run_id, user_id, status, progress_pct, current_stage,
+                       request_json, rule_chain_snapshot_json, metrics_json, chart_json,
+                       warnings_json, progress_logs_json, error_message, created_at, finished_at
                 FROM quant_backtest_runs
                 WHERE run_id=%s
                 LIMIT 1
@@ -2369,13 +2503,17 @@ class MarketDatabase:
             "run_id": row[0],
             "user_id": row[1],
             "status": row[2],
-            "request": _decode_json_field(row[3], {}),
-            "rule_chain_snapshot": _decode_json_field(row[4], {}),
-            "metrics": _decode_json_field(row[5], {}),
-            "warnings": _decode_json_field(row[6], []),
-            "error_message": row[7],
-            "created_at": str(row[8]) if row[8] else None,
-            "finished_at": str(row[9]) if row[9] else None,
+            "progress_pct": int(row[3] or 0),
+            "current_stage": row[4] or "",
+            "request": _decode_json_field(row[5], {}),
+            "rule_chain_snapshot": _decode_json_field(row[6], {}),
+            "metrics": _decode_json_field(row[7], {}),
+            "chart": _decode_json_field(row[8], {}),
+            "warnings": _decode_json_field(row[9], []),
+            "progress_logs": _decode_json_field(row[10], []),
+            "error_message": row[11],
+            "created_at": str(row[12]) if row[12] else None,
+            "finished_at": str(row[13]) if row[13] else None,
         }
 
     def init_option_lab_schema(self) -> None:
