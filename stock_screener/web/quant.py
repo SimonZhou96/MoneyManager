@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from quant_lab.paper import PaperTradingService
 from quant_lab.service import QuantLabService
 
 from .auth import CurrentUser, get_db, require_user
@@ -30,6 +31,11 @@ class QuantBacktestRequest(BaseModel):
     max_position_weight: float = Field(default=1.0, gt=0, le=1.0)
 
 
+class CreatePaperAccountRequest(BaseModel):
+    name: str = "默认模拟账户"
+    initial_cash: float = Field(gt=0)
+
+
 def get_quant_service(db=Depends(get_db)) -> QuantLabService:
     return QuantLabService(repository=db)
 
@@ -43,3 +49,13 @@ def create_backtest(
     if payload.end < payload.start:
         raise BusinessError("QUANT_INVALID_DATE_RANGE", "回测结束日期不能早于开始日期")
     return service.submit_backtest(payload.model_dump(mode="json"), user_id=user.id)
+
+
+@router.post("/paper/accounts")
+def create_paper_account(
+    payload: CreatePaperAccountRequest,
+    user: CurrentUser = Depends(require_user),
+    db=Depends(get_db),
+) -> Dict[str, Any]:
+    service = PaperTradingService(repository=db)
+    return service.create_account(user_id=user.id, name=payload.name, initial_cash=payload.initial_cash)
