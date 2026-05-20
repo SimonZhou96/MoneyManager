@@ -314,6 +314,8 @@ class SignalAnalysisResult:
         market: str,
         check_date: date,
         csv_path: str,
+        timeframe: str = "1d",
+        analysis_profile: str = "default",
     ) -> Dict[str, Any]:
         return {
             "task_id": task_id,
@@ -322,6 +324,8 @@ class SignalAnalysisResult:
             "name": self.name,
             "check_date": check_date,
             "csv_path": csv_path,
+            "timeframe": timeframe,
+            "analysis_profile": analysis_profile,
             "analysis_status": self.analysis_status,
             "reliability_score": self.reliability_score,
             "confidence_score": self.confidence_score,

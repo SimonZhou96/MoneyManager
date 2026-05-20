@@ -18,6 +18,7 @@ from db import MarketDatabase
 from custom_list import CustomListCodeParser, CustomListJobService
 from market import normalize_market
 from rule_engine import RuleRepository
+from stock_pool import CANONICAL_POOL_TYPES, normalize_pool_types, pool_scope_from_types
 from .auth import (
     CurrentUser,
     authenticate,
@@ -46,13 +47,15 @@ from .rate_limit import (
     WEB_READ_RULE,
     enforce_rate_limit,
 )
-from .rule_chains import resolve_rule_chain
+from .rule_chains import parse_rule_expression, resolve_rule_chain, validate_rule_expression_against_market
 from .single_stock import normalize_stock_code
 from .validation import (
     validate_agent_artifact_size,
     validate_agent_bulk_size,
     validate_agent_json_payload_size,
     validate_markets,
+    validate_rule_chain_key,
+    validate_rule_chain_timeframe,
     validate_timeframe,
 )
 
@@ -75,6 +78,7 @@ class LoginRequest(BaseModel):
 class ScreeningTaskRequest(BaseModel):
     markets: List[str] = Field(default_factory=lambda: ["HK", "US", "A"])
     timeframe: str = "1d"
+    pool_types: List[str] = Field(default_factory=lambda: list(CANONICAL_POOL_TYPES))
     chain_key: Optional[str] = None
     enable_ai_analysis: bool = True
     send_feishu: bool = False
@@ -167,6 +171,17 @@ class AgentSingleStockCompleteRequest(BaseModel):
     rule_details: List[Dict[str, Any]] = Field(default_factory=list)
 
 
+class RuleChainUpsertRequest(BaseModel):
+    market: str
+    timeframe: str = "1d"
+    chain_key: str
+    chain_name: str
+    expression_json: Dict[str, Any]
+    enabled: bool = True
+    priority: int = 100
+    description: Optional[str] = None
+
+
 def require_read_user(user: CurrentUser = Depends(require_user)) -> CurrentUser:
     enforce_rate_limit(f"user:{user.id}:read", WEB_READ_RULE)
     return user
@@ -235,13 +250,21 @@ def create_screening_task(
     try:
         markets = validate_markets(payload.markets)
         timeframe = validate_timeframe(payload.timeframe)
+        pool_types = normalize_pool_types(payload.pool_types or CANONICAL_POOL_TYPES)
     except ValueError as exc:
         raise BusinessError("INVALID_SCREENING_TASK", str(exc)) from exc
     enforce_rate_limit(f"user:{user.id}:create_task", CREATE_TASK_RULE)
     run_date = _run_date()
     chain = resolve_rule_chain(db, markets, timeframe=timeframe, chain_key=payload.chain_key)
     chain_key = chain["chain_key"]
-    existing_locks = db.get_screening_run_locks(run_date, markets, timeframe, chain_key=chain_key)
+    pool_scope = pool_scope_from_types(pool_types)
+    existing_locks = db.get_screening_run_locks(
+        run_date,
+        markets,
+        timeframe,
+        chain_key=chain_key,
+        pool_scope=pool_scope,
+    )
     completed = [item for item in existing_locks if item.get("status") == "completed"]
     if completed:
         scopes = "、".join(f"{item['market']}/{item['timeframe']}/{item.get('chain_key') or chain_key}" for item in completed)
@@ -261,6 +284,7 @@ def create_screening_task(
             "message": "已有任务运行中，已为你复用该任务",
             "markets": job.get("markets") or sorted({item["market"] for item in active}),
             "timeframe": timeframe,
+            "pool_types": pool_types,
             "chain_key": chain_key,
             "chain_timeframe": chain.get("chain_timeframe"),
             "chain_name": chain.get("chain_name"),
@@ -270,6 +294,8 @@ def create_screening_task(
         "enable_ai_analysis": bool(payload.enable_ai_analysis),
         "send_feishu": bool(payload.send_feishu),
         "result_upload_scope": "passed_only",
+        "pool_types": pool_types,
+        "pool_scope": pool_scope,
         "chain_key": chain_key,
         "chain_timeframe": chain.get("chain_timeframe"),
         "chain_name": chain.get("chain_name"),
@@ -282,9 +308,16 @@ def create_screening_task(
             markets=markets,
             timeframe=timeframe,
             chain_key=chain_key,
+            pool_scope=pool_scope,
         )
     except Exception as exc:
-        locks = db.get_screening_run_locks(run_date, markets, timeframe, chain_key=chain_key)
+        locks = db.get_screening_run_locks(
+            run_date,
+            markets,
+            timeframe,
+            chain_key=chain_key,
+            pool_scope=pool_scope,
+        )
         active_after_race = [item for item in locks if item.get("status") in {"queued", "running"}]
         if active_after_race:
             return {
@@ -295,6 +328,7 @@ def create_screening_task(
                 "message": "已有任务运行中，已为你复用该任务",
                 "markets": sorted({item["market"] for item in active_after_race}),
                 "timeframe": timeframe,
+                "pool_types": pool_types,
                 "chain_key": chain_key,
                 "chain_timeframe": chain.get("chain_timeframe"),
                 "chain_name": chain.get("chain_name"),
@@ -306,6 +340,7 @@ def create_screening_task(
         "runner": "local_agent",
         "markets": markets,
         "timeframe": timeframe,
+        "pool_types": pool_types,
         "chain_key": chain_key,
         "chain_timeframe": chain.get("chain_timeframe"),
         "chain_name": chain.get("chain_name"),
@@ -467,16 +502,95 @@ def get_single_stock(run_id: str, _: CurrentUser = Depends(require_read_user), d
 
 
 @app.get("/api/rules")
-def get_rules(market: str = "HK", _: CurrentUser = Depends(require_read_user), db: MarketDatabase = Depends(get_db)):
+def get_rules(
+    market: str = "HK",
+    timeframe: Optional[str] = None,
+    _: CurrentUser = Depends(require_read_user),
+    db: MarketDatabase = Depends(get_db),
+):
     market = normalize_market(market)
+    if timeframe:
+        timeframe = validate_timeframe(timeframe)
     repository = RuleRepository(db)
-    chains = repository.load_chains(market)
+    chains = repository.load_chains(market, timeframe)
     return {
         "market": market,
+        "timeframe": timeframe or "*",
         "metadata": [item.__dict__ for item in repository.load_metadata(market)],
-        "chain": repository.load_active_chain(market).__dict__,
+        "chain": repository.load_active_chain(market, timeframe or "*").__dict__,
         "chains": [item.__dict__ for item in chains],
     }
+
+
+@app.post("/api/rules/chains")
+def create_rule_chain(
+    payload: RuleChainUpsertRequest,
+    _: CurrentUser = Depends(require_user),
+    db: MarketDatabase = Depends(get_db),
+):
+    market = normalize_market(payload.market)
+    timeframe = validate_rule_chain_timeframe(payload.timeframe)
+    chain_key = validate_rule_chain_key(payload.chain_key)
+    expression = validate_rule_expression_against_market(db, market, parse_rule_expression(payload.expression_json))
+    db.create_screening_rule_chain({
+        "market": market,
+        "timeframe": timeframe,
+        "chain_key": chain_key,
+        "chain_name": payload.chain_name.strip(),
+        "expression_json": expression,
+        "enabled": payload.enabled,
+        "priority": payload.priority,
+        "description": payload.description,
+    })
+    return {"ok": True}
+
+
+@app.put("/api/rules/chains/{market}/{timeframe}/{chain_key}")
+def update_rule_chain(
+    market: str,
+    timeframe: str,
+    chain_key: str,
+    payload: RuleChainUpsertRequest,
+    _: CurrentUser = Depends(require_user),
+    db: MarketDatabase = Depends(get_db),
+):
+    market = normalize_market(market)
+    timeframe = validate_rule_chain_timeframe(timeframe)
+    chain_key = validate_rule_chain_key(chain_key)
+    expression = validate_rule_expression_against_market(db, market, parse_rule_expression(payload.expression_json))
+    active = db.get_active_screening_rule_chain(market, timeframe)
+    if active and active["chain_key"] == chain_key and not payload.enabled:
+        raise BusinessError("RULE_CHAIN_ACTIVE", "当前生效规则链不能直接禁用，请先启用其他规则链")
+    updated = db.update_screening_rule_chain(market, timeframe, chain_key, {
+        "chain_name": payload.chain_name.strip(),
+        "expression_json": expression,
+        "enabled": payload.enabled,
+        "priority": payload.priority,
+        "description": payload.description,
+    })
+    if not updated:
+        raise BusinessError("RULE_CHAIN_NOT_FOUND", "规则链不存在")
+    return {"ok": True}
+
+
+@app.delete("/api/rules/chains/{market}/{timeframe}/{chain_key}")
+def delete_rule_chain(
+    market: str,
+    timeframe: str,
+    chain_key: str,
+    _: CurrentUser = Depends(require_user),
+    db: MarketDatabase = Depends(get_db),
+):
+    market = normalize_market(market)
+    timeframe = validate_rule_chain_timeframe(timeframe)
+    chain_key = validate_rule_chain_key(chain_key)
+    active = db.get_active_screening_rule_chain(market, timeframe)
+    if active and active["chain_key"] == chain_key:
+        raise BusinessError("RULE_CHAIN_ACTIVE", "当前生效规则链不能删除，请先切换到其他规则链")
+    deleted = db.delete_screening_rule_chain(market, timeframe, chain_key)
+    if not deleted:
+        raise BusinessError("RULE_CHAIN_NOT_FOUND", "规则链不存在")
+    return {"ok": True}
 
 
 @app.get("/api/system/data-freshness")
@@ -617,8 +731,15 @@ def create_sync_run(payload: SyncRunRequest, db: MarketDatabase = Depends(get_db
 @app.post("/api/agent/stock-pools/bulk-upsert", dependencies=[Depends(require_agent)])
 def bulk_stock_pool(payload: BulkStockPoolRequest, db: MarketDatabase = Depends(get_db)):
     validate_agent_bulk_size(payload.rows)
+    try:
+        pool_types = normalize_pool_types([payload.pool_type])
+    except ValueError as exc:
+        raise StarletteHTTPException(status_code=400, detail=str(exc)) from exc
+    if not pool_types:
+        raise StarletteHTTPException(status_code=400, detail="无效股票池类型: 不能为空")
+    pool_type = pool_types[0]
     rows = [dict(row, sync_run_id=payload.sync_run_id) for row in payload.rows]
-    db.upsert_stock_pool(normalize_market(payload.market), payload.pool_type, rows)
+    db.upsert_stock_pool(normalize_market(payload.market), pool_type, rows)
     return {"written": len(rows)}
 
 

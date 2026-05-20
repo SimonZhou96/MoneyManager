@@ -5,14 +5,17 @@
 ALTER TABLE screening_run_locks
     ADD COLUMN IF NOT EXISTS chain_key VARCHAR(64) NOT NULL DEFAULT 'default_zuoyi_and_other' AFTER timeframe;
 
+ALTER TABLE screening_run_locks
+    ADD COLUMN IF NOT EXISTS pool_scope VARCHAR(255) NOT NULL DEFAULT 'best,major_index,industry_top5,recent_ipo_2y,all_etf' AFTER chain_key;
+
 ALTER TABLE single_stock_runs
     ADD COLUMN IF NOT EXISTS chain_key VARCHAR(64) NULL AFTER timeframe;
 
 -- Replace old unique scope (run_date, market, timeframe) with
--- (run_date, market, timeframe, chain_key).
+-- (run_date, market, timeframe, chain_key, pool_scope).
 ALTER TABLE screening_run_locks DROP INDEX uk_screening_run_lock_scope;
 ALTER TABLE screening_run_locks
-    ADD UNIQUE KEY uk_screening_run_lock_scope (run_date, market, timeframe, chain_key);
+    ADD UNIQUE KEY uk_screening_run_lock_scope (run_date, market, timeframe, chain_key, pool_scope);
 
 INSERT IGNORE INTO screening_rule_chains
     (market, timeframe, chain_key, chain_name, expression_json, enabled, priority, description)

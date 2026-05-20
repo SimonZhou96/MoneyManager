@@ -44,7 +44,7 @@ ensure_frontend_deps() {
 print_commands() {
   cat <<'EOF'
 Available commands:
-  screening        Start stock screener
+  screening        Start stock screener; full-market mode lets you choose stock-pool types
   option           Start Option Lab shell
   local-agent      Start Python local agent
   go-agent         Start Go agent worker
@@ -69,6 +69,11 @@ Environment:
   MM_API_PORT=${MM_API_PORT}
   MM_WEB_HOST=${MM_WEB_HOST}
   MM_WEB_PORT=${MM_WEB_PORT}
+
+Stock screener:
+  交互模式：选择「选股器」后，进入全市场筛选时会继续选择股票池类型。
+  批处理模式：用 POOLS 指定股票池类型，例如：
+    POOLS=best,major_index,all_etf ./run_moneymanager.sh screening
 
 EOF
   print_commands
@@ -172,7 +177,7 @@ interactive_menu() {
     cat <<'EOF'
 MoneyManager 启动菜单
 
-  1) 选股器
+  1) 选股器（全市场可选择股票池类型）
   2) 期权实验室
   3) Python 本地 Agent
   4) Go Agent 常驻 worker

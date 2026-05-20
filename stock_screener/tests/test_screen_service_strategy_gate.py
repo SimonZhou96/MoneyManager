@@ -175,7 +175,10 @@ class ScreenServiceStrategyGateTest(unittest.TestCase):
             def requires_kline(self):
                 return False
 
-            def evaluate_stock(self, stock, context):
+            def requires_macro_analysis(self):
+                return False
+
+            def evaluate_stock(self, stock, context, **kwargs):
                 return StockFilterResult(
                     stock=stock,
                     passed=True,

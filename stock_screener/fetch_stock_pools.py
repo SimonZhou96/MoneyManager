@@ -5,7 +5,7 @@
 
 用法:
     python3 fetch_stock_pools.py --market HK --pools all
-    python3 fetch_stock_pools.py --market HK --pools best,index,etf
+    python3 fetch_stock_pools.py --market HK --pools best,major_index,all_etf
 """
 
 import argparse
@@ -17,15 +17,18 @@ import futu as ft
 
 from db import MarketDatabase, MySqlConfig
 from market import normalize_market
-from stock_pool import StockPoolCriteria, StockPoolFetcher
-
-
-# 港股三大指数代码（需要通过 Futu 查询确认）
-HK_MAJOR_INDICES = [
-    "HK.800000",  # 恒生指数
-    "HK.800700",  # 恒生科技指数
-    "HK.800100",  # 恒生中国企业指数
-]
+from stock_pool import (
+    DEFAULT_POOL_TYPES_TEXT,
+    POOL_TYPE_ALL_ETF,
+    POOL_TYPE_BEST,
+    POOL_TYPE_INDUSTRY_TOP5,
+    POOL_TYPE_MAJOR_INDEX,
+    POOL_TYPE_RECENT_IPO_2Y,
+    StockPoolCriteria,
+    StockPoolFetcher,
+    get_major_index_codes,
+    parse_pool_types,
+)
 
 
 def get_db_config() -> MySqlConfig:
@@ -58,8 +61,8 @@ def fetch_and_save_best_stocks(
         print(f"筛选出 {len(stocks)} 只股票")
 
         if stocks:
-            db.upsert_stock_pool(market, "best", stocks)
-            db.record_pool_update(market, "best", len(stocks), "success")
+            db.upsert_stock_pool(market, POOL_TYPE_BEST, stocks)
+            db.record_pool_update(market, POOL_TYPE_BEST, len(stocks), "success")
             print(f"已保存到数据库")
 
             # 显示前10只
@@ -71,24 +74,24 @@ def fetch_and_save_best_stocks(
                       f"PE: {stock['pe_ratio']:.2f}")
     except Exception as e:
         print(f"错误: {e}")
-        db.record_pool_update(market, "best", 0, "failed", str(e))
+        db.record_pool_update(market, POOL_TYPE_BEST, 0, "failed", str(e))
 
 
-def fetch_and_save_index_constituents(
+def fetch_and_save_major_index_constituents(
     fetcher: StockPoolFetcher, db: MarketDatabase, market: str
 ):
-    """获取并保存指数成份股"""
-    print(f"\n=== 获取 {market} 指数成份股 ===")
+    """获取并保存核心指数成份股"""
+    print(f"\n=== 获取 {market} 核心指数成份股 ===")
 
-    index_codes = HK_MAJOR_INDICES if market == "HK" else []
+    index_codes = get_major_index_codes(market)
 
     try:
-        stocks = fetcher.fetch_index_constituents(market, index_codes)
+        stocks = fetcher.fetch_major_index_constituents(market, index_codes)
         print(f"获取到 {len(stocks)} 只成份股")
 
         if stocks:
-            db.upsert_stock_pool(market, "index", stocks)
-            db.record_pool_update(market, "index", len(stocks), "success")
+            db.upsert_stock_pool(market, POOL_TYPE_MAJOR_INDEX, stocks)
+            db.record_pool_update(market, POOL_TYPE_MAJOR_INDEX, len(stocks), "success")
             print(f"已保存到数据库")
 
             # 按指数统计
@@ -99,13 +102,13 @@ def fetch_and_save_index_constituents(
                 print(f"  {idx_code}: {count} 只")
     except Exception as e:
         print(f"错误: {e}")
-        db.record_pool_update(market, "index", 0, "failed", str(e))
+        db.record_pool_update(market, POOL_TYPE_MAJOR_INDEX, 0, "failed", str(e))
 
 
-def fetch_and_save_industry_leaders(
+def fetch_and_save_industry_top5(
     fetcher: StockPoolFetcher, db: MarketDatabase, market: str, top_n: int = 5
 ):
-    """获取并保存行业龙头股"""
+    """获取并保存主流行业前N名股票"""
     print(f"\n=== 获取 {market} 各行业前{top_n}名股票 ===")
 
     try:
@@ -113,8 +116,8 @@ def fetch_and_save_industry_leaders(
         print(f"获取到 {len(stocks)} 只行业龙头股")
 
         if stocks:
-            db.upsert_stock_pool(market, "industry", stocks)
-            db.record_pool_update(market, "industry", len(stocks), "success")
+            db.upsert_stock_pool(market, POOL_TYPE_INDUSTRY_TOP5, stocks)
+            db.record_pool_update(market, POOL_TYPE_INDUSTRY_TOP5, len(stocks), "success")
             print(f"已保存到数据库")
 
             # 统计行业数量
@@ -122,13 +125,13 @@ def fetch_and_save_industry_leaders(
             print(f"\n覆盖 {len(industries)} 个行业")
     except Exception as e:
         print(f"错误: {e}")
-        db.record_pool_update(market, "industry", 0, "failed", str(e))
+        db.record_pool_update(market, POOL_TYPE_INDUSTRY_TOP5, 0, "failed", str(e))
 
 
-def fetch_and_save_recent_ipos(
+def fetch_and_save_recent_ipo_2y(
     fetcher: StockPoolFetcher, db: MarketDatabase, market: str, days: int = 730
 ):
-    """获取并保存新股"""
+    """获取并保存最近两年上市新股"""
     print(f"\n=== 获取 {market} 最近{days}天上市的新股 ===")
 
     try:
@@ -136,8 +139,8 @@ def fetch_and_save_recent_ipos(
         print(f"获取到 {len(stocks)} 只新股")
 
         if stocks:
-            db.upsert_stock_pool(market, "ipo", stocks)
-            db.record_pool_update(market, "ipo", len(stocks), "success")
+            db.upsert_stock_pool(market, POOL_TYPE_RECENT_IPO_2Y, stocks)
+            db.record_pool_update(market, POOL_TYPE_RECENT_IPO_2Y, len(stocks), "success")
             print(f"已保存到数据库")
 
             # 显示最新的10只
@@ -149,13 +152,13 @@ def fetch_and_save_recent_ipos(
                       f"({stock['days_since_listing']}天)")
     except Exception as e:
         print(f"错误: {e}")
-        db.record_pool_update(market, "ipo", 0, "failed", str(e))
+        db.record_pool_update(market, POOL_TYPE_RECENT_IPO_2Y, 0, "failed", str(e))
 
 
-def fetch_and_save_etf_list(
+def fetch_and_save_all_etf(
     fetcher: StockPoolFetcher, db: MarketDatabase, market: str
 ):
-    """获取并保存ETF列表"""
+    """获取并保存全部ETF指数基金"""
     print(f"\n=== 获取 {market} ETF列表 ===")
 
     try:
@@ -163,8 +166,8 @@ def fetch_and_save_etf_list(
         print(f"获取到 {len(stocks)} 只ETF")
 
         if stocks:
-            db.upsert_stock_pool(market, "etf", stocks)
-            db.record_pool_update(market, "etf", len(stocks), "success")
+            db.upsert_stock_pool(market, POOL_TYPE_ALL_ETF, stocks)
+            db.record_pool_update(market, POOL_TYPE_ALL_ETF, len(stocks), "success")
             print(f"已保存到数据库")
 
             # 显示前20只
@@ -173,7 +176,7 @@ def fetch_and_save_etf_list(
                 print(f"{i}. {stock['code']} {stock['name']}")
     except Exception as e:
         print(f"错误: {e}")
-        db.record_pool_update(market, "etf", 0, "failed", str(e))
+        db.record_pool_update(market, POOL_TYPE_ALL_ETF, 0, "failed", str(e))
 
 
 def main():
@@ -188,7 +191,7 @@ def main():
         "--pools",
         type=str,
         default="all",
-        help="要获取的池: all/best/index/industry/ipo/etf，多个用逗号分隔 (默认: all)",
+        help=f"要获取的池: all/{DEFAULT_POOL_TYPES_TEXT}，多个用逗号分隔 (默认: all)",
     )
     parser.add_argument(
         "--host",
@@ -206,7 +209,10 @@ def main():
     args = parser.parse_args()
 
     market = normalize_market(args.market)
-    pools = args.pools.lower().split(",") if args.pools != "all" else ["best", "index", "industry", "ipo", "etf"]
+    try:
+        pools = parse_pool_types(args.pools)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     print(f"开始时间: {datetime.now()}")
     print(f"市场: {market}")
@@ -230,20 +236,20 @@ def main():
 
     try:
         # 执行获取
-        if "best" in pools:
+        if POOL_TYPE_BEST in pools:
             fetch_and_save_best_stocks(fetcher, db, market)
 
-        if "index" in pools:
-            fetch_and_save_index_constituents(fetcher, db, market)
+        if POOL_TYPE_MAJOR_INDEX in pools:
+            fetch_and_save_major_index_constituents(fetcher, db, market)
 
-        if "industry" in pools:
-            fetch_and_save_industry_leaders(fetcher, db, market, top_n=5)
+        if POOL_TYPE_INDUSTRY_TOP5 in pools:
+            fetch_and_save_industry_top5(fetcher, db, market, top_n=5)
 
-        if "ipo" in pools:
-            fetch_and_save_recent_ipos(fetcher, db, market, days=730)
+        if POOL_TYPE_RECENT_IPO_2Y in pools:
+            fetch_and_save_recent_ipo_2y(fetcher, db, market, days=730)
 
-        if "etf" in pools:
-            fetch_and_save_etf_list(fetcher, db, market)
+        if POOL_TYPE_ALL_ETF in pools:
+            fetch_and_save_all_etf(fetcher, db, market)
 
         print(f"\n完成时间: {datetime.now()}")
         print("\n所有股票池已更新完成！")

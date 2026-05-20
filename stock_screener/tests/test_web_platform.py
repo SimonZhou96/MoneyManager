@@ -3,8 +3,10 @@ import unittest
 from db import hash_password, verify_password
 from kline_fetcher import DatabaseKlineFetcher, KlineFetcherFactory
 from web.business import BusinessError
+from web.auth import CurrentUser
+from web.main import BulkStockPoolRequest, ScreeningTaskRequest, bulk_stock_pool, create_screening_task
 from web.rate_limit import InMemorySlidingWindowRateLimiter, RateLimitRule, rate_limiter
-from web.rule_chains import resolve_rule_chain
+from web.rule_chains import parse_rule_expression, resolve_rule_chain, validate_rule_expression_against_market
 from signal_analysis.models import SignalAnalysisResult
 from web.single_stock import _analysis_to_response_dict, _load_stock_info, normalize_stock_code
 from web.validation import (
@@ -12,6 +14,8 @@ from web.validation import (
     validate_agent_bulk_size,
     validate_agent_json_payload_size,
     validate_markets,
+    validate_rule_chain_key,
+    validate_rule_chain_timeframe,
     validate_timeframe,
 )
 
@@ -43,12 +47,85 @@ class WebPlatformTests(unittest.TestCase):
     def test_validate_screening_task_write_inputs(self):
         self.assertEqual(validate_markets(["hk", "US", "HK"]), ["HK", "US"])
         self.assertEqual(validate_timeframe("1d"), "1d")
+        self.assertEqual(validate_rule_chain_timeframe("*"), "*")
+        self.assertEqual(validate_rule_chain_key("macro_only_chain"), "macro_only_chain")
         with self.assertRaisesRegex(ValueError, "至少选择一个市场"):
             validate_markets([])
         with self.assertRaisesRegex(ValueError, "不支持的市场"):
             validate_markets(["CN"])
         with self.assertRaisesRegex(ValueError, "不支持的周期"):
             validate_timeframe("2d")
+        with self.assertRaisesRegex(ValueError, "仅支持小写字母"):
+            validate_rule_chain_key("Bad-Key")
+
+    def test_create_screening_task_stores_selected_pool_types(self):
+        class FakeDB:
+            def __init__(self):
+                self.created_job = None
+                self.created_locks = None
+
+            def get_screening_run_locks(self, run_date, markets, timeframe, chain_key=None, pool_scope=None):
+                return []
+
+            def create_web_screening_job(self, job_id, user_id, markets, timeframe, options):
+                self.created_job = {
+                    "job_id": job_id,
+                    "user_id": user_id,
+                    "markets": markets,
+                    "timeframe": timeframe,
+                    "options": options,
+                }
+
+            def create_screening_run_locks(self, **kwargs):
+                self.created_locks = kwargs
+
+        db = FakeDB()
+        payload = ScreeningTaskRequest(
+            markets=["HK"],
+            timeframe="1d",
+            pool_types=["major_index", "all_etf"],
+            enable_ai_analysis=False,
+        )
+
+        with unittest.mock.patch("web.main.resolve_rule_chain", return_value={
+            "chain_key": "default_zuoyi_and_other",
+            "chain_timeframe": "*",
+            "chain_name": "默认链",
+        }):
+            result = create_screening_task(payload, CurrentUser(id=7, username="tester", role="admin"), db)
+
+        self.assertEqual(result["pool_types"], ["major_index", "all_etf"])
+        self.assertEqual(db.created_job["options"]["pool_types"], ["major_index", "all_etf"])
+        self.assertEqual(db.created_locks["pool_scope"], "major_index,all_etf")
+
+    def test_rule_chain_expression_validation_checks_shape_and_refs(self):
+        class FakeDB:
+            def get_screening_rule_metadata(self, market):
+                return [
+                    {
+                        "market": market,
+                        "rule_key": "company_event_hot_news_link",
+                        "rule_name": "公司时事与热点新闻关联",
+                        "rule_type": "strategy",
+                        "strategy_category": "macro",
+                        "implementation": "CompanyEventHotNewsStrategizer",
+                        "params_json": {},
+                        "enabled": True,
+                        "display_order": 220,
+                        "description": "",
+                    }
+                ]
+
+        expression = parse_rule_expression('{"ref":"company_event_hot_news_link"}')
+        self.assertEqual(
+            validate_rule_expression_against_market(FakeDB(), "HK", expression),
+            {"ref": "company_event_hot_news_link"},
+        )
+        with self.assertRaises(BusinessError) as missing:
+            validate_rule_expression_against_market(FakeDB(), "HK", {"ref": "missing_rule"})
+        self.assertEqual(missing.exception.error_code, "INVALID_RULE_CHAIN_EXPRESSION")
+        with self.assertRaises(BusinessError):
+            parse_rule_expression('{"ref": ""}')
 
     def test_single_stock_info_enriches_from_pool_and_sector_membership(self):
         class FakeDB:
@@ -80,6 +157,35 @@ class WebPlatformTests(unittest.TestCase):
         self.assertEqual(stock.pe_ratio, 18.5)
         self.assertEqual(stock.sector, "Biotechnology")
         self.assertEqual(stock.industry, "Biotechnology")
+
+    def test_agent_stock_pool_bulk_upsert_rejects_legacy_pool_type(self):
+        class FakeDB:
+            def __init__(self):
+                self.calls = []
+
+            def upsert_stock_pool(self, market, pool_type, rows):
+                self.calls.append((market, pool_type, rows))
+
+        db = FakeDB()
+        payload = BulkStockPoolRequest(
+            sync_run_id="sync-1",
+            market="HK",
+            pool_type="index",
+            rows=[{"code": "HK.00700"}],
+        )
+
+        with self.assertRaisesRegex(Exception, "无效股票池类型"):
+            bulk_stock_pool(payload, db)
+        self.assertEqual(db.calls, [])
+
+        valid_payload = BulkStockPoolRequest(
+            sync_run_id="sync-1",
+            market="HK",
+            pool_type="major_index",
+            rows=[{"code": "HK.00700"}],
+        )
+        self.assertEqual(bulk_stock_pool(valid_payload, db), {"written": 1})
+        self.assertEqual(db.calls[0][1], "major_index")
 
     def test_single_stock_ai_response_includes_evidence_fields(self):
         response = _analysis_to_response_dict(SignalAnalysisResult(

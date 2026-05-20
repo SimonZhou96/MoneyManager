@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Iterable, List
 
 from .business import BusinessError
@@ -11,6 +12,7 @@ SUPPORTED_TIMEFRAMES = {"1d", "1wk", "1mo", "3mo", "1m", "3m", "5m", "15m", "30m
 MAX_AGENT_BULK_ROWS = 2000
 MAX_AGENT_JSON_BYTES = 2 * 1024 * 1024
 MAX_AGENT_ARTIFACT_BYTES = 20 * 1024 * 1024
+CHAIN_KEY_PATTERN = re.compile(r"^[a-z0-9_]+$")
 
 
 def validate_markets(markets: Iterable[str]) -> List[str]:
@@ -33,6 +35,22 @@ def validate_timeframe(timeframe: str) -> str:
     value = str(timeframe or "").strip()
     if value not in SUPPORTED_TIMEFRAMES:
         raise ValueError(f"不支持的周期: {timeframe}")
+    return value
+
+
+def validate_rule_chain_timeframe(timeframe: str) -> str:
+    value = str(timeframe or "*").strip() or "*"
+    if value == "*":
+        return value
+    return validate_timeframe(value)
+
+
+def validate_rule_chain_key(chain_key: str) -> str:
+    value = str(chain_key or "").strip()
+    if not value:
+        raise ValueError("规则链 Key 不能为空")
+    if not CHAIN_KEY_PATTERN.fullmatch(value):
+        raise ValueError("规则链 Key 仅支持小写字母、数字和下划线")
     return value
 
 

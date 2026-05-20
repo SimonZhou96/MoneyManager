@@ -5,7 +5,9 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-from filters import Filter, FilterContext, FilterResult, StockInfo
+import pandas as pd
+
+from filters import AvgDailyVolumeFilter, Filter, FilterContext, FilterResult, StockInfo
 from rule_engine import (
     RuleChainConfig,
     RuleEngine,
@@ -32,25 +34,28 @@ class StaticFilter(Filter):
 
 
 class StaticStrategizer(Strategizer):
-    def __init__(self, satisfied=True, name="StaticStrategizer"):
+    def __init__(self, satisfied=True, name="StaticStrategizer", result=""):
         super().__init__(name=name)
         self.satisfied = satisfied
+        self.result = result
 
     def apply(self, stock, context):
         return StrategizerOutput(
             name=self.name,
             satisfied=self.satisfied,
+            result=self.result,
             reason="strategy pass" if self.satisfied else "strategy fail",
         )
 
 
-def metadata(rule_key, rule_type, implementation, enabled=True, params=None, order=1):
+def metadata(rule_key, rule_type, implementation, enabled=True, params=None, order=1, strategy_category=""):
     return RuleMetadata(
         market="HK",
         rule_key=rule_key,
         rule_name=rule_key,
         rule_type=rule_type,
         implementation=implementation,
+        strategy_category=strategy_category,
         params=params or {},
         enabled=enabled,
         display_order=order,
@@ -81,6 +86,7 @@ def registry():
         lambda params: StaticStrategizer(
             satisfied=bool(params.get("satisfied", True)),
             name=params.get("name", "StaticStrategizer"),
+            result=params.get("result", ""),
         ),
     )
     return r
@@ -197,6 +203,40 @@ class RuleEngineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "未注册的规则实现"):
             registry().create(metadata("bad", "filter", "DoesNotExist"))
 
+    def test_macro_strategy_skip_is_treated_as_non_blocking(self):
+        result = self.evaluate(
+            [
+                metadata(
+                    "company_event_hot_news_link",
+                    "strategy",
+                    "StaticStrategizer",
+                    params={"satisfied": False, "result": "skip"},
+                    strategy_category="macro",
+                ),
+            ],
+            {"ref": "company_event_hot_news_link"},
+        )
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.filter_outputs[0].result, FilterResult.SKIP)
+
+    def test_rule_metadata_supports_strategy_category(self):
+        item = RuleMetadata.from_row({
+            "market": "HK",
+            "rule_key": "company_event_hot_news_link",
+            "rule_name": "公司时事与热点新闻关联",
+            "rule_type": "strategy",
+            "strategy_category": "macro",
+            "implementation": "CompanyEventHotNewsStrategizer",
+            "params_json": {},
+            "enabled": True,
+            "display_order": 220,
+            "description": "macro strategy",
+        })
+
+        self.assertEqual(item.rule_type, "strategy")
+        self.assertEqual(item.strategy_category, "macro")
+
     def test_rule_repository_loads_dataclasses_from_db_rows(self):
         class FakeDB:
             def get_screening_rule_metadata(self, market):
@@ -275,17 +315,73 @@ class RuleEngineTest(unittest.TestCase):
 
         self.assertIn("CREATE TABLE IF NOT EXISTS screening_rule_metadata", content)
         self.assertIn("CREATE TABLE IF NOT EXISTS screening_rule_chains", content)
+        self.assertIn("strategy_category VARCHAR(16)", content)
         self.assertIn("timeframe VARCHAR(16) NOT NULL DEFAULT '*'", content)
         self.assertIn("UNIQUE KEY uk_rule_chains_market_timeframe_key (market, timeframe, chain_key)", content)
-        for market in ("HK", "US", "A"):
+        self.assertIn("company_event_hot_sector_link", content)
+        self.assertIn("company_event_hot_news_link", content)
+        for market in ("HK", "A"):
             self.assertIn(f"('{market}', 'zuoyi_signal'", content)
             self.assertIn(f"('{market}', '*', 'default_zuoyi_and_other'", content)
             self.assertIn(f"('{market}', '*', 'trend_capital_accumulation_watch'", content)
             self.assertIn(
-                f"('{market}', 'market_cap_range', '市值范围', 'filter', 'MarketCapFilter', "
+                f"('{market}', 'market_cap_range', '市值范围', 'filter', '', 'MarketCapFilter', "
                 """'{"min_cap": null, "max_cap": null}', 1,""",
                 content,
             )
+        self.assertIn("('US', 'zuoyi_signal'", content)
+        self.assertIn("('US', '*', 'default_zuoyi_and_other'", content)
+        self.assertIn(
+            "('US', 'market_cap_range', '市值范围', 'filter', '', 'MarketCapFilter', "
+            """'{"min_cap": 5000000000, "max_cap": null, "min_exclusive": true}', 1,""",
+            content,
+        )
+        self.assertIn(
+            "('US', 'avg_daily_volume_range', '10天平均成交额范围', 'filter', '', 'AvgDailyVolumeFilter', "
+            """'{"min_volume": 20000000, "max_volume": null, "lookback_days": 10, "metric": "turnover", "min_exclusive": true}', 1,""",
+            content,
+        )
+        self.assertNotIn("AvgTurnoverFilter", content)
+
+    def test_avg_daily_volume_filter_can_reuse_turnover_metric(self):
+        df = pd.DataFrame({
+            "date": pd.date_range("2026-01-01", periods=10, freq="D"),
+            "close": [10.0] * 10,
+            "volume": [2_500_000] * 10,
+        })
+        stock = StockInfo(market="US", code="AAPL", name="Apple", kline_df=df)
+        context = FilterContext(check_date=date(2026, 1, 10), market="US")
+        context.timeframe = "1d"
+
+        output = AvgDailyVolumeFilter(
+            min_volume=20_000_000,
+            lookback_days=10,
+            metric="turnover",
+            min_exclusive=True,
+        ).apply(stock, context)
+
+        self.assertEqual(output.result, FilterResult.PASS)
+        self.assertEqual(output.details["avg_daily_turnover"], 25_000_000)
+        self.assertEqual(output.details["source"], "close_volume")
+
+    def test_avg_daily_volume_filter_turnover_metric_uses_strict_min_when_configured(self):
+        df = pd.DataFrame({
+            "date": pd.date_range("2026-01-01", periods=10, freq="D"),
+            "close": [10.0] * 10,
+            "volume": [2_000_000] * 10,
+        })
+        stock = StockInfo(market="US", code="AAPL", name="Apple", kline_df=df)
+        context = FilterContext(check_date=date(2026, 1, 10), market="US")
+        context.timeframe = "1d"
+
+        output = AvgDailyVolumeFilter(
+            min_volume=20_000_000,
+            lookback_days=10,
+            metric="turnover",
+            min_exclusive=True,
+        ).apply(stock, context)
+
+        self.assertEqual(output.result, FilterResult.FAIL)
 
 
 if __name__ == "__main__":

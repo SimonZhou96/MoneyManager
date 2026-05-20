@@ -32,6 +32,7 @@ class StrategizerOutput:
     """单个策略器的输出"""
     name: str
     satisfied: bool  # 是否满足该策略
+    result: str = ""
     reason: str = ""
     details: Dict[str, Any] = field(default_factory=dict)
 

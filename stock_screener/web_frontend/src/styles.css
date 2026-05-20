@@ -107,6 +107,8 @@ nav button.active, nav button:hover { background: #263449; color: white; }
 .check { min-height: 44px; display: flex; align-items: center; gap: 10px; font-weight: 600; }
 .check input { min-height: auto; }
 .segmented { display: flex; gap: 8px; }
+.segmented-wrap { flex-wrap: wrap; }
+.field-wide { grid-column: span 2; }
 .segmented button {
   min-height: 44px;
   border: 1px solid #cbd5e1;

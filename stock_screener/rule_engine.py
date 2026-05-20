@@ -29,6 +29,10 @@ from filters import (
     StockFilterResult,
     StockInfo,
 )
+from macro_strategies import (
+    CompanyEventHotNewsStrategizer,
+    CompanyEventHotSectorStrategizer,
+)
 from strategizers import (
     DailyPctChangeBandStrategizer,
     EMABreakoutStrategizer,
@@ -54,6 +58,7 @@ class RuleMetadata:
     rule_name: str
     rule_type: str
     implementation: str
+    strategy_category: str = ""
     params: Dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
     display_order: int = 0
@@ -70,6 +75,7 @@ class RuleMetadata:
             rule_name=str(row.get("rule_name") or ""),
             rule_type=str(row.get("rule_type") or ""),
             implementation=str(row.get("implementation") or ""),
+            strategy_category=str(row.get("strategy_category") or ""),
             params=params if isinstance(params, dict) else {},
             enabled=bool(row.get("enabled")),
             display_order=int(row.get("display_order") or 0),
@@ -182,6 +188,7 @@ class RuleRegistry:
             lambda params: MarketCapFilter(
                 min_cap=params.get("min_cap"),
                 max_cap=params.get("max_cap"),
+                min_exclusive=bool(params.get("min_exclusive", False)),
             ),
         )
         registry.register_filter(
@@ -189,6 +196,9 @@ class RuleRegistry:
             lambda params: AvgDailyVolumeFilter(
                 min_volume=params.get("min_volume"),
                 max_volume=params.get("max_volume"),
+                lookback_days=params.get("lookback_days"),
+                metric=params.get("metric", "volume"),
+                min_exclusive=bool(params.get("min_exclusive", False)),
             ),
         )
         registry.register_filter(
@@ -196,6 +206,7 @@ class RuleRegistry:
             lambda params: PriceFilter(
                 min_price=params.get("min_price"),
                 max_price=params.get("max_price"),
+                min_exclusive=bool(params.get("min_exclusive", False)),
             ),
         )
         registry.register_filter(
@@ -204,6 +215,7 @@ class RuleRegistry:
                 min_pe=params.get("min_pe"),
                 max_pe=params.get("max_pe"),
                 allow_negative=bool(params.get("allow_negative", False)),
+                min_exclusive=bool(params.get("min_exclusive", False)),
             ),
         )
         registry.register_filter(
@@ -262,6 +274,14 @@ class RuleRegistry:
                 name="DailyRise4To45Strategizer",
             ),
         )
+        registry.register_strategy(
+            "CompanyEventHotSectorStrategizer",
+            lambda params: CompanyEventHotSectorStrategizer(),
+        )
+        registry.register_strategy(
+            "CompanyEventHotNewsStrategizer",
+            lambda params: CompanyEventHotNewsStrategizer(),
+        )
         return registry
 
 
@@ -300,7 +320,7 @@ class RuleExecutionContext:
             elif metadata.rule_type == RULE_TYPE_STRATEGY:
                 strategy_output = implementation.apply(self.stock, self.filter_context)
                 output = self._strategy_to_filter_output(strategy_output)
-                truth = strategy_output.satisfied
+                truth = output.result in (FilterResult.PASS, FilterResult.SKIP)
             else:
                 output = FilterOutput(
                     filter_name=metadata.implementation,
@@ -324,9 +344,20 @@ class RuleExecutionContext:
 
     @staticmethod
     def _strategy_to_filter_output(output: StrategizerOutput) -> FilterOutput:
+        result_value = str(getattr(output, "result", "") or "").lower()
+        if result_value == "skip":
+            result = FilterResult.SKIP
+        elif result_value == "pass":
+            result = FilterResult.PASS
+        elif result_value == "fail":
+            result = FilterResult.FAIL
+        elif result_value == "error":
+            result = FilterResult.ERROR
+        else:
+            result = FilterResult.PASS if output.satisfied else FilterResult.FAIL
         return FilterOutput(
             filter_name=output.name,
-            result=FilterResult.PASS if output.satisfied else FilterResult.FAIL,
+            result=result,
             reason=output.reason or "",
             details=dict(output.details) if output.details else {},
         )
@@ -347,13 +378,21 @@ class RuleExpressionEvaluator:
 
         if "and" in expression:
             items = self._as_list(expression["and"])
-            values = [self.evaluate(item, context) for item in items]
-            return all(values) if values else True
+            if not items:
+                return True
+            for item in items:
+                if not self.evaluate(item, context):
+                    return False
+            return True
 
         if "any" in expression:
             items = self._as_list(expression["any"])
-            values = [self.evaluate(item, context) for item in items]
-            return any(values) if values else False
+            if not items:
+                return False
+            for item in items:
+                if self.evaluate(item, context):
+                    return True
+            return False
 
         if "all_enabled" in expression:
             rule_keys = self._enabled_keys(expression["all_enabled"])
@@ -431,6 +470,18 @@ class RuleEngine:
     def has_rules(self) -> bool:
         return bool(self.referenced_rule_keys)
 
+    def requires_macro_analysis(self) -> bool:
+        for rule_key in self.referenced_rule_keys:
+            metadata = self.metadata_by_key.get(rule_key)
+            if (
+                metadata
+                and metadata.enabled
+                and metadata.rule_type == RULE_TYPE_STRATEGY
+                and str(metadata.strategy_category or "").lower() == "macro"
+            ):
+                return True
+        return False
+
     def requires_kline(self) -> bool:
         for rule_key in self.referenced_rule_keys:
             metadata = self.metadata_by_key.get(rule_key)
@@ -438,14 +489,38 @@ class RuleEngine:
                 return True
         return False
 
-    def evaluate_stock(self, stock: StockInfo, filter_context: FilterContext) -> StockFilterResult:
+    def evaluate_stock(
+        self,
+        stock: StockInfo,
+        filter_context: FilterContext,
+        *,
+        signal_analysis: Optional[Any] = None,
+        signal_analysis_loader: Optional[Callable[[StockInfo], Any]] = None,
+    ) -> StockFilterResult:
+        cache_key = f"signal_analysis:{stock.code}"
+        previous_analysis = filter_context.get_cache(cache_key)
+        previous_loader = filter_context.get_cache("signal_analysis_loader")
+        if signal_analysis is not None:
+            filter_context.set_cache(cache_key, signal_analysis)
+        if signal_analysis_loader is not None:
+            filter_context.set_cache("signal_analysis_loader", signal_analysis_loader)
         execution = RuleExecutionContext(
             stock=stock,
             filter_context=filter_context,
             metadata_by_key=self.metadata_by_key,
             registry=self.registry,
         )
-        passed = self.evaluator.evaluate(self.chain_config.expression, execution)
+        try:
+            passed = self.evaluator.evaluate(self.chain_config.expression, execution)
+        finally:
+            if previous_analysis is None:
+                filter_context._cache.pop(cache_key, None)
+            else:
+                filter_context.set_cache(cache_key, previous_analysis)
+            if previous_loader is None:
+                filter_context._cache.pop("signal_analysis_loader", None)
+            else:
+                filter_context.set_cache("signal_analysis_loader", previous_loader)
         return StockFilterResult(
             stock=stock,
             passed=passed,

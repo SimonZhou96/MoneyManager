@@ -11,7 +11,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 from network_preflight import format_resolution_failures
 
@@ -27,6 +27,43 @@ FEISHU_FILE_SIZE_LIMIT = 30 * 1024 * 1024
 # Token 缓存（提前 5 分钟过期）
 _token_cache: Optional[Tuple[str, float]] = None
 _TOKEN_EXPIRE_BUFFER = 300
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _dns_retry_attempts() -> int:
+    return max(1, _env_int("FEISHU_DNS_RETRY_ATTEMPTS", _env_int("FEISHU_SEND_RETRY_ATTEMPTS", 3)))
+
+
+def _dns_retry_delay_sec() -> float:
+    return max(0.0, _env_float("FEISHU_DNS_RETRY_DELAY_SEC", _env_float("FEISHU_SEND_RETRY_DELAY_SEC", 1.0)))
+
+
+def _feishu_resolution_failures(prefix: str, hosts: Iterable[str]) -> List[str]:
+    return format_resolution_failures(
+        prefix,
+        hosts,
+        attempts=_dns_retry_attempts(),
+        retry_delay_sec=_dns_retry_delay_sec(),
+    )
 
 
 def _load_dotenv():
@@ -53,7 +90,7 @@ def get_tenant_access_token(app_id: str, app_secret: str) -> Optional[str]:
     if not _HAS_REQUESTS:
         print("获取 token 失败: requests 不可用", file=__import__("sys").stderr)
         return None
-    for message in format_resolution_failures("[Feishu] token 获取预检失败", ["https://open.feishu.cn"]):
+    for message in _feishu_resolution_failures("[Feishu] token 获取预检失败", ["https://open.feishu.cn"]):
         print(message, file=__import__("sys").stderr)
         return None
     url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
@@ -100,7 +137,7 @@ def upload_file(token: str, file_path: str, file_name: Optional[str] = None) -> 
     name = file_name or path.name
     url = "https://open.feishu.cn/open-apis/im/v1/files"
     headers = {"Authorization": f"Bearer {token}"}
-    for message in format_resolution_failures("[Feishu] 文件上传预检失败", [url]):
+    for message in _feishu_resolution_failures("[Feishu] 文件上传预检失败", [url]):
         print(message, file=__import__("sys").stderr)
         return None
     try:
@@ -141,7 +178,7 @@ def send_file_message(token: str, chat_id: str, file_key: str) -> bool:
         "msg_type": "file",
         "content": content,
     }
-    for message in format_resolution_failures("[Feishu] 文件消息发送预检失败", [url]):
+    for message in _feishu_resolution_failures("[Feishu] 文件消息发送预检失败", [url]):
         print(message, file=__import__("sys").stderr)
         return False
     try:

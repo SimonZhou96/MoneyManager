@@ -8,7 +8,7 @@ import time
 import uuid
 import os
 from datetime import date
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional
 
 from db import MarketDatabase, MySqlConfig
 from filters import (
@@ -36,6 +36,8 @@ from strategizers import (
     TodayVolumeExceedsPrior3MaxStrategizer,
     DailyPctChangeBandStrategizer,
 )
+from signal_analysis.models import ScreeningSignalRow
+from signal_analysis.service import run_signal_analysis_for_row
 from timeframe import parse_timeframe
 from universe import fetch_stock_list_akshare
 from universe_filter import UniverseFilterFactory
@@ -234,6 +236,21 @@ def create_rule_engine_from_db(
     )
 
 
+def _build_macro_signal_row(stock: StockInfo, market: str) -> ScreeningSignalRow:
+    return ScreeningSignalRow(
+        index=0,
+        code=stock.code,
+        market=market,
+        market_label=market_label(market),
+        name=stock.name or stock.code,
+        pe_ratio="" if stock.pe_ratio is None else str(stock.pe_ratio),
+        market_cap="" if stock.market_cap is None else str(stock.market_cap),
+        sector=stock.sector or stock.industry or "",
+        conditions_met="",
+        raw={},
+    )
+
+
 def run_screening_task(
     mysql_config: MySqlConfig,
     task_id: str,
@@ -411,6 +428,8 @@ def run_screening_task(
         # 步骤4: 写入数据库
         results = []
         passed_stocks = []  # 记录满足条件的股票
+        macro_analysis_cache: Dict[str, object] = {}
+        macro_warning_cache: Dict[str, list[str]] = {}
         
         if verbose:
             print(f"\n{'='*80}")
@@ -452,7 +471,32 @@ def run_screening_task(
             
             # 步骤2: 应用规则。默认由 DB 规则引擎计算；兼容模式保留旧链路。
             if rule_engine is not None:
-                result = rule_engine.evaluate_stock(si, context)
+                signal_analysis_loader = None
+                if rule_engine.requires_macro_analysis():
+                    def load_signal_analysis(current_stock: StockInfo):
+                        cached = macro_analysis_cache.get(current_stock.code)
+                        if cached is not None:
+                            return cached
+                        analysis, warnings = run_signal_analysis_for_row(
+                            mysql_config=mysql_config,
+                            task_id=f"{task_id}:macro:{current_stock.code}",
+                            row=_build_macro_signal_row(current_stock, market),
+                            market=market,
+                            check_date=context.check_date,
+                            timeframe=timeframe,
+                            enabled=True,
+                        )
+                        macro_analysis_cache[current_stock.code] = analysis
+                        macro_warning_cache[current_stock.code] = list(warnings or [])
+                        if verbose and warnings:
+                            print(f"[{i}/{total_count}] ℹ️  {current_stock.code} - 宏观分析告警: {' | '.join(warnings)}")
+                        return analysis
+                    signal_analysis_loader = load_signal_analysis
+                result = rule_engine.evaluate_stock(
+                    si,
+                    context,
+                    signal_analysis_loader=signal_analysis_loader,
+                )
             else:
                 # 策略通过条件：左一战法 && 任一其他策略（关闭左一时退回任一策略命中）
                 result = filter_chain.apply(si, context)

@@ -154,82 +154,29 @@ class SignalOptionMacroAnalysisProvider:
         self.settings = settings or AnalysisSettings()
 
     def analyze(self, *, market: str, code: str, snapshot: MarketSnapshot, ttl_minutes: int) -> OptionMacroAnalysis:
-        from signal_analysis.chain import (
-            ApplyManualHotNewsStep,
-            BuildSearchQueriesStep,
-            LLMBatchAnalysisStep,
-            NormalizeAnalysisStep,
-            ResolveHotSectorsStep,
-            SearchContextStep,
-            SignalAnalysisContext,
-        )
-        from signal_analysis.factories import LLMProviderFactory, SearchProviderFactory
-        from signal_analysis.hot_news import ManualHotNewsConfig
-        from signal_analysis.hot_sectors import ManualHotSectorConfig
-        from signal_analysis.service import _prepare_analysis_providers, settings_from_env
-
-        settings = settings_from_env()
-        search_provider = SearchProviderFactory.from_env(settings)
-        llm_provider = LLMProviderFactory.from_env(settings)
-        search_provider, llm_provider, warnings = _prepare_analysis_providers(search_provider, llm_provider)
-        if not getattr(llm_provider, "is_available", False):
-            return NullOptionMacroAnalysisProvider().analyze(
-                market=market,
-                code=code,
-                snapshot=snapshot,
-                ttl_minutes=ttl_minutes,
-            ).with_cached(False, warnings + ["未配置 LLM provider，跳过宏观分析"])
+        from web.config import mysql_config_from_env
+        from signal_analysis.service import run_signal_analysis_for_row
 
         row = screening_row_from_snapshot(market, code, snapshot)
-        context = SignalAnalysisContext(
+        result, warnings = run_signal_analysis_for_row(
+            mysql_config=mysql_config_from_env(),
             task_id=f"option-macro-{market}-{code}",
+            row=row,
             market=market,
-            csv_path="",
             check_date=date.today(),
-            settings=settings,
-            search_provider=search_provider,
-            llm_provider=llm_provider,
-            manual_hot_news=ManualHotNewsConfig.from_env(market),
-            manual_hot_sectors=ManualHotSectorConfig.from_env(market),
-            rows=[row],
-            warnings=list(warnings),
+            timeframe="1d",
+            enabled=True,
+            analysis_profile=MACRO_ANALYSIS_PROFILE,
         )
-        for step in (BuildSearchQueriesStep(), SearchContextStep(), ApplyManualHotNewsStep()):
-            if context.aborted:
-                break
-            step.run(context)
-        if not context.aborted:
-            try:
-                expanded_docs = expand_option_company_documents(
-                    search_provider=context.search_provider,
-                    market=market,
-                    row=row,
-                    max_results=context.settings.search_max_results,
-                )
-                context.company_documents[row.code] = dedupe_documents([
-                    *(context.company_documents.get(row.code) or []),
-                    *expanded_docs,
-                ])
-            except Exception as exc:
-                context.warnings.append(f"期权宏观来源拓展搜索失败: {type(exc).__name__}: {exc}")
-        for step in (ResolveHotSectorsStep(), LLMBatchAnalysisStep(), NormalizeAnalysisStep()):
-            if context.aborted:
-                break
-            step.run(context)
-        result = context.results_by_code.get(code)
         if result is None:
-            result = SignalAnalysisResult.error(row, context.skipped_reason or "模型未返回该股票结果", llm_provider.model_name)
+            result = SignalAnalysisResult.error(row, "模型未返回该股票结果", "option_macro")
         return macro_analysis_from_signal_result(
             result=result,
-            warnings=context.warnings,
-            provider=llm_provider.model_name,
+            warnings=warnings,
+            provider=result.model or "option_macro",
             ttl_minutes=ttl_minutes,
             row=row,
-            source_documents=[
-                *context.market_documents,
-                *context.sector_documents,
-                *(context.company_documents.get(code) or []),
-            ],
+            source_documents=[],
         )
 
 
@@ -282,14 +229,20 @@ def macro_analysis_from_signal_result(
 ) -> OptionMacroAnalysis:
     now = _now()
     clean_result_factors(result)
-    evidence_links = build_evidence_links(source_documents or [], result.source_urls or result.news_sources)
-    source_urls = dedupe([item["url"] for item in evidence_links] or list(result.source_urls or result.news_sources))
-    factor_citations = build_factor_citations(
-        [*result.positive_factors, *result.risk_factors, *result.macro_factors],
-        source_documents or [],
-        evidence_links,
+    evidence_links = (
+        [dict(item) for item in (result.evidence_links or [])]
+        or build_evidence_links(source_documents or [], result.source_urls or result.news_sources)
     )
-    data_gaps = build_data_gaps(
+    source_urls = dedupe([item["url"] for item in evidence_links] or list(result.source_urls or result.news_sources))
+    factor_citations = (
+        {str(key): [dict(item) for item in value] for key, value in (result.factor_citations or {}).items()}
+        or build_factor_citations(
+            [*result.positive_factors, *result.risk_factors, *result.macro_factors],
+            source_documents or [],
+            evidence_links,
+        )
+    )
+    data_gaps = list(result.data_gaps or []) or build_data_gaps(
         row=row,
         result=result,
         source_documents=source_documents or [],

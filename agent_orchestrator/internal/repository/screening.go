@@ -274,8 +274,8 @@ func (r *MySQLRepository) listMergedPoolStocks(ctx context.Context, market strin
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT code, name, market_cap, price, pe_ratio, turnover, volume, industry_name
 		FROM stock_pools
-		WHERE market=? AND pool_type IN ('best','index','industry','ipo','etf')
-		ORDER BY FIELD(pool_type, 'best', 'index', 'industry', 'ipo', 'etf'), market_cap DESC`,
+		WHERE market=? AND pool_type IN ('best','major_index','industry_top5','recent_ipo_2y','all_etf')
+		ORDER BY FIELD(pool_type, 'best', 'major_index', 'industry_top5', 'recent_ipo_2y', 'all_etf'), market_cap DESC`,
 		market,
 	)
 	if err != nil {
@@ -431,7 +431,7 @@ func (r *MySQLRepository) listPoolStocksByCodes(ctx context.Context, market stri
 		SELECT code, name, market_cap, price, pe_ratio, turnover, volume, industry_name
 		FROM stock_pools
 		WHERE market=? AND code IN (`+placeholders+`)
-		ORDER BY FIELD(pool_type, 'best', 'index', 'industry', 'ipo', 'etf')`,
+		ORDER BY FIELD(pool_type, 'best', 'major_index', 'industry_top5', 'recent_ipo_2y', 'all_etf')`,
 		args...,
 	)
 	if err != nil {

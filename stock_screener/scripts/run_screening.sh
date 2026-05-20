@@ -31,6 +31,7 @@ fi
 
 MARKETS="${MARKETS:-HK,US,A}"
 TIMEFRAME="${TIMEFRAME:-1d}"
+POOLS="${POOLS:-best,major_index,industry_top5,recent_ipo_2y,all_etf}"
 CSV_PATH="${CSV_PATH:-logs/screening_result.csv}"
 MARKET_WORKERS="${MARKET_WORKERS:-3}"
 FUTU_HOST="${FUTU_HOST:-127.0.0.1}"
@@ -43,6 +44,7 @@ args=(
   "scheduled_daily_job.py"
   "--markets" "$MARKETS"
   "--timeframe" "$TIMEFRAME"
+  "--pools" "$POOLS"
   "--csv" "$CSV_PATH"
   "--market-workers" "$MARKET_WORKERS"
   "--futu-host" "$FUTU_HOST"

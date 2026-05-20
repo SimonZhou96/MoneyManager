@@ -54,10 +54,27 @@ def _retry_delay_sec() -> float:
     return max(0.0, _env_float("FEISHU_SEND_RETRY_DELAY_SEC", 1.0))
 
 
+def _dns_retry_attempts() -> int:
+    return max(1, _env_int("FEISHU_DNS_RETRY_ATTEMPTS", _retry_attempts()))
+
+
+def _dns_retry_delay_sec() -> float:
+    return max(0.0, _env_float("FEISHU_DNS_RETRY_DELAY_SEC", _retry_delay_sec()))
+
+
 def _sleep_before_retry(attempt: int) -> None:
     delay = _retry_delay_sec()
     if delay > 0:
         time.sleep(delay * (2 ** max(0, attempt - 1)))
+
+
+def _feishu_resolution_failures(prefix: str, hosts: Sequence[str]) -> List[str]:
+    return format_resolution_failures(
+        prefix,
+        hosts,
+        attempts=_dns_retry_attempts(),
+        retry_delay_sec=_dns_retry_delay_sec(),
+    )
 
 
 def send_feishu_text(webhook_url: str, text: str) -> bool:
@@ -77,7 +94,7 @@ def send_feishu_text(webhook_url: str, text: str) -> bool:
     if not webhook_url or not text:
         print("[Feishu] 缺少 webhook_url 或文本内容，无法发送摘要")
         return False
-    preflight_errors = format_resolution_failures("[Feishu] 摘要发送预检失败", [webhook_url])
+    preflight_errors = _feishu_resolution_failures("[Feishu] 摘要发送预检失败", [webhook_url])
     if preflight_errors:
         for message in preflight_errors:
             print(message)
@@ -135,7 +152,7 @@ def send_screening_result(webhook_url: str, summary: str, csv_paths: Union[str, 
         print("[Feishu] 未提供 CSV 文件路径")
         return ok
 
-    preflight_errors = format_resolution_failures(
+    preflight_errors = _feishu_resolution_failures(
         "[Feishu] 文件发送预检失败",
         [webhook_url, "https://open.feishu.cn"],
     )

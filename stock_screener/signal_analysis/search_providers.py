@@ -8,6 +8,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import os
 import re
+import sys
 from typing import Dict, List, Optional
 
 from .models import ScreeningSignalRow, SearchDocument
@@ -128,8 +129,10 @@ class TavilySearchProvider(SearchProvider):
         max_chars = _company_search_query_max_chars()
         for query_rows in _split_rows_by_query_budget(market, rows, max_chars):
             query = _build_company_batch_query(market, query_rows, max_chars=max_chars)
-            documents = self.search(query, max_results)
+            batch_max_results = _company_batch_max_results(max_results, len(query_rows))
+            documents = self.search(query, batch_max_results)
             assigned = _assign_documents_to_stocks(documents, query_rows)
+            _debug_company_batch_search(market, query_rows, query, batch_max_results, documents, assigned)
             for code, code_documents in assigned.items():
                 grouped.setdefault(code, []).extend(code_documents)
         return grouped
@@ -220,9 +223,7 @@ def _company_query_item(row: ScreeningSignalRow, name_max_chars: int) -> str:
 
 def _company_query_base_terms(row: ScreeningSignalRow) -> List[str]:
     terms: List[str] = []
-    code = (row.code or "").strip()
-    ticker = _normalize_ticker(code)
-    for term in (code, ticker):
+    for term in _stock_query_terms(row):
         if term and term not in terms:
             terms.append(term)
     return terms
@@ -246,14 +247,21 @@ def _company_search_query_max_chars() -> int:
     return min(400, max(120, value))
 
 
+def _company_batch_max_results(max_results: int, row_count: int) -> int:
+    try:
+        configured = int(max_results)
+    except (TypeError, ValueError):
+        configured = 1
+    return max(1, configured, int(row_count or 0))
+
+
 def _stock_identity_terms(row: ScreeningSignalRow) -> List[str]:
     terms = []
-    code = (row.code or "").strip()
-    ticker = _normalize_ticker(code)
     name = (row.name or "").strip()
-    for term in (code, ticker, name):
+    for term in [*_stock_code_alias_terms(row), name]:
         if term and term not in terms:
             terms.append(term)
+    ticker = _normalize_ticker(row.code)
     if ticker and ticker.isdigit():
         no_zero = ticker.lstrip("0")
         if len(no_zero) >= 3 and no_zero not in terms:
@@ -268,6 +276,150 @@ def _stock_identity_terms(row: ScreeningSignalRow) -> List[str]:
         if phrase not in terms:
             terms.append(phrase)
     return terms
+
+
+def _stock_query_terms(row: ScreeningSignalRow) -> List[str]:
+    code = (row.code or "").strip()
+    ticker = _normalize_ticker(code)
+    market = _infer_code_market(row, code)
+    terms: List[str] = []
+
+    def add(value: str) -> None:
+        value = (value or "").strip()
+        if value and value not in terms:
+            terms.append(value)
+
+    add(code)
+    add(ticker)
+    if market == "HK":
+        for value in _hk_query_ticker_forms(ticker):
+            add(f"{value}.HK")
+    elif market == "US":
+        for value in _us_query_ticker_forms(ticker):
+            add(value)
+    elif market in {"SH", "SZ", "BJ", "A"}:
+        exchange = market if market in {"SH", "SZ", "BJ"} else _a_share_exchange_from_code(code)
+        if exchange and ticker:
+            add(f"{ticker}.{exchange}")
+    return terms
+
+
+def _stock_code_alias_terms(row: ScreeningSignalRow) -> List[str]:
+    code = (row.code or "").strip()
+    ticker = _normalize_ticker(code)
+    market = _infer_code_market(row, code)
+    aliases: List[str] = []
+
+    def add(value: str) -> None:
+        value = (value or "").strip()
+        if value and value not in aliases:
+            aliases.append(value)
+
+    add(code)
+    add(ticker)
+
+    if market == "HK":
+        for value in _hk_ticker_forms(ticker):
+            add(f"{value}.HK")
+            add(f"{value} HK")
+            add(f"{value}-HK")
+    elif market == "US":
+        for value in _us_ticker_forms(ticker):
+            add(value)
+            add(f"{value}.US")
+            add(f"{value} US")
+    elif market in {"SH", "SZ", "BJ", "A"}:
+        exchange = market if market in {"SH", "SZ", "BJ"} else _a_share_exchange_from_code(code)
+        if exchange and ticker:
+            add(f"{ticker}.{exchange}")
+            add(f"{exchange}{ticker}")
+    return aliases
+
+
+def _hk_query_ticker_forms(ticker: str) -> List[str]:
+    value = (ticker or "").strip()
+    if not value:
+        return []
+    if value.isdigit() and len(value) == 5 and value.startswith("0"):
+        return [value[-4:]]
+    return [value]
+
+
+def _infer_code_market(row: ScreeningSignalRow, code: str) -> str:
+    value = (code or "").strip()
+    if "." in value:
+        left, right = value.split(".", 1)
+        if left.upper() in {"HK", "US", "SH", "SZ", "BJ"}:
+            return left.upper()
+        if right.upper() in {"HK", "US", "SH", "SZ", "SS", "BJ"}:
+            return "SH" if right.upper() == "SS" else right.upper()
+    market = (getattr(row, "market", "") or "").upper()
+    if market == "A":
+        return _a_share_exchange_from_code(value) or "A"
+    return market
+
+
+def _hk_ticker_forms(ticker: str) -> List[str]:
+    value = (ticker or "").strip()
+    if not value:
+        return []
+    forms = [value]
+    if value.isdigit():
+        if len(value) == 5 and value.startswith("0"):
+            forms.append(value[-4:])
+        forms.append(value.zfill(5))
+        forms.append(value.zfill(4))
+        no_zero = value.lstrip("0")
+        if len(no_zero) >= 3:
+            forms.append(no_zero)
+    return _dedupe_terms(forms)
+
+
+def _us_ticker_forms(ticker: str) -> List[str]:
+    value = (ticker or "").strip().upper()
+    if not value:
+        return []
+    forms = [value]
+    if "-" in value:
+        forms.append(value.replace("-", "."))
+        forms.append(value.replace("-", " "))
+    if "." in value:
+        forms.append(value.replace(".", "-"))
+        forms.append(value.replace(".", " "))
+    return _dedupe_terms(forms)
+
+
+def _us_query_ticker_forms(ticker: str) -> List[str]:
+    value = (ticker or "").strip().upper()
+    if not value:
+        return []
+    forms: List[str] = []
+    if "-" in value:
+        forms.append(value.replace("-", "."))
+    elif "." in value:
+        forms.append(value.replace(".", "-"))
+    return _dedupe_terms(forms)
+
+
+def _a_share_exchange_from_code(code: str) -> str:
+    ticker = _normalize_ticker(code)
+    if not ticker.isdigit() or len(ticker) < 6:
+        return ""
+    if ticker.startswith(("60", "68", "90")):
+        return "SH"
+    if ticker.startswith(("00", "30", "20")):
+        return "SZ"
+    if ticker.startswith(("43", "83", "87", "88")):
+        return "BJ"
+    return ""
+
+
+def _dedupe_terms(values: List[str]) -> List[str]:
+    result: List[str] = []
+    for value in values:
+        if value and value not in result:
+            result.append(value)
+    return result
 
 
 def _normalize_ticker(code: str) -> str:
@@ -316,3 +468,56 @@ def _contains_term(text: str, term: str) -> bool:
     if re.fullmatch(r"[a-z0-9]+", term):
         return re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", text) is not None
     return term in text
+
+
+def _debug_company_batch_search(
+    market: str,
+    rows: List[ScreeningSignalRow],
+    query: str,
+    max_results: int,
+    documents: List[SearchDocument],
+    assigned: Dict[str, List[SearchDocument]],
+) -> None:
+    codes = [row.code for row in rows]
+    missing_codes = [code for code in codes if not assigned.get(code)]
+    debug_mode = _company_search_debug_mode()
+    if debug_mode == "off":
+        return
+    if debug_mode == "missing" and not missing_codes:
+        return
+    print(
+        f"[公司事件搜索诊断] market={market} codes={','.join(codes)} "
+        f"max_results={max_results} returned={len(documents or [])}",
+        file=sys.stderr,
+    )
+    print(f"[公司事件搜索诊断] query={query}", file=sys.stderr)
+    for row in rows:
+        print(
+            f"[公司事件搜索诊断] identity[{row.code}]={'|'.join(_stock_identity_terms(row))}",
+            file=sys.stderr,
+        )
+    for index, document in enumerate(documents or [], 1):
+        matched_codes = [code for code, items in assigned.items() if document in items]
+        print(
+            f"[公司事件搜索诊断] result#{index} matched={','.join(matched_codes) or '-'} "
+            f"title={document.title[:120]} url={document.url}",
+            file=sys.stderr,
+        )
+    if missing_codes:
+        print(f"[公司事件搜索诊断] missing={','.join(missing_codes)}", file=sys.stderr)
+
+
+def _company_search_debug_mode() -> str:
+    value = os.getenv("SIGNAL_COMPANY_SEARCH_DEBUG")
+    if value is None:
+        value = os.getenv("SIGNAL_SEARCH_DEBUG")
+    if value is None:
+        return "missing"
+    normalized = value.strip().lower()
+    if normalized in {"0", "false", "no", "n", "off", "否", "关闭"}:
+        return "off"
+    if normalized in {"1", "true", "yes", "y", "on", "是", "full", "all"}:
+        return "full"
+    if normalized in {"missing", "miss", "unmatched"}:
+        return "missing"
+    return "missing"

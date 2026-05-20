@@ -77,20 +77,34 @@ type Job = {
   execution_mode?: string
   chain_key?: string
   chain_name?: string
+  pool_types?: string[]
   summary?: Record<string, unknown>
 }
 type RuleChain = {
   market: string
+  timeframe: string
   chain_key: string
   chain_name: string
   expression: Record<string, unknown>
+  expression_json?: Record<string, unknown>
   enabled: boolean
   priority: number
   description?: string
 }
+type AtomicRule = {
+  market: string
+  rule_key: string
+  rule_name: string
+  rule_type: string
+  strategy_category?: string
+  implementation: string
+  enabled: boolean
+  display_order: number
+}
 type RulesResponse = {
   market: string
-  metadata: any[]
+  timeframe?: string
+  metadata: AtomicRule[]
   chain: RuleChain
   chains: RuleChain[]
 }
@@ -182,6 +196,13 @@ const OPTION_MARKET_OPTIONS = [
   { value: 'A', label: 'A股' }
 ]
 const TIMEFRAME_OPTIONS = ['1d', '1wk', '1mo', '3mo', '1m', '3m', '5m', '15m', '30m', '60m']
+const POOL_OPTIONS = [
+  { value: 'best', label: '优选池' },
+  { value: 'major_index', label: '核心指数' },
+  { value: 'industry_top5', label: '行业前五' },
+  { value: 'recent_ipo_2y', label: '两年新股' },
+  { value: 'all_etf', label: '全部ETF' }
+]
 
 const COLUMN_LABELS: Record<string, string> = {
   artifact_type: '文件类型',
@@ -248,7 +269,7 @@ function commonRuleChains(markets: string[], rulesByMarket: Record<string, Rules
   const firstRules = rulesByMarket[markets[0]]
   if (!firstRules?.chains) return []
   return firstRules.chains
-    .filter(chain => markets.every(market => (rulesByMarket[market]?.chains || []).some(item => item.chain_key === chain.chain_key)))
+    .filter(chain => markets.every(market => (rulesByMarket[market]?.chains || []).some(item => item.chain_key === chain.chain_key && item.timeframe === chain.timeframe)))
     .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.priority - b.priority || a.chain_key.localeCompare(b.chain_key))
 }
 
@@ -763,6 +784,7 @@ function mergeRecentTasks(tasks: Task[], singleRuns: SingleStockRun[], jobs: Job
 function Screening() {
   const [markets, setMarkets] = useState(['HK', 'US', 'A'])
   const [timeframe, setTimeframe] = useState('1d')
+  const [poolTypes, setPoolTypes] = useState(POOL_OPTIONS.map(item => item.value))
   const [rulesByMarket, setRulesByMarket] = useState<Record<string, RulesResponse>>({})
   const [chainKey, setChainKey] = useState('')
   const [enableAi, setEnableAi] = useState(true)
@@ -776,11 +798,16 @@ function Screening() {
     setMarkets(current => current.includes(market) ? current.filter(item => item !== market) : [...current, market])
   }
 
+  function togglePoolType(poolType: string) {
+    setError('')
+    setPoolTypes(current => current.includes(poolType) ? current.filter(item => item !== poolType) : [...current, poolType])
+  }
+
   useEffect(() => {
     let cancelled = false
     async function loadRules() {
       const entries = await Promise.all(markets.map(async market => {
-        const rules = await api<RulesResponse>(`/api/rules?market=${market}`)
+        const rules = await api<RulesResponse>(`/api/rules?market=${market}&timeframe=${timeframe}`)
         return [market, rules] as const
       }))
       if (!cancelled) {
@@ -789,7 +816,7 @@ function Screening() {
     }
     if (markets.length > 0) loadRules().catch(err => setError(err instanceof Error ? err.message : '加载规则链失败'))
     return () => { cancelled = true }
-  }, [markets.join('|')])
+  }, [markets.join('|'), timeframe])
 
   const chainOptions = commonRuleChains(markets, rulesByMarket)
   const chainOptionKey = chainOptions.map(item => item.chain_key).join('|')
@@ -813,11 +840,22 @@ function Screening() {
       setError('至少选择一个市场')
       return
     }
+    if (poolTypes.length === 0) {
+      setError('至少选择一个股票池类型')
+      return
+    }
     setSubmitting(true)
     try {
       const result = await api<any>('/api/screening/tasks', {
         method: 'POST',
-        body: JSON.stringify({ markets, timeframe, chain_key: chainKey || undefined, enable_ai_analysis: enableAi, send_feishu: sendFeishu })
+        body: JSON.stringify({
+          markets,
+          timeframe,
+          pool_types: poolTypes,
+          chain_key: chainKey || undefined,
+          enable_ai_analysis: enableAi,
+          send_feishu: sendFeishu
+        })
       })
       setMessage(result.reused
         ? `已有任务运行中，已复用任务组 ${result.job_id}。`
@@ -845,6 +883,14 @@ function Screening() {
             {TIMEFRAME_OPTIONS.map(item => <option key={item}>{item}</option>)}
           </select>
         </Field>
+        <div className="field field-wide">
+          <span>股票池类型</span>
+          <div className="segmented segmented-wrap">
+            {POOL_OPTIONS.map(item => (
+              <button type="button" className={poolTypes.includes(item.value) ? 'selected' : ''} onClick={() => togglePoolType(item.value)} key={item.value}>{item.label}</button>
+            ))}
+          </div>
+        </div>
         <Field label="规则链">
           <select value={chainKey} onChange={event => setChainKey(event.target.value)} disabled={chainOptions.length === 0}>
             {chainOptions.length === 0 ? <option value="">暂无共同规则链</option> : chainOptions.map(item => (
@@ -856,9 +902,10 @@ function Screening() {
         </Field>
         <label className="check"><input type="checkbox" checked={enableAi} onChange={event => setEnableAi(event.target.checked)} /> AI 分析</label>
         <label className="check"><input type="checkbox" checked={sendFeishu} onChange={event => setSendFeishu(event.target.checked)} /> 发送飞书</label>
-        <button className="primary" disabled={submitting || markets.length === 0 || chainOptions.length === 0}>{submitting ? '创建中...' : '启动筛选'}</button>
+        <button className="primary" disabled={submitting || markets.length === 0 || poolTypes.length === 0 || chainOptions.length === 0}>{submitting ? '创建中...' : '启动筛选'}</button>
       </form>
       {markets.length === 0 && <div className="inline-error">至少选择一个市场后才能启动筛选。</div>}
+      {poolTypes.length === 0 && <div className="inline-error">至少选择一个股票池类型后才能启动筛选。</div>}
       {markets.length > 0 && chainOptions.length === 0 && <div className="inline-error">所选市场没有共同规则链，无法创建多市场任务。</div>}
       {error && <div className="error">{error}</div>}
       {message && <div className="notice">{message}</div>}
@@ -923,7 +970,7 @@ function SingleStock() {
 
   useEffect(() => {
     let cancelled = false
-    api<RulesResponse>(`/api/rules?market=${market}`)
+    api<RulesResponse>(`/api/rules?market=${market}&timeframe=${timeframe}`)
       .then(data => {
         if (cancelled) return
         setRules(data)
@@ -934,7 +981,7 @@ function SingleStock() {
       })
       .catch(err => setResult({ error: err instanceof Error ? err.message : '加载规则链失败' }))
     return () => { cancelled = true }
-  }, [market])
+  }, [market, timeframe])
 
   return (
     <section>
@@ -1061,48 +1108,167 @@ function SingleRunDetail({ runId }: { runId: string }) {
 
 function Rules() {
   const [market, setMarket] = useState('HK')
+  const [timeframe, setTimeframe] = useState('1d')
   const [rules, setRules] = useState<RulesResponse | null>(null)
   const [chainKey, setChainKey] = useState('')
+  const [editor, setEditor] = useState({
+    timeframe: '1d',
+    chain_key: '',
+    chain_name: '',
+    enabled: true,
+    priority: 100,
+    description: '',
+    expression_text: '{\n  "ref": "zuoyi_signal"\n}'
+  })
+  const [saving, setSaving] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+
+  async function loadRules() {
+    const data = await api<RulesResponse>(`/api/rules?market=${market}&timeframe=${timeframe}`)
+    setRules(data)
+    const activeKey = data.chain?.chain_key
+    if (!chainKey || !(data.chains || []).some(item => item.chain_key === chainKey)) {
+      setChainKey(activeKey || data.chains?.[0]?.chain_key || '')
+    }
+    return data
+  }
+
   useEffect(() => {
-    api<RulesResponse>(`/api/rules?market=${market}`)
-      .then(data => {
-        setRules(data)
-        const activeKey = data.chain?.chain_key
-        if (!chainKey || !(data.chains || []).some(item => item.chain_key === chainKey)) {
-          setChainKey(activeKey || data.chains?.[0]?.chain_key || '')
-        }
-      })
-      .catch(console.error)
-  }, [market])
+    loadRules().catch(err => setError(err instanceof Error ? err.message : '加载规则链失败'))
+  }, [market, timeframe])
   const selectedChain = (rules?.chains || []).find(item => item.chain_key === chainKey) || rules?.chain
+
+  useEffect(() => {
+    if (!selectedChain) return
+    setEditor({
+      timeframe: selectedChain.timeframe || timeframe,
+      chain_key: selectedChain.chain_key,
+      chain_name: selectedChain.chain_name,
+      enabled: !!selectedChain.enabled,
+      priority: selectedChain.priority || 100,
+      description: selectedChain.description || '',
+      expression_text: JSON.stringify(selectedChain.expression_json || selectedChain.expression || {}, null, 2)
+    })
+  }, [selectedChain?.chain_key, selectedChain?.timeframe])
+
+  function startNewChain() {
+    setEditor({
+      timeframe,
+      chain_key: '',
+      chain_name: '',
+      enabled: false,
+      priority: 100,
+      description: '',
+      expression_text: '{\n  "ref": "zuoyi_signal"\n}'
+    })
+  }
+
+  function insertRuleRef(ruleKey: string) {
+    navigator.clipboard?.writeText(`{"ref":"${ruleKey}"}`).catch(() => undefined)
+    setNotice(`已复制 {"ref":"${ruleKey}"} 到剪贴板`)
+  }
+
+  async function saveChain() {
+    setSaving(true)
+    setNotice('')
+    setError('')
+    try {
+      const expression_json = JSON.parse(editor.expression_text)
+      const payload = {
+        market,
+        timeframe: editor.timeframe,
+        chain_key: editor.chain_key,
+        chain_name: editor.chain_name,
+        expression_json,
+        enabled: editor.enabled,
+        priority: Number(editor.priority || 100),
+        description: editor.description
+      }
+      const method = (rules?.chains || []).some(item => item.chain_key === editor.chain_key && item.timeframe === editor.timeframe) ? 'PUT' : 'POST'
+      const path = method === 'PUT'
+        ? `/api/rules/chains/${market}/${encodeURIComponent(editor.timeframe)}/${editor.chain_key}`
+        : '/api/rules/chains'
+      await api(path, { method, body: JSON.stringify(payload) })
+      setNotice('规则链已保存')
+      await loadRules()
+      setChainKey(editor.chain_key)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存规则链失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function deleteChain() {
+    if (!editor.chain_key) return
+    setSaving(true)
+    setNotice('')
+    setError('')
+    try {
+      await api(`/api/rules/chains/${market}/${encodeURIComponent(editor.timeframe)}/${editor.chain_key}`, { method: 'DELETE' })
+      setNotice('规则链已删除')
+      setChainKey('')
+      startNewChain()
+      await loadRules()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除规则链失败')
+    } finally {
+      setSaving(false)
+    }
+  }
   return (
     <section>
-      <Header title="规则链" subtitle="只读展示当前数据库规则配置" />
+      <Header title="规则链" subtitle="查看原子规则，并以 JSON DSL 新增、编辑、删除规则链" />
       <div className="toolbar toolbar-row">
         <select value={market} onChange={event => setMarket(event.target.value)}>
           {MARKET_OPTIONS.map(item => <option key={item}>{item}</option>)}
         </select>
+        <select value={timeframe} onChange={event => setTimeframe(event.target.value)}>
+          {TIMEFRAME_OPTIONS.map(item => <option key={item}>{item}</option>)}
+        </select>
         <Field label="规则链">
           <select value={chainKey} onChange={event => setChainKey(event.target.value)}>
             {(rules?.chains || []).map(item => (
-              <option key={item.chain_key} value={item.chain_key}>{item.chain_name}</option>
+              <option key={`${item.chain_key}:${item.timeframe}`} value={item.chain_key}>{item.chain_name}</option>
             ))}
           </select>
         </Field>
+        <button type="button" onClick={startNewChain}>新建</button>
       </div>
-      <div className="table-note">SKIP 表示该规则启用但当前参数为空，不阻断通过。</div>
+      <div className="table-note">规则链表达式使用 JSON DSL。可从下方原子规则复制 `ref` 节点；当前版本不做可视化编排器。</div>
+      {error && <div className="error">{error}</div>}
+      {notice && <div className="notice">{notice}</div>}
       <Panel title="规则链列表">
         <Table rows={(rules?.chains || []).map(item => ({
           ...item,
+          timeframe: item.timeframe,
           chain_name: item.chain_key === rules?.chain?.chain_key ? `${item.chain_name}（默认生效）` : item.chain_name,
           enabled: item.enabled ? '默认候选' : '可试跑',
-        }))} columns={['chain_name', 'chain_key', 'enabled', 'priority', 'description']} />
+        }))} columns={['chain_name', 'chain_key', 'timeframe', 'enabled', 'priority', 'description']} onRowClick={(row) => setChainKey(row.chain_key)} />
       </Panel>
-      <Panel title="生效规则链">
-        <pre>{JSON.stringify(selectedChain || {}, null, 2)}</pre>
+      <Panel title="规则链编辑">
+        <div className="form-grid">
+          <Field label="规则链 Key"><input value={editor.chain_key} onChange={event => setEditor(current => ({ ...current, chain_key: event.target.value }))} /></Field>
+          <Field label="适用周期">
+            <select value={editor.timeframe} onChange={event => setEditor(current => ({ ...current, timeframe: event.target.value }))}>
+              <option value="*">通用</option>
+              {TIMEFRAME_OPTIONS.map(item => <option key={item}>{item}</option>)}
+            </select>
+          </Field>
+          <Field label="规则链名称"><input value={editor.chain_name} onChange={event => setEditor(current => ({ ...current, chain_name: event.target.value }))} /></Field>
+          <Field label="优先级"><input type="number" value={editor.priority} onChange={event => setEditor(current => ({ ...current, priority: Number(event.target.value) }))} /></Field>
+          <label className="check"><input type="checkbox" checked={editor.enabled} onChange={event => setEditor(current => ({ ...current, enabled: event.target.checked }))} /> 启用</label>
+          <Field label="说明"><input value={editor.description} onChange={event => setEditor(current => ({ ...current, description: event.target.value }))} /></Field>
+          <Field label="expression_json"><textarea rows={14} value={editor.expression_text} onChange={event => setEditor(current => ({ ...current, expression_text: event.target.value }))} /></Field>
+          <div className="toolbar toolbar-row">
+            <button type="button" className="primary" disabled={saving} onClick={saveChain}>{saving ? '保存中...' : '保存'}</button>
+            <button type="button" disabled={saving || !editor.chain_key} onClick={deleteChain}>删除</button>
+          </div>
+        </div>
       </Panel>
       <Panel title="原子规则">
-        <Table rows={rules?.metadata || []} columns={['rule_key', 'rule_name', 'rule_type', 'implementation', 'enabled', 'display_order']} />
+        <Table rows={(rules?.metadata || []).map(item => ({ ...item, enabled: item.enabled ? '启用' : '停用' }))} columns={['rule_key', 'rule_name', 'rule_type', 'strategy_category', 'implementation', 'enabled', 'display_order']} onRowClick={(row) => insertRuleRef(row.rule_key)} />
       </Panel>
     </section>
   )

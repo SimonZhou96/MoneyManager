@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from datetime import date
+from pathlib import Path
 from typing import List, Optional
 
 from db import MarketDatabase, MySqlConfig
@@ -17,8 +19,11 @@ from .factories import LLMProviderFactory, SearchProviderFactory
 from .llm_providers import FallbackLLMProvider, LLMProvider, NullLLMProvider
 from .hot_news import ManualHotNewsConfig
 from .hot_sectors import ManualHotSectorConfig
-from .models import AnalysisRunResult, AnalysisSettings
+from .models import AnalysisRunResult, AnalysisSettings, ScreeningSignalRow, SignalAnalysisResult
 from .search_providers import NullSearchProvider, SearchProvider
+
+
+DEFAULT_ANALYSIS_PROFILE = "default"
 
 
 def env_flag(name: str, default: bool) -> bool:
@@ -49,6 +54,29 @@ class MySqlSignalAnalysisRepository:
         try:
             db.init_signal_analysis_schema()
             db.upsert_signal_analysis_results(rows)
+            db.init_signal_analysis_cache_schema()
+            db.upsert_signal_analysis_cache(rows)
+        finally:
+            db.close()
+
+    def get_signal_analysis_cache(
+        self,
+        market: str,
+        code: str,
+        timeframe: str,
+        analysis_profile: str,
+        trade_date: date,
+    ) -> Optional[dict]:
+        db = MarketDatabase(self.mysql_config)
+        try:
+            db.init_signal_analysis_cache_schema()
+            return db.get_signal_analysis_cache(
+                market=market,
+                code=code,
+                timeframe=timeframe,
+                analysis_profile=analysis_profile,
+                trade_date=trade_date,
+            )
         finally:
             db.close()
 
@@ -69,6 +97,11 @@ def run_signal_analysis_for_market(
     check_date: Optional[date] = None,
     timeframe: str = "1d",
     enabled: Optional[bool] = None,
+    analysis_profile: str = DEFAULT_ANALYSIS_PROFILE,
+    force_refresh: bool = False,
+    repository_override: Optional[MySqlSignalAnalysisRepository] = None,
+    search_provider_override: Optional[SearchProvider] = None,
+    llm_provider_override: Optional[LLMProvider] = None,
 ) -> AnalysisRunResult:
     """Run optional post-screening analysis without affecting the main screening flow."""
     should_run = env_flag("ENABLE_LLM_ANALYSIS", True) if enabled is None else bool(enabled)
@@ -76,22 +109,14 @@ def run_signal_analysis_for_market(
         return AnalysisRunResult(success=False, skipped_reason="AI 辅助分析已关闭")
 
     settings = settings_from_env()
-    llm_provider = LLMProviderFactory.from_env(settings)
-    if not llm_provider.is_available:
-        return AnalysisRunResult(
-            success=False,
-            warnings=["未配置可用 LLM provider，跳过 AI 辅助分析"],
-            skipped_reason="未配置 LLM provider",
-        )
-
-    search_provider = SearchProviderFactory.from_env(settings)
+    llm_provider = llm_provider_override or LLMProviderFactory.from_env(settings)
+    search_provider = search_provider_override or SearchProviderFactory.from_env(settings)
     search_provider, llm_provider, preflight_warnings = _prepare_analysis_providers(search_provider, llm_provider)
     if not llm_provider.is_available:
-        return AnalysisRunResult(
-            success=False,
-            warnings=preflight_warnings,
-            skipped_reason="LLM provider 网络预检失败，跳过 AI 辅助分析",
-        )
+        if _has_llm_preflight_failure(preflight_warnings):
+            preflight_warnings = [*preflight_warnings, "LLM provider 网络预检失败，仅返回命中的缓存结果"]
+        else:
+            preflight_warnings = [*preflight_warnings, "未配置可用 LLM provider，仅返回命中的缓存结果"]
 
     context = SignalAnalysisContext(
         task_id=task_id,
@@ -102,12 +127,73 @@ def run_signal_analysis_for_market(
         search_provider=search_provider,
         llm_provider=llm_provider,
         timeframe=timeframe,
-        repository=MySqlSignalAnalysisRepository(mysql_config),
+        repository=repository_override or MySqlSignalAnalysisRepository(mysql_config),
         manual_hot_news=ManualHotNewsConfig.from_env(market),
         manual_hot_sectors=ManualHotSectorConfig.from_env(market),
         warnings=list(preflight_warnings),
+        analysis_profile=analysis_profile,
+        force_refresh=force_refresh,
     )
     return SignalAnalysisChain().run(context)
+
+
+def run_signal_analysis_for_row(
+    mysql_config: MySqlConfig,
+    *,
+    task_id: str,
+    row: ScreeningSignalRow,
+    market: str,
+    check_date: Optional[date] = None,
+    timeframe: str = "1d",
+    enabled: Optional[bool] = None,
+    analysis_profile: str = DEFAULT_ANALYSIS_PROFILE,
+    force_refresh: bool = False,
+) -> tuple[Optional[SignalAnalysisResult], List[str]]:
+    run_date = check_date or date.today()
+    with tempfile.TemporaryDirectory(prefix="signal_analysis_row_") as tmp_dir:
+        csv_path = Path(tmp_dir) / f"{row.code}.csv"
+        fieldnames = [
+            "股票代码", "市场", "名称", "标的类型", "pe", "市值", "所属板块", "满足的条件",
+            "主力流出风险", "主力风险分", "主力风险信号", "主力风险说明",
+            "资金与盘面观察", "资金流向数据", "盘口数据", "龙虎榜数据", "成交量分布数据",
+        ]
+        csv_row = {
+            "股票代码": row.code,
+            "市场": row.market_label or row.market,
+            "名称": row.name,
+            "标的类型": row.instrument_type,
+            "pe": row.pe_ratio,
+            "市值": row.market_cap,
+            "所属板块": row.sector,
+            "满足的条件": row.conditions_met,
+            "主力流出风险": row.main_force_risk_level,
+            "主力风险分": row.main_force_risk_score,
+            "主力风险信号": row.main_force_risk_signals,
+            "主力风险说明": row.main_force_risk_summary,
+            "资金与盘面观察": row.main_force_market_data_observation,
+            "资金流向数据": row.main_force_fund_flow_data,
+            "盘口数据": row.main_force_order_book_data,
+            "龙虎榜数据": row.main_force_lhb_data,
+            "成交量分布数据": row.main_force_chip_data,
+        }
+        import csv
+
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerow(csv_row)
+        result = run_signal_analysis_for_market(
+            mysql_config=mysql_config,
+            task_id=task_id,
+            market=market,
+            csv_path=str(csv_path),
+            check_date=run_date,
+            timeframe=timeframe,
+            enabled=enabled,
+            analysis_profile=analysis_profile,
+            force_refresh=force_refresh,
+        )
+        return (result.results_by_code or {}).get(row.code), list(result.warnings or [])
 
 
 def _prepare_analysis_providers(
@@ -178,3 +264,7 @@ def _analysis_network_preflight(search_provider, llm_provider) -> List[str]:
     """Backward-compatible warning-only preflight helper for tests and scripts."""
     _, _, warnings = _prepare_analysis_providers(search_provider, llm_provider)
     return warnings
+
+
+def _has_llm_preflight_failure(warnings: List[str]) -> bool:
+    return any("LLM provider" in warning and "预检失败" in warning for warning in warnings)

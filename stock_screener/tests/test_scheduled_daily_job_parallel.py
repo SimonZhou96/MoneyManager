@@ -18,6 +18,7 @@ from signal_analysis.models import SignalAnalysisResult
 
 class FakeMarketDatabase:
     pools_by_market = {}
+    pools_by_type = {}
     etfs_by_market = {}
     instances = []
 
@@ -33,7 +34,9 @@ class FakeMarketDatabase:
         self.closed = True
 
     def get_stock_pool(self, market, pool_type, limit=None):
-        if pool_type == "etf":
+        if self.pools_by_type:
+            return self.pools_by_type.get((market, pool_type), [])
+        if pool_type == "all_etf":
             return self.etfs_by_market.get(market, [])
         return self.pools_by_market.get(market, []) if pool_type == "best" else []
 
@@ -46,6 +49,7 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
             "US": [{"code": "US.AAPL", "name": "Apple"}],
         }
         FakeMarketDatabase.etfs_by_market = {}
+        FakeMarketDatabase.pools_by_type = {}
         FakeMarketDatabase.instances = []
 
     def run_main(self, tmp_dir, markets="HK,A,US", workers=3):
@@ -67,12 +71,53 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 return job.main()
 
+    def test_get_merged_pool_stocks_filters_selected_pool_types(self):
+        FakeMarketDatabase.pools_by_type = {
+            ("HK", "best"): [{"code": "HK.00001", "name": "Best"}],
+            ("HK", "major_index"): [{"code": "HK.00700", "name": "Index"}],
+            ("HK", "all_etf"): [{"code": "HK.02800", "name": "ETF"}],
+        }
+
+        records = job.get_merged_pool_stocks(FakeMarketDatabase(object()), "HK", pool_types=["major_index", "all_etf"])
+
+        self.assertEqual([item["code"] for item in records], ["HK.00700", "HK.02800"])
+        self.assertEqual(records[1]["sector"], "ETF")
+
+    def test_run_market_worker_passes_selected_pool_types_to_screening(self):
+        captured = {}
+
+        def fake_has_pool(db, market, pool_types=None):
+            captured["has_pool_types"] = pool_types
+            return True
+
+        def fake_run_screening(**kwargs):
+            captured["screening_pool_types"] = kwargs.get("pool_types")
+            return "task-HK", []
+
+        with patch.object(job, "MarketDatabase", FakeMarketDatabase), \
+                patch.object(job, "has_merged_pool_stocks", side_effect=fake_has_pool), \
+                patch.object(job, "run_screening_for_market", side_effect=fake_run_screening), \
+                patch.object(job.ScreeningPostProcessor, "process", return_value=[]):
+            result = job.run_market_screening_worker(
+                mysql_config=object(),
+                market="HK",
+                timeframe="1d",
+                default_params={},
+                csv_base="logs/screening_result",
+                today_str="2026-05-20",
+                pool_types=["major_index"],
+            )
+
+        self.assertFalse(result.skipped)
+        self.assertEqual(captured["has_pool_types"], ["major_index"])
+        self.assertEqual(captured["screening_pool_types"], ["major_index"])
+
     def test_workers_start_concurrently_when_market_workers_is_three(self):
         barrier = threading.Barrier(3, timeout=2)
         started = []
         started_lock = threading.Lock()
 
-        def fake_run_screening(mysql_config, market, timeframe, default_params, verbose=False):
+        def fake_run_screening(mysql_config, market, timeframe, default_params, verbose=False, pool_types=None):
             with started_lock:
                 started.append(market)
             barrier.wait()
@@ -87,7 +132,7 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
         self.assertGreaterEqual(len(FakeMarketDatabase.instances), 4)
 
     def test_failure_in_one_market_does_not_block_success_in_another(self):
-        def fake_run_screening(mysql_config, market, timeframe, default_params, verbose=False):
+        def fake_run_screening(mysql_config, market, timeframe, default_params, verbose=False, pool_types=None):
             if market == "A":
                 raise RuntimeError("boom")
             return f"task-{market}", [{
@@ -104,8 +149,9 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with patch.object(job, "run_screening_for_market", side_effect=fake_run_screening):
                 exit_code = self.run_main(tmp_dir, markets="HK,A", workers=2)
-            hk_csv = Path(tmp_dir) / "港股市场信号1d复核报告.csv"
-            a_csv = Path(tmp_dir) / "A股市场信号1d复核报告.csv"
+            today = f"{job.date.today():%Y-%m-%d}"
+            hk_csv = Path(tmp_dir) / f"港股市场信号1d{today}复核报告.csv"
+            a_csv = Path(tmp_dir) / f"A股市场信号1d{today}复核报告.csv"
 
             self.assertEqual(exit_code, 0)
             self.assertTrue(hk_csv.exists())
@@ -114,7 +160,7 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
     def test_market_workers_one_preserves_market_order(self):
         run_order = []
 
-        def fake_run_screening(mysql_config, market, timeframe, default_params, verbose=False):
+        def fake_run_screening(mysql_config, market, timeframe, default_params, verbose=False, pool_types=None):
             run_order.append(market)
             return f"task-{market}", []
 
@@ -155,7 +201,7 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
             },
         ]
 
-        def fake_run_screening(mysql_config, market, timeframe, default_params, verbose=False):
+        def fake_run_screening(mysql_config, market, timeframe, default_params, verbose=False, pool_types=None):
             return "task-US", passed
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -173,14 +219,14 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
                     )
 
             expected_paths = [
-                str(Path(tmp_dir) / "美股市场信号1d复核报告.csv"),
+                str(Path(tmp_dir) / "美股市场信号1d2026-05-08复核报告.csv"),
             ]
             self.assertFalse(result.skipped)
             self.assertEqual(result.csv_paths, expected_paths)
             for path in expected_paths:
                 self.assertTrue(Path(path).exists())
-            self.assertFalse((Path(tmp_dir) / "美股市场信号1d复核报告_no_etf.csv").exists())
-            self.assertFalse((Path(tmp_dir) / "美股市场信号1d复核报告_etf_only.csv").exists())
+            self.assertFalse((Path(tmp_dir) / "美股市场信号1d2026-05-08复核报告_no_etf.csv").exists())
+            self.assertFalse((Path(tmp_dir) / "美股市场信号1d2026-05-08复核报告_etf_only.csv").exists())
             with open(expected_paths[0], "r", encoding="utf-8-sig", newline="") as f:
                 rows = list(csv.DictReader(f))
             self.assertEqual(rows[0]["标的类型"], "股票")
@@ -378,12 +424,12 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
             },
         ]
 
-        def fake_run_screening(mysql_config, market, timeframe, default_params, verbose=False):
+        def fake_run_screening(mysql_config, market, timeframe, default_params, verbose=False, pool_types=None):
             return "task-US", passed
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             csv_base = str(Path(tmp_dir) / "screening_result")
-            report_path = str(Path(tmp_dir) / "美股市场信号1d复核报告.md")
+            report_path = str(Path(tmp_dir) / "美股市场信号1d2026-05-08复核报告.md")
             results_by_code = {
                 "US.TEST": SignalAnalysisResult(
                     code="US.TEST",
@@ -433,13 +479,13 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
 
             self.assertFalse(result.skipped)
             self.assertEqual(result.csv_paths, [
-                str(Path(tmp_dir) / "美股市场信号1d复核报告.csv"),
+                str(Path(tmp_dir) / "美股市场信号1d2026-05-08复核报告.csv"),
                 report_path,
             ])
-            self.assertFalse(Path(tmp_dir, "美股市场信号1d复核报告_ai.csv").exists())
-            self.assertFalse((Path(tmp_dir) / "美股市场信号1d复核报告_no_etf.csv").exists())
-            self.assertFalse((Path(tmp_dir) / "美股市场信号1d复核报告_etf_only.csv").exists())
-            with open(Path(tmp_dir) / "美股市场信号1d复核报告.csv", "r", encoding="utf-8-sig", newline="") as f:
+            self.assertFalse(Path(tmp_dir, "美股市场信号1d2026-05-08复核报告_ai.csv").exists())
+            self.assertFalse((Path(tmp_dir) / "美股市场信号1d2026-05-08复核报告_no_etf.csv").exists())
+            self.assertFalse((Path(tmp_dir) / "美股市场信号1d2026-05-08复核报告_etf_only.csv").exists())
+            with open(Path(tmp_dir) / "美股市场信号1d2026-05-08复核报告.csv", "r", encoding="utf-8-sig", newline="") as f:
                 rows = list(csv.DictReader(f))
             self.assertEqual(rows[0]["股票代码"], "US.TEST")
             self.assertEqual(rows[0]["标的类型"], "股票")
@@ -472,7 +518,7 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
             "conditions_met": "左一战法-看涨|EMA突破",
         }]
 
-        def fake_run_screening(mysql_config, market, timeframe, default_params, verbose=False):
+        def fake_run_screening(mysql_config, market, timeframe, default_params, verbose=False, pool_types=None):
             return "task-US", passed
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -492,7 +538,7 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
                     )
 
             expected_paths = [
-                str(Path(tmp_dir) / "美股市场信号1d复核报告.csv"),
+                str(Path(tmp_dir) / "美股市场信号1d2026-05-08复核报告.csv"),
             ]
             self.assertIsNone(result.error)
             self.assertEqual(result.csv_paths, expected_paths)

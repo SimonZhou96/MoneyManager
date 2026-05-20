@@ -21,9 +21,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from market import normalize_market
+from stock_pool import CANONICAL_POOL_TYPES, POOL_TYPE_ALL_ETF
 
 
-DEFAULT_POOL_TYPES = ("best", "index", "industry", "ipo", "etf")
+DEFAULT_POOL_TYPES = CANONICAL_POOL_TYPES
 
 
 @dataclass(frozen=True)
@@ -168,7 +169,7 @@ class StockPoolSectorProvider(SectorProvider):
                 code = _clean(row.get("code"))
                 if code not in wanted:
                     continue
-                if pool_type == "etf":
+                if pool_type == POOL_TYPE_ALL_ETF:
                     info = SectorInfo(code=code, sector="ETF", industry="ETF", source=self.name)
                 else:
                     industry = _clean(row.get("industry_name"))

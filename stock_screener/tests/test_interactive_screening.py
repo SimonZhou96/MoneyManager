@@ -60,7 +60,7 @@ class InteractiveScreeningTests(unittest.TestCase):
             "logs/x.csv",
             "trial_chain",
             "HK,A",
-            "best,etf",
+            "best,major_index,all_etf",
             "n",         # 不刷新股票池
             "2",         # market workers
             "",          # futu host
@@ -72,11 +72,32 @@ class InteractiveScreeningTests(unittest.TestCase):
 
         self.assertEqual(options.mode, "full")
         self.assertEqual(options.markets, ["HK", "A"])
-        self.assertEqual(options.pools, ["best", "etf"])
+        self.assertEqual(options.pools, ["best", "major_index", "all_etf"])
         self.assertFalse(options.fetch_pools)
         self.assertFalse(options.enable_main_force_external_data)
         self.assertEqual(options.market_workers, 2)
         self.assertEqual(options.chain_key, "trial_chain")
+
+    def test_prompt_pools_rejects_removed_legacy_pool_types(self):
+        answers = iter([
+            "index,industry,ipo,etf",
+            "best,major_index,industry_top5,recent_ipo_2y,all_etf",
+        ])
+        output = []
+        app = ScreeningInteractiveApp(
+            input_func=lambda _: next(answers),
+            print_func=lambda *args, **kwargs: output.append(" ".join(str(arg) for arg in args)),
+        )
+
+        pools = app._prompt_pools()
+
+        self.assertEqual(pools, ["best", "major_index", "industry_top5", "recent_ipo_2y", "all_etf"])
+        text = "\n".join(output)
+        self.assertIn("major_index", text)
+        self.assertIn("industry_top5", text)
+        self.assertIn("recent_ipo_2y", text)
+        self.assertIn("all_etf", text)
+        self.assertIn("无效股票池类型", text)
 
     def test_apply_main_force_external_data_env(self):
         options = InteractiveScreeningOptions(

@@ -418,12 +418,14 @@ class MarketCapFilter(Filter):
         self,
         min_cap: Optional[float] = None,  # 最小市值（单位取决于数据源）
         max_cap: Optional[float] = None,  # 最大市值
+        min_exclusive: bool = False,
         name: str = "MarketCapFilter",
         enabled: bool = True,
     ):
         super().__init__(name=name, enabled=enabled)
         self.min_cap = min_cap
         self.max_cap = max_cap
+        self.min_exclusive = min_exclusive
     
     def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
         """应用市值筛选。数据缺失时兜底视为通过，不阻断后续流程。"""
@@ -432,13 +434,17 @@ class MarketCapFilter(Filter):
         if market_cap is None:
             return self._pass("市值数据缺失，兜底视为通过", market_cap=None)
         
-        if self.min_cap is not None and market_cap < self.min_cap:
-            return self._fail(
-                reason=f"市值 {market_cap:.2f} < 最小值 {self.min_cap:.2f}",
-                market_cap=market_cap,
-                min_cap=self.min_cap
-            )
-        
+        if self.min_cap is not None:
+            min_failed = market_cap <= self.min_cap if self.min_exclusive else market_cap < self.min_cap
+            if min_failed:
+                op = "<=" if self.min_exclusive else "<"
+                return self._fail(
+                    reason=f"市值 {market_cap:.2f} {op} 最小值 {self.min_cap:.2f}",
+                    market_cap=market_cap,
+                    min_cap=self.min_cap,
+                    min_exclusive=self.min_exclusive,
+                )
+
         if self.max_cap is not None and market_cap > self.max_cap:
             return self._fail(
                 reason=f"市值 {market_cap:.2f} > 最大值 {self.max_cap:.2f}",
@@ -463,6 +469,7 @@ class PEFilter(Filter):
         min_pe: Optional[float] = None,
         max_pe: Optional[float] = None,
         allow_negative: bool = False,  # 是否允许负 PE
+        min_exclusive: bool = False,
         name: str = "PEFilter",
         enabled: bool = True,
     ):
@@ -470,6 +477,7 @@ class PEFilter(Filter):
         self.min_pe = min_pe
         self.max_pe = max_pe
         self.allow_negative = allow_negative
+        self.min_exclusive = min_exclusive
     
     def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
         """应用 PE 筛选。数据缺失时兜底视为通过，不阻断后续流程。"""
@@ -484,13 +492,17 @@ class PEFilter(Filter):
                 pe=pe
             )
         
-        if self.min_pe is not None and pe < self.min_pe:
-            return self._fail(
-                reason=f"PE {pe:.2f} < 最小值 {self.min_pe:.2f}",
-                pe=pe,
-                min_pe=self.min_pe
-            )
-        
+        if self.min_pe is not None:
+            min_failed = pe <= self.min_pe if self.min_exclusive else pe < self.min_pe
+            if min_failed:
+                op = "<=" if self.min_exclusive else "<"
+                return self._fail(
+                    reason=f"PE {pe:.2f} {op} 最小值 {self.min_pe:.2f}",
+                    pe=pe,
+                    min_pe=self.min_pe,
+                    min_exclusive=self.min_exclusive,
+                )
+
         if self.max_pe is not None and pe > self.max_pe:
             return self._fail(
                 reason=f"PE {pe:.2f} > 最大值 {self.max_pe:.2f}",
@@ -707,12 +719,14 @@ class PriceFilter(Filter):
         self,
         min_price: Optional[float] = None,  # 最小价格
         max_price: Optional[float] = None,  # 最大价格
+        min_exclusive: bool = False,
         name: str = "PriceFilter",
         enabled: bool = True,
     ):
         super().__init__(name=name, enabled=enabled)
         self.min_price = min_price
         self.max_price = max_price
+        self.min_exclusive = min_exclusive
     
     def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
         """应用价格筛选"""
@@ -728,13 +742,17 @@ class PriceFilter(Filter):
         except (ValueError, TypeError, IndexError):
             return self._skip("无法获取收盘价")
         
-        if self.min_price is not None and price < self.min_price:
-            return self._fail(
-                reason=f"股票价格 {price:.2f} < 最小值 {self.min_price:.2f}",
-                price=price,
-                min_price=self.min_price
-            )
-        
+        if self.min_price is not None:
+            min_failed = price <= self.min_price if self.min_exclusive else price < self.min_price
+            if min_failed:
+                op = "<=" if self.min_exclusive else "<"
+                return self._fail(
+                    reason=f"股票价格 {price:.2f} {op} 最小值 {self.min_price:.2f}",
+                    price=price,
+                    min_price=self.min_price,
+                    min_exclusive=self.min_exclusive,
+                )
+
         if self.max_price is not None and price > self.max_price:
             return self._fail(
                 reason=f"股票价格 {price:.2f} > 最大值 {self.max_price:.2f}",
@@ -751,77 +769,140 @@ class PriceFilter(Filter):
 class AvgDailyVolumeFilter(Filter):
     """每日平均交易量筛选器
     
-    根据每日平均交易量范围筛选，从 K 线数据计算
+    根据每日平均交易量范围筛选，从 K 线数据计算。
+    metric=turnover 时复用同一规则计算平均成交额，不新增筛选器。
     """
     
     def __init__(
         self,
         min_volume: Optional[float] = None,  # 最小每日平均交易量
         max_volume: Optional[float] = None,  # 最大每日平均交易量
+        lookback_days: Optional[int] = None,
+        metric: str = "volume",
+        min_exclusive: bool = False,
         name: str = "AvgDailyVolumeFilter",
         enabled: bool = True,
     ):
         super().__init__(name=name, enabled=enabled)
         self.min_volume = min_volume
         self.max_volume = max_volume
+        self.lookback_days = int(lookback_days) if lookback_days else None
+        self.metric = str(metric or "volume").strip().lower()
+        self.min_exclusive = min_exclusive
     
     def apply(self, stock: StockInfo, context: FilterContext) -> FilterOutput:
         """应用每日平均交易量筛选"""
-        # 从 K 线数据计算每日平均交易量
         if stock.kline_df is None or stock.kline_df.empty:
             return self._skip("K线数据缺失")
-        
-        if "volume" not in stock.kline_df.columns:
+
+        if self.metric == "turnover":
+            metric_label = "成交额"
+            metric_detail_key = "avg_daily_turnover"
+        else:
+            metric_label = "交易量"
+            metric_detail_key = "avg_daily_volume"
+
+        if self.metric != "turnover" and "volume" not in stock.kline_df.columns:
             return self._skip("K线数据无成交量")
         
-        # 计算每日平均成交量
         try:
             from timeframe import is_intraday
-            # 获取 timeframe（从 context 或默认为日线）
             timeframe = getattr(context, "timeframe", "1d")
             
-            df = stock.kline_df
-            if is_intraday(timeframe):
-                # 日内：按日期聚合后取均值
-                if isinstance(df.index, pd.DatetimeIndex):
-                    daily = df["volume"].groupby(df.index.date).sum()
-                elif "date" in df.columns:
-                    dt = pd.to_datetime(df["date"])
-                    daily = df["volume"].groupby(dt.dt.date).sum()
+            df = stock.kline_df.copy()
+            if self.metric == "turnover":
+                if "turnover" in df.columns:
+                    series = pd.to_numeric(df["turnover"], errors="coerce")
+                    source = "turnover"
+                elif "close" in df.columns and "volume" in df.columns:
+                    close = pd.to_numeric(df["close"], errors="coerce")
+                    volume = pd.to_numeric(df["volume"], errors="coerce")
+                    series = close * volume
+                    source = "close_volume"
                 else:
-                    avg_volume = float(df["volume"].mean())
-                    daily = None
-                
-                if daily is not None and len(daily) > 0:
-                    avg_volume = float(daily.mean())
-                else:
-                    avg_volume = float(df["volume"].mean()) if len(df) > 0 else None
+                    return self._skip("K线数据缺少成交额，且无法用收盘价和成交量计算")
             else:
-                # 日线及以上：直接取均值
-                avg_volume = float(df["volume"].mean()) if len(df) > 0 else None
-            
+                series = pd.to_numeric(df["volume"], errors="coerce")
+                source = "volume"
+
+            df = df.assign(_screen_metric=series)
+            df = df[df["_screen_metric"].notna()]
+            if df.empty:
+                return self._skip(f"无法计算每日平均{metric_label}")
+
+            if is_intraday(timeframe):
+                if isinstance(df.index, pd.DatetimeIndex):
+                    if context.check_date is not None:
+                        df = df[df.index.date <= context.check_date]
+                    daily = df["_screen_metric"].groupby(df.index.date).sum()
+                elif "date" in df.columns:
+                    dt = pd.to_datetime(df["date"], errors="coerce")
+                    df = df.assign(_screen_date=dt)
+                    df = df[df["_screen_date"].notna()]
+                    if context.check_date is not None:
+                        df = df[df["_screen_date"].dt.date <= context.check_date]
+                    daily = df["_screen_metric"].groupby(df["_screen_date"].dt.date).sum()
+                else:
+                    daily = df["_screen_metric"].reset_index(drop=True)
+            else:
+                if "date" in df.columns:
+                    dt = pd.to_datetime(df["date"], errors="coerce")
+                    df = df.assign(_screen_date=dt)
+                    if context.check_date is not None:
+                        df = df[df["_screen_date"].dt.date <= context.check_date]
+                    daily = df.sort_values("_screen_date")["_screen_metric"].reset_index(drop=True)
+                else:
+                    daily = df["_screen_metric"].reset_index(drop=True)
+
+            if daily is not None and len(daily) > 0:
+                if self.lookback_days:
+                    daily = daily.tail(self.lookback_days)
+                    if len(daily) < self.lookback_days:
+                        return self._skip(
+                            f"{metric_label}数据不足，需至少{self.lookback_days}天",
+                            data_days=int(len(daily)),
+                            lookback_days=self.lookback_days,
+                            source=source,
+                        )
+                avg_volume = float(daily.mean())
+            else:
+                avg_volume = None
+
             if avg_volume is None:
-                return self._skip("无法计算每日平均交易量")
+                return self._skip(f"无法计算每日平均{metric_label}")
         except Exception as e:
-            return self._skip(f"计算每日平均交易量失败: {str(e)}")
+            return self._skip(f"计算每日平均{metric_label}失败: {str(e)}")
         
-        if self.min_volume is not None and avg_volume < self.min_volume:
-            return self._fail(
-                reason=f"每日平均交易量 {avg_volume:.0f} < 最小值 {self.min_volume:.0f}",
-                avg_daily_volume=avg_volume,
-                min_volume=self.min_volume
-            )
+        details = {
+            metric_detail_key: avg_volume,
+            "min_volume": self.min_volume,
+            "max_volume": self.max_volume,
+            "metric": self.metric,
+            "source": source,
+            "min_exclusive": self.min_exclusive,
+        }
+        if self.lookback_days:
+            details["lookback_days"] = self.lookback_days
+
+        period_label = f"{self.lookback_days}天平均" if self.lookback_days else "每日平均"
+        if self.min_volume is not None:
+            min_failed = avg_volume <= self.min_volume if self.min_exclusive else avg_volume < self.min_volume
+            if min_failed:
+                op = "<=" if self.min_exclusive else "<"
+                return self._fail(
+                    reason=f"{period_label}{metric_label} {avg_volume:.0f} {op} 最小值 {self.min_volume:.0f}",
+                    **details
+                )
         
         if self.max_volume is not None and avg_volume > self.max_volume:
             return self._fail(
-                reason=f"每日平均交易量 {avg_volume:.0f} > 最大值 {self.max_volume:.0f}",
-                avg_daily_volume=avg_volume,
-                max_volume=self.max_volume
+                reason=f"{period_label}{metric_label} {avg_volume:.0f} > 最大值 {self.max_volume:.0f}",
+                **details
             )
         
         return self._pass(
-            reason=f"每日平均交易量 {avg_volume:.0f} 在范围内",
-            avg_daily_volume=avg_volume
+            reason=f"{period_label}{metric_label} {avg_volume:.0f} 在范围内",
+            **details
         )
 
 

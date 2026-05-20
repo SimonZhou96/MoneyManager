@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import csv
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from network_preflight import check_host_resolution, extract_host, format_resolution_failures
@@ -9,6 +12,11 @@ from signal_analysis.llm_providers import FallbackLLMProvider
 from signal_analysis.models import AnalysisSettings
 from signal_analysis.service import _prepare_analysis_providers, run_signal_analysis_for_market
 from signal_analysis.search_providers import NullSearchProvider
+
+
+class NoopRepository:
+    def save_results(self, rows):
+        pass
 
 
 class NetworkPreflightTest(unittest.TestCase):
@@ -74,22 +82,42 @@ class NetworkPreflightTest(unittest.TestCase):
         fake_llm = type("FakeLLM", (), {"is_available": True, "api_base": "https://api.deepseek.com"})()
         fake_search = type("FakeSearch", (), {"is_available": True, "endpoint": "https://api.tavily.com/search"})()
 
-        with patch("signal_analysis.service.LLMProviderFactory.from_env", return_value=fake_llm), \
-                patch("signal_analysis.service.SearchProviderFactory.from_env", return_value=fake_search), \
-                patch(
-                    "signal_analysis.service.check_host_resolution",
-                    return_value=[("api.deepseek.com", "gaierror: dns down")],
-                ):
-            result = run_signal_analysis_for_market(
-                mysql_config=object(),
-                task_id="task-A",
-                market="A",
-                csv_path="/tmp/not_used.csv",
-            )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = Path(tmp_dir) / "screening_result.csv"
+            with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=["股票代码", "市场", "名称", "标的类型", "满足的条件"],
+                )
+                writer.writeheader()
+                writer.writerow({
+                    "股票代码": "US.TEST",
+                    "市场": "美股",
+                    "名称": "Test US",
+                    "标的类型": "股票",
+                    "满足的条件": "测试规则",
+                })
+
+            with patch.dict("os.environ", {"SIGNAL_ENABLE_API_HOT_SECTORS": "0"}), \
+                    patch("signal_analysis.service.LLMProviderFactory.from_env", return_value=fake_llm), \
+                    patch("signal_analysis.service.SearchProviderFactory.from_env", return_value=fake_search), \
+                    patch(
+                        "signal_analysis.service.check_host_resolution",
+                        return_value=[("api.deepseek.com", "gaierror: dns down")],
+                    ):
+                result = run_signal_analysis_for_market(
+                    mysql_config=object(),
+                    task_id="task-A",
+                    market="A",
+                    csv_path=str(csv_path),
+                    repository_override=NoopRepository(),
+                )
 
         self.assertFalse(result.success)
         self.assertEqual(result.skipped_reason, "LLM provider 网络预检失败，跳过 AI 辅助分析")
         self.assertTrue(any("api.deepseek.com" in warning for warning in result.warnings))
+        self.assertFalse(any("未配置搜索 provider" in warning for warning in result.warnings))
+        self.assertFalse(any("未配置可用 LLM provider" in warning for warning in result.warnings))
 
 
 if __name__ == "__main__":

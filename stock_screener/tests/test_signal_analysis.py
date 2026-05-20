@@ -2,9 +2,11 @@
 # -*- coding: utf-8 -*-
 
 import csv
+import io
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
@@ -32,6 +34,7 @@ from signal_analysis.models import (
     SignalAnalysisResult,
 )
 from signal_analysis.search_providers import NullSearchProvider, TavilySearchProvider, _build_company_batch_query
+from signal_analysis.service import run_signal_analysis_for_market
 
 
 class FakeSearchProvider:
@@ -140,6 +143,18 @@ class ExplodingRepository:
         raise RuntimeError("db boom")
 
 
+class CacheAwareRepository:
+    def __init__(self, cached_rows=None):
+        self.cached_rows = cached_rows or {}
+        self.saved_rows = []
+
+    def save_results(self, rows):
+        self.saved_rows.extend(rows)
+
+    def get_signal_analysis_cache(self, market, code, timeframe, analysis_profile, trade_date):
+        return self.cached_rows.get((market, code, timeframe, analysis_profile, str(trade_date)))
+
+
 class SignalAnalysisTest(unittest.TestCase):
     def signal_rows(self):
         return [
@@ -200,6 +215,54 @@ class SignalAnalysisTest(unittest.TestCase):
             settings = AnalysisSettings()
             self.assertIsInstance(SearchProviderFactory.from_env(settings), NullSearchProvider)
             self.assertIsInstance(LLMProviderFactory.from_env(settings), NullLLMProvider)
+
+    def test_run_signal_analysis_uses_shared_cache_before_llm(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            repo = CacheAwareRepository({
+                ("HK", "HK.00001", "1d", "default", "2026-05-19"): {
+                    "code": "HK.00001",
+                    "name": "Test HK",
+                    "analysis_status": "success",
+                    "summary": "cached",
+                    "reliability_score": 88,
+                    "confidence_score": 75,
+                    "signal_bias": "bullish",
+                    "company_events": ["缓存公司事件"],
+                    "company_hot_news": ["缓存公司新闻"],
+                    "market_hot_news": ["缓存市场新闻"],
+                    "news_impact": "利好",
+                    "news_sources": ["https://example.com/cache"],
+                    "hot_sectors": ["机器人"],
+                    "hot_sector_mark": "重点",
+                    "matched_hot_sectors": ["机器人"],
+                    "hot_sector_reason": "cache",
+                    "source_urls": ["https://example.com/cache"],
+                    "data_gaps": [],
+                    "evidence_links": [],
+                    "factor_citations": {},
+                    "model": "cache",
+                }
+            })
+            llm = RecordingLLMProvider("unused", "unused-model")
+            search = FakeSearchProvider()
+            result = run_signal_analysis_for_market(
+                mysql_config=None,
+                task_id="task-cache",
+                market="HK",
+                csv_path=csv_path,
+                check_date=date(2026, 5, 19),
+                timeframe="1d",
+                enabled=True,
+                repository_override=repo,
+                search_provider_override=search,
+                llm_provider_override=llm,
+            )
+
+            self.assertEqual(llm.calls, 0)
+            self.assertEqual(search.search_queries, [])
+            self.assertEqual(search.company_batch_calls, [])
+            self.assertEqual(result.results_by_code["HK.00001"].summary, "cached")
 
     def test_expand_company_documents_adds_market_specific_authoritative_queries(self):
         provider = FakeSearchProvider()
@@ -477,6 +540,257 @@ class SignalAnalysisTest(unittest.TestCase):
             self.assertIn(row.code, query)
             self.assertIn(row.name.split()[0], query)
             self.assertIn(row.code, grouped)
+
+    def test_tavily_company_batch_debug_outputs_cross_market_matching_context(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {
+                    "results": [
+                        {
+                            "title": "Apple Inc latest product launch",
+                            "url": "https://example.com/aapl",
+                            "content": "AAPL company event",
+                        },
+                        {
+                            "title": "贵州茅台 600519 最新公告",
+                            "url": "https://example.com/600519",
+                            "content": "贵州茅台 公司事件",
+                        },
+                    ]
+                }
+
+        rows = [
+            ScreeningSignalRow(
+                index=0,
+                code="US.AAPL",
+                market="US",
+                market_label="美股",
+                name="Apple Inc",
+                pe_ratio="",
+                market_cap="",
+                sector="Technology",
+                conditions_met="",
+            ),
+            ScreeningSignalRow(
+                index=1,
+                code="SH.600519",
+                market="A",
+                market_label="A股",
+                name="贵州茅台",
+                pe_ratio="",
+                market_cap="",
+                sector="白酒",
+                conditions_met="",
+            ),
+            ScreeningSignalRow(
+                index=2,
+                code="HK.00148",
+                market="HK",
+                market_label="港股",
+                name="KINGBOARD HLDG",
+                pe_ratio="",
+                market_cap="",
+                sector="Industrials",
+                conditions_met="",
+            ),
+        ]
+
+        stderr = io.StringIO()
+        with patch.dict(os.environ, {"SIGNAL_COMPANY_SEARCH_DEBUG": "1"}):
+            with patch("signal_analysis.search_providers.requests.post", return_value=Response()):
+                with redirect_stderr(stderr):
+                    provider = TavilySearchProvider(api_key="key", timeout_sec=5)
+                    grouped = provider.search_companies_batch("HK", rows, 5)
+
+        output = stderr.getvalue()
+        self.assertIn("market=HK codes=US.AAPL,SH.600519,HK.00148", output)
+        self.assertIn("max_results=5 returned=2", output)
+        self.assertIn("identity[US.AAPL]=US.AAPL|AAPL|AAPL.US|AAPL US|Apple Inc", output)
+        self.assertIn("identity[SH.600519]=SH.600519|600519|600519.SH|SH600519|贵州茅台", output)
+        self.assertIn("identity[HK.00148]=HK.00148|00148|00148.HK|00148 HK|00148-HK|0148.HK", output)
+        self.assertIn("result#1 matched=US.AAPL", output)
+        self.assertIn("result#2 matched=SH.600519", output)
+        self.assertIn("missing=HK.00148", output)
+        self.assertEqual(len(grouped["US.AAPL"]), 1)
+        self.assertEqual(len(grouped["SH.600519"]), 1)
+        self.assertEqual(grouped["HK.00148"], [])
+
+    def test_tavily_company_batch_diagnoses_missing_matches_by_default(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"results": []}
+
+        rows = [
+            ScreeningSignalRow(
+                index=0,
+                code="HK.00148",
+                market="HK",
+                market_label="港股",
+                name="KINGBOARD HLDG",
+                pe_ratio="",
+                market_cap="",
+                sector="Industrials",
+                conditions_met="",
+            )
+        ]
+
+        stderr = io.StringIO()
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("signal_analysis.search_providers.requests.post", return_value=Response()):
+                with redirect_stderr(stderr):
+                    TavilySearchProvider(api_key="key", timeout_sec=5).search_companies_batch("HK", rows, 5)
+
+        output = stderr.getvalue()
+        self.assertIn("[公司事件搜索诊断]", output)
+        self.assertIn("missing=HK.00148", output)
+
+    def test_tavily_company_batch_does_not_diagnose_successful_matches_by_default(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {
+                    "results": [
+                        {
+                            "title": "Apple Inc latest product launch",
+                            "url": "https://example.com/aapl",
+                            "content": "AAPL company event",
+                        }
+                    ]
+                }
+
+        rows = [
+            ScreeningSignalRow(
+                index=0,
+                code="US.AAPL",
+                market="US",
+                market_label="美股",
+                name="Apple Inc",
+                pe_ratio="",
+                market_cap="",
+                sector="Technology",
+                conditions_met="",
+            )
+        ]
+
+        stderr = io.StringIO()
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("signal_analysis.search_providers.requests.post", return_value=Response()):
+                with redirect_stderr(stderr):
+                    TavilySearchProvider(api_key="key", timeout_sec=5).search_companies_batch("US", rows, 5)
+
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_tavily_company_batch_requests_at_least_one_result_per_stock(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"results": []}
+
+        rows = [
+            ScreeningSignalRow(
+                index=index,
+                code=f"HK.00{index + 100:03d}",
+                market="HK",
+                market_label="港股",
+                name=f"CO{index}",
+                pe_ratio="",
+                market_cap="",
+                sector="",
+                conditions_met="",
+            )
+            for index in range(8)
+        ]
+
+        with patch("signal_analysis.search_providers.requests.post", return_value=Response()) as post:
+            provider = TavilySearchProvider(api_key="key", timeout_sec=5)
+            provider.search_companies_batch("HK", rows, 5)
+
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(post.call_args.kwargs["json"]["max_results"], 8)
+
+    def test_tavily_company_batch_matches_hk_us_and_a_share_aliases(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {
+                    "results": [
+                        {
+                            "title": "Kingboard Holdings Limited (0148.HK) latest announcement",
+                            "url": "https://example.com/0148.HK",
+                            "content": "Kingboard Holdings reported new company updates.",
+                        },
+                        {
+                            "title": "Berkshire Hathaway BRK.B shareholder meeting",
+                            "url": "https://example.com/brk.b",
+                            "content": "Berkshire Hathaway class B updates.",
+                        },
+                        {
+                            "title": "贵州茅台 600519.SH 最新公告",
+                            "url": "https://example.com/600519.SH",
+                            "content": "贵州茅台 公司事件",
+                        },
+                    ]
+                }
+
+        rows = [
+            ScreeningSignalRow(
+                index=0,
+                code="HK.00148",
+                market="HK",
+                market_label="港股",
+                name="KINGBOARD HLDG",
+                pe_ratio="",
+                market_cap="",
+                sector="Industrials",
+                conditions_met="",
+            ),
+            ScreeningSignalRow(
+                index=1,
+                code="US.BRK-B",
+                market="US",
+                market_label="美股",
+                name="Berkshire Hathaway",
+                pe_ratio="",
+                market_cap="",
+                sector="Financials",
+                conditions_met="",
+            ),
+            ScreeningSignalRow(
+                index=2,
+                code="SH.600519",
+                market="A",
+                market_label="A股",
+                name="贵州茅台",
+                pe_ratio="",
+                market_cap="",
+                sector="白酒",
+                conditions_met="",
+            ),
+        ]
+
+        with patch("signal_analysis.search_providers.requests.post", return_value=Response()) as post:
+            provider = TavilySearchProvider(api_key="key", timeout_sec=5)
+            grouped = provider.search_companies_batch("HK", rows, 5)
+
+        query = post.call_args.kwargs["json"]["query"]
+        self.assertIn("0148.HK", query)
+        self.assertIn("BRK.B", query)
+        self.assertIn("600519.SH", query)
+        self.assertEqual(len(grouped["HK.00148"]), 1)
+        self.assertEqual(len(grouped["US.BRK-B"]), 1)
+        self.assertEqual(len(grouped["SH.600519"]), 1)
 
     def test_tavily_company_batch_splits_when_name_preserving_query_is_too_long(self):
         class Response:
@@ -1041,6 +1355,55 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertTrue(any("LLM provider second:model-b 失败" in warning for warning in result.warnings))
         self.assertTrue(any("模型批量分析失败" in warning for warning in result.warnings))
         self.assertTrue(any("模型分析没有成功返回任何股票结果" in warning for warning in result.warnings))
+
+    def test_chain_stops_after_llm_quota_error_without_repeating_batches(self):
+        class QuotaLLMProvider:
+            name = "codex_responses"
+            is_available = True
+
+            def __init__(self):
+                self.calls = 0
+
+            @property
+            def model_name(self):
+                return "gpt-5.2-codex"
+
+            def analyze_batch(self, market, signals, market_documents, sector_documents, hot_sectors, company_documents):
+                self.calls += 1
+                raise RuntimeError(
+                    'Codex Responses analysis failed: HTTP 429 {"error":{"type":"insufficient_quota"}}'
+                )
+
+        rows = [
+            {
+                "股票代码": f"SH.6000{index}",
+                "市场": "A股",
+                "名称": f"Test A {index}",
+                "标的类型": "股票",
+                "满足的条件": "测试规则",
+            }
+            for index in range(3)
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir, rows=rows)
+            llm_provider = QuotaLLMProvider()
+            context = SignalAnalysisContext(
+                task_id="task-A",
+                market="A",
+                csv_path=csv_path,
+                check_date=date(2026, 5, 20),
+                settings=AnalysisSettings(batch_size=1, search_max_results=2),
+                search_provider=NullSearchProvider(),
+                llm_provider=llm_provider,
+            )
+
+            with patch.dict(os.environ, {"SIGNAL_ENABLE_API_HOT_SECTORS": "0"}):
+                result = SignalAnalysisChain().run(context)
+
+        self.assertFalse(result.success)
+        self.assertEqual(llm_provider.calls, 1)
+        self.assertEqual(result.skipped_reason, "LLM provider 额度不足，跳过 AI 辅助分析")
+        self.assertTrue(any("insufficient_quota" in warning for warning in result.warnings))
 
     def test_markdown_report_explains_information_gap_reasons(self):
         class GapLLMProvider(FakeLLMProvider):

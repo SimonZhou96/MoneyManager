@@ -13,7 +13,10 @@ from db import MarketDatabase, MySqlConfig
 from filters import FilterContext, StockInfo
 from kline_fetcher import KlineFetcherFactory
 from market import normalize_market
+from stock_pool import POOL_TYPE_ALL_ETF
 from signal_analysis.service import run_signal_analysis_for_market
+from signal_analysis.service import run_signal_analysis_for_row
+from signal_analysis.models import ScreeningSignalRow
 from timeframe import parse_timeframe
 
 
@@ -64,6 +67,7 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
     warnings: List[str] = []
     ai_analysis: Optional[dict] = None
     data_source = ""
+    macro_analysis_cache: Dict[str, Any] = {}
 
     db = MarketDatabase(mysql_config)
     db.init_web_schema()
@@ -87,12 +91,35 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
         context = FilterContext(check_date=date.today(), market=market, db=db, verbose=False)
         context.timeframe = timeframe
         rule_engine = create_rule_engine_from_db(db, market, timeframe, request.chain_key)
-        result = rule_engine.evaluate_stock(stock, context)
+        signal_analysis_loader = None
+        if rule_engine.requires_macro_analysis():
+            def load_signal_analysis(current_stock: StockInfo):
+                cached = macro_analysis_cache.get(current_stock.code)
+                if cached is not None:
+                    return cached
+                analysis, ai_warnings = run_signal_analysis_for_row(
+                    mysql_config=mysql_config,
+                    task_id=f"{run_id}:macro:{current_stock.code}",
+                    row=_build_macro_signal_row(current_stock, market),
+                    market=market,
+                    check_date=context.check_date,
+                    timeframe=timeframe,
+                    enabled=True,
+                )
+                warnings.extend(ai_warnings)
+                macro_analysis_cache[current_stock.code] = analysis
+                return analysis
+            signal_analysis_loader = load_signal_analysis
+        result = rule_engine.evaluate_stock(stock, context, signal_analysis_loader=signal_analysis_loader)
         rule_details = _rule_details(rule_engine, result.filter_outputs)
 
         db.insert_single_stock_rule_details(run_id, rule_details)
 
-        if result.passed:
+        if rule_engine.requires_macro_analysis():
+            analysis = macro_analysis_cache.get(stock.code)
+            if analysis is not None:
+                ai_analysis = _analysis_to_response_dict(analysis)
+        elif result.passed:
             ai_analysis, ai_warnings = _run_single_ai(mysql_config, run_id, market, timeframe, stock, result.filter_outputs)
             warnings.extend(ai_warnings)
 
@@ -168,7 +195,7 @@ def _load_stock_info(db: MarketDatabase, market: str, code: str) -> StockInfo:
         if industry_name:
             industry = industry or industry_name
             sector = sector or industry_name
-        if pool_item.get("pool_type") == "etf":
+        if pool_item.get("pool_type") == POOL_TYPE_ALL_ETF:
             industry = industry or "ETF"
             sector = sector or "ETF"
 
@@ -218,6 +245,7 @@ def _rule_details(rule_engine, outputs) -> List[dict]:
             "rule_key": metadata.rule_key if metadata else output.filter_name,
             "rule_name": metadata.rule_name if metadata else output.filter_name,
             "rule_type": metadata.rule_type if metadata else "",
+            "strategy_category": metadata.strategy_category if metadata else "",
             "result": output.result.value,
             "reason": output.reason or "",
             "details": output.details or {},
@@ -290,6 +318,21 @@ def _run_single_ai(
                 warnings.append(result.skipped_reason)
             return None, warnings
         return _analysis_to_response_dict(analysis), warnings
+
+
+def _build_macro_signal_row(stock: StockInfo, market: str) -> ScreeningSignalRow:
+    return ScreeningSignalRow(
+        index=0,
+        code=stock.code,
+        market=market,
+        market_label=market,
+        name=stock.name or stock.code,
+        pe_ratio="" if stock.pe_ratio is None else str(stock.pe_ratio),
+        market_cap="" if stock.market_cap is None else str(stock.market_cap),
+        sector=stock.sector or stock.industry or "",
+        conditions_met="",
+        raw={},
+    )
 
 
 def _analysis_to_response_dict(analysis) -> dict:

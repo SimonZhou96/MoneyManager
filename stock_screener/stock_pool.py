@@ -5,20 +5,152 @@
 
 支持港股、美股、A股的股票池获取和管理
 包含5个子池：
-1. 最好股票（基于市值、价格、PE、成交量筛选）
-2. 指数成份股
-3. 行业龙头股（各行业前5名）
-4. 新股（最近两年上市）
-5. ETF列表
+1. 优选池（基于市值、价格、PE、成交量筛选）
+2. 核心指数成分股
+3. 主流行业前5
+4. 最近两年上市新股
+5. 全部ETF指数基金
 """
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, List, Optional
+from typing import Any, Iterable, List, Optional
 
 import pandas as pd
 
 from market import normalize_market
+
+
+POOL_TYPE_BEST = "best"
+POOL_TYPE_MAJOR_INDEX = "major_index"
+POOL_TYPE_INDUSTRY_TOP5 = "industry_top5"
+POOL_TYPE_RECENT_IPO_2Y = "recent_ipo_2y"
+POOL_TYPE_ALL_ETF = "all_etf"
+
+CANONICAL_POOL_TYPES = (
+    POOL_TYPE_BEST,
+    POOL_TYPE_MAJOR_INDEX,
+    POOL_TYPE_INDUSTRY_TOP5,
+    POOL_TYPE_RECENT_IPO_2Y,
+    POOL_TYPE_ALL_ETF,
+)
+
+POOL_LABELS = {
+    POOL_TYPE_BEST: "优选池",
+    POOL_TYPE_MAJOR_INDEX: "核心指数成分股",
+    POOL_TYPE_INDUSTRY_TOP5: "主流行业前5",
+    POOL_TYPE_RECENT_IPO_2Y: "最近两年上市新股",
+    POOL_TYPE_ALL_ETF: "全部ETF指数基金",
+}
+
+POOL_RESULT_KEY_BY_TYPE = {
+    POOL_TYPE_BEST: "best_stocks",
+    POOL_TYPE_MAJOR_INDEX: "major_index_constituents",
+    POOL_TYPE_INDUSTRY_TOP5: "industry_top5",
+    POOL_TYPE_RECENT_IPO_2Y: "recent_ipo_2y",
+    POOL_TYPE_ALL_ETF: "all_etf",
+}
+
+DEFAULT_POOL_TYPES_TEXT = ",".join(CANONICAL_POOL_TYPES)
+
+MAJOR_INDEX_CODES_BY_MARKET = {
+    "HK": [
+        "HK.HSI Constituent Stocks",
+        "HK.HSCEI Stock",
+        "HK.800700",  # 恒生科技指数，Futu 不同版本可能返回数字板块代码
+    ],
+    "A": [
+        "000300",  # 沪深300
+        "000905",  # 中证500
+        "000016",  # 上证50
+        "399006",  # 创业板指
+    ],
+    "US": [],
+}
+
+A_CORE_INDEX_DEFINITIONS = (
+    ("000300", "沪深300"),
+    ("000905", "中证500"),
+    ("000016", "上证50"),
+    ("399006", "创业板指"),
+)
+
+US_CORE_INDEX_DEFINITIONS = (
+    ("sp500", "标普500", "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"),
+    ("nasdaq100", "纳斯达克100", "https://en.wikipedia.org/wiki/Nasdaq-100"),
+    ("dow30", "道琼斯工业平均", "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average"),
+)
+
+
+def get_major_index_codes(market: str) -> List[str]:
+    """Return configured core-index identifiers for a market."""
+    market = normalize_market(market)
+    env_name = f"STOCK_POOL_MAJOR_INDEX_CODES_{market}"
+    raw = os.getenv(env_name, "").strip()
+    if raw:
+        return [item.strip() for item in raw.replace("，", ",").split(",") if item.strip()]
+    return list(MAJOR_INDEX_CODES_BY_MARKET.get(market, []))
+
+
+def normalize_pool_types(values: Iterable[str]) -> List[str]:
+    """Validate pool types and remove duplicates while preserving order."""
+    allowed = set(CANONICAL_POOL_TYPES)
+    result: List[str] = []
+    invalid: List[str] = []
+    for raw in values:
+        item = str(raw or "").strip().lower()
+        if not item:
+            continue
+        if item not in allowed:
+            invalid.append(item)
+            continue
+        if item not in result:
+            result.append(item)
+    if invalid:
+        raise ValueError(f"无效股票池类型: {invalid}; 可选: {DEFAULT_POOL_TYPES_TEXT}")
+    return result
+
+
+def parse_pool_types(raw: str) -> List[str]:
+    """Parse CLI/interactive pool type input."""
+    value = str(raw or "").strip()
+    if not value or value.lower() == "all":
+        return list(CANONICAL_POOL_TYPES)
+    return normalize_pool_types(value.replace("，", ",").split(","))
+
+
+def pool_scope_from_types(values: Optional[Iterable[str]] = None) -> str:
+    """Stable lock/cache scope string for a selected stock-pool set."""
+    pool_types = normalize_pool_types(values or CANONICAL_POOL_TYPES)
+    return ",".join(pool_types)
+
+
+def _find_column(columns: Iterable[Any], candidates: Iterable[str]) -> Optional[Any]:
+    column_map = {str(column).strip().lower(): column for column in columns}
+    for candidate in candidates:
+        matched = column_map.get(str(candidate).strip().lower())
+        if matched is not None:
+            return matched
+    return None
+
+
+def _normalize_a_stock_code(code: str) -> str:
+    digits = "".join(ch for ch in str(code) if ch.isdigit()).zfill(6)[-6:]
+    prefix = "SH" if digits.startswith(("5", "6", "9")) else "SZ"
+    return f"{prefix}.{digits}"
+
+
+def _dedupe_stock_rows(rows: Iterable[dict]) -> List[dict]:
+    result: List[dict] = []
+    seen = set()
+    for row in rows:
+        code = str(row.get("code") or "").strip()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        result.append(row)
+    return result
 
 
 @dataclass
@@ -160,6 +292,95 @@ class StockPoolFetcher:
                         "index_name": row.get("plate_name", ""),
                     })
 
+        return result
+
+    def fetch_major_index_constituents(
+        self, market: str, index_codes: Optional[List[str]] = None
+    ) -> List[dict]:
+        """获取核心指数成分股。"""
+        market = normalize_market(market)
+        codes = index_codes if index_codes is not None else get_major_index_codes(market)
+        result = self.fetch_index_constituents(market, codes)
+        if market == "A":
+            result.extend(self._fetch_a_core_index_constituents())
+        elif market == "US":
+            result.extend(self._fetch_us_core_index_constituents())
+        return _dedupe_stock_rows(result)
+
+    def _fetch_a_core_index_constituents(self) -> List[dict]:
+        """Fetch A-share core index constituents from AkShare."""
+        try:
+            import akshare as ak
+        except Exception:
+            return []
+
+        result: List[dict] = []
+        for index_code, index_name in A_CORE_INDEX_DEFINITIONS:
+            data = None
+            for func_name in ("index_stock_cons_csindex", "index_stock_cons_sina", "index_stock_cons"):
+                func = getattr(ak, func_name, None)
+                if not func:
+                    continue
+                try:
+                    candidate = func(symbol=index_code)
+                except Exception:
+                    continue
+                if candidate is not None and not candidate.empty:
+                    data = candidate
+                    break
+            if data is None or data.empty:
+                continue
+            code_col = _find_column(data.columns, ["成分券代码", "品种代码", "代码", "symbol", "code"])
+            name_col = _find_column(data.columns, ["成分券名称", "品种名称", "名称", "name"])
+            if not code_col:
+                continue
+            for _, row in data.iterrows():
+                raw_code = str(row.get(code_col) or "").strip()
+                if not raw_code:
+                    continue
+                code = _normalize_a_stock_code(raw_code)
+                result.append({
+                    "code": code,
+                    "name": str(row.get(name_col) or code).strip() if name_col else code,
+                    "index_code": index_code,
+                    "index_name": index_name,
+                })
+        return result
+
+    def _fetch_us_core_index_constituents(self) -> List[dict]:
+        """Fetch US core index constituents from public index tables."""
+        result: List[dict] = []
+        for index_code, index_name, url in US_CORE_INDEX_DEFINITIONS:
+            try:
+                tables = pd.read_html(url)
+            except Exception:
+                continue
+            for table in tables:
+                code_col = _find_column(
+                    table.columns,
+                    ["Symbol", "Ticker", "Ticker symbol", "Ticker Symbol"],
+                )
+                name_col = _find_column(
+                    table.columns,
+                    ["Security", "Company", "Company name", "Company Name"],
+                )
+                if not code_col:
+                    continue
+                added_for_index = False
+                for _, row in table.iterrows():
+                    ticker = str(row.get(code_col) or "").strip()
+                    if not ticker or ticker.lower() == "nan":
+                        continue
+                    ticker = ticker.replace(".", "-").upper()
+                    result.append({
+                        "code": f"US.{ticker}",
+                        "name": str(row.get(name_col) or ticker).strip() if name_col else ticker,
+                        "index_code": index_code,
+                        "index_name": index_name,
+                    })
+                    added_for_index = True
+                if added_for_index:
+                    break
         return result
 
     def fetch_industry_leaders(
@@ -395,16 +616,16 @@ class StockPoolFetcher:
         Returns:
             {
                 "best_stocks": [...],
-                "index_constituents": [...],
-                "industry_leaders": [...],
-                "recent_ipos": [...],
-                "etf_list": [...]
-            }
+            "major_index_constituents": [...],
+            "industry_top5": [...],
+            "recent_ipo_2y": [...],
+            "all_etf": [...]
+        }
         """
         return {
             "best_stocks": self.fetch_best_stocks(market, best_criteria or StockPoolCriteria()),
-            "index_constituents": self.fetch_index_constituents(market, index_codes or []),
-            "industry_leaders": self.fetch_industry_leaders(market, industry_top_n),
-            "recent_ipos": self.fetch_recent_ipos(market, ipo_days),
-            "etf_list": self.fetch_etf_list(market),
+            "major_index_constituents": self.fetch_major_index_constituents(market, index_codes),
+            "industry_top5": self.fetch_industry_leaders(market, industry_top_n),
+            "recent_ipo_2y": self.fetch_recent_ipos(market, ipo_days),
+            "all_etf": self.fetch_etf_list(market),
         }

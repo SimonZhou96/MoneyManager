@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS screening_run_locks (
     market VARCHAR(8) NOT NULL,
     timeframe VARCHAR(8) NOT NULL,
     chain_key VARCHAR(64) NOT NULL DEFAULT 'default_zuoyi_and_other',
+    pool_scope VARCHAR(255) NOT NULL DEFAULT 'best,major_index,industry_top5,recent_ipo_2y,all_etf',
     status VARCHAR(32) NOT NULL DEFAULT 'queued',
     job_id VARCHAR(64) NOT NULL,
     task_id VARCHAR(64) NULL,
@@ -20,7 +21,7 @@ CREATE TABLE IF NOT EXISTS screening_run_locks (
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
         ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id),
-    UNIQUE KEY uk_screening_run_lock_scope (run_date, market, timeframe, chain_key),
+    UNIQUE KEY uk_screening_run_lock_scope (run_date, market, timeframe, chain_key, pool_scope),
     UNIQUE KEY uk_screening_run_lock_id (lock_id),
     KEY idx_screening_run_lock_job (job_id),
     KEY idx_screening_run_lock_status (status, run_date)

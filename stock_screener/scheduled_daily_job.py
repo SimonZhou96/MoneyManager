@@ -66,10 +66,10 @@ from db import MarketDatabase, MySqlConfig
 from feishu_notifier import send_feishu_text, send_screening_result
 from fetch_stock_pools import (
     fetch_and_save_best_stocks,
-    fetch_and_save_etf_list,
-    fetch_and_save_index_constituents,
-    fetch_and_save_industry_leaders,
-    fetch_and_save_recent_ipos,
+    fetch_and_save_all_etf,
+    fetch_and_save_major_index_constituents,
+    fetch_and_save_industry_top5,
+    fetch_and_save_recent_ipo_2y,
     get_db_config,
 )
 from kline_fetcher import KlineFetcherFactory
@@ -86,6 +86,17 @@ from sector_resolver import (
     sector_info_to_stock_row,
 )
 from stock_name_resolver import StockNameResolver
+from stock_pool import (
+    CANONICAL_POOL_TYPES,
+    DEFAULT_POOL_TYPES_TEXT,
+    POOL_TYPE_ALL_ETF,
+    POOL_TYPE_BEST,
+    POOL_TYPE_INDUSTRY_TOP5,
+    POOL_TYPE_MAJOR_INDEX,
+    POOL_TYPE_RECENT_IPO_2Y,
+    normalize_pool_types,
+    parse_pool_types,
+)
 from timeframe import parse_timeframe
 
 
@@ -101,18 +112,19 @@ def fetch_all_markets_pools(
     pools: List[str],
 ) -> None:
     """捞取多市场股票池并更新到数据库"""
+    pools = normalize_pool_types(pools)
     for market in markets:
         market = normalize_market(market)
-        if "best" in pools:
+        if POOL_TYPE_BEST in pools:
             fetch_and_save_best_stocks(fetcher, db, market)
-        if "index" in pools:
-            fetch_and_save_index_constituents(fetcher, db, market)
-        if "industry" in pools:
-            fetch_and_save_industry_leaders(fetcher, db, market, top_n=5)
-        if "ipo" in pools:
-            fetch_and_save_recent_ipos(fetcher, db, market, days=730)
-        if "etf" in pools:
-            fetch_and_save_etf_list(fetcher, db, market)
+        if POOL_TYPE_MAJOR_INDEX in pools:
+            fetch_and_save_major_index_constituents(fetcher, db, market)
+        if POOL_TYPE_INDUSTRY_TOP5 in pools:
+            fetch_and_save_industry_top5(fetcher, db, market, top_n=5)
+        if POOL_TYPE_RECENT_IPO_2Y in pools:
+            fetch_and_save_recent_ipo_2y(fetcher, db, market, days=730)
+        if POOL_TYPE_ALL_ETF in pools:
+            fetch_and_save_all_etf(fetcher, db, market)
 
 
 def sync_sector_memberships_for_markets(db: MarketDatabase, fetcher, markets: List[str]) -> None:
@@ -176,12 +188,16 @@ def sync_sector_memberships_for_markets(db: MarketDatabase, fetcher, markets: Li
 # ------------------------------------------------------------------
 
 
-def get_merged_pool_stocks(db: MarketDatabase, market: str) -> List[dict]:
+def get_merged_pool_stocks(
+    db: MarketDatabase,
+    market: str,
+    pool_types: Optional[List[str]] = None,
+) -> List[dict]:
     """
     合并指定市场所有股票池类型，按 code 聚合并补齐板块字段。
     返回格式兼容 screen_service 的 watchlist。
     """
-    pool_types = ["best", "index", "industry", "ipo", "etf"]
+    pool_types = normalize_pool_types(pool_types or CANONICAL_POOL_TYPES)
     merged = {}
     for pool_type in pool_types:
         stocks = db.get_stock_pool(market, pool_type, limit=None)
@@ -199,7 +215,7 @@ def get_merged_pool_stocks(db: MarketDatabase, market: str) -> List[dict]:
                 current["industry"] = current.get("industry") or industry
                 current["sector"] = current.get("sector") or industry
 
-            if pool_type == "etf":
+            if pool_type == POOL_TYPE_ALL_ETF:
                 current["industry"] = current.get("industry") or "ETF"
                 current["sector"] = current.get("sector") or "ETF"
 
@@ -209,16 +225,16 @@ def get_merged_pool_stocks(db: MarketDatabase, market: str) -> List[dict]:
     return list(merged.values())
 
 
-def has_merged_pool_stocks(db: MarketDatabase, market: str) -> bool:
+def has_merged_pool_stocks(db: MarketDatabase, market: str, pool_types: Optional[List[str]] = None) -> bool:
     """检查指定市场是否存在可用于筛选的合并股票池数据。"""
-    return len(get_merged_pool_stocks(db, market)) > 0
+    return len(get_merged_pool_stocks(db, market, pool_types=pool_types)) > 0
 
 
 def get_etf_codes(db: MarketDatabase, market: str) -> set[str]:
     """获取指定市场 ETF 股票池中的代码集合，用于标注标的类型。"""
     return {
         (s.get("code") or "").strip()
-        for s in db.get_stock_pool(market, "etf", limit=None)
+        for s in db.get_stock_pool(market, POOL_TYPE_ALL_ETF, limit=None)
         if (s.get("code") or "").strip()
     }
 
@@ -517,6 +533,7 @@ def run_screening_for_market(
     default_params: dict,
     verbose: bool = False,
     chain_key: Optional[str] = None,
+    pool_types: Optional[List[str]] = None,
 ) -> Tuple[Optional[str], List[dict]]:
     """
     对指定市场的合并股票池执行筛选。
@@ -527,13 +544,15 @@ def run_screening_for_market(
     db = MarketDatabase(mysql_config)
     db.init_schema(timeframe)
 
-    watchlist = get_merged_pool_stocks(db, market)
+    pool_types = normalize_pool_types(pool_types or CANONICAL_POOL_TYPES)
+    watchlist = get_merged_pool_stocks(db, market, pool_types=pool_types)
     if not watchlist:
         db.close()
         return None, []
 
     task_id = str(uuid.uuid4())
     task_params = dict(default_params or {})
+    task_params["pool_types"] = pool_types
     if chain_key:
         task_params["chain_key"] = chain_key
     db.create_screening_task(
@@ -764,7 +783,7 @@ class ScreeningPostProcessor:
         enrich_records_with_sectors(self.mysql_config, task_id, market, passed)
         etf_codes = get_market_etf_codes(self.mysql_config, market)
         annotate_records_with_instrument_type(passed, etf_codes)
-        csv_path = market_signal_report_path(self.csv_base, market, timeframe, ".csv")
+        csv_path = market_signal_report_path(self.csv_base, market, timeframe, self.today_str, ".csv")
         check_date = date.fromisoformat(self.today_str)
         enrich_records_with_main_force_risks(
             mysql_config=self.mysql_config,
@@ -831,6 +850,7 @@ def run_market_screening_worker(
     verbose: bool = False,
     enable_ai_analysis: bool = False,
     chain_key: Optional[str] = None,
+    pool_types: Optional[List[str]] = None,
 ) -> MarketScreeningResult:
     """
     Execute screening and CSV export for one market.
@@ -840,10 +860,11 @@ def run_market_screening_worker(
     side effects stay in the main thread.
     """
     print(f"\n--- 开始筛选 {market_label(market)} ---")
+    pool_types = normalize_pool_types(pool_types or CANONICAL_POOL_TYPES)
     db = None
     try:
         db = MarketDatabase(mysql_config)
-        if not has_merged_pool_stocks(db, market):
+        if not has_merged_pool_stocks(db, market, pool_types=pool_types):
             print(f"  {market_label(market)} 无可用股票池数据，跳过")
             return MarketScreeningResult(market=market, skipped=True)
         db.close()
@@ -855,6 +876,7 @@ def run_market_screening_worker(
             timeframe=timeframe,
             default_params=default_params,
             verbose=verbose,
+            pool_types=pool_types,
         )
         if chain_key:
             screening_kwargs["chain_key"] = chain_key
@@ -905,9 +927,9 @@ def main():
         help="抓池失败时直接退出；默认会回退使用数据库中的已有股票池数据",
     )
     parser.add_argument("--markets", default="HK,A,US", help="市场列表，逗号分隔")
-    parser.add_argument("--pools", default="best,index,industry,ipo,etf", help="股票池类型")
+    parser.add_argument("--pools", default=DEFAULT_POOL_TYPES_TEXT, help=f"股票池类型: {DEFAULT_POOL_TYPES_TEXT}")
     parser.add_argument("--timeframe", default="1d", help="K线周期")
-    parser.add_argument("--csv", default="logs/screening_result.csv", help="CSV 输出目录基准（会生成 {股票类型}市场信号{timeframe}复核报告.csv，主表内用“标的类型”区分股票/ETF）")
+    parser.add_argument("--csv", default="logs/screening_result.csv", help="CSV 输出目录基准（会生成 {股票类型}市场信号{timeframe}{date}复核报告.csv，主表内用“标的类型”区分股票/ETF）")
     parser.add_argument("--market-workers", type=int, default=3, help="并行筛选市场的 worker 数量")
     parser.add_argument("--chain-key", default=None, help="筛选规则链 key（默认使用各市场启用的默认链）")
     ai_group = parser.add_mutually_exclusive_group()
@@ -923,7 +945,10 @@ def main():
     db.init_stock_pool_schema()
 
     markets = [normalize_market(m) for m in args.markets.split(",") if m.strip()]
-    pools = [p.strip().lower() for p in args.pools.split(",") if p.strip()]
+    try:
+        pools = parse_pool_types(args.pools)
+    except ValueError as exc:
+        parser.error(str(exc))
     timeframe = parse_timeframe(args.timeframe)
 
     print(f"[{datetime.now()}] 定时任务开始 | 市场: {markets} | 股票池: {pools}")
@@ -991,6 +1016,7 @@ def main():
                 False,
                 enable_ai_analysis,
                 args.chain_key,
+                pools,
             ): market
             for market in markets
         }

@@ -11,7 +11,7 @@ import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from report_naming import analysis_report_path_for_csv, market_signal_report_stem
 
@@ -91,6 +91,7 @@ class SignalAnalysisContext:
     manual_hot_news: ManualHotNewsConfig = field(default_factory=ManualHotNewsConfig)
     manual_hot_sectors: ManualHotSectorConfig = field(default_factory=ManualHotSectorConfig)
     rows: List[ScreeningSignalRow] = field(default_factory=list)
+    all_rows: List[ScreeningSignalRow] = field(default_factory=list)
     csv_fieldnames: List[str] = field(default_factory=list)
     market_query: str = ""
     sector_query: str = ""
@@ -103,6 +104,8 @@ class SignalAnalysisContext:
     results_by_code: Dict[str, SignalAnalysisResult] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     artifact_paths: List[str] = field(default_factory=list)
+    analysis_profile: str = "default"
+    force_refresh: bool = False
     aborted: bool = False
     skipped_reason: str = ""
 
@@ -134,16 +137,47 @@ class LoadCsvSignalsStep(AnalysisStep):
                 ScreeningSignalRow.from_csv_row(row, index=index, default_market=context.market)
                 for index, row in enumerate(reader)
             ]
+        context.all_rows = list(context.rows)
         if not context.rows:
             context.aborted = True
             context.skipped_reason = "CSV 没有可分析的股票行"
             context.warnings.append(context.skipped_reason)
 
 
+class LoadCachedResultsStep(AnalysisStep):
+    name = "LoadCachedResultsStep"
+
+    def run(self, context: SignalAnalysisContext) -> None:
+        if context.force_refresh or context.repository is None:
+            return
+        getter = getattr(context.repository, "get_signal_analysis_cache", None)
+        if not callable(getter):
+            return
+        pending_rows: List[ScreeningSignalRow] = []
+        for row in context.rows:
+            cached = getter(
+                context.market,
+                row.code,
+                context.timeframe,
+                context.analysis_profile,
+                context.check_date,
+            )
+            if cached:
+                context.results_by_code[row.code] = SignalAnalysisResult.from_llm_item(
+                    cached,
+                    model=str(cached.get("model") or "cache"),
+                )
+                continue
+            pending_rows.append(row)
+        context.rows = pending_rows
+
+
 class BuildSearchQueriesStep(AnalysisStep):
     name = "BuildSearchQueriesStep"
 
     def run(self, context: SignalAnalysisContext) -> None:
+        if not context.rows and context.results_by_code:
+            return
         market_name = MARKET_NAMES.get(context.market, context.market)
         context.market_query = (
             f"{market_name} 股票市场 最新 政策 宏观经济 热点新闻 "
@@ -164,8 +198,13 @@ class SearchContextStep(AnalysisStep):
     name = "SearchContextStep"
 
     def run(self, context: SignalAnalysisContext) -> None:
+        if not context.rows and context.results_by_code:
+            return
         if not context.search_provider.is_available:
-            context.warnings.append("未配置搜索 provider，跳过联网检索，仅使用 CSV 信号交给模型分析")
+            if _has_search_preflight_failure(context.warnings):
+                context.warnings.append("搜索 provider 网络预检失败，跳过联网检索，仅使用 CSV 信号交给模型分析")
+            else:
+                context.warnings.append("未配置搜索 provider，跳过联网检索，仅使用 CSV 信号交给模型分析")
             return
 
         try:
@@ -239,6 +278,8 @@ class ApplyManualHotNewsStep(AnalysisStep):
     name = "ApplyManualHotNewsStep"
 
     def run(self, context: SignalAnalysisContext) -> None:
+        if not context.rows and context.results_by_code:
+            return
         config = context.manual_hot_news
         if config.market_hot_news:
             context.market_documents = config.market_documents(context.market_query)
@@ -258,6 +299,8 @@ class ExpandCompanyEvidenceStep(AnalysisStep):
     name = "ExpandCompanyEvidenceStep"
 
     def run(self, context: SignalAnalysisContext) -> None:
+        if not context.rows and context.results_by_code:
+            return
         if not context.search_provider.is_available:
             return
         if not _env_bool("SIGNAL_ENABLE_EVIDENCE_EXPANSION", False):
@@ -296,6 +339,8 @@ class ResolveHotSectorsStep(AnalysisStep):
     name = "ResolveHotSectorsStep"
 
     def run(self, context: SignalAnalysisContext) -> None:
+        if not context.rows and context.results_by_code:
+            return
         manual = context.manual_hot_sectors
         if manual.hot_sectors:
             context.hot_sectors = list(manual.hot_sectors)
@@ -334,9 +379,14 @@ class LLMBatchAnalysisStep(AnalysisStep):
     name = "LLMBatchAnalysisStep"
 
     def run(self, context: SignalAnalysisContext) -> None:
+        if not context.rows and context.results_by_code:
+            return
         if not context.llm_provider.is_available:
             context.aborted = True
-            context.skipped_reason = "未配置 LLM provider，跳过 AI 辅助分析"
+            if _has_llm_preflight_failure(context.warnings):
+                context.skipped_reason = "LLM provider 网络预检失败，跳过 AI 辅助分析"
+            else:
+                context.skipped_reason = "未配置 LLM provider，跳过 AI 辅助分析"
             context.warnings.append(context.skipped_reason)
             return
 
@@ -358,6 +408,11 @@ class LLMBatchAnalysisStep(AnalysisStep):
                 context.warnings.extend(_drain_llm_provider_warnings(context.llm_provider))
                 message = f"模型批量分析失败: {type(exc).__name__}: {exc}"
                 context.warnings.append(message)
+                if _is_llm_quota_error(exc):
+                    context.aborted = True
+                    context.skipped_reason = "LLM provider 额度不足，跳过 AI 辅助分析"
+                    context.warnings.append(context.skipped_reason)
+                    return
                 for row in batch:
                     failed_rows[row.code] = message
                 continue
@@ -436,8 +491,10 @@ class PersistAnalysisStep(AnalysisStep):
                 market=context.market,
                 check_date=context.check_date,
                 csv_path=context.csv_path,
+                timeframe=context.timeframe,
+                analysis_profile=context.analysis_profile,
             )
-            for row in context.rows
+            for row in (context.all_rows or context.rows)
         ]
         try:
             context.repository.save_results(rows)
@@ -465,6 +522,7 @@ class SignalAnalysisChain:
     def __init__(self, steps: Optional[List[AnalysisStep]] = None):
         self.steps = steps or [
             LoadCsvSignalsStep(),
+            LoadCachedResultsStep(),
             BuildSearchQueriesStep(),
             SearchContextStep(),
             ApplyManualHotNewsStep(),
@@ -503,6 +561,26 @@ def _drain_llm_provider_warnings(provider: LLMProvider) -> List[str]:
     if not callable(drain):
         return []
     return list(drain())
+
+
+def _has_search_preflight_failure(warnings: List[str]) -> bool:
+    return any("联网检索预检失败" in warning for warning in warnings)
+
+
+def _has_llm_preflight_failure(warnings: List[str]) -> bool:
+    return any("LLM provider" in warning and "预检失败" in warning for warning in warnings)
+
+
+def _is_llm_quota_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return (
+        "http 429" in text
+        and (
+            "insufficient_quota" in text
+            or "exceeded your current quota" in text
+            or "billing" in text
+        )
+    )
 
 
 def _company_search_batch_size() -> int:
@@ -743,9 +821,10 @@ def write_analysis_columns_to_csv(
 
 
 def _render_markdown_report(context: SignalAnalysisContext) -> str:
-    report_title = market_signal_report_stem(context.market, context.timeframe)
-    results = [context.results_by_code[row.code] for row in context.rows]
-    rows_by_code = {row.code: row for row in context.rows}
+    report_title = market_signal_report_stem(context.market, context.timeframe, context.check_date)
+    report_rows = context.all_rows or context.rows
+    results = [context.results_by_code[row.code] for row in report_rows if row.code in context.results_by_code]
+    rows_by_code = {row.code: row for row in report_rows}
     ranked = sorted(
         results,
         key=lambda item: -1 if item.reliability_score is None else item.reliability_score,
@@ -768,7 +847,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
     overall_strength = _overall_strength(ranked)
     pool_category = _pool_category(ranked, attention, cautious, insufficient)
     hot_sector_text = "；".join(context.hot_sectors) if context.hot_sectors else "暂未识别到明确市场热点"
-    main_force_rows = [row for row in context.rows if _has_main_force_risk(row)]
+    main_force_rows = [row for row in report_rows if _has_main_force_risk(row)]
     main_force_high = [row for row in main_force_rows if row.main_force_risk_level == "高"]
     main_force_medium = [row for row in main_force_rows if row.main_force_risk_level == "中"]
     main_force_signal_text = _main_force_top_signal_text(main_force_rows)
@@ -777,7 +856,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         f"# {report_title}",
         "",
         f"**报告日期：** {context.check_date.strftime('%Y年%m月%d日')}",
-        f"**覆盖标的数量：** {len(context.rows)}个（个股 {len(stock_ranked)} 个，ETF/基金 {len(etf_ranked)} 个）",
+        f"**覆盖标的数量：** {len(report_rows)}个（个股 {len(stock_ranked)} 个，ETF/基金 {len(etf_ranked)} 个）",
         "**报告用途：** 辅助判断 / 观察池复核 / 信号解释",
         "**适用读者：** 投研、业务负责人、非技术背景读者",
         "",
@@ -787,7 +866,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         "## 一、核心结论",
         "",
-        f"本次共复核 **{len(context.rows)}个标的**。整体来看，当前信号强度为：**{overall_strength}**。",
+        f"本次共复核 **{len(report_rows)}个标的**。整体来看，当前信号强度为：**{overall_strength}**。",
         "",
         "本批股票的主要特点是：",
         "",
@@ -850,7 +929,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "### 1. 买卖点确认情况",
         "",
         f"- 已看到较明确买入/卖出提示的股票：{len(confirmed_timing)}只",
-        f"- 暂未看到明确买入/卖出提示的股票：{max(0, len(context.rows) - len(confirmed_timing))}只",
+        f"- 暂未看到明确买入/卖出提示的股票：{max(0, len(report_rows) - len(confirmed_timing))}只",
         f"- 综合评分较高、可重点跟踪的股票：{len(attention)}只",
         f"- 评分偏低或信息不足的股票：{len(cautious)}只",
         "",

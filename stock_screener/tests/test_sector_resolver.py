@@ -23,7 +23,7 @@ class FakePoolDb:
                 {"code": "HK.00001", "name": "Best Name", "market_cap": 100, "pe_ratio": 10},
                 {"code": "HK.02800", "name": "ETF Name", "market_cap": 200, "pe_ratio": 20},
             ],
-            ("HK", "industry"): [
+            ("HK", "industry_top5"): [
                 {
                     "code": "HK.00001",
                     "name": "Industry Name",
@@ -31,7 +31,7 @@ class FakePoolDb:
                     "industry_code": "BK001",
                 }
             ],
-            ("HK", "etf"): [
+            ("HK", "all_etf"): [
                 {"code": "HK.02800", "name": "ETF Name"},
             ],
         }

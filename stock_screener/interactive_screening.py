@@ -26,6 +26,7 @@ from scheduled_daily_job import (
     sync_sector_memberships_for_markets,
 )
 from signal_analysis.service import env_flag
+from stock_pool import DEFAULT_POOL_TYPES_TEXT, POOL_LABELS, parse_pool_types
 from timeframe import parse_timeframe
 
 
@@ -41,13 +42,7 @@ MARKET_HELP = {
     "A": "A 股",
 }
 
-POOL_HELP = {
-    "best": "优选池",
-    "index": "指数成分",
-    "industry": "行业龙头",
-    "ipo": "近期新股",
-    "etf": "ETF",
-}
+POOL_HELP = POOL_LABELS
 
 CODE_EXAMPLES = {
     "HK": "00700,09988",
@@ -63,7 +58,7 @@ class InteractiveScreeningOptions:
     market: Optional[str] = None
     codes: List[str] = field(default_factory=list)
     timeframe: str = "1d"
-    pools: List[str] = field(default_factory=lambda: ["best", "index", "industry", "ipo", "etf"])
+    pools: List[str] = field(default_factory=lambda: parse_pool_types("all"))
     fetch_pools: bool = True
     require_fresh_pools: bool = False
     send_feishu: bool = False
@@ -222,6 +217,7 @@ class ScreeningInteractiveApp:
                     False,
                     options.enable_ai_analysis,
                     options.chain_key,
+                    options.pools,
                 ): market
                 for market in options.markets
             }
@@ -422,19 +418,22 @@ class ScreeningInteractiveApp:
                 self.print(f"市场列表无效: {exc}")
 
     def _prompt_pools(self) -> List[str]:
-        allowed = set(POOL_HELP.keys())
         self.print("")
         self.print("股票池类型")
         for key, label in POOL_HELP.items():
             self.print(f"  {key}: {label}")
-        self.print("输入方式: 多个类型用英文逗号或中文逗号分隔，例如 best,index,etf；回车使用全部。")
+        self.print(
+            "输入方式: 多个类型用英文逗号或中文逗号分隔，"
+            f"例如 best,major_index,all_etf；回车使用全部（{DEFAULT_POOL_TYPES_TEXT}）。"
+        )
         while True:
-            values = self._split_csv_values(self._prompt_text("股票池类型，逗号分隔", "best,index,industry,ipo,etf"))
-            invalid = [item for item in values if item not in allowed]
-            if invalid:
-                self.print(f"股票池类型无效: {invalid}")
+            raw = self._prompt_text("股票池类型，逗号分隔", DEFAULT_POOL_TYPES_TEXT)
+            try:
+                values = parse_pool_types(raw)
+            except ValueError as exc:
+                self.print(str(exc))
                 continue
-            return values or ["best", "index", "industry", "ipo", "etf"]
+            return values
 
     def _prompt_codes(self, market: str) -> List[str]:
         example = CODE_EXAMPLES.get(market, "00700")

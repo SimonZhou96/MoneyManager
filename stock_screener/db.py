@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
+from stock_pool import DEFAULT_POOL_TYPES_TEXT
 
 try:
     import pymysql
@@ -233,32 +234,58 @@ DEFAULT_RULE_CHAIN_KEY = "default_zuoyi_and_other"
 
 
 DEFAULT_RULE_METADATA = (
-    ("market_cap_range", "市值范围", "filter", "MarketCapFilter",
+    ("market_cap_range", "市值范围", "filter", "", "MarketCapFilter",
      {"min_cap": None, "max_cap": None}, True, 10, "按市值上下限筛选"),
-    ("avg_daily_volume_range", "每日平均交易量范围", "filter", "AvgDailyVolumeFilter",
+    ("avg_daily_volume_range", "每日平均交易量范围", "filter", "", "AvgDailyVolumeFilter",
      {"min_volume": None, "max_volume": None}, True, 20, "按 K 线计算每日平均交易量"),
-    ("price_range", "价格范围", "filter", "PriceFilter",
+    ("price_range", "价格范围", "filter", "", "PriceFilter",
      {"min_price": None, "max_price": None}, True, 30, "按最新收盘价筛选"),
-    ("pe_range", "PE 范围", "filter", "PEFilter",
+    ("pe_range", "PE 范围", "filter", "", "PEFilter",
      {"min_pe": None, "max_pe": None, "allow_negative": False}, True, 40, "按 PE 上下限筛选"),
-    ("profitability", "公司盈利", "filter", "ProfitabilityFilter",
+    ("profitability", "公司盈利", "filter", "", "ProfitabilityFilter",
      {"require_profitable": True}, True, 50, "要求 PE 为正"),
-    ("zuoyi_signal", "左一战法", "strategy", "ZuoYiStrategizer",
+    ("zuoyi_signal", "左一战法", "strategy", "technical", "ZuoYiStrategizer",
      {"signal_window": 15, "include_bullish": True, "include_bearish": True}, True, 110,
      "当前周期15根K线内左一战法看涨/看跌信号"),
-    ("ema_breakout", "EMA 突破", "strategy", "EMABreakoutStrategizer",
+    ("ema_breakout", "EMA 突破", "strategy", "technical", "EMABreakoutStrategizer",
      {"ema_short": 10, "ema_long": 150}, True, 120, "EMA 短线向上突破长线"),
-    ("rsi_oversold", "RSI 超卖", "strategy", "RSIOversoldStrategizer",
+    ("rsi_oversold", "RSI 超卖", "strategy", "technical", "RSIOversoldStrategizer",
      {"period": 14, "threshold": 30.0}, True, 130, "RSI 低于等于阈值"),
-    ("rsi_overbought", "RSI 超买", "strategy", "RSIOverboughtStrategizer",
+    ("rsi_overbought", "RSI 超买", "strategy", "technical", "RSIOverboughtStrategizer",
      {"period": 14, "threshold": 70.0}, True, 140, "RSI 高于等于阈值"),
-    ("volume_spike_prior3", "放量超前三日", "strategy", "TodayVolumeExceedsPrior3MaxStrategizer",
+    ("volume_spike_prior3", "放量超前三日", "strategy", "technical", "TodayVolumeExceedsPrior3MaxStrategizer",
      {}, True, 150, "当日成交量大于前三日最大值"),
-    ("daily_drop_6_65", "当日跌 6%~6.5%", "strategy", "DailyDrop6To65Strategizer",
+    ("daily_drop_6_65", "当日跌 6%~6.5%", "strategy", "technical", "DailyDrop6To65Strategizer",
      {"pct_min": -6.5, "pct_max": -6.0}, True, 160, "当日跌幅在指定区间"),
-    ("daily_rise_4_45", "当日涨 4%~4.5%", "strategy", "DailyRise4To45Strategizer",
+    ("daily_rise_4_45", "当日涨 4%~4.5%", "strategy", "technical", "DailyRise4To45Strategizer",
      {"pct_min": 4.0, "pct_max": 4.5}, True, 170, "当日涨幅在指定区间"),
+    ("company_event_hot_sector_link", "公司时事与热点板块关联", "strategy", "macro", "CompanyEventHotSectorStrategizer",
+     {}, True, 210, "复用 AI 分析结果，判断公司时事是否与热点板块形成共振"),
+    ("company_event_hot_news_link", "公司时事与热点新闻关联", "strategy", "macro", "CompanyEventHotNewsStrategizer",
+     {}, True, 220, "复用 AI 分析结果，判断公司时事是否被热点新闻验证"),
 )
+
+
+US_DEFAULT_RULE_PARAM_OVERRIDES = {
+    "market_cap_range": {"min_cap": 5_000_000_000, "max_cap": None, "min_exclusive": True},
+    "avg_daily_volume_range": {
+        "min_volume": 20_000_000,
+        "max_volume": None,
+        "lookback_days": 10,
+        "metric": "turnover",
+        "min_exclusive": True,
+    },
+    "price_range": {"min_price": 5, "max_price": None, "min_exclusive": True},
+    "pe_range": {"min_pe": 5, "max_pe": None, "allow_negative": False, "min_exclusive": True},
+}
+
+
+US_DEFAULT_RULE_FIELD_OVERRIDES = {
+    "avg_daily_volume_range": {
+        "rule_name": "10天平均成交额范围",
+        "description": "复用每日平均交易量规则，按 K 线计算最近10天平均成交额",
+    },
+}
 
 
 DEFAULT_RULE_CHAIN_EXPRESSION = {
@@ -308,6 +335,29 @@ TREND_CAPITAL_ACCUMULATION_WATCH_EXPRESSION = {
         },
     ]
 }
+
+
+def _default_rule_params_for_market(market: str, rule_key: str, params: dict) -> dict:
+    result = dict(params or {})
+    if market == "US":
+        result.update(US_DEFAULT_RULE_PARAM_OVERRIDES.get(rule_key, {}))
+    return result
+
+
+def _default_rule_name_for_market(market: str, rule_key: str, rule_name: str) -> str:
+    if market == "US":
+        return US_DEFAULT_RULE_FIELD_OVERRIDES.get(rule_key, {}).get("rule_name", rule_name)
+    return rule_name
+
+
+def _default_rule_description_for_market(market: str, rule_key: str, description: str) -> str:
+    if market == "US":
+        return US_DEFAULT_RULE_FIELD_OVERRIDES.get(rule_key, {}).get("description", description)
+    return description
+
+
+def _default_rule_chain_expression_for_market(market: str) -> dict:
+    return DEFAULT_RULE_CHAIN_EXPRESSION
 
 
 class MarketDatabase:
@@ -737,6 +787,7 @@ class MarketDatabase:
                     market VARCHAR(8) NOT NULL,
                     timeframe VARCHAR(8) NOT NULL,
                     chain_key VARCHAR(64) NOT NULL DEFAULT 'default_zuoyi_and_other',
+                    pool_scope VARCHAR(255) NOT NULL DEFAULT 'best,major_index,industry_top5,recent_ipo_2y,all_etf',
                     status VARCHAR(32) NOT NULL DEFAULT 'queued',
                     job_id VARCHAR(64) NOT NULL,
                     task_id VARCHAR(64) NULL,
@@ -749,7 +800,7 @@ class MarketDatabase:
                     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                         ON UPDATE CURRENT_TIMESTAMP(6),
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_screening_run_lock_scope (run_date, market, timeframe, chain_key),
+                    UNIQUE KEY uk_screening_run_lock_scope (run_date, market, timeframe, chain_key, pool_scope),
                     UNIQUE KEY uk_screening_run_lock_id (lock_id),
                     KEY idx_screening_run_lock_job (job_id),
                     KEY idx_screening_run_lock_status (status, run_date)
@@ -769,6 +820,17 @@ class MarketDatabase:
                 except Exception:
                     pass
             try:
+                cursor.execute("SELECT `pool_scope` FROM screening_run_locks LIMIT 1")
+            except Exception:
+                try:
+                    cursor.execute(
+                        "ALTER TABLE screening_run_locks "
+                        f"ADD COLUMN pool_scope VARCHAR(255) NOT NULL DEFAULT '{DEFAULT_POOL_TYPES_TEXT}' "
+                        "AFTER chain_key"
+                    )
+                except Exception:
+                    pass
+            try:
                 cursor.execute("ALTER TABLE screening_run_locks DROP INDEX uk_screening_run_lock_scope")
             except Exception:
                 pass
@@ -776,7 +838,7 @@ class MarketDatabase:
                 cursor.execute(
                     "ALTER TABLE screening_run_locks "
                     "ADD UNIQUE KEY uk_screening_run_lock_scope "
-                    "(run_date, market, timeframe, chain_key)"
+                    "(run_date, market, timeframe, chain_key, pool_scope)"
                 )
             except Exception:
                 pass
@@ -1506,10 +1568,10 @@ class MarketDatabase:
                 code ASC,
                 CASE pool_type
                     WHEN 'best' THEN 0
-                    WHEN 'industry' THEN 1
-                    WHEN 'index' THEN 2
-                    WHEN 'ipo' THEN 3
-                    WHEN 'etf' THEN 4
+                    WHEN 'major_index' THEN 1
+                    WHEN 'industry_top5' THEN 2
+                    WHEN 'recent_ipo_2y' THEN 3
+                    WHEN 'all_etf' THEN 4
                     ELSE 5
                 END,
                 updated_at DESC
@@ -1761,21 +1823,25 @@ class MarketDatabase:
         markets: List[str],
         timeframe: str,
         chain_key: Optional[str] = None,
+        pool_scope: Optional[str] = None,
     ) -> List[dict]:
         if not markets:
             return []
         placeholders = ",".join(["%s"] * len(markets))
         chain_condition = " AND chain_key=%s" if chain_key else ""
+        pool_condition = " AND pool_scope=%s" if pool_scope else ""
         sql = f"""
-            SELECT lock_id, run_date, market, timeframe, chain_key, status, job_id, task_id,
+            SELECT lock_id, run_date, market, timeframe, chain_key, pool_scope, status, job_id, task_id,
                    agent_id, claimed_at, heartbeat_at, completed_at, error_message
             FROM screening_run_locks
-            WHERE run_date=%s AND timeframe=%s AND market IN ({placeholders}){chain_condition}
+            WHERE run_date=%s AND timeframe=%s AND market IN ({placeholders}){chain_condition}{pool_condition}
             ORDER BY market
         """
         params: List[Any] = [run_date, timeframe, *markets]
         if chain_key:
             params.append(chain_key)
+        if pool_scope:
+            params.append(pool_scope)
         with self.conn.cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall() or []
@@ -1786,14 +1852,15 @@ class MarketDatabase:
                 "market": row[2],
                 "timeframe": row[3],
                 "chain_key": row[4],
-                "status": row[5],
-                "job_id": row[6],
-                "task_id": row[7],
-                "agent_id": row[8],
-                "claimed_at": str(row[9]) if row[9] else None,
-                "heartbeat_at": str(row[10]) if row[10] else None,
-                "completed_at": str(row[11]) if row[11] else None,
-                "error_message": row[12],
+                "pool_scope": row[5],
+                "status": row[6],
+                "job_id": row[7],
+                "task_id": row[8],
+                "agent_id": row[9],
+                "claimed_at": str(row[10]) if row[10] else None,
+                "heartbeat_at": str(row[11]) if row[11] else None,
+                "completed_at": str(row[12]) if row[12] else None,
+                "error_message": row[13],
             }
             for row in rows
         ]
@@ -1805,9 +1872,10 @@ class MarketDatabase:
         markets: List[str],
         timeframe: str,
         chain_key: str = DEFAULT_RULE_CHAIN_KEY,
+        pool_scope: str = DEFAULT_POOL_TYPES_TEXT,
     ) -> None:
         rows = [
-            (secrets.token_hex(16), run_date, market, timeframe, chain_key, "queued", job_id)
+            (secrets.token_hex(16), run_date, market, timeframe, chain_key, pool_scope, "queued", job_id)
             for market in markets
         ]
         if not rows:
@@ -1816,8 +1884,8 @@ class MarketDatabase:
             cursor.executemany(
                 """
                 INSERT INTO screening_run_locks
-                    (lock_id, run_date, market, timeframe, chain_key, status, job_id)
-                VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    (lock_id, run_date, market, timeframe, chain_key, pool_scope, status, job_id)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 rows,
             )
@@ -3563,6 +3631,7 @@ class MarketDatabase:
                     rule_key VARCHAR(64) NOT NULL COMMENT '原子规则键',
                     rule_name VARCHAR(128) NOT NULL COMMENT '规则展示名称',
                     rule_type VARCHAR(16) NOT NULL COMMENT 'filter/strategy',
+                    strategy_category VARCHAR(16) NULL COMMENT 'technical/macro',
                     implementation VARCHAR(128) NOT NULL COMMENT '代码侧白名单实现名',
                     params_json JSON NULL COMMENT '规则参数',
                     enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
@@ -3578,6 +3647,16 @@ class MarketDatabase:
                 COMMENT='筛选原子规则元数据'
                 """
             )
+            try:
+                cursor.execute("SELECT `strategy_category` FROM screening_rule_metadata LIMIT 1")
+            except Exception:
+                try:
+                    cursor.execute(
+                        "ALTER TABLE screening_rule_metadata "
+                        "ADD COLUMN strategy_category VARCHAR(16) NULL COMMENT 'technical/macro' AFTER rule_type"
+                    )
+                except Exception:
+                    pass
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS screening_rule_chains (
@@ -3600,6 +3679,7 @@ class MarketDatabase:
                 """
             )
             self._ensure_rule_chain_timeframe_scope(cursor)
+            self._ensure_rule_chain_indexes(cursor)
         self.seed_default_screening_rules()
 
     def _ensure_rule_chain_timeframe_scope(self, cursor):
@@ -3619,6 +3699,8 @@ class MarketDatabase:
             cursor.execute("ALTER TABLE screening_rule_chains DROP INDEX uk_rule_chains_market_key")
         except Exception:
             pass
+
+    def _ensure_rule_chain_indexes(self, cursor):
         try:
             cursor.execute(
                 "ALTER TABLE screening_rule_chains "
@@ -3646,6 +3728,7 @@ class MarketDatabase:
                 rule_key,
                 rule_name,
                 rule_type,
+                strategy_category,
                 implementation,
                 params,
                 enabled,
@@ -3655,13 +3738,17 @@ class MarketDatabase:
                 metadata_rows.append((
                     market,
                     rule_key,
-                    rule_name,
+                    _default_rule_name_for_market(market, rule_key, rule_name),
                     rule_type,
+                    strategy_category,
                     implementation,
-                    json.dumps(params, ensure_ascii=False),
+                    json.dumps(
+                        _default_rule_params_for_market(market, rule_key, params),
+                        ensure_ascii=False,
+                    ),
                     1 if enabled else 0,
                     display_order,
-                    description,
+                    _default_rule_description_for_market(market, rule_key, description),
                 ))
 
         chain_rows = []
@@ -3671,7 +3758,7 @@ class MarketDatabase:
                 "*",
                 DEFAULT_RULE_CHAIN_KEY,
                 "左一战法与其他策略默认链",
-                json.dumps(DEFAULT_RULE_CHAIN_EXPRESSION, ensure_ascii=False),
+                json.dumps(_default_rule_chain_expression_for_market(market), ensure_ascii=False),
                 1,
                 100,
                 "启用硬筛选全部通过 && 左一战法命中 && 至少一个其他策略命中",
@@ -3691,9 +3778,9 @@ class MarketDatabase:
             cursor.executemany(
                 """
                 INSERT IGNORE INTO screening_rule_metadata
-                    (market, rule_key, rule_name, rule_type, implementation,
+                    (market, rule_key, rule_name, rule_type, strategy_category, implementation,
                      params_json, enabled, display_order, description)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 metadata_rows,
             )
@@ -3709,7 +3796,7 @@ class MarketDatabase:
     def get_screening_rule_metadata(self, market: str) -> List[dict]:
         """读取某个市场的所有原子规则元数据。"""
         sql = """
-            SELECT market, rule_key, rule_name, rule_type, implementation,
+            SELECT market, rule_key, rule_name, rule_type, strategy_category, implementation,
                    params_json, enabled, display_order, description
             FROM screening_rule_metadata
             WHERE market=%s
@@ -3724,11 +3811,12 @@ class MarketDatabase:
                 "rule_key": row[1],
                 "rule_name": row[2],
                 "rule_type": row[3],
-                "implementation": row[4],
-                "params_json": _decode_json_field(row[5], {}),
-                "enabled": bool(row[6]),
-                "display_order": int(row[7] or 0),
-                "description": row[8],
+                "strategy_category": row[4],
+                "implementation": row[5],
+                "params_json": _decode_json_field(row[6], {}),
+                "enabled": bool(row[7]),
+                "display_order": int(row[8] or 0),
+                "description": row[9],
             }
             for row in rows
         ]
@@ -3824,6 +3912,62 @@ class MarketDatabase:
             "priority": int(row[6] or 100),
             "description": row[7],
         }
+
+    def create_screening_rule_chain(self, item: dict) -> None:
+        sql = """
+            INSERT INTO screening_rule_chains
+                (market, timeframe, chain_key, chain_name, expression_json, enabled, priority, description)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (
+                    item.get("market"),
+                    item.get("timeframe") or "*",
+                    item.get("chain_key"),
+                    item.get("chain_name"),
+                    _json_or_none(item.get("expression_json")) or "{}",
+                    1 if item.get("enabled") else 0,
+                    int(item.get("priority") or 100),
+                    item.get("description"),
+                ),
+            )
+
+    def update_screening_rule_chain(self, market: str, timeframe: str, chain_key: str, item: dict) -> bool:
+        sql = """
+            UPDATE screening_rule_chains
+            SET chain_name=%s,
+                expression_json=%s,
+                enabled=%s,
+                priority=%s,
+                description=%s
+            WHERE market=%s AND timeframe=%s AND chain_key=%s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                sql,
+                (
+                    item.get("chain_name"),
+                    _json_or_none(item.get("expression_json")) or "{}",
+                    1 if item.get("enabled") else 0,
+                    int(item.get("priority") or 100),
+                    item.get("description"),
+                    market,
+                    timeframe,
+                    chain_key,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def delete_screening_rule_chain(self, market: str, timeframe: str, chain_key: str) -> bool:
+        sql = """
+            DELETE FROM screening_rule_chains
+            WHERE market=%s AND timeframe=%s AND chain_key=%s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (market, timeframe, chain_key))
+            return cursor.rowcount > 0
 
     # ------------------------------------------------------------------
     # Signal analysis
@@ -3937,6 +4081,10 @@ class MarketDatabase:
                     risk_factors JSON NULL COMMENT '风险因素',
                     macro_factors JSON NULL COMMENT '宏观/政策因素',
                     company_events JSON NULL COMMENT '公司事件',
+                    market_hot_news JSON NULL COMMENT '市场热点新闻',
+                    company_hot_news JSON NULL COMMENT '公司热点新闻',
+                    news_impact VARCHAR(64) NULL COMMENT '新闻影响判断',
+                    news_sources JSON NULL COMMENT '新闻来源',
                     hot_sectors JSON NULL COMMENT '识别到的热点板块',
                     hot_sector_mark VARCHAR(32) NULL COMMENT '重点/相关/观察/无明确关联/未知',
                     matched_hot_sectors JSON NULL COMMENT '匹配到的热点板块',
@@ -3962,6 +4110,10 @@ class MarketDatabase:
                 """
             )
             signal_analysis_alters = [
+                ("market_hot_news", "ALTER TABLE screening_signal_analysis ADD COLUMN market_hot_news JSON NULL COMMENT '市场热点新闻' AFTER company_events"),
+                ("company_hot_news", "ALTER TABLE screening_signal_analysis ADD COLUMN company_hot_news JSON NULL COMMENT '公司热点新闻' AFTER market_hot_news"),
+                ("news_impact", "ALTER TABLE screening_signal_analysis ADD COLUMN news_impact VARCHAR(64) NULL COMMENT '新闻影响判断' AFTER company_hot_news"),
+                ("news_sources", "ALTER TABLE screening_signal_analysis ADD COLUMN news_sources JSON NULL COMMENT '新闻来源' AFTER news_impact"),
                 ("hot_sectors", "ALTER TABLE screening_signal_analysis ADD COLUMN hot_sectors JSON NULL COMMENT '识别到的热点板块' AFTER company_events"),
                 ("hot_sector_mark", "ALTER TABLE screening_signal_analysis ADD COLUMN hot_sector_mark VARCHAR(32) NULL COMMENT '重点/相关/观察/无明确关联/未知' AFTER hot_sectors"),
                 ("matched_hot_sectors", "ALTER TABLE screening_signal_analysis ADD COLUMN matched_hot_sectors JSON NULL COMMENT '匹配到的热点板块' AFTER hot_sector_mark"),
@@ -3980,6 +4132,56 @@ class MarketDatabase:
                         cursor.execute(alter_sql)
                     except Exception:
                         pass
+        self.init_signal_analysis_cache_schema()
+
+    def init_signal_analysis_cache_schema(self):
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS signal_analysis_cache (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    cache_key VARCHAR(200) NOT NULL,
+                    market VARCHAR(8) NOT NULL,
+                    code VARCHAR(32) NOT NULL,
+                    timeframe VARCHAR(16) NOT NULL,
+                    analysis_profile VARCHAR(32) NOT NULL DEFAULT 'default',
+                    trade_date DATE NOT NULL,
+                    name VARCHAR(255) NULL,
+                    analysis_status VARCHAR(32) NOT NULL DEFAULT 'success',
+                    reliability_score DECIMAL(6,2) NULL,
+                    confidence_score DECIMAL(6,2) NULL,
+                    signal_bias VARCHAR(32) NULL,
+                    summary TEXT NULL,
+                    positive_factors JSON NULL,
+                    risk_factors JSON NULL,
+                    macro_factors JSON NULL,
+                    company_events JSON NULL,
+                    market_hot_news JSON NULL,
+                    company_hot_news JSON NULL,
+                    news_impact VARCHAR(64) NULL,
+                    news_sources JSON NULL,
+                    hot_sectors JSON NULL,
+                    hot_sector_mark VARCHAR(32) NULL,
+                    matched_hot_sectors JSON NULL,
+                    hot_sector_relevance VARCHAR(64) NULL,
+                    hot_sector_reason TEXT NULL,
+                    hot_sector_sources JSON NULL,
+                    source_urls JSON NULL,
+                    data_gaps JSON NULL,
+                    evidence_links JSON NULL,
+                    factor_citations JSON NULL,
+                    model VARCHAR(128) NULL,
+                    raw_response JSON NULL,
+                    error_message TEXT NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_signal_analysis_cache_key (cache_key),
+                    KEY idx_signal_analysis_cache_scope (market, code, timeframe, analysis_profile, trade_date)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='股票维度共享 signal analysis 缓存'
+                """
+            )
 
     def upsert_signal_analysis_results(self, results: Iterable[dict]):
         """写入或更新选股信号 AI 辅助分析结果。"""
@@ -4006,6 +4208,10 @@ class MarketDatabase:
                 _json_or_none(item.get("risk_factors")),
                 _json_or_none(item.get("macro_factors")),
                 _json_or_none(item.get("company_events")),
+                _json_or_none(item.get("market_hot_news")),
+                _json_or_none(item.get("company_hot_news")),
+                item.get("news_impact"),
+                _json_or_none(item.get("news_sources")),
                 _json_or_none(item.get("hot_sectors")),
                 item.get("hot_sector_mark"),
                 _json_or_none(item.get("matched_hot_sectors")),
@@ -4028,11 +4234,12 @@ class MarketDatabase:
                 (task_id, market, code, name, check_date, csv_path, analysis_status,
                  reliability_score, confidence_score, signal_bias, summary,
                  positive_factors, risk_factors, macro_factors, company_events,
+                 market_hot_news, company_hot_news, news_impact, news_sources,
                  hot_sectors, hot_sector_mark, matched_hot_sectors, hot_sector_relevance,
                  hot_sector_reason, hot_sector_sources, source_urls, data_gaps,
                  evidence_links, factor_citations, model, raw_response,
                  error_message)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
                 name=VALUES(name),
                 check_date=VALUES(check_date),
@@ -4046,6 +4253,10 @@ class MarketDatabase:
                 risk_factors=VALUES(risk_factors),
                 macro_factors=VALUES(macro_factors),
                 company_events=VALUES(company_events),
+                market_hot_news=VALUES(market_hot_news),
+                company_hot_news=VALUES(company_hot_news),
+                news_impact=VALUES(news_impact),
+                news_sources=VALUES(news_sources),
                 hot_sectors=VALUES(hot_sectors),
                 hot_sector_mark=VALUES(hot_sector_mark),
                 matched_hot_sectors=VALUES(matched_hot_sectors),
@@ -4068,6 +4279,7 @@ class MarketDatabase:
             SELECT task_id, market, code, name, check_date, csv_path, analysis_status,
                    reliability_score, confidence_score, signal_bias, summary,
                    positive_factors, risk_factors, macro_factors, company_events,
+                   market_hot_news, company_hot_news, news_impact, news_sources,
                    hot_sectors, hot_sector_mark, matched_hot_sectors, hot_sector_relevance,
                    hot_sector_reason, hot_sector_sources, source_urls, data_gaps,
                    evidence_links, factor_citations, model, raw_response,
@@ -4096,22 +4308,177 @@ class MarketDatabase:
                 "risk_factors": _decode_json_field(row[12], []),
                 "macro_factors": _decode_json_field(row[13], []),
                 "company_events": _decode_json_field(row[14], []),
-                "hot_sectors": _decode_json_field(row[15], []),
-                "hot_sector_mark": row[16],
-                "matched_hot_sectors": _decode_json_field(row[17], []),
-                "hot_sector_relevance": row[18],
-                "hot_sector_reason": row[19],
-                "hot_sector_sources": _decode_json_field(row[20], []),
-                "source_urls": _decode_json_field(row[21], []),
-                "data_gaps": _decode_json_field(row[22], []),
-                "evidence_links": _decode_json_field(row[23], []),
-                "factor_citations": _decode_json_field(row[24], {}),
-                "model": row[25],
-                "raw_response": _decode_json_field(row[26], None),
-                "error_message": row[27],
+                "market_hot_news": _decode_json_field(row[15], []),
+                "company_hot_news": _decode_json_field(row[16], []),
+                "news_impact": row[17],
+                "news_sources": _decode_json_field(row[18], []),
+                "hot_sectors": _decode_json_field(row[19], []),
+                "hot_sector_mark": row[20],
+                "matched_hot_sectors": _decode_json_field(row[21], []),
+                "hot_sector_relevance": row[22],
+                "hot_sector_reason": row[23],
+                "hot_sector_sources": _decode_json_field(row[24], []),
+                "source_urls": _decode_json_field(row[25], []),
+                "data_gaps": _decode_json_field(row[26], []),
+                "evidence_links": _decode_json_field(row[27], []),
+                "factor_citations": _decode_json_field(row[28], {}),
+                "model": row[29],
+                "raw_response": _decode_json_field(row[30], None),
+                "error_message": row[31],
             }
             for row in rows
         ]
+
+    def upsert_signal_analysis_cache(self, results: Iterable[dict]) -> None:
+        rows = []
+        for item in results:
+            market = str(item.get("market") or "").strip()
+            code = str(item.get("code") or "").strip()
+            timeframe = str(item.get("timeframe") or "1d").strip() or "1d"
+            analysis_profile = str(item.get("analysis_profile") or "default").strip() or "default"
+            trade_date = item.get("check_date")
+            if not (market and code and trade_date):
+                continue
+            cache_key = f"{market}:{code}:{timeframe}:{analysis_profile}:{trade_date}"
+            rows.append((
+                cache_key,
+                market,
+                code,
+                timeframe,
+                analysis_profile,
+                trade_date,
+                item.get("name"),
+                item.get("analysis_status") or "success",
+                item.get("reliability_score"),
+                item.get("confidence_score"),
+                item.get("signal_bias"),
+                item.get("summary"),
+                _json_or_none(item.get("positive_factors")),
+                _json_or_none(item.get("risk_factors")),
+                _json_or_none(item.get("macro_factors")),
+                _json_or_none(item.get("company_events")),
+                _json_or_none(item.get("market_hot_news")),
+                _json_or_none(item.get("company_hot_news")),
+                item.get("news_impact"),
+                _json_or_none(item.get("news_sources")),
+                _json_or_none(item.get("hot_sectors")),
+                item.get("hot_sector_mark"),
+                _json_or_none(item.get("matched_hot_sectors")),
+                item.get("hot_sector_relevance"),
+                item.get("hot_sector_reason"),
+                _json_or_none(item.get("hot_sector_sources")),
+                _json_or_none(item.get("source_urls")),
+                _json_or_none(item.get("data_gaps")),
+                _json_or_none(item.get("evidence_links")),
+                _json_or_none(item.get("factor_citations")),
+                item.get("model"),
+                _json_or_none(item.get("raw_response")),
+                item.get("error_message"),
+            ))
+        if not rows:
+            return
+        sql = """
+            INSERT INTO signal_analysis_cache
+                (cache_key, market, code, timeframe, analysis_profile, trade_date, name,
+                 analysis_status, reliability_score, confidence_score, signal_bias, summary,
+                 positive_factors, risk_factors, macro_factors, company_events,
+                 market_hot_news, company_hot_news, news_impact, news_sources,
+                 hot_sectors, hot_sector_mark, matched_hot_sectors, hot_sector_relevance,
+                 hot_sector_reason, hot_sector_sources, source_urls, data_gaps,
+                 evidence_links, factor_citations, model, raw_response, error_message)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                name=VALUES(name),
+                analysis_status=VALUES(analysis_status),
+                reliability_score=VALUES(reliability_score),
+                confidence_score=VALUES(confidence_score),
+                signal_bias=VALUES(signal_bias),
+                summary=VALUES(summary),
+                positive_factors=VALUES(positive_factors),
+                risk_factors=VALUES(risk_factors),
+                macro_factors=VALUES(macro_factors),
+                company_events=VALUES(company_events),
+                market_hot_news=VALUES(market_hot_news),
+                company_hot_news=VALUES(company_hot_news),
+                news_impact=VALUES(news_impact),
+                news_sources=VALUES(news_sources),
+                hot_sectors=VALUES(hot_sectors),
+                hot_sector_mark=VALUES(hot_sector_mark),
+                matched_hot_sectors=VALUES(matched_hot_sectors),
+                hot_sector_relevance=VALUES(hot_sector_relevance),
+                hot_sector_reason=VALUES(hot_sector_reason),
+                hot_sector_sources=VALUES(hot_sector_sources),
+                source_urls=VALUES(source_urls),
+                data_gaps=VALUES(data_gaps),
+                evidence_links=VALUES(evidence_links),
+                factor_citations=VALUES(factor_citations),
+                model=VALUES(model),
+                raw_response=VALUES(raw_response),
+                error_message=VALUES(error_message)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.executemany(sql, rows)
+
+    def get_signal_analysis_cache(
+        self,
+        market: str,
+        code: str,
+        timeframe: str,
+        analysis_profile: str,
+        trade_date: date,
+    ) -> Optional[dict]:
+        cache_key = f"{market}:{code}:{timeframe}:{analysis_profile}:{trade_date}"
+        sql = """
+            SELECT market, code, timeframe, analysis_profile, trade_date, name, analysis_status,
+                   reliability_score, confidence_score, signal_bias, summary,
+                   positive_factors, risk_factors, macro_factors, company_events,
+                   market_hot_news, company_hot_news, news_impact, news_sources,
+                   hot_sectors, hot_sector_mark, matched_hot_sectors, hot_sector_relevance,
+                   hot_sector_reason, hot_sector_sources, source_urls, data_gaps,
+                   evidence_links, factor_citations, model, raw_response, error_message
+            FROM signal_analysis_cache
+            WHERE cache_key=%s
+            LIMIT 1
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (cache_key,))
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "market": row[0],
+            "code": row[1],
+            "timeframe": row[2],
+            "analysis_profile": row[3],
+            "check_date": str(row[4]) if row[4] else None,
+            "name": row[5],
+            "analysis_status": row[6],
+            "reliability_score": float(row[7]) if row[7] is not None else None,
+            "confidence_score": float(row[8]) if row[8] is not None else None,
+            "signal_bias": row[9],
+            "summary": row[10],
+            "positive_factors": _decode_json_field(row[11], []),
+            "risk_factors": _decode_json_field(row[12], []),
+            "macro_factors": _decode_json_field(row[13], []),
+            "company_events": _decode_json_field(row[14], []),
+            "market_hot_news": _decode_json_field(row[15], []),
+            "company_hot_news": _decode_json_field(row[16], []),
+            "news_impact": row[17],
+            "news_sources": _decode_json_field(row[18], []),
+            "hot_sectors": _decode_json_field(row[19], []),
+            "hot_sector_mark": row[20],
+            "matched_hot_sectors": _decode_json_field(row[21], []),
+            "hot_sector_relevance": row[22],
+            "hot_sector_reason": row[23],
+            "hot_sector_sources": _decode_json_field(row[24], []),
+            "source_urls": _decode_json_field(row[25], []),
+            "data_gaps": _decode_json_field(row[26], []),
+            "evidence_links": _decode_json_field(row[27], []),
+            "factor_citations": _decode_json_field(row[28], {}),
+            "model": row[29],
+            "raw_response": _decode_json_field(row[30], None),
+            "error_message": row[31],
+        }
 
     # ------------------------------------------------------------------
     # Main-force risk analysis
@@ -4317,7 +4684,7 @@ class MarketDatabase:
                 CREATE TABLE IF NOT EXISTS stock_pools (
                     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
                     market VARCHAR(8) NOT NULL COMMENT '市场: HK/US/A',
-                    pool_type VARCHAR(32) NOT NULL COMMENT '池类型: best/index/industry/ipo/etf',
+                    pool_type VARCHAR(32) NOT NULL COMMENT '池类型: best/major_index/industry_top5/recent_ipo_2y/all_etf',
                     code VARCHAR(32) NOT NULL COMMENT '股票代码',
                     name VARCHAR(255) NULL COMMENT '股票名称',
                     market_cap DECIMAL(28,2) NULL COMMENT '市值',
@@ -4378,7 +4745,7 @@ class MarketDatabase:
 
         Args:
             market: HK/US/A
-            pool_type: best/index/industry/ipo/etf
+            pool_type: best/major_index/industry_top5/recent_ipo_2y/all_etf
             stocks: 股票列表
         """
         if not stocks:
@@ -4446,7 +4813,7 @@ class MarketDatabase:
 
         Args:
             market: HK/US/A
-            pool_type: best/index/industry/ipo/etf
+            pool_type: best/major_index/industry_top5/recent_ipo_2y/all_etf
             limit: 限制返回数量
 
         Returns:

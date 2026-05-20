@@ -22,17 +22,12 @@ from fetch_stock_pools import get_db_config
 from kline_fetcher import FutuKlineFetcher
 from market import market_label, normalize_market
 from scheduled_daily_job import get_default_screening_params, run_market_screening_worker
-from stock_pool import StockPoolCriteria, StockPoolFetcher
+from stock_pool import CANONICAL_POOL_TYPES, POOL_RESULT_KEY_BY_TYPE, StockPoolCriteria, StockPoolFetcher, normalize_pool_types
 from web.config import load_dotenv
 from web.single_stock import SingleStockRequest, run_single_stock_analysis
 
 
-POOL_MAP = {
-    "best": "best_stocks",
-    "industry": "industry_leaders",
-    "ipo": "recent_ipos",
-    "etf": "etf_list",
-}
+POOL_MAP = dict(POOL_RESULT_KEY_BY_TYPE)
 
 
 def main() -> int:
@@ -395,6 +390,7 @@ def process_screening_job(args, client: CloudClient, job: dict) -> None:
     enable_ai_analysis = bool(options.get("enable_ai_analysis", True))
     send_feishu = bool(options.get("send_feishu", False))
     chain_key = job.get("chain_key") or options.get("chain_key")
+    pool_types = normalize_pool_types(options.get("pool_types") or CANONICAL_POOL_TYPES)
     mysql_config = get_db_config()
     default_params = get_default_screening_params()
     if chain_key:
@@ -411,6 +407,7 @@ def process_screening_job(args, client: CloudClient, job: dict) -> None:
         "chain_key": chain_key,
         "chain_timeframe": job.get("chain_timeframe") or options.get("chain_timeframe"),
         "chain_name": job.get("chain_name") or options.get("chain_name"),
+        "pool_types": pool_types,
         "result_upload_scope": "passed_only",
         "market_statuses": market_statuses,
     }
@@ -427,6 +424,7 @@ def process_screening_job(args, client: CloudClient, job: dict) -> None:
             verbose=False,
             enable_ai_analysis=enable_ai_analysis,
             chain_key=chain_key,
+            pool_types=pool_types,
         )
         if result.error:
             warnings.append(f"{market}: {result.error}")
@@ -648,7 +646,7 @@ def json_payload_size(value: Any) -> int:
 def collect_codes_from_pools(pools: Dict[str, List[dict]]) -> List[str]:
     result = []
     seen = set()
-    for key in ("best_stocks", "index_constituents", "industry_leaders", "recent_ipos", "etf_list"):
+    for key in POOL_MAP.values():
         for item in pools.get(key) or []:
             code = str(item.get("code") or "").strip()
             if code and code not in seen:

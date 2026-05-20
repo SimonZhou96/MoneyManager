@@ -21,6 +21,7 @@ def run_web_screening_job(
     enable_ai_analysis: bool = True,
     send_feishu: bool = False,
     chain_key: str | None = None,
+    pool_types: List[str] | None = None,
 ) -> None:
     db = MarketDatabase(mysql_config)
     db.init_web_schema()
@@ -50,6 +51,7 @@ def run_web_screening_job(
                 verbose=False,
                 enable_ai_analysis=enable_ai_analysis,
                 chain_key=chain_key,
+                pool_types=pool_types,
             )
             if result.task_id:
                 task_ids.append(result.task_id)

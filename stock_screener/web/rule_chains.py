@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import List, Optional
+import json
+from typing import Dict, List, Optional, Set
 
 from db import MarketDatabase
 from rule_engine import RuleRepository
@@ -46,3 +47,69 @@ def resolve_rule_chain(
         "enabled": first.enabled,
         "description": first.description,
     }
+
+
+def parse_rule_expression(raw_expression) -> dict:
+    if isinstance(raw_expression, dict):
+        expression = raw_expression
+    elif isinstance(raw_expression, str):
+        try:
+            expression = json.loads(raw_expression)
+        except json.JSONDecodeError as exc:
+            raise BusinessError("INVALID_RULE_CHAIN_EXPRESSION", f"规则链表达式 JSON 解析失败: {exc}") from exc
+    else:
+        raise BusinessError("INVALID_RULE_CHAIN_EXPRESSION", "规则链表达式必须是 JSON 对象")
+    if not isinstance(expression, dict) or not expression:
+        raise BusinessError("INVALID_RULE_CHAIN_EXPRESSION", "规则链表达式必须是非空 JSON 对象")
+    _validate_expression_shape(expression)
+    return expression
+
+
+def validate_rule_expression_against_market(db: MarketDatabase, market: str, expression: dict) -> dict:
+    repository = RuleRepository(db)
+    metadata = {item.rule_key for item in repository.load_metadata(market)}
+    missing = sorted(_collect_rule_keys(expression) - metadata)
+    if missing:
+        raise BusinessError(
+            "INVALID_RULE_CHAIN_EXPRESSION",
+            f"规则链引用了不存在的原子规则: {', '.join(missing)}",
+        )
+    return expression
+
+
+def _validate_expression_shape(expression: dict) -> None:
+    supported = {"ref", "and", "any", "all_enabled", "any_enabled"}
+    keys = set(expression.keys())
+    if not keys or not keys.issubset(supported) or len(keys) != 1:
+        raise BusinessError("INVALID_RULE_CHAIN_EXPRESSION", "规则链表达式仅支持 ref/and/any/all_enabled/any_enabled")
+    if "ref" in expression:
+        if not str(expression["ref"] or "").strip():
+            raise BusinessError("INVALID_RULE_CHAIN_EXPRESSION", "ref 节点不能为空")
+        return
+    field = next(iter(keys))
+    value = expression.get(field)
+    if not isinstance(value, list):
+        raise BusinessError("INVALID_RULE_CHAIN_EXPRESSION", f"{field} 节点必须是数组")
+    if field in {"and", "any"}:
+        for item in value:
+            if not isinstance(item, dict):
+                raise BusinessError("INVALID_RULE_CHAIN_EXPRESSION", f"{field} 子节点必须是对象")
+            _validate_expression_shape(item)
+        return
+    for item in value:
+        if not str(item or "").strip():
+            raise BusinessError("INVALID_RULE_CHAIN_EXPRESSION", f"{field} 中的规则 Key 不能为空")
+
+
+def _collect_rule_keys(expression: dict) -> Set[str]:
+    if "ref" in expression:
+        return {str(expression["ref"])}
+    keys: Set[str] = set()
+    if "and" in expression or "any" in expression:
+        for item in expression.get("and") or expression.get("any") or []:
+            if isinstance(item, dict):
+                keys.update(_collect_rule_keys(item))
+        return keys
+    for item in expression.get("all_enabled") or expression.get("any_enabled") or []:
+        keys.add(str(item))
+    return keys
