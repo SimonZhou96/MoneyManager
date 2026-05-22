@@ -33,6 +33,7 @@ from strategizers import (
     EMABreakoutStrategizer,
     RSIOversoldStrategizer,
     RSIOverboughtStrategizer,
+    TechnicalPatternStrategizer,
     TodayVolumeExceedsPrior3MaxStrategizer,
     DailyPctChangeBandStrategizer,
 )
@@ -80,6 +81,10 @@ def get_strategy_condition_labels(filter_name: str, details: Optional[dict] = No
         if isinstance(direction, str) and direction:
             return [_zuoyi_direction_label(d) for d in direction.split("|") if d]
         return ["左一战法"]
+
+    if filter_name == "TechnicalPatternStrategizer":
+        label = details.get("pattern_label")
+        return [str(label)] if label else []
 
     label = STRATEGY_NAME_MAP.get(filter_name)
     return [label] if label else []

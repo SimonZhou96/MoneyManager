@@ -1,0 +1,81 @@
+<h2>单股筛选完全复用自选列表：前端入口怎么设计？</h2>
+<p class="subtitle">目标是用户仍然能快速跑一只股票，但底层统一创建 custom-list 任务；结果页复用自选列表结果、CSV、报告、Artifact。</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">方案 A：保留“单股选股”入口</div>
+        <div class="mockup-body">
+          <div class="mock-nav">单股选股</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+            <input class="mock-input" value="US" readonly>
+            <input class="mock-input" value="1d" readonly>
+            <input class="mock-input" value="AAPL" readonly>
+            <input class="mock-input" value="默认规则链" readonly>
+          </div>
+          <button class="mock-button" style="margin-top:12px">开始分析</button>
+          <div class="placeholder" style="margin-top:12px">跳转到任务详情：只显示这一只股票</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 外观保留单股，底层创建自选列表任务</h3>
+      <p>最少改用户习惯；提交后调用 custom-list 接口，codes 只有一个。结果页可以进入统一任务详情，也可以加一个单股摘要壳。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">方案 B：合并为“自选股票筛选”</div>
+        <div class="mockup-body">
+          <div class="mock-nav">自选股票筛选</div>
+          <div class="options">
+            <div class="option">
+              <div class="letter">1</div>
+              <div class="content"><h3>单只股票</h3><p>输入一个代码</p></div>
+            </div>
+            <div class="option">
+              <div class="letter">N</div>
+              <div class="content"><h3>多只股票</h3><p>一行一个或逗号分隔</p></div>
+            </div>
+          </div>
+          <div class="placeholder">统一任务结果表 + 报告下载</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 去掉独立单股页，入口合并到自选列表</h3>
+      <p>产品模型最干净，用户理解为“单股是自选列表的一种”。但现有单股入口会消失，需要迁移用户习惯。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">方案 C：统一“股票代码筛选”页面</div>
+        <div class="mockup-body">
+          <div class="mock-nav">股票代码筛选</div>
+          <div style="display:grid;grid-template-columns:160px 1fr;gap:12px">
+            <div class="mock-sidebar">单只快速跑<br>批量代码<br>历史任务</div>
+            <div class="mock-content">
+              <input class="mock-input" value="HK.00700, HK.09988" readonly>
+              <div class="placeholder" style="margin-top:10px">预览：2 个有效代码</div>
+              <button class="mock-button" style="margin-top:10px">创建筛选任务</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 重做成统一代码筛选工作台</h3>
+      <p>扩展性最好，能同时容纳单股、批量、历史任务；但改动最大，当前阶段容易扩大范围。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>我倾向的设计</h3>
+  <p>先选 A：保留单股入口，但底层 100% 创建 custom-list 任务。这样前端体验不突变，后端逻辑彻底统一，后续再把 A 和 B 合并也容易。</p>
+</div>

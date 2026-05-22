@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import CodeMirror from '@uiw/react-codemirror'
+import { json } from '@codemirror/lang-json'
 import { api } from './api'
 import { QuantLab } from './features/quant/QuantLab'
 import './styles.css'
@@ -27,21 +29,6 @@ type Task = {
   chain_key?: string
   chain_name?: string
 }
-type SingleStockRun = {
-  job_type: 'single_stock'
-  run_id: string
-  market: string
-  code: string
-  normalized_code: string
-  timeframe: string
-  status: string
-  passed: boolean
-  name?: string
-  chain_key?: string
-  chain_name?: string
-  created_at?: string
-  error_message?: string
-}
 type ScreeningResult = {
   market: string
   code: string
@@ -59,6 +46,25 @@ type TaskResultsResponse = {
   uploaded_result_scope?: string
   limit: number
   offset: number
+}
+type CustomListResultRow = ScreeningResult & {
+  input?: string
+  status?: string
+  status_text?: string
+  状态?: string
+  task_id?: string
+  reason?: string
+}
+type CustomListResultsResponse = {
+  job_id: string
+  status: string
+  market: string
+  timeframe: string
+  chain_key?: string
+  chain_name?: string
+  task_id?: string
+  input_summary?: Record<string, unknown>
+  rows: CustomListResultRow[]
 }
 type Artifact = {
   artifact_id: string
@@ -98,6 +104,9 @@ type AtomicRule = {
   rule_type: string
   strategy_category?: string
   implementation: string
+  params?: Record<string, unknown>
+  signal_direction?: string | null
+  signal_direction_label?: string
   enabled: boolean
   display_order: number
 }
@@ -108,6 +117,9 @@ type RulesResponse = {
   chain: RuleChain
   chains: RuleChain[]
 }
+
+const jsonEditorExtensions = [json()]
+
 type EvidenceLink = {
   label?: string
   url?: string
@@ -222,6 +234,7 @@ const COLUMN_LABELS: Record<string, string> = {
   filter_summary: '筛选摘要',
   implementation: '实现类',
   industry: '行业',
+  input: '原始输入',
   is_passed: '通过状态',
   job_id: '任务组 ID',
   market: '市场',
@@ -234,6 +247,7 @@ const COLUMN_LABELS: Record<string, string> = {
   rule_key: '规则 Key',
   rule_name: '规则名',
   rule_type: '规则类型',
+  signal_direction_label: '方向',
   sector: '所属板块',
   status: '状态',
   task_id: '任务 ID',
@@ -253,15 +267,47 @@ const STATUS_LABELS: Record<string, string> = {
   false: '未通过',
   expired: '已过期',
   pass: '通过',
+  passed: '通过',
   queued: '排队中',
   running: '运行中',
   skip: '跳过',
+  valid: '待筛选',
+  invalid: '无效输入',
+  duplicate: '重复输入',
   true: '通过'
 }
 
 function chainDisplay(chain?: Partial<RuleChain> | null) {
   if (!chain?.chain_key) return '默认链/历史任务'
   return chain.chain_name ? `${chain.chain_name} (${chain.chain_key})` : chain.chain_key
+}
+
+function ruleDirection(rule: AtomicRule) {
+  const fromField = String(rule.signal_direction || '').trim()
+  if (fromField) return fromField
+  const fromParams = String(rule.params?.direction || '').trim()
+  return fromParams || 'unknown'
+}
+
+function ruleDirectionLabel(direction: string) {
+  if (direction === 'bullish') return '看涨'
+  if (direction === 'bearish') return '看跌'
+  if (direction === 'neutral') return '中性'
+  return '未标明'
+}
+
+function ruleGroupLabel(direction: string) {
+  if (direction === 'bullish') return '看涨规则'
+  if (direction === 'bearish') return '看跌规则'
+  if (direction === 'neutral') return '中性规则'
+  return '其他规则'
+}
+
+function ruleDirectionOrder(direction: string) {
+  if (direction === 'bullish') return 1
+  if (direction === 'bearish') return 2
+  if (direction === 'neutral') return 3
+  return 4
 }
 
 function commonRuleChains(markets: string[], rulesByMarket: Record<string, RulesResponse | undefined>): RuleChain[] {
@@ -324,7 +370,6 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState('dashboard')
   const [selectedTaskId, setSelectedTaskId] = useState('')
-  const [selectedSingleRunId, setSelectedSingleRunId] = useState('')
 
   useEffect(() => {
     api<User>('/api/auth/me')
@@ -351,7 +396,7 @@ function App() {
         <nav>
           <button className={page === 'dashboard' ? 'active' : ''} onClick={() => setPage('dashboard')}>总览</button>
           <button className={page === 'screening' ? 'active' : ''} onClick={() => setPage('screening')}>全市场筛选</button>
-          <button className={page === 'single' ? 'active' : ''} onClick={() => setPage('single')}>单股选股</button>
+          <button className={page === 'codeScreening' ? 'active' : ''} onClick={() => setPage('codeScreening')}>代码筛选</button>
           <button className={page === 'options' ? 'active' : ''} onClick={() => setPage('options')}>期权实验室</button>
           <button className={page === 'quant' ? 'active' : ''} onClick={() => setPage('quant')}>量化实验室</button>
           <button className={page === 'rules' ? 'active' : ''} onClick={() => setPage('rules')}>规则链</button>
@@ -364,15 +409,13 @@ function App() {
       <main className="content">
         {page === 'dashboard' && <Dashboard
           openTask={(taskId) => { setSelectedTaskId(taskId); setPage('task') }}
-          openSingle={(runId) => { setSelectedSingleRunId(runId); setPage('singleRun') }}
         />}
         {page === 'screening' && <Screening />}
-        {page === 'single' && <SingleStock />}
+        {page === 'codeScreening' && <CodeScreening openTask={(taskId) => { setSelectedTaskId(taskId); setPage('task') }} />}
         {page === 'options' && <OptionLab />}
         {page === 'quant' && <QuantLab />}
         {page === 'rules' && <Rules />}
         {page === 'task' && <TaskDetail taskId={selectedTaskId} />}
-        {page === 'singleRun' && <SingleRunDetail runId={selectedSingleRunId} />}
       </main>
     </div>
   )
@@ -713,17 +756,15 @@ function OptionLab() {
   )
 }
 
-function Dashboard({ openTask, openSingle }: { openTask: (taskId: string) => void; openSingle: (runId: string) => void }) {
+function Dashboard({ openTask }: { openTask: (taskId: string) => void }) {
   const [tasks, setTasks] = useState<Task[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
-  const [singleRuns, setSingleRuns] = useState<SingleStockRun[]>([])
   const [syncRuns, setSyncRuns] = useState<any[]>([])
 
   async function refresh() {
-    const taskData = await api<{ jobs: Job[]; tasks: Task[]; single_stock_runs?: SingleStockRun[] }>('/api/screening/tasks')
+    const taskData = await api<{ jobs: Job[]; tasks: Task[] }>('/api/screening/tasks')
     setJobs(taskData.jobs)
     setTasks(taskData.tasks)
-    setSingleRuns(taskData.single_stock_runs || [])
     const fresh = await api<{ sync_runs: any[] }>('/api/system/data-freshness')
     setSyncRuns(fresh.sync_runs)
   }
@@ -739,32 +780,21 @@ function Dashboard({ openTask, openSingle }: { openTask: (taskId: string) => voi
       <Header title="总览" subtitle="任务进度、数据同步和最近筛选结果" />
       <div className="metric-grid">
         <Metric label="Web 任务" value={jobs.length} />
-        <Metric label="筛选任务" value={tasks.length + singleRuns.length} />
+        <Metric label="筛选任务" value={tasks.length} />
         <Metric label="最近同步" value={statusLabel(syncRuns[0]?.status || '无')} />
       </div>
       <Panel title="最近 Web 任务">
         <Table rows={jobs} columns={['job_id', 'markets', 'timeframe', 'chain_name', 'status', 'created_at', 'error_message']} />
       </Panel>
       <Panel title="最近筛选任务">
-        <TaskTable rows={mergeRecentTasks(tasks, singleRuns, jobs)} openTask={openTask} openSingle={openSingle} />
+        <TaskTable rows={mergeRecentTasks(tasks, jobs)} openTask={openTask} />
       </Panel>
     </section>
   )
 }
 
-function mergeRecentTasks(tasks: Task[], singleRuns: SingleStockRun[], jobs: Job[]): Task[] {
+function mergeRecentTasks(tasks: Task[], jobs: Job[]): Task[] {
   const marketTasks = (tasks || []).map(item => ({ ...item, job_type: 'screening' }))
-  const singleTasks = (singleRuns || []).map(item => ({
-    ...item,
-    task_id: item.run_id,
-    job_type: 'single_stock',
-    total_count: 1,
-    completed_count: item.status === 'completed' || item.status === 'failed' ? 1 : 0,
-    current_stock_code: item.normalized_code || item.code,
-    current_stock_name: item.name,
-    chain_key: item.chain_key,
-    chain_name: item.chain_name
-  }))
   const webJobs = (jobs || []).map(item => ({
     ...item,
     task_id: item.job_id,
@@ -776,7 +806,7 @@ function mergeRecentTasks(tasks: Task[], singleRuns: SingleStockRun[], jobs: Job
     chain_key: item.chain_key,
     chain_name: item.chain_name
   }))
-  return [...webJobs, ...marketTasks, ...singleTasks]
+  return [...webJobs, ...marketTasks]
     .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
     .slice(0, 50)
 }
@@ -913,60 +943,75 @@ function Screening() {
   )
 }
 
-function SingleStock() {
+function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
   const [market, setMarket] = useState('US')
   const [timeframe, setTimeframe] = useState('1d')
   const [rules, setRules] = useState<RulesResponse | null>(null)
   const [chainKey, setChainKey] = useState('')
-  const [code, setCode] = useState('AAPL')
-  const [result, setResult] = useState<any>(null)
+  const [codes, setCodes] = useState('AAPL, MSFT')
+  const [enableAi, setEnableAi] = useState(true)
+  const [sendFeishu, setSendFeishu] = useState(false)
+  const [jobId, setJobId] = useState('')
+  const [result, setResult] = useState<CustomListResultsResponse | null>(null)
+  const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [runId, setRunId] = useState('')
+  const parsedCodes = useMemo(() => splitCodes(codes), [codes])
 
   async function submit(event: React.FormEvent) {
     event.preventDefault()
-    setLoading(true)
+    setError('')
     setResult(null)
-    setRunId('')
+    setJobId('')
+    if (parsedCodes.length === 0) {
+      setError('至少输入一个代码')
+      return
+    }
+    setLoading(true)
     try {
-      const data = await api('/api/screening/single-stock', {
+      const data = await api<{ job_id: string }>('/api/screening/custom-list-tasks', {
         method: 'POST',
-        body: JSON.stringify({ market, code, timeframe, chain_key: chainKey || undefined })
+        body: JSON.stringify({
+          market,
+          codes: parsedCodes,
+          timeframe,
+          chain_key: chainKey || undefined,
+          enable_ai_analysis: enableAi,
+          send_feishu: sendFeishu
+        })
       })
-      setResult(data)
-      setRunId((data as any).run_id || '')
+      const nextJobId = data.job_id || ''
+      setJobId(nextJobId)
+      if (nextJobId) await refreshJob(nextJobId)
     } catch (err) {
-      setResult({ error: err instanceof Error ? err.message : '分析失败' })
+      setError(err instanceof Error ? err.message : '创建代码筛选任务失败')
       setLoading(false)
     }
   }
 
-  async function refreshRun(id: string) {
+  async function refreshJob(jobId: string) {
     try {
-      const data = await api(`/api/screening/single-stock/${id}`)
+      const data = await api<CustomListResultsResponse>(`/api/screening/custom-list-tasks/${jobId}/results`)
       setResult(data)
-      const status = (data as any).status
-      if (status === 'completed' || status === 'failed') setLoading(false)
+      if (data.status === 'completed' || data.status === 'failed' || data.status === 'error') setLoading(false)
     } catch (err) {
-      setResult({ error: err instanceof Error ? err.message : '加载单股任务失败' })
+      setError(err instanceof Error ? err.message : '加载代码筛选结果失败')
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    if (!runId) return
-    refreshRun(runId).catch(console.error)
-    const timer = window.setInterval(() => refreshRun(runId).catch(console.error), 5000)
+    if (!jobId || !loading) return
+    refreshJob(jobId).catch(console.error)
+    const timer = window.setInterval(() => refreshJob(jobId).catch(console.error), 5000)
     return () => window.clearInterval(timer)
-  }, [runId])
+  }, [jobId, loading])
 
   useEffect(() => {
-    if (!result || !runId) return
-    if (result.status === 'completed' || result.status === 'failed') {
+    if (!result || !jobId) return
+    if (result.status === 'completed' || result.status === 'failed' || result.status === 'error') {
       setLoading(false)
-      setRunId('')
     }
-  }, [result, runId])
+  }, [result, jobId])
 
   useEffect(() => {
     let cancelled = false
@@ -979,14 +1024,16 @@ function SingleStock() {
           setChainKey(activeKey || data.chains?.[0]?.chain_key || '')
         }
       })
-      .catch(err => setResult({ error: err instanceof Error ? err.message : '加载规则链失败' }))
+      .catch(err => setError(err instanceof Error ? err.message : '加载规则链失败'))
     return () => { cancelled = true }
   }, [market, timeframe])
 
+  const selectedChain = (rules?.chains || []).find(item => item.chain_key === chainKey) || rules?.chain
+
   return (
-    <section>
-      <Header title="单股选股" subtitle="输入股票代码，跑完整规则链；未通过只展示失败原因" />
-      <form className="form-grid" onSubmit={submit}>
+    <section className="code-screening-layout">
+      <Header title="代码筛选" subtitle="输入一个或多个代码，使用自定义列表任务按原始顺序返回筛选结果" />
+      <form className="compact-form-grid" onSubmit={submit}>
         <Field label="市场">
           <select value={market} onChange={event => setMarket(event.target.value)}>
             {MARKET_OPTIONS.map(item => <option key={item}>{item}</option>)}
@@ -997,9 +1044,6 @@ function SingleStock() {
             {TIMEFRAME_OPTIONS.map(item => <option key={item}>{item}</option>)}
           </select>
         </Field>
-        <Field label="股票代码">
-          <input value={code} onChange={event => setCode(event.target.value)} />
-        </Field>
         <Field label="规则链">
           <select value={chainKey} onChange={event => setChainKey(event.target.value)}>
             {(rules?.chains || []).map(item => (
@@ -1009,101 +1053,135 @@ function SingleStock() {
             ))}
           </select>
         </Field>
-        <button className="primary" disabled={loading}>{loading ? '等待本地 Agent...' : '开始分析'}</button>
+        <label className="check"><input type="checkbox" checked={enableAi} onChange={event => setEnableAi(event.target.checked)} /> AI 分析</label>
+        <label className="check"><input type="checkbox" checked={sendFeishu} onChange={event => setSendFeishu(event.target.checked)} /> 发送飞书</label>
+        <Field label="代码列表" className="field-wide">
+          <textarea className="code-input" rows={5} value={codes} onChange={event => setCodes(event.target.value)} placeholder="AAPL, MSFT 或每行一个代码" />
+        </Field>
+        <div className="code-preview-actions">
+          <button className="primary" disabled={loading || parsedCodes.length === 0 || (rules?.chains || []).length === 0}>{loading ? '等待本地 Agent...' : '启动代码筛选'}</button>
+        </div>
       </form>
-      {result && <SingleResult result={result} />}
-    </section>
-  )
-}
-
-function SingleResult({ result }: { result: any }) {
-  if (result.error) return <div className="error">{result.error}</div>
-  if (result.status && result.status !== 'completed' && result.status !== 'failed') {
-    return <div className="notice">单股任务 {result.run_id} 当前状态：{statusLabel(result.status)}，等待本地 Agent 执行。</div>
-  }
-  const details = result.rule_chain?.details || result.rule_details || []
-  const displayCode = result.code || result.normalized_code || result.run_id
-  const displayName = result.name || result.normalized_code || ''
-  return (
-    <div className="result-layout">
-      <Panel title={`${displayCode} ${displayName}`}>
-        <StatusBadge value={Boolean(result.passed)} />
-        <dl className="info-list">
-          <div><dt>规则链</dt><dd>{displayMissing(result.rule_chain?.chain_name || result.chain_name || result.chain_key)}</dd></div>
-          <div><dt>板块</dt><dd>{displayMissing(result.sector)}</dd></div>
-          <div><dt>行业</dt><dd>{displayMissing(result.industry)}</dd></div>
-          <div><dt>数据源</dt><dd>{displayMissing(result.data_source)}</dd></div>
-          <div><dt>市值</dt><dd>{displayMissing(result.market_cap)}</dd></div>
-          <div><dt>PE</dt><dd>{displayMissing(result.pe_ratio)}</dd></div>
-        </dl>
-        <p>命中条件：{(result.conditions_met || []).join(' | ') || '无'}</p>
-        {result.ai_analysis && <SingleAiAnalysis analysis={result.ai_analysis} />}
+      <Panel title="输入预览">
+        {parsedCodes.length === 0 ? (
+          <div className="empty">暂无可提交代码</div>
+        ) : (
+          <div className="code-preview-grid">
+            {parsedCodes.slice(0, 12).map((code, index) => (
+              <article className="code-preview-card" key={`${code}-${index}`}>
+                <header>
+                  <h3>{code}</h3>
+                  <span className="status-badge">待提交</span>
+                </header>
+                <dl>
+                  <dt>市场</dt><dd>{optionMarketLabel(market)}</dd>
+                  <dt>周期</dt><dd>{timeframe}</dd>
+                  <dt>规则链</dt><dd>{selectedChain ? chainDisplay(selectedChain) : '未加载'}</dd>
+                </dl>
+              </article>
+            ))}
+            {parsedCodes.length > 12 && (
+              <article className="code-preview-card">
+                <header>
+                  <h3>其余代码</h3>
+                  <span className="status-badge">+{parsedCodes.length - 12}</span>
+                </header>
+                <p>提交时会按输入顺序一起进入自定义列表筛选。</p>
+              </article>
+            )}
+          </div>
+        )}
       </Panel>
-      <Panel title="规则明细">
-        <Table rows={details} columns={['rule_name', 'rule_type', 'result', 'reason']} />
-      </Panel>
-    </div>
-  )
-}
-
-function SingleAiAnalysis({ analysis }: { analysis: any }) {
-  const citations = asFactorCitations(analysis.因素引用 || analysis.factor_citations)
-  const sourceLinks = asEvidenceLinks(
-    analysis.引用来源 || analysis.evidence_links,
-    asStringList(analysis.source_urls)
-  )
-  return (
-    <div className="subsection">
-      <h4>AI 辅助分析</h4>
-      <dl className="info-list compact">
-        <div><dt>信号可靠性评分</dt><dd>{displayMissing(analysis.reliability_score)}</dd></div>
-        <div><dt>模型置信度</dt><dd>{displayMissing(analysis.confidence_score)}</dd></div>
-        <div><dt>辅助方向判断</dt><dd>{displayMissing(analysis.signal_bias)}</dd></div>
-        <div><dt>新闻影响</dt><dd>{displayMissing(analysis.news_impact)}</dd></div>
-        <div><dt>热点匹配</dt><dd>{displayMissing(analysis.hot_sector_mark)}</dd></div>
-        <div><dt>摘要</dt><dd>{displayMissing(analysis.summary)}</dd></div>
-        <div><dt>数据缺失原因</dt><dd>{displayWarnings(analysis.数据缺失原因 || analysis.data_gaps)}</dd></div>
-        <div><dt>关键利好因素</dt><dd><FactorList factors={asStringList(analysis.positive_factors)} citations={citations} /></dd></div>
-        <div><dt>关键风险因素</dt><dd><FactorList factors={asStringList(analysis.risk_factors)} citations={citations} /></dd></div>
-        <div><dt>宏观/政策因素</dt><dd><FactorList factors={asStringList(analysis.macro_factors)} citations={citations} /></dd></div>
-        <div><dt>信息来源</dt><dd><CitationTags links={sourceLinks} /></dd></div>
-      </dl>
-    </div>
-  )
-}
-
-function SingleRunDetail({ runId }: { runId: string }) {
-  const [result, setResult] = useState<any>(null)
-  const [error, setError] = useState('')
-
-  async function refresh() {
-    if (!runId) return
-    setError('')
-    try {
-      const data = await api(`/api/screening/single-stock/${runId}`)
-      setResult(data)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '加载单股任务失败')
-    }
-  }
-
-  useEffect(() => {
-    refresh().catch(console.error)
-    if (!runId) return
-    const timer = window.setInterval(() => refresh().catch(console.error), 5000)
-    return () => window.clearInterval(timer)
-  }, [runId])
-
-  return (
-    <section>
-      <Header title={`单股任务 ${runId ? runId.slice(0, 8) : ''}`} subtitle={runId || '请选择一个单股任务'} />
-      <div className="toolbar toolbar-row">
-        <button className="primary" onClick={() => refresh().catch(console.error)}>刷新</button>
-      </div>
       {error && <div className="error">{error}</div>}
-      {result && <SingleResult result={result} />}
+      {result && (
+        <>
+          <div className="metric-grid">
+            <Metric label="任务组" value={result.job_id ? result.job_id.slice(0, 8) : '-'} />
+            <Metric label="市场" value={optionMarketLabel(result.market)} />
+            <Metric label="周期" value={result.timeframe} />
+            <Metric label="规则链" value={chainDisplay({ chain_key: result.chain_key || selectedChain?.chain_key, chain_name: result.chain_name || selectedChain?.chain_name })} />
+            <Metric label="状态" value={<StatusBadge value={result.status} />} />
+            <Metric label="通过" value={displayMissing(result.input_summary?.['通过数量'])} />
+          </div>
+          <Panel title="任务摘要">
+            <dl className="info-list">
+              <div><dt>输入数量</dt><dd>{displayMissing(result.input_summary?.['输入数量'] || result.input_summary?.input_count)}</dd></div>
+              <div><dt>有效数量</dt><dd>{displayMissing(result.input_summary?.['有效代码数'] || result.input_summary?.valid_count)}</dd></div>
+              <div><dt>无效代码</dt><dd>{displayMissing(result.input_summary?.['无效代码数'])}</dd></div>
+              <div><dt>重复代码</dt><dd>{displayMissing(result.input_summary?.['重复代码数'])}</dd></div>
+              <div><dt>未通过数量</dt><dd>{displayMissing(result.input_summary?.['未通过数量'])}</dd></div>
+              <div><dt>筛选任务</dt><dd>{result.task_id ? <button className="link-button" onClick={() => openTask(result.task_id || '')}>{result.task_id.slice(0, 8)}</button> : '等待本地 Agent 创建'}</dd></div>
+            </dl>
+          </Panel>
+          <Panel title="筛选结果">
+            <CodeScreeningResultTable rows={result.rows || []} taskId={result.task_id} openTask={openTask} />
+          </Panel>
+        </>
+      )}
     </section>
   )
+}
+
+function CodeScreeningResultTable({ rows, taskId, openTask }: { rows: CustomListResultRow[]; taskId?: string; openTask: (taskId: string) => void }) {
+  if (!rows || rows.length === 0) return <div className="empty">暂无数据</div>
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>原始输入</th>
+            <th>股票代码</th>
+            <th>名称</th>
+            <th>状态</th>
+            <th>结果</th>
+            <th>所属板块</th>
+            <th>行业</th>
+            <th>最新收盘价</th>
+            <th>筛选摘要</th>
+            <th>原因</th>
+            <th>任务详情</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => {
+            const rowTaskId = row.task_id || taskId || ''
+            return (
+              <tr key={`${row.input || row.code || 'row'}-${index}`}>
+                <td>{displayMissing(row.input || row.code)}</td>
+                <td>{displayMissing(row.code)}</td>
+                <td>{displayMissing(row.name)}</td>
+                <td><span className={`status-badge ${codeScreeningStatusClass(row)}`}>{codeScreeningStatusLabel(row)}</span></td>
+                <td><StatusBadge value={codeScreeningResultValue(row)} /></td>
+                <td>{displayMissing(row.sector)}</td>
+                <td>{displayMissing(row.industry)}</td>
+                <td>{displayMissing(row.close_price)}</td>
+                <td>{displayMissing(row.filter_summary)}</td>
+                <td>{displayMissing(row.reason)}</td>
+                <td>{rowTaskId ? <button className="link-button" onClick={() => openTask(rowTaskId)}>{rowTaskId.slice(0, 8)}</button> : '等待创建'}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function codeScreeningStatusLabel(row: CustomListResultRow) {
+  return row.状态 || row.status_text || statusLabel(row.status || 'queued')
+}
+
+function codeScreeningStatusClass(row: CustomListResultRow) {
+  if (row.is_passed === true || row.status === 'passed') return 'pass'
+  if (row.is_passed === false || row.status === 'failed') return 'fail'
+  if (row.status === 'invalid') return 'invalid'
+  if (row.status === 'duplicate') return 'duplicate'
+  return ''
+}
+
+function codeScreeningResultValue(row: CustomListResultRow) {
+  if (row.is_passed !== undefined && row.is_passed !== null) return row.is_passed
+  return row.status || row.status_text || 'queued'
 }
 
 function Rules() {
@@ -1111,6 +1189,11 @@ function Rules() {
   const [timeframe, setTimeframe] = useState('1d')
   const [rules, setRules] = useState<RulesResponse | null>(null)
   const [chainKey, setChainKey] = useState('')
+  const [ruleSearch, setRuleSearch] = useState('')
+  const [ruleTypeFilter, setRuleTypeFilter] = useState('all')
+  const [ruleDirectionFilter, setRuleDirectionFilter] = useState('all')
+  const [rulePage, setRulePage] = useState(0)
+  const rulePageSize = 12
   const [editor, setEditor] = useState({
     timeframe: '1d',
     chain_key: '',
@@ -1138,6 +1221,66 @@ function Rules() {
     loadRules().catch(err => setError(err instanceof Error ? err.message : '加载规则链失败'))
   }, [market, timeframe])
   const selectedChain = (rules?.chains || []).find(item => item.chain_key === chainKey) || rules?.chain
+
+  useEffect(() => {
+    setRulePage(0)
+  }, [ruleSearch, ruleTypeFilter, ruleDirectionFilter, market, timeframe])
+
+  const ruleRows = useMemo(() => {
+    const keyword = ruleSearch.trim().toLowerCase()
+    return (rules?.metadata || [])
+      .map(item => {
+        const direction = ruleDirection(item)
+        return {
+          ...item,
+          enabled: item.enabled ? '启用' : '停用',
+          signal_direction: direction,
+          signal_direction_label: ruleDirectionLabel(direction),
+          direction_group: ruleGroupLabel(direction),
+        }
+      })
+      .filter(item => {
+        if (ruleTypeFilter !== 'all' && item.rule_type !== ruleTypeFilter) return false
+        if (ruleDirectionFilter !== 'all' && item.signal_direction !== ruleDirectionFilter) return false
+        if (!keyword) return true
+        return [
+          item.rule_key,
+          item.rule_name,
+          item.rule_type,
+          item.strategy_category || '',
+          item.implementation,
+          item.signal_direction_label,
+        ].some(value => String(value).toLowerCase().includes(keyword))
+      })
+      .sort((a, b) => {
+        const directionDelta = ruleDirectionOrder(String(a.signal_direction)) - ruleDirectionOrder(String(b.signal_direction))
+        if (directionDelta !== 0) return directionDelta
+        return Number(a.display_order || 0) - Number(b.display_order || 0)
+      })
+  }, [rules?.metadata, ruleSearch, ruleTypeFilter, ruleDirectionFilter])
+
+  const rulePageCount = Math.max(1, Math.ceil(ruleRows.length / rulePageSize))
+  const visibleRuleRows = ruleRows.slice(rulePage * rulePageSize, (rulePage + 1) * rulePageSize)
+  const groupedVisibleRuleRows = visibleRuleRows.reduce<Record<string, typeof visibleRuleRows>>((groups, row) => {
+    const group = String(row.direction_group || '其他规则')
+    groups[group] = groups[group] || []
+    groups[group].push(row)
+    return groups
+  }, {})
+  const jsonStatus = useMemo(() => {
+    if (!editor.expression_text.trim()) {
+      return { ok: false, message: 'expression_json 不能为空' }
+    }
+    try {
+      JSON.parse(editor.expression_text)
+      return { ok: true, message: 'JSON 格式有效' }
+    } catch (err) {
+      return {
+        ok: false,
+        message: `JSON 格式错误：${err instanceof Error ? err.message : '无法解析'}`
+      }
+    }
+  }, [editor.expression_text])
 
   useEffect(() => {
     if (!selectedChain) return
@@ -1169,6 +1312,21 @@ function Rules() {
     setNotice(`已复制 {"ref":"${ruleKey}"} 到剪贴板`)
   }
 
+  function formatExpressionJson() {
+    setNotice('')
+    setError('')
+    try {
+      const expression_json = JSON.parse(editor.expression_text)
+      setEditor(current => ({
+        ...current,
+        expression_text: JSON.stringify(expression_json, null, 2)
+      }))
+      setNotice('expression_json 已格式化')
+    } catch (err) {
+      setError(`expression_json 不是合法 JSON：${err instanceof Error ? err.message : '无法解析'}`)
+    }
+  }
+
   async function saveChain() {
     setSaving(true)
     setNotice('')
@@ -1194,7 +1352,11 @@ function Rules() {
       await loadRules()
       setChainKey(editor.chain_key)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '保存规则链失败')
+      if (err instanceof SyntaxError) {
+        setError(`expression_json 不是合法 JSON：${err.message}`)
+      } else {
+        setError(err instanceof Error ? err.message : '保存规则链失败')
+      }
     } finally {
       setSaving(false)
     }
@@ -1248,27 +1410,91 @@ function Rules() {
         }))} columns={['chain_name', 'chain_key', 'timeframe', 'enabled', 'priority', 'description']} onRowClick={(row) => setChainKey(row.chain_key)} />
       </Panel>
       <Panel title="规则链编辑">
-        <div className="form-grid">
-          <Field label="规则链 Key"><input value={editor.chain_key} onChange={event => setEditor(current => ({ ...current, chain_key: event.target.value }))} /></Field>
-          <Field label="适用周期">
-            <select value={editor.timeframe} onChange={event => setEditor(current => ({ ...current, timeframe: event.target.value }))}>
-              <option value="*">通用</option>
-              {TIMEFRAME_OPTIONS.map(item => <option key={item}>{item}</option>)}
-            </select>
-          </Field>
-          <Field label="规则链名称"><input value={editor.chain_name} onChange={event => setEditor(current => ({ ...current, chain_name: event.target.value }))} /></Field>
-          <Field label="优先级"><input type="number" value={editor.priority} onChange={event => setEditor(current => ({ ...current, priority: Number(event.target.value) }))} /></Field>
-          <label className="check"><input type="checkbox" checked={editor.enabled} onChange={event => setEditor(current => ({ ...current, enabled: event.target.checked }))} /> 启用</label>
-          <Field label="说明"><input value={editor.description} onChange={event => setEditor(current => ({ ...current, description: event.target.value }))} /></Field>
-          <Field label="expression_json"><textarea rows={14} value={editor.expression_text} onChange={event => setEditor(current => ({ ...current, expression_text: event.target.value }))} /></Field>
-          <div className="toolbar toolbar-row">
-            <button type="button" className="primary" disabled={saving} onClick={saveChain}>{saving ? '保存中...' : '保存'}</button>
-            <button type="button" disabled={saving || !editor.chain_key} onClick={deleteChain}>删除</button>
+        <div className="rule-editor-layout">
+          <div className="rule-editor-fields">
+            <Field label="规则链 Key"><input value={editor.chain_key} onChange={event => setEditor(current => ({ ...current, chain_key: event.target.value }))} /></Field>
+            <Field label="适用周期">
+              <select value={editor.timeframe} onChange={event => setEditor(current => ({ ...current, timeframe: event.target.value }))}>
+                <option value="*">通用</option>
+                {TIMEFRAME_OPTIONS.map(item => <option key={item}>{item}</option>)}
+              </select>
+            </Field>
+            <Field label="规则链名称"><input value={editor.chain_name} onChange={event => setEditor(current => ({ ...current, chain_name: event.target.value }))} /></Field>
+            <Field label="优先级"><input type="number" value={editor.priority} onChange={event => setEditor(current => ({ ...current, priority: Number(event.target.value) }))} /></Field>
+            <Field label="说明"><input value={editor.description} onChange={event => setEditor(current => ({ ...current, description: event.target.value }))} /></Field>
+            <label className="check"><input type="checkbox" checked={editor.enabled} onChange={event => setEditor(current => ({ ...current, enabled: event.target.checked }))} /> 启用为默认候选</label>
+          </div>
+          <div className="rule-json-editor">
+            <div className="json-editor-heading">
+              <div>
+                <strong>expression_json</strong>
+                <span>使用 JSON DSL 组合原子规则，点击下方原子规则可复制 ref 节点。</span>
+              </div>
+              <span className={`json-status ${jsonStatus.ok ? 'valid' : 'invalid'}`}>{jsonStatus.message}</span>
+            </div>
+            <div className="json-editor-shell">
+              <CodeMirror
+                value={editor.expression_text}
+                height="360px"
+                basicSetup={{
+                  lineNumbers: true,
+                  foldGutter: true,
+                  highlightActiveLine: true,
+                  autocompletion: true,
+                  bracketMatching: true,
+                  closeBrackets: true,
+                }}
+                extensions={jsonEditorExtensions}
+                onChange={(value) => setEditor(current => ({ ...current, expression_text: value }))}
+              />
+            </div>
+            <div className="json-editor-footer">
+              <span>常用节点：ref、and、any、all_enabled、any_enabled</span>
+              <div className="toolbar-row json-editor-actions">
+                <button type="button" className="secondary-button" onClick={formatExpressionJson}>格式化 JSON</button>
+                <button type="button" className="primary" disabled={saving || !jsonStatus.ok} onClick={saveChain}>{saving ? '保存中...' : '保存'}</button>
+                <button type="button" disabled={saving || !editor.chain_key} onClick={deleteChain}>删除</button>
+              </div>
+            </div>
           </div>
         </div>
       </Panel>
       <Panel title="原子规则">
-        <Table rows={(rules?.metadata || []).map(item => ({ ...item, enabled: item.enabled ? '启用' : '停用' }))} columns={['rule_key', 'rule_name', 'rule_type', 'strategy_category', 'implementation', 'enabled', 'display_order']} onRowClick={(row) => insertRuleRef(row.rule_key)} />
+        <div className="rule-list-toolbar">
+          <Field label="搜索规则">
+            <input value={ruleSearch} onChange={event => setRuleSearch(event.target.value)} placeholder="规则名、Key、实现类" />
+          </Field>
+          <Field label="规则类型">
+            <select value={ruleTypeFilter} onChange={event => setRuleTypeFilter(event.target.value)}>
+              <option value="all">全部类型</option>
+              <option value="filter">硬筛选</option>
+              <option value="strategy">策略规则</option>
+            </select>
+          </Field>
+          <Field label="方向">
+            <select value={ruleDirectionFilter} onChange={event => setRuleDirectionFilter(event.target.value)}>
+              <option value="all">全部方向</option>
+              <option value="bullish">看涨</option>
+              <option value="bearish">看跌</option>
+              <option value="neutral">中性</option>
+              <option value="unknown">未标明</option>
+            </select>
+          </Field>
+          <div className="rule-list-summary">共 {ruleRows.length} 条</div>
+        </div>
+        <div className="pager">
+          <button disabled={rulePage <= 0} onClick={() => setRulePage(page => Math.max(0, page - 1))}>上一页</button>
+          <span>{rulePage + 1} / {rulePageCount}</span>
+          <button disabled={rulePage >= rulePageCount - 1} onClick={() => setRulePage(page => Math.min(rulePageCount - 1, page + 1))}>下一页</button>
+        </div>
+        {visibleRuleRows.length === 0 ? (
+          <div className="empty">暂无匹配规则</div>
+        ) : Object.entries(groupedVisibleRuleRows).map(([group, rows]) => (
+          <div className="rule-group" key={group}>
+            <div className="rule-group-title"><span>{group}</span><small>{rows.length} 条</small></div>
+            <Table rows={rows} columns={['rule_key', 'rule_name', 'signal_direction_label', 'rule_type', 'strategy_category', 'implementation', 'enabled', 'display_order']} onRowClick={(row) => insertRuleRef(row.rule_key)} />
+          </div>
+        ))}
       </Panel>
     </section>
   )
@@ -1389,8 +1615,8 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
   return <section className="panel"><h2>{title}</h2>{children}</section>
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="field"><span>{label}</span>{children}</label>
+function Field({ label, children, className = '' }: { label: string; children: React.ReactNode; className?: string }) {
+  return <label className={['field', className].filter(Boolean).join(' ')}><span>{label}</span>{children}</label>
 }
 
 function FactorList({ factors, citations }: { factors: string[]; citations: FactorCitations }) {
@@ -1444,7 +1670,7 @@ function Table({ rows, columns, onRowClick }: { rows: any[]; columns: string[]; 
   )
 }
 
-function TaskTable({ rows, openTask, openSingle }: { rows: Task[]; openTask: (taskId: string) => void; openSingle: (runId: string) => void }) {
+function TaskTable({ rows, openTask }: { rows: Task[]; openTask: (taskId: string) => void }) {
   if (!rows || rows.length === 0) return <div className="empty">暂无数据</div>
   return (
     <div className="table-wrap">
@@ -1463,21 +1689,16 @@ function TaskTable({ rows, openTask, openSingle }: { rows: Task[]; openTask: (ta
         </thead>
         <tbody>
           {rows.map(row => {
-            const isSingle = row.job_type === 'single_stock'
             const isWebJob = row.job_type === 'web_job'
-            const id = isSingle ? (row.run_id || row.task_id) : row.task_id
-            const stockText = isSingle
-              ? formatSingleStockText(row)
-              : (row.current_stock_code || '未补齐')
-            const progressText = isSingle
-              ? (row.status === 'completed' ? (row.passed ? '通过' : '未通过') : statusLabel(row.status))
-              : isWebJob
+            const id = row.task_id
+            const stockText = row.current_stock_code || '未补齐'
+            const progressText = isWebJob
                 ? (row.task_ids && row.task_ids.length > 0 ? `${row.task_ids.length} 个市场任务` : statusLabel(row.status))
               : `${row.completed_count}/${row.total_count}`
             const firstTaskId = row.task_ids && row.task_ids.length > 0 ? row.task_ids[0] : ''
             return (
               <tr key={`${row.job_type || 'screening'}-${id}`}>
-                <td>{isSingle ? '单股' : isWebJob ? '任务组' : '全市场'}</td>
+                <td>{isWebJob ? '任务组' : '全市场'}</td>
                 <td>
                   {isWebJob && !firstTaskId ? (
                     <span title={id}>{id.slice(0, 8)}</span>
@@ -1485,7 +1706,7 @@ function TaskTable({ rows, openTask, openSingle }: { rows: Task[]; openTask: (ta
                     <button
                       className="link-button"
                       title={id}
-                      onClick={() => isSingle ? openSingle(id) : openTask(isWebJob ? firstTaskId : id)}
+                      onClick={() => openTask(isWebJob ? firstTaskId : id)}
                     >
                       {id.slice(0, 8)}
                     </button>
@@ -1504,16 +1725,6 @@ function TaskTable({ rows, openTask, openSingle }: { rows: Task[]; openTask: (ta
       </table>
     </div>
   )
-}
-
-function formatSingleStockText(row: Task): string {
-  const code = row.normalized_code || row.code || ''
-  const name = row.name || row.current_stock_name || ''
-  if (!name) return code || '未补齐'
-  const normalized = (value: string) => value.trim().toLowerCase()
-  const duplicateNames = new Set([row.normalized_code, row.code, code].filter(Boolean).map(value => normalized(String(value))))
-  if (duplicateNames.has(normalized(name))) return code || name
-  return [code, name].filter(Boolean).join(' ')
 }
 
 function StatusBadge({ value }: { value: string | boolean }) {

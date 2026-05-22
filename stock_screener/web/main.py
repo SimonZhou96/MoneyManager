@@ -513,10 +513,22 @@ def get_rules(
         timeframe = validate_timeframe(timeframe)
     repository = RuleRepository(db)
     chains = repository.load_chains(market, timeframe)
+    metadata = []
+    for item in repository.load_metadata(market):
+        row = item.__dict__.copy()
+        params = row.get("params") if isinstance(row.get("params"), dict) else {}
+        direction = str(params.get("direction") or "").strip()
+        row["signal_direction"] = direction or None
+        row["signal_direction_label"] = {
+            "bullish": "看涨",
+            "bearish": "看跌",
+            "neutral": "中性",
+        }.get(direction, "未标明")
+        metadata.append(row)
     return {
         "market": market,
         "timeframe": timeframe or "*",
-        "metadata": [item.__dict__ for item in repository.load_metadata(market)],
+        "metadata": metadata,
         "chain": repository.load_active_chain(market, timeframe or "*").__dict__,
         "chains": [item.__dict__ for item in chains],
     }

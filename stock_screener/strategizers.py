@@ -22,6 +22,7 @@ from strategy import (
     check_ema_breakout,
     check_zuoyi_strategy,
     EMABreakoutResult,
+    analyze_technical_pattern,
     compute_daily_volume_vs_prior3_and_pct_change,
     get_latest_rsi,
 )
@@ -213,6 +214,44 @@ class EMABreakoutStrategizer(Strategizer):
             satisfied=satisfied,
             reason=result_enum.get_description(),
             details=details,
+        )
+
+
+class TechnicalPatternStrategizer(Strategizer):
+    """通用技术形态策略器：封装蜡烛图、K线和辅助线原子规则。"""
+
+    def __init__(
+        self,
+        pattern_key: str,
+        name: str = "TechnicalPatternStrategizer",
+        enabled: bool = True,
+        **params: Any,
+    ):
+        super().__init__(name=name, enabled=enabled)
+        self.pattern_key = str(pattern_key or "").strip()
+        self.params = dict(params or {})
+
+    def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
+        df = stock.kline_df
+        if df is None or df.empty:
+            return StrategizerOutput(
+                name=self.name,
+                satisfied=False,
+                reason="K线数据不足，无法判断技术形态",
+                details={"kline_available": False, "pattern_key": self.pattern_key},
+            )
+
+        signal = analyze_technical_pattern(
+            df=df,
+            pattern_key=self.pattern_key,
+            check_date=context.check_date,
+            **self.params,
+        )
+        return StrategizerOutput(
+            name=self.name,
+            satisfied=signal.satisfied,
+            reason=signal.reason,
+            details=dict(signal.details),
         )
 
 

@@ -1,0 +1,62 @@
+<h2>代码筛选工作台：确认版前端结构</h2>
+<p class="subtitle">旧“单股选股”入口删除；单只股票和多只股票都从同一个代码筛选入口发起。</p>
+
+<div class="mockup">
+  <div class="mockup-header">左侧导航</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px">
+      <div class="mock-sidebar">
+        <div style="padding:8px">概览</div>
+        <div style="padding:8px">全市场筛选</div>
+        <div style="padding:8px;border-radius:6px;background:#e8f1ff;color:#1f6feb;font-weight:700">代码筛选</div>
+        <div style="padding:8px">规则链</div>
+        <div style="padding:8px">量化实验室</div>
+        <div style="padding:8px">期权实验室</div>
+      </div>
+      <div class="mock-content">
+        <h3 style="margin-top:0">代码筛选</h3>
+        <div style="display:grid;grid-template-columns:120px 120px minmax(180px,1fr);gap:10px">
+          <input class="mock-input" value="市场：HK" readonly>
+          <input class="mock-input" value="周期：1d" readonly>
+          <input class="mock-input" value="规则链：默认链" readonly>
+        </div>
+        <div style="margin-top:12px">
+          <div class="label">股票代码输入</div>
+          <div class="placeholder" style="height:128px;text-align:left;align-items:flex-start;padding:12px;white-space:pre-line">HK.00700
+HK.09988
+03690</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px">
+          <div class="placeholder">有效 3</div>
+          <div class="placeholder">重复 0</div>
+          <div class="placeholder">无效 0</div>
+          <div class="placeholder">运行方式：自选列表</div>
+        </div>
+        <button class="mock-button" style="margin-top:12px">创建筛选任务</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>行为规则</h3>
+  <div class="options">
+    <div class="option">
+      <div class="letter">1</div>
+      <div class="content"><h3>输入一个代码</h3><p>创建 custom-list 任务，列表只有一只股票；不再走 single-stock-run。</p></div>
+    </div>
+    <div class="option">
+      <div class="letter">N</div>
+      <div class="content"><h3>输入多个代码</h3><p>创建同一个 custom-list 任务；按原始输入顺序返回每只股票状态。</p></div>
+    </div>
+    <div class="option">
+      <div class="letter">R</div>
+      <div class="content"><h3>结果展示</h3><p>跳到统一任务详情页，展示通过、未通过、代码无效、重复跳过和报告文件。</p></div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>需要改动的前端边界</h3>
+  <p>删除 SingleStock 页面入口；新增或改造为 CodeScreening 页面；提交接口使用 /api/screening/custom-list-tasks；结果查看使用 custom-list task results 和现有任务详情组件。</p>
+</div>

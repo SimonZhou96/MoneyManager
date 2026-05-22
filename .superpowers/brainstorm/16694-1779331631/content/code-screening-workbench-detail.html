@@ -1,0 +1,59 @@
+<h2>方案 C 细化：股票代码筛选工作台</h2>
+<p class="subtitle">单股、多股代码输入、历史任务和结果查看统一到一个页面；底层只创建 custom-list 任务，不再维护单股专用执行链。</p>
+
+<div class="mockup">
+  <div class="mockup-header">股票代码筛选</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:180px minmax(0,1fr);gap:16px">
+      <div class="mock-sidebar">
+        <div style="font-weight:700;margin-bottom:10px">运行方式</div>
+        <div style="padding:8px;border-radius:6px;background:#e8f1ff;color:#1f6feb">代码输入</div>
+        <div style="padding:8px">最近任务</div>
+        <div style="padding:8px">结果文件</div>
+      </div>
+      <div class="mock-content">
+        <div style="display:grid;grid-template-columns:120px 120px minmax(180px,1fr);gap:10px">
+          <input class="mock-input" value="HK" readonly>
+          <input class="mock-input" value="1d" readonly>
+          <input class="mock-input" value="默认规则链" readonly>
+        </div>
+        <div style="margin-top:12px">
+          <div class="label">股票代码</div>
+          <div class="placeholder" style="height:120px;text-align:left;align-items:flex-start;padding:12px;white-space:pre-line">HK.00700
+HK.09988
+03690</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:12px">
+          <div class="placeholder">有效代码 3</div>
+          <div class="placeholder">重复 0</div>
+          <div class="placeholder">无效 0</div>
+        </div>
+        <button class="mock-button" style="margin-top:12px">创建筛选任务</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">提交后</div>
+    <div class="mockup-body">
+      <div class="placeholder">创建 custom-list task</div>
+      <div class="placeholder">等待 local_agent</div>
+      <div class="placeholder">跳转任务详情</div>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">结果页</div>
+    <div class="mockup-body">
+      <div class="placeholder">按原始输入顺序展示</div>
+      <div class="placeholder">已通过 / 未通过 / 代码无效 / 重复跳过</div>
+      <div class="placeholder">CSV、联网AI报告、PDF/Markdown 文件下载</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>关键产品决定</h3>
+  <p>我建议把左侧导航里的“单股选股”直接替换成“代码筛选”。页面里不再区分单股与自选列表：输入一个代码就是单股，输入多个代码就是自选列表。</p>
+</div>

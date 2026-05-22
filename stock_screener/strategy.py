@@ -8,7 +8,7 @@
 from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -124,6 +124,131 @@ def calculate_ema(prices: pd.Series, period: int) -> pd.Series:
     return prices.ewm(span=period, adjust=False).mean()
 
 
+def calculate_sma(prices: pd.Series, period: int) -> pd.Series:
+    """计算简单移动平均线 (SMA)。"""
+    return prices.rolling(window=period, min_periods=period).mean()
+
+
+def calculate_macd(
+    prices: pd.Series,
+    fast_period: int = 12,
+    slow_period: int = 26,
+    signal_period: int = 9,
+) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """计算 MACD、信号线和柱状图。"""
+    fast = calculate_ema(prices, fast_period)
+    slow = calculate_ema(prices, slow_period)
+    macd = fast - slow
+    signal = calculate_ema(macd, signal_period)
+    histogram = macd - signal
+    return macd, signal, histogram
+
+
+def calculate_bollinger_bands(
+    prices: pd.Series,
+    period: int = 20,
+    std_multiplier: float = 2.0,
+) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """计算布林线中轨、上轨、下轨。"""
+    middle = calculate_sma(prices, period)
+    std = prices.rolling(window=period, min_periods=period).std()
+    upper = middle + std * std_multiplier
+    lower = middle - std * std_multiplier
+    return middle, upper, lower
+
+
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """计算平均真实波幅 (ATR)。"""
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    close = df["close"].astype(float)
+    prev_close = close.shift(1)
+    true_range = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    return true_range.rolling(window=period, min_periods=period).mean()
+
+
+def calculate_vwap(df: pd.DataFrame) -> pd.Series:
+    """按已有 K 线窗口计算成交量加权均价。"""
+    typical_price = (df["high"].astype(float) + df["low"].astype(float) + df["close"].astype(float)) / 3.0
+    volume = df["volume"].astype(float)
+    cumulative_volume = volume.cumsum()
+    return (typical_price * volume).cumsum() / cumulative_volume
+
+
+def calculate_kdj(
+    df: pd.DataFrame,
+    period: int = 9,
+    k_period: int = 3,
+    d_period: int = 3,
+) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """计算 KDJ 指标。"""
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    close = df["close"].astype(float)
+    lowest_low = low.rolling(window=period, min_periods=period).min()
+    highest_high = high.rolling(window=period, min_periods=period).max()
+    rsv = (close - lowest_low) / (highest_high - lowest_low) * 100.0
+    k = rsv.ewm(alpha=1.0 / k_period, adjust=False).mean()
+    d = k.ewm(alpha=1.0 / d_period, adjust=False).mean()
+    j = 3.0 * k - 2.0 * d
+    return k, d, j
+
+
+@dataclass
+class TechnicalPatternSignal:
+    """通用蜡烛图/辅助线原子规则分析结果。"""
+
+    pattern_key: str
+    pattern_label: str
+    direction: str
+    satisfied: bool
+    reason: str
+    details: Dict[str, Any] = field(default_factory=dict)
+    data_rows: int = 0
+
+
+TECHNICAL_PATTERN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
+    "bullish_engulfing": {"label": "看涨吞没", "direction": "bullish", "min_rows": 2},
+    "bearish_engulfing": {"label": "看跌吞没", "direction": "bearish", "min_rows": 2},
+    "hammer_reversal": {"label": "锤子线反转", "direction": "bullish", "min_rows": 1},
+    "shooting_star_reversal": {"label": "射击之星反转", "direction": "bearish", "min_rows": 1},
+    "morning_star": {"label": "早晨之星", "direction": "bullish", "min_rows": 3},
+    "evening_star": {"label": "黄昏之星", "direction": "bearish", "min_rows": 3},
+    "piercing_line": {"label": "曙光初现", "direction": "bullish", "min_rows": 2},
+    "dark_cloud_cover": {"label": "乌云盖顶", "direction": "bearish", "min_rows": 2},
+    "three_white_soldiers": {"label": "红三兵", "direction": "bullish", "min_rows": 3},
+    "three_black_crows": {"label": "三只乌鸦", "direction": "bearish", "min_rows": 3},
+    "doji_indecision": {"label": "十字星", "direction": "neutral", "min_rows": 1},
+    "bullish_marubozu": {"label": "看涨光头光脚", "direction": "bullish", "min_rows": 1},
+    "bearish_marubozu": {"label": "看跌光头光脚", "direction": "bearish", "min_rows": 1},
+    "sma_golden_cross": {"label": "均线金叉", "direction": "bullish", "min_rows": 51},
+    "sma_death_cross": {"label": "均线死叉", "direction": "bearish", "min_rows": 51},
+    "ema_golden_cross": {"label": "EMA金叉", "direction": "bullish", "min_rows": 51},
+    "ema_death_cross": {"label": "EMA死叉", "direction": "bearish", "min_rows": 51},
+    "macd_bullish_cross": {"label": "MACD金叉", "direction": "bullish", "min_rows": 35},
+    "macd_bearish_cross": {"label": "MACD死叉", "direction": "bearish", "min_rows": 35},
+    "bollinger_lower_rebound": {"label": "布林下轨反弹", "direction": "bullish", "min_rows": 21},
+    "bollinger_upper_rejection": {"label": "布林上轨回落", "direction": "bearish", "min_rows": 21},
+    "vwap_bullish_reclaim": {"label": "成交量加权均价上穿", "direction": "bullish", "min_rows": 2, "volume": True},
+    "vwap_bearish_loss": {"label": "成交量加权均价下破", "direction": "bearish", "min_rows": 2, "volume": True},
+    "atr_up_breakout": {"label": "ATR向上突破", "direction": "bullish", "min_rows": 16},
+    "atr_down_breakdown": {"label": "ATR向下跌破", "direction": "bearish", "min_rows": 16},
+    "kdj_bullish_cross": {"label": "KDJ金叉", "direction": "bullish", "min_rows": 12},
+    "kdj_bearish_cross": {"label": "KDJ死叉", "direction": "bearish", "min_rows": 12},
+    "rsi_bullish_rebound": {"label": "RSI超卖回升", "direction": "bullish", "min_rows": 16},
+    "rsi_bearish_pullback": {"label": "RSI超买回落", "direction": "bearish", "min_rows": 16},
+    "volume_price_breakout": {"label": "放量突破", "direction": "bullish", "min_rows": 22, "volume": True},
+    "volume_price_breakdown": {"label": "放量跌破", "direction": "bearish", "min_rows": 22, "volume": True},
+}
+
+
 def _validate_kline_data(df: pd.DataFrame) -> Tuple[bool, str]:
     """
     验证 K 线数据的有效性
@@ -170,6 +295,453 @@ def _prepare_kline_data(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values("date").reset_index(drop=True)
     
     return df
+
+
+def _prepare_technical_pattern_data(
+    df: pd.DataFrame,
+    check_date: date | None = None,
+    require_volume: bool = False,
+) -> Tuple[Optional[pd.DataFrame], str]:
+    """预处理蜡烛图和辅助线原子规则所需的 OHLCV 数据。"""
+    if df is None or df.empty:
+        return None, "K线数据为空"
+
+    required_columns = ["date", "open", "high", "low", "close"]
+    if require_volume:
+        required_columns.append("volume")
+    missing = [col for col in required_columns if col not in df.columns]
+    if missing:
+        return None, f"缺少字段: {', '.join(missing)}"
+
+    work = df.copy()
+    work["date"] = pd.to_datetime(work["date"], errors="coerce")
+    for col in ["open", "high", "low", "close"] + (["volume"] if require_volume else []):
+        work[col] = pd.to_numeric(work[col], errors="coerce")
+
+    valid = (
+        work["date"].notna()
+        & work["open"].notna()
+        & work["high"].notna()
+        & work["low"].notna()
+        & work["close"].notna()
+        & (work["open"] > 0)
+        & (work["high"] > 0)
+        & (work["low"] > 0)
+        & (work["close"] > 0)
+        & (work["high"] >= work["low"])
+        & (work["high"] >= work["open"])
+        & (work["high"] >= work["close"])
+        & (work["low"] <= work["open"])
+        & (work["low"] <= work["close"])
+    )
+    if require_volume:
+        valid = valid & work["volume"].notna() & (work["volume"] > 0)
+    work = work[valid].sort_values("date").reset_index(drop=True)
+
+    if check_date is not None and not work.empty:
+        work = work[work["date"].dt.date <= check_date].reset_index(drop=True)
+
+    if work.empty:
+        return None, "无有效 OHLC K线"
+    return work, ""
+
+
+def _candle_body(row: pd.Series) -> float:
+    return abs(float(row["close"]) - float(row["open"]))
+
+
+def _candle_range(row: pd.Series) -> float:
+    return float(row["high"]) - float(row["low"])
+
+
+def _upper_shadow(row: pd.Series) -> float:
+    return float(row["high"]) - max(float(row["open"]), float(row["close"]))
+
+
+def _lower_shadow(row: pd.Series) -> float:
+    return min(float(row["open"]), float(row["close"])) - float(row["low"])
+
+
+def _is_bullish(row: pd.Series) -> bool:
+    return float(row["close"]) > float(row["open"])
+
+
+def _is_bearish(row: pd.Series) -> bool:
+    return float(row["close"]) < float(row["open"])
+
+
+def _body_midpoint(row: pd.Series) -> float:
+    return (float(row["open"]) + float(row["close"])) / 2.0
+
+
+def _crossed_up(prev_left: float, prev_right: float, curr_left: float, curr_right: float) -> bool:
+    return prev_left <= prev_right and curr_left > curr_right
+
+
+def _crossed_down(prev_left: float, prev_right: float, curr_left: float, curr_right: float) -> bool:
+    return prev_left >= prev_right and curr_left < curr_right
+
+
+def _latest_value(series: pd.Series, offset: int = 1) -> Optional[float]:
+    if len(series) < offset:
+        return None
+    val = series.iloc[-offset]
+    if pd.isna(val):
+        return None
+    return float(val)
+
+
+def _format_price(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    return round(float(value), 4)
+
+
+def _technical_signal(
+    pattern_key: str,
+    satisfied: bool,
+    reason: str,
+    work: Optional[pd.DataFrame],
+    details: Optional[Dict[str, Any]] = None,
+) -> TechnicalPatternSignal:
+    definition = TECHNICAL_PATTERN_DEFINITIONS.get(pattern_key, {})
+    label = str(definition.get("label") or pattern_key)
+    direction = str(definition.get("direction") or "neutral")
+    data_rows = len(work) if work is not None else 0
+    payload: Dict[str, Any] = {
+        "pattern_key": pattern_key,
+        "pattern_label": label,
+        "direction": direction,
+        "data_rows": data_rows,
+    }
+    if details:
+        payload.update(details)
+    return TechnicalPatternSignal(
+        pattern_key=pattern_key,
+        pattern_label=label,
+        direction=direction,
+        satisfied=satisfied,
+        reason=reason,
+        details=payload,
+        data_rows=data_rows,
+    )
+
+
+def _analyze_candlestick_pattern(pattern_key: str, work: pd.DataFrame, params: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
+    body_ratio = float(params.get("body_ratio", 0.1))
+    shadow_ratio = float(params.get("shadow_ratio", 2.0))
+    small_shadow_ratio = float(params.get("small_shadow_ratio", 0.6))
+    min_body_ratio = float(params.get("min_body_range_ratio", 0.45))
+    last = work.iloc[-1]
+    details = {
+        "open": _format_price(float(last["open"])),
+        "high": _format_price(float(last["high"])),
+        "low": _format_price(float(last["low"])),
+        "close": _format_price(float(last["close"])),
+    }
+
+    if pattern_key in ("bullish_engulfing", "bearish_engulfing", "piercing_line", "dark_cloud_cover"):
+        prev, curr = work.iloc[-2], work.iloc[-1]
+        prev_body_low = min(float(prev["open"]), float(prev["close"]))
+        prev_body_high = max(float(prev["open"]), float(prev["close"]))
+        curr_body_low = min(float(curr["open"]), float(curr["close"]))
+        curr_body_high = max(float(curr["open"]), float(curr["close"]))
+        details.update({
+            "prev_open": _format_price(float(prev["open"])),
+            "prev_close": _format_price(float(prev["close"])),
+        })
+        if pattern_key == "bullish_engulfing":
+            ok = _is_bearish(prev) and _is_bullish(curr) and curr_body_low <= prev_body_low and curr_body_high >= prev_body_high
+            return ok, "最近两根K线形成看涨吞没" if ok else "未形成看涨吞没", details
+        if pattern_key == "bearish_engulfing":
+            ok = _is_bullish(prev) and _is_bearish(curr) and curr_body_low <= prev_body_low and curr_body_high >= prev_body_high
+            return ok, "最近两根K线形成看跌吞没" if ok else "未形成看跌吞没", details
+        if pattern_key == "piercing_line":
+            midpoint = _body_midpoint(prev)
+            ok = _is_bearish(prev) and _is_bullish(curr) and float(curr["open"]) < float(prev["close"]) and midpoint < float(curr["close"]) < float(prev["open"])
+            details["prev_body_midpoint"] = _format_price(midpoint)
+            return ok, "当前K线向上刺入前一阴线实体中点上方" if ok else "未形成曙光初现", details
+        midpoint = _body_midpoint(prev)
+        ok = _is_bullish(prev) and _is_bearish(curr) and float(curr["open"]) > float(prev["close"]) and float(prev["open"]) < float(curr["close"]) < midpoint
+        details["prev_body_midpoint"] = _format_price(midpoint)
+        return ok, "当前K线跌破前一阳线实体中点" if ok else "未形成乌云盖顶", details
+
+    if pattern_key in ("hammer_reversal", "shooting_star_reversal", "doji_indecision", "bullish_marubozu", "bearish_marubozu"):
+        body = max(_candle_body(last), 1e-9)
+        rng = max(_candle_range(last), 1e-9)
+        upper = _upper_shadow(last)
+        lower = _lower_shadow(last)
+        details.update({
+            "body": _format_price(body),
+            "upper_shadow": _format_price(upper),
+            "lower_shadow": _format_price(lower),
+            "body_range_ratio": round(body / rng, 4),
+        })
+        if pattern_key == "hammer_reversal":
+            ok = lower >= body * shadow_ratio and upper <= body * small_shadow_ratio and max(float(last["open"]), float(last["close"])) >= float(last["low"]) + rng * 0.6
+            return ok, "下影线明显长于实体，收盘靠近上方" if ok else "未形成锤子线反转", details
+        if pattern_key == "shooting_star_reversal":
+            ok = upper >= body * shadow_ratio and lower <= body * small_shadow_ratio and min(float(last["open"]), float(last["close"])) <= float(last["low"]) + rng * 0.4
+            return ok, "上影线明显长于实体，收盘靠近下方" if ok else "未形成射击之星反转", details
+        if pattern_key == "doji_indecision":
+            ok = body <= rng * body_ratio
+            return ok, "开收盘价接近，形成十字星" if ok else "未形成十字星", details
+        if pattern_key == "bullish_marubozu":
+            ok = _is_bullish(last) and body >= rng * 0.8 and upper <= rng * 0.1 and lower <= rng * 0.1
+            return ok, "阳线实体占主要波幅，上下影较短" if ok else "未形成看涨光头光脚", details
+        ok = _is_bearish(last) and body >= rng * 0.8 and upper <= rng * 0.1 and lower <= rng * 0.1
+        return ok, "阴线实体占主要波幅，上下影较短" if ok else "未形成看跌光头光脚", details
+
+    if pattern_key in ("morning_star", "evening_star"):
+        first, second, third = work.iloc[-3], work.iloc[-2], work.iloc[-1]
+        first_body = max(_candle_body(first), 1e-9)
+        second_body = _candle_body(second)
+        third_body = _candle_body(third)
+        details.update({
+            "first_open": _format_price(float(first["open"])),
+            "first_close": _format_price(float(first["close"])),
+            "second_body": _format_price(second_body),
+            "third_body": _format_price(third_body),
+        })
+        if pattern_key == "morning_star":
+            ok = _is_bearish(first) and second_body <= first_body * 0.55 and _is_bullish(third) and float(third["close"]) > _body_midpoint(first)
+            return ok, "三根K线形成早晨之星反转" if ok else "未形成早晨之星", details
+        ok = _is_bullish(first) and second_body <= first_body * 0.55 and _is_bearish(third) and float(third["close"]) < _body_midpoint(first)
+        return ok, "三根K线形成黄昏之星反转" if ok else "未形成黄昏之星", details
+
+    if pattern_key in ("three_white_soldiers", "three_black_crows"):
+        rows = [work.iloc[-3], work.iloc[-2], work.iloc[-1]]
+        if pattern_key == "three_white_soldiers":
+            ok = all(_is_bullish(row) and _candle_body(row) / max(_candle_range(row), 1e-9) >= min_body_ratio for row in rows)
+            ok = ok and float(rows[1]["close"]) > float(rows[0]["close"]) and float(rows[2]["close"]) > float(rows[1]["close"])
+            return ok, "连续三根较强阳线且收盘逐步抬高" if ok else "未形成红三兵", details
+        ok = all(_is_bearish(row) and _candle_body(row) / max(_candle_range(row), 1e-9) >= min_body_ratio for row in rows)
+        ok = ok and float(rows[1]["close"]) < float(rows[0]["close"]) and float(rows[2]["close"]) < float(rows[1]["close"])
+        return ok, "连续三根较强阴线且收盘逐步走低" if ok else "未形成三只乌鸦", details
+
+    return False, "未实现的蜡烛图形态", details
+
+
+def _analyze_indicator_pattern(pattern_key: str, work: pd.DataFrame, params: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
+    close = work["close"].astype(float)
+    details: Dict[str, Any] = {"close": _format_price(float(close.iloc[-1]))}
+
+    if pattern_key in ("sma_golden_cross", "sma_death_cross", "ema_golden_cross", "ema_death_cross"):
+        short_period = int(params.get("short_period", 20))
+        long_period = int(params.get("long_period", 50))
+        if pattern_key.startswith("sma"):
+            short_line = calculate_sma(close, short_period)
+            long_line = calculate_sma(close, long_period)
+            line_name = "SMA"
+        else:
+            short_line = calculate_ema(close, short_period)
+            long_line = calculate_ema(close, long_period)
+            line_name = "EMA"
+        prev_short, curr_short = _latest_value(short_line, 2), _latest_value(short_line, 1)
+        prev_long, curr_long = _latest_value(long_line, 2), _latest_value(long_line, 1)
+        details.update({
+            f"{line_name}{short_period}": _format_price(curr_short),
+            f"{line_name}{long_period}": _format_price(curr_long),
+        })
+        if None in (prev_short, curr_short, prev_long, curr_long):
+            return False, f"{line_name}数据不足", details
+        if pattern_key.endswith("golden_cross"):
+            ok = _crossed_up(prev_short, prev_long, curr_short, curr_long)
+            return ok, f"{line_name}{short_period}向上穿越{line_name}{long_period}" if ok else "未形成均线金叉", details
+        ok = _crossed_down(prev_short, prev_long, curr_short, curr_long)
+        return ok, f"{line_name}{short_period}向下穿越{line_name}{long_period}" if ok else "未形成均线死叉", details
+
+    if pattern_key in ("macd_bullish_cross", "macd_bearish_cross"):
+        fast = int(params.get("fast_period", 12))
+        slow = int(params.get("slow_period", 26))
+        signal_period = int(params.get("signal_period", 9))
+        macd, signal, histogram = calculate_macd(close, fast, slow, signal_period)
+        prev_macd, curr_macd = _latest_value(macd, 2), _latest_value(macd, 1)
+        prev_signal, curr_signal = _latest_value(signal, 2), _latest_value(signal, 1)
+        details.update({
+            "macd": _format_price(curr_macd),
+            "macd_signal": _format_price(curr_signal),
+            "macd_histogram": _format_price(_latest_value(histogram, 1)),
+        })
+        if None in (prev_macd, curr_macd, prev_signal, curr_signal):
+            return False, "MACD数据不足", details
+        if pattern_key == "macd_bullish_cross":
+            ok = _crossed_up(prev_macd, prev_signal, curr_macd, curr_signal)
+            return ok, "MACD线向上穿越信号线" if ok else "未形成MACD金叉", details
+        ok = _crossed_down(prev_macd, prev_signal, curr_macd, curr_signal)
+        return ok, "MACD线向下穿越信号线" if ok else "未形成MACD死叉", details
+
+    if pattern_key in ("bollinger_lower_rebound", "bollinger_upper_rejection"):
+        period = int(params.get("period", 20))
+        std_multiplier = float(params.get("std_multiplier", 2.0))
+        _, upper, lower = calculate_bollinger_bands(close, period, std_multiplier)
+        prev_close, curr_close = float(close.iloc[-2]), float(close.iloc[-1])
+        prev_upper, curr_upper = _latest_value(upper, 2), _latest_value(upper, 1)
+        prev_lower, curr_lower = _latest_value(lower, 2), _latest_value(lower, 1)
+        details.update({
+            "bollinger_upper": _format_price(curr_upper),
+            "bollinger_lower": _format_price(curr_lower),
+        })
+        if None in (prev_upper, curr_upper, prev_lower, curr_lower):
+            return False, "布林线数据不足", details
+        if pattern_key == "bollinger_lower_rebound":
+            ok = prev_close <= prev_lower and curr_close > curr_lower and curr_close > prev_close
+            return ok, "价格从布林下轨下方向上收回" if ok else "未形成布林下轨反弹", details
+        ok = prev_close >= prev_upper and curr_close < curr_upper and curr_close < prev_close
+        return ok, "价格从布林上轨上方向下回落" if ok else "未形成布林上轨回落", details
+
+    if pattern_key in ("vwap_bullish_reclaim", "vwap_bearish_loss"):
+        vwap = calculate_vwap(work)
+        prev_close, curr_close = float(close.iloc[-2]), float(close.iloc[-1])
+        prev_vwap, curr_vwap = _latest_value(vwap, 2), _latest_value(vwap, 1)
+        details["vwap"] = _format_price(curr_vwap)
+        if None in (prev_vwap, curr_vwap):
+            return False, "成交量加权均价数据不足", details
+        if pattern_key == "vwap_bullish_reclaim":
+            ok = _crossed_up(prev_close, prev_vwap, curr_close, curr_vwap)
+            return ok, "收盘价向上收复成交量加权均价" if ok else "未上穿成交量加权均价", details
+        ok = _crossed_down(prev_close, prev_vwap, curr_close, curr_vwap)
+        return ok, "收盘价跌破成交量加权均价" if ok else "未下破成交量加权均价", details
+
+    if pattern_key in ("atr_up_breakout", "atr_down_breakdown"):
+        period = int(params.get("period", 14))
+        multiplier = float(params.get("multiplier", 1.0))
+        atr = calculate_atr(work, period=period)
+        current_atr = _latest_value(atr, 1)
+        lookback_high = float(work["high"].iloc[-period - 1:-1].max())
+        lookback_low = float(work["low"].iloc[-period - 1:-1].min())
+        curr_close = float(close.iloc[-1])
+        prev_close = float(close.iloc[-2])
+        details.update({
+            "atr": _format_price(current_atr),
+            "lookback_high": _format_price(lookback_high),
+            "lookback_low": _format_price(lookback_low),
+        })
+        if current_atr is None or current_atr <= 0:
+            return False, "ATR数据不足", details
+        if pattern_key == "atr_up_breakout":
+            ok = curr_close > lookback_high and (curr_close - prev_close) >= current_atr * multiplier
+            return ok, "收盘价放大波幅突破前高" if ok else "未形成ATR向上突破", details
+        ok = curr_close < lookback_low and (prev_close - curr_close) >= current_atr * multiplier
+        return ok, "收盘价放大波幅跌破前低" if ok else "未形成ATR向下跌破", details
+
+    if pattern_key in ("kdj_bullish_cross", "kdj_bearish_cross"):
+        period = int(params.get("period", 9))
+        k, d, j = calculate_kdj(work, period=period)
+        prev_k, curr_k = _latest_value(k, 2), _latest_value(k, 1)
+        prev_d, curr_d = _latest_value(d, 2), _latest_value(d, 1)
+        details.update({"k": _format_price(curr_k), "d": _format_price(curr_d), "j": _format_price(_latest_value(j, 1))})
+        if None in (prev_k, curr_k, prev_d, curr_d):
+            return False, "KDJ数据不足", details
+        if pattern_key == "kdj_bullish_cross":
+            ok = _crossed_up(prev_k, prev_d, curr_k, curr_d)
+            return ok, "K线向上穿越D线" if ok else "未形成KDJ金叉", details
+        ok = _crossed_down(prev_k, prev_d, curr_k, curr_d)
+        return ok, "K线向下穿越D线" if ok else "未形成KDJ死叉", details
+
+    if pattern_key in ("rsi_bullish_rebound", "rsi_bearish_pullback"):
+        period = int(params.get("period", 14))
+        low_threshold = float(params.get("low_threshold", 30.0))
+        high_threshold = float(params.get("high_threshold", 70.0))
+        rsi = calculate_rsi(close, period=period)
+        prev_rsi, curr_rsi = _latest_value(rsi, 2), _latest_value(rsi, 1)
+        details["rsi"] = _format_price(curr_rsi)
+        if None in (prev_rsi, curr_rsi):
+            return False, "RSI数据不足", details
+        if pattern_key == "rsi_bullish_rebound":
+            ok = prev_rsi <= low_threshold and curr_rsi > low_threshold
+            return ok, "RSI从超卖区向上回升" if ok else "未形成RSI超卖回升", details
+        ok = prev_rsi >= high_threshold and curr_rsi < high_threshold
+        return ok, "RSI从超买区向下回落" if ok else "未形成RSI超买回落", details
+
+    if pattern_key in ("volume_price_breakout", "volume_price_breakdown"):
+        lookback = int(params.get("lookback", 20))
+        volume_multiplier = float(params.get("volume_multiplier", 1.5))
+        prior = work.iloc[-lookback - 1:-1]
+        avg_volume = float(prior["volume"].astype(float).mean())
+        curr_volume = float(work.iloc[-1]["volume"])
+        curr_close = float(close.iloc[-1])
+        details.update({
+            "avg_volume": _format_price(avg_volume),
+            "current_volume": _format_price(curr_volume),
+            "volume_multiplier": round(curr_volume / avg_volume, 4) if avg_volume > 0 else None,
+        })
+        if avg_volume <= 0:
+            return False, "成交量数据不足", details
+        if pattern_key == "volume_price_breakout":
+            prior_high = float(prior["high"].max())
+            details["prior_high"] = _format_price(prior_high)
+            ok = curr_close > prior_high and curr_volume >= avg_volume * volume_multiplier
+            return ok, "收盘价突破前高且成交量放大" if ok else "未形成放量突破", details
+        prior_low = float(prior["low"].min())
+        details["prior_low"] = _format_price(prior_low)
+        ok = curr_close < prior_low and curr_volume >= avg_volume * volume_multiplier
+        return ok, "收盘价跌破前低且成交量放大" if ok else "未形成放量跌破", details
+
+    return False, "未实现的辅助线策略", details
+
+
+def analyze_technical_pattern(
+    df: pd.DataFrame,
+    pattern_key: str,
+    check_date: date | None = None,
+    **params: Any,
+) -> TechnicalPatternSignal:
+    """
+    分析常见蜡烛图、K线与辅助线原子规则。
+
+    pattern_key 使用 TECHNICAL_PATTERN_DEFINITIONS 中的键。返回统一的中文标签、
+    方向、是否命中、原因与关键指标，供规则链和报告复用。
+    """
+    pattern_key = str(pattern_key or "").strip()
+    definition = TECHNICAL_PATTERN_DEFINITIONS.get(pattern_key)
+    if not definition:
+        return TechnicalPatternSignal(
+            pattern_key=pattern_key,
+            pattern_label=pattern_key or "未知规则",
+            direction="neutral",
+            satisfied=False,
+            reason=f"未知技术形态规则: {pattern_key}",
+            details={"pattern_key": pattern_key, "pattern_label": pattern_key or "未知规则"},
+            data_rows=0,
+        )
+
+    work, error_msg = _prepare_technical_pattern_data(
+        df,
+        check_date=check_date,
+        require_volume=bool(definition.get("volume")),
+    )
+    if work is None:
+        return _technical_signal(pattern_key, False, error_msg, work)
+
+    min_rows = int(params.get("min_rows", definition.get("min_rows", 1)))
+    if len(work) < min_rows:
+        return _technical_signal(pattern_key, False, f"K线数据不足，至少需要{min_rows}根", work)
+
+    candlestick_keys = {
+        "bullish_engulfing",
+        "bearish_engulfing",
+        "hammer_reversal",
+        "shooting_star_reversal",
+        "morning_star",
+        "evening_star",
+        "piercing_line",
+        "dark_cloud_cover",
+        "three_white_soldiers",
+        "three_black_crows",
+        "doji_indecision",
+        "bullish_marubozu",
+        "bearish_marubozu",
+    }
+    try:
+        if pattern_key in candlestick_keys:
+            satisfied, reason, details = _analyze_candlestick_pattern(pattern_key, work, params)
+        else:
+            satisfied, reason, details = _analyze_indicator_pattern(pattern_key, work, params)
+    except Exception as exc:
+        return _technical_signal(pattern_key, False, f"技术形态计算失败: {exc}", work, {"error": True})
+
+    return _technical_signal(pattern_key, satisfied, reason, work, details)
 
 
 def check_ema_breakout(

@@ -23,6 +23,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
 from stock_pool import DEFAULT_POOL_TYPES_TEXT
+from strategy import TECHNICAL_PATTERN_DEFINITIONS
 
 try:
     import pymysql
@@ -233,6 +234,34 @@ DEFAULT_RULE_MARKETS = ("HK", "US", "A")
 DEFAULT_RULE_CHAIN_KEY = "default_zuoyi_and_other"
 
 
+def _technical_pattern_rule_rows() -> tuple:
+    """根据通用技术形态定义生成默认原子规则元数据。"""
+    rows = []
+    display_order = 300
+    for pattern_key, definition in TECHNICAL_PATTERN_DEFINITIONS.items():
+        label = str(definition.get("label") or pattern_key)
+        direction = str(definition.get("direction") or "neutral")
+        group = {"bullish": "看涨规则", "bearish": "看跌规则", "neutral": "中性规则"}.get(direction, "其他规则")
+        rows.append((
+            pattern_key,
+            label,
+            "strategy",
+            "technical",
+            "TechnicalPatternStrategizer",
+            {
+                "pattern_key": pattern_key,
+                "pattern_label": label,
+                "direction": direction,
+                "display_group": group,
+            },
+            True,
+            display_order,
+            f"{group}：{label}",
+        ))
+        display_order += 10
+    return tuple(rows)
+
+
 DEFAULT_RULE_METADATA = (
     ("market_cap_range", "市值范围", "filter", "", "MarketCapFilter",
      {"min_cap": None, "max_cap": None}, True, 10, "按市值上下限筛选"),
@@ -263,7 +292,7 @@ DEFAULT_RULE_METADATA = (
      {}, True, 210, "复用 AI 分析结果，判断公司时事是否与热点板块形成共振"),
     ("company_event_hot_news_link", "公司时事与热点新闻关联", "strategy", "macro", "CompanyEventHotNewsStrategizer",
      {}, True, 220, "复用 AI 分析结果，判断公司时事是否被热点新闻验证"),
-)
+) + _technical_pattern_rule_rows()
 
 
 US_DEFAULT_RULE_PARAM_OVERRIDES = {

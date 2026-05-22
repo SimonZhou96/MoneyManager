@@ -40,6 +40,7 @@ from strategizers import (
     RSIOversoldStrategizer,
     Strategizer,
     StrategizerOutput,
+    TechnicalPatternStrategizer,
     TodayVolumeExceedsPrior3MaxStrategizer,
     ZuoYiStrategizer,
 )
@@ -275,6 +276,17 @@ class RuleRegistry:
             ),
         )
         registry.register_strategy(
+            "TechnicalPatternStrategizer",
+            lambda params: TechnicalPatternStrategizer(
+                pattern_key=str(params.get("pattern_key") or ""),
+                **{
+                    key: value
+                    for key, value in params.items()
+                    if key not in {"pattern_key", "direction", "pattern_label", "display_group"}
+                },
+            ),
+        )
+        registry.register_strategy(
             "CompanyEventHotSectorStrategizer",
             lambda params: CompanyEventHotSectorStrategizer(),
         )
@@ -452,6 +464,7 @@ class RuleEngine:
         "TodayVolumeExceedsPrior3MaxStrategizer",
         "DailyDrop6To65Strategizer",
         "DailyRise4To45Strategizer",
+        "TechnicalPatternStrategizer",
     }
 
     def __init__(
