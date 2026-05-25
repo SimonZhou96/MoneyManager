@@ -8,11 +8,15 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 MAIN_TSX = ROOT / "web_frontend" / "src" / "main.tsx"
 STYLES_CSS = ROOT / "web_frontend" / "src" / "styles.css"
+STOCK_TERMINAL_API = ROOT / "web_frontend" / "src" / "features" / "stockTerminal" / "api.ts"
 
 
 class CodeScreeningFrontendTest(unittest.TestCase):
     def read_main(self) -> str:
         return MAIN_TSX.read_text(encoding="utf-8")
+
+    def read_stock_terminal_api(self) -> str:
+        return STOCK_TERMINAL_API.read_text(encoding="utf-8")
 
     def test_navigation_replaces_single_stock_with_code_screening(self):
         source = self.read_main()
@@ -74,6 +78,22 @@ class CodeScreeningFrontendTest(unittest.TestCase):
         self.assertIn(".screening-rule-field", styles)
         self.assertIn(".screening-toggles", styles)
         self.assertIn(".screening-actions", styles)
+
+    def test_code_screening_is_merged_stock_terminal_entry(self):
+        source = self.read_main()
+
+        self.assertIn("个股筛选器", source)
+        self.assertNotIn(">市场情报<", source)
+        self.assertNotIn("page === 'marketIntel'", source)
+        self.assertIn("StockTerminalPanel", source)
+
+    def test_terminal_loading_is_row_selection_driven(self):
+        source = self.read_main()
+        api_source = self.read_stock_terminal_api()
+
+        self.assertIn("selectedTerminalRow", source)
+        self.assertIn("setSelectedTerminalRow", source)
+        self.assertIn("/api/stock-terminal", api_source)
 
 
 if __name__ == "__main__":
