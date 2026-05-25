@@ -2452,6 +2452,127 @@ class MarketDatabase:
             cursor.execute(sql, (market, code, timeframe, market, code, timeframe, int(max_bars)))
 
     # ------------------------------------------------------------------
+    # Stock Terminal JSON TTL Cache
+    # ------------------------------------------------------------------
+
+    def init_stock_terminal_schema(self) -> None:
+        schema_path = Path(__file__).resolve().parent / "sql" / "018_stock_terminal.sql"
+        sql_text = schema_path.read_text(encoding="utf-8")
+        statements = [stmt.strip() for stmt in sql_text.split(";") if stmt.strip()]
+        with self.conn.cursor() as cursor:
+            for statement in statements:
+                cursor.execute(statement)
+
+    def upsert_stock_terminal_json_cache(
+        self,
+        table: str,
+        market: str,
+        code: str,
+        payload: Any,
+        source: str,
+        fetched_at: Any,
+        expires_at: Any,
+        trade_date: Any = None,
+    ) -> None:
+        allowed_tables = {
+            "stock_quote_cache",
+            "stock_minute_cache",
+            "stock_fund_flow_cache",
+        }
+        if table not in allowed_tables:
+            raise ValueError(f"unsupported stock terminal cache table: {table}")
+        payload_json = _json_or_none(payload)
+        fetched_at = _mysql_datetime_or_none(fetched_at) or _utcnow()
+        expires_at = _mysql_datetime_or_none(expires_at) or fetched_at
+        if table == "stock_minute_cache":
+            if trade_date in (None, ""):
+                raise ValueError("trade_date is required for stock_minute_cache")
+            sql = f"""
+                INSERT INTO {table}
+                    (market, code, trade_date, payload_json, source, fetched_at, expires_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s)
+                ON DUPLICATE KEY UPDATE
+                    payload_json=VALUES(payload_json),
+                    source=VALUES(source),
+                    fetched_at=VALUES(fetched_at),
+                    expires_at=VALUES(expires_at)
+            """
+            params = (
+                market,
+                code,
+                trade_date,
+                payload_json,
+                source or "cache",
+                fetched_at,
+                expires_at,
+            )
+        else:
+            sql = f"""
+                INSERT INTO {table}
+                    (market, code, payload_json, source, fetched_at, expires_at)
+                VALUES (%s,%s,%s,%s,%s,%s)
+                ON DUPLICATE KEY UPDATE
+                    payload_json=VALUES(payload_json),
+                    source=VALUES(source),
+                    fetched_at=VALUES(fetched_at),
+                    expires_at=VALUES(expires_at)
+            """
+            params = (
+                market,
+                code,
+                payload_json,
+                source or "cache",
+                fetched_at,
+                expires_at,
+            )
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, params)
+
+    def get_stock_terminal_json_cache(
+        self,
+        table: str,
+        market: str,
+        code: str,
+        trade_date: Any = None,
+    ) -> Optional[dict]:
+        allowed_tables = {
+            "stock_quote_cache",
+            "stock_minute_cache",
+            "stock_fund_flow_cache",
+        }
+        if table not in allowed_tables:
+            raise ValueError(f"unsupported stock terminal cache table: {table}")
+        if table == "stock_minute_cache":
+            if trade_date in (None, ""):
+                raise ValueError("trade_date is required for stock_minute_cache")
+            sql = f"""
+                SELECT payload_json, source, fetched_at, expires_at
+                FROM {table}
+                WHERE market=%s AND code=%s AND trade_date=%s
+                LIMIT 1
+            """
+            params = (market, code, trade_date)
+        else:
+            sql = f"""
+                SELECT payload_json, source, fetched_at, expires_at
+                FROM {table}
+                WHERE market=%s AND code=%s
+                LIMIT 1
+            """
+            params = (market, code)
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "payload_json": _decode_json_field(row[0], {}),
+            "source": row[1],
+            "fetched_at": row[2],
+            "expires_at": row[3],
+        }
+
+    # ------------------------------------------------------------------
     # Market Intel
     # ------------------------------------------------------------------
 
