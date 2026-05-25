@@ -995,6 +995,117 @@ textarea.code-input::placeholder {
   color: #1e3a8a;
 }
 
+.market-intel-controls {
+  margin-bottom: 18px;
+}
+
+.market-intel-error {
+  margin: 12px 0 18px;
+}
+
+.market-intel-summary {
+  margin-top: 18px;
+}
+
+.market-intel-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 18px;
+}
+
+.market-intel-source-list,
+.market-intel-groups,
+.market-intel-item-list {
+  display: grid;
+  gap: 12px;
+}
+
+.market-intel-source {
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 12px;
+}
+
+.market-intel-source:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.market-intel-source div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.market-intel-source span,
+.market-intel-item header span,
+.market-intel-item footer {
+  color: #65758b;
+  font-size: 12px;
+}
+
+.market-intel-source p {
+  margin: 0;
+  color: #991b1b;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.market-intel-kv {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.market-intel-kv dt {
+  color: #65758b;
+  font-weight: 700;
+}
+
+.market-intel-kv dd {
+  margin: 0;
+  color: #243247;
+}
+
+.market-intel-group h3 {
+  margin: 0 0 10px;
+  color: #172033;
+  font-size: 14px;
+}
+
+.market-intel-item {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.market-intel-item header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.market-intel-item a,
+.market-intel-item strong {
+  min-width: 0;
+  color: #172033;
+  font-size: 14px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.market-intel-item p {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .result-actions,
 .code-result-actions,
 .code-preview-actions {
@@ -1015,7 +1126,7 @@ textarea.code-input::placeholder {
 @media (max-width: 900px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: static; }
-  .metric-grid, .form-grid, .result-layout, .option-form, .option-fill-form, .option-layout, .option-summary-grid, .quant-grid, .metric-row, .rule-list-toolbar, .rule-editor-layout, .compact-form-grid, .code-preview-grid { grid-template-columns: 1fr; }
+  .metric-grid, .form-grid, .result-layout, .option-form, .option-fill-form, .option-layout, .option-summary-grid, .quant-grid, .metric-row, .rule-list-toolbar, .rule-editor-layout, .compact-form-grid, .code-preview-grid, .market-intel-layout { grid-template-columns: 1fr; }
   .compact-form-grid .field-wide { grid-column: auto; }
   .code-preview-card header { display: grid; }
   .result-actions, .code-result-actions, .code-preview-actions { justify-content: flex-start; }

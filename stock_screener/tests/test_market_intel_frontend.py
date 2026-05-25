@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+from pathlib import Path
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+FRONTEND_SRC = ROOT / "web_frontend" / "src"
+MAIN_TSX = FRONTEND_SRC / "main.tsx"
+MARKET_INTEL_PAGE = FRONTEND_SRC / "features" / "marketIntel" / "MarketIntelPage.tsx"
+MARKET_INTEL_API = FRONTEND_SRC / "features" / "marketIntel" / "api.ts"
+
+
+class MarketIntelFrontendTest(unittest.TestCase):
+    def test_main_wires_market_intel_navigation(self):
+        source = MAIN_TSX.read_text(encoding="utf-8")
+
+        self.assertIn("市场情报", source)
+        self.assertIn("page === 'marketIntel'", source)
+        self.assertIn("setPage('marketIntel')", source)
+
+    def test_market_intel_page_has_operational_sections(self):
+        source = MARKET_INTEL_PAGE.read_text(encoding="utf-8")
+
+        self.assertIn("来源状态", source)
+        self.assertIn("公告", source)
+        self.assertIn("研报", source)
+        self.assertIn("资金面", source)
+
+    def test_market_intel_api_uses_v1_endpoints(self):
+        source = MARKET_INTEL_API.read_text(encoding="utf-8")
+
+        self.assertIn("/api/market-intel/stocks", source)
+        self.assertIn("/api/market-intel/markets", source)
+        self.assertIn("/api/market-intel/evidence-pack/preview", source)
+
+
+if __name__ == "__main__":
+    unittest.main()

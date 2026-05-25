@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import CodeMirror from '@uiw/react-codemirror'
 import { json } from '@codemirror/lang-json'
 import { api } from './api'
+import { MarketIntelPage } from './features/marketIntel/MarketIntelPage'
 import { QuantLab } from './features/quant/QuantLab'
 import './styles.css'
 
@@ -397,6 +398,7 @@ function App() {
           <button className={page === 'dashboard' ? 'active' : ''} onClick={() => setPage('dashboard')}>总览</button>
           <button className={page === 'screening' ? 'active' : ''} onClick={() => setPage('screening')}>全市场筛选</button>
           <button className={page === 'codeScreening' ? 'active' : ''} onClick={() => setPage('codeScreening')}>代码筛选</button>
+          <button className={page === 'marketIntel' ? 'active' : ''} onClick={() => setPage('marketIntel')}>市场情报</button>
           <button className={page === 'options' ? 'active' : ''} onClick={() => setPage('options')}>期权实验室</button>
           <button className={page === 'quant' ? 'active' : ''} onClick={() => setPage('quant')}>量化实验室</button>
           <button className={page === 'rules' ? 'active' : ''} onClick={() => setPage('rules')}>规则链</button>
@@ -412,6 +414,7 @@ function App() {
         />}
         {page === 'screening' && <Screening />}
         {page === 'codeScreening' && <CodeScreening openTask={(taskId) => { setSelectedTaskId(taskId); setPage('task') }} />}
+        {page === 'marketIntel' && <MarketIntelPage />}
         {page === 'options' && <OptionLab />}
         {page === 'quant' && <QuantLab />}
         {page === 'rules' && <Rules />}
