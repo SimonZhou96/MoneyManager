@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 from report_naming import analysis_report_path_for_csv, market_signal_report_stem
 
 from market_intel.evidence import EvidencePackBuilder, flatten_bundle_items, intel_items_to_search_documents
+from market_intel.reporting import render_multi_stock_report
 
 from .evidence import apply_evidence_to_result, dedupe_documents, expand_company_documents
 from .llm_providers import LLMProvider
@@ -606,7 +607,7 @@ class WriteArtifactsStep(AnalysisStep):
         write_analysis_columns_to_csv(context.csv_path, context.results_by_code)
 
         with open(report_path, "w", encoding="utf-8") as f:
-            f.write(_render_markdown_report(context))
+            f.write(_render_artifact_report(context))
 
         context.artifact_paths.append(report_path)
 
@@ -916,6 +917,30 @@ def write_analysis_columns_to_csv(
                 os.unlink(temp_path)
             except OSError:
                 pass
+
+
+def _render_artifact_report(context: SignalAnalysisContext) -> str:
+    if context.evidence_packs:
+        report_rows = context.all_rows or context.rows
+        packs = [
+            context.evidence_packs[row.code]
+            for row in report_rows
+            if row.code in context.evidence_packs
+        ]
+        results = [
+            context.results_by_code[row.code].to_db_row(
+                task_id=context.task_id,
+                market=context.market,
+                check_date=context.check_date,
+                csv_path=context.csv_path,
+                timeframe=context.timeframe,
+                analysis_profile=context.analysis_profile,
+            )
+            for row in report_rows
+            if row.code in context.results_by_code
+        ]
+        return render_multi_stock_report(packs, results, report_date=context.check_date)
+    return _render_markdown_report(context)
 
 
 def _render_markdown_report(context: SignalAnalysisContext) -> str:

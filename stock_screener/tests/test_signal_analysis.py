@@ -19,6 +19,7 @@ from signal_analysis.chain import (
     SearchContextStep,
     SignalAnalysisChain,
     SignalAnalysisContext,
+    WriteArtifactsStep,
     write_analysis_columns_to_csv,
 )
 from signal_analysis.evidence import expand_company_documents
@@ -395,6 +396,62 @@ class MarketIntelSignalAnalysisIntegrationTest(unittest.TestCase):
             result.evidence_packs["US.AAPL"]["stock_context"]["items"][0]["title"],
             "US.AAPL stock intel headline",
         )
+
+    def test_write_artifacts_uses_market_intel_report_when_evidence_packs_exist(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = Path(tmp_dir) / "screening_result_2026-05-25_A.csv"
+            with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=["股票代码", "市场", "名称", "标的类型"])
+                writer.writeheader()
+                writer.writerow({"股票代码": "600519", "市场": "A股", "名称": "贵州茅台", "标的类型": "股票"})
+
+            row = ScreeningSignalRow(
+                index=0,
+                code="600519",
+                market="A",
+                market_label="A股",
+                name="贵州茅台",
+                pe_ratio="",
+                market_cap="",
+                sector="白酒",
+                conditions_met="左一战法",
+            )
+            context = SignalAnalysisContext(
+                task_id="task-A",
+                market="A",
+                csv_path=str(csv_path),
+                check_date=date(2026, 5, 25),
+                settings=AnalysisSettings(),
+                search_provider=NullSearchProvider(),
+                llm_provider=NullLLMProvider(),
+                rows=[row],
+                all_rows=[row],
+                evidence_packs={
+                    "600519": {
+                        "market": "A",
+                        "code": "600519",
+                        "stock_context": {"items": [{"title": "贵州茅台经营稳健", "summary": "渠道反馈稳定"}]},
+                        "data_gaps": [],
+                    }
+                },
+                results_by_code={
+                    "600519": SignalAnalysisResult(
+                        code="600519",
+                        name="贵州茅台",
+                        reliability_score=86,
+                        confidence_score=74,
+                        signal_bias="bullish",
+                        summary="信号较强，但仍需要观察资金连续性。",
+                    )
+                },
+            )
+
+            WriteArtifactsStep().run(context)
+
+            report_text = Path(context.artifact_paths[0]).read_text(encoding="utf-8")
+            self.assertIn("# 多股票市场情报与AI复核报告", report_text)
+            self.assertIn("饼图：股票评级分布", report_text)
+            self.assertIn("## 10. 数据缺失与来源说明", report_text)
 
 
 class SignalAnalysisTest(unittest.TestCase):
