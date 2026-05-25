@@ -7,12 +7,21 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_SRC = ROOT / "web_frontend" / "src"
+MAIN_TSX = FRONTEND_SRC / "main.tsx"
 MARKET_INTEL_PAGE = FRONTEND_SRC / "features" / "marketIntel" / "MarketIntelPage.tsx"
 MARKET_INTEL_API = FRONTEND_SRC / "features" / "marketIntel" / "api.ts"
 MARKET_INTEL_TYPES = FRONTEND_SRC / "features" / "marketIntel" / "types.ts"
 
 
 class MarketIntelFrontendTest(unittest.TestCase):
+    def test_main_wires_market_intel_navigation(self):
+        source = MAIN_TSX.read_text(encoding="utf-8")
+
+        self.assertIn("MarketIntelPage", source)
+        self.assertIn("市场情报", source)
+        self.assertIn("page === 'marketIntel'", source)
+        self.assertIn("setPage('marketIntel')", source)
+
     def test_market_intel_page_exports_feature_view(self):
         source = MARKET_INTEL_PAGE.read_text(encoding="utf-8")
 

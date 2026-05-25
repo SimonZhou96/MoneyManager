@@ -1403,7 +1403,9 @@ textarea.code-input::placeholder {
 
 .market-intel-source {
   display: grid;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: start;
   border-bottom: 1px solid #e2e8f0;
   padding-bottom: 12px;
 }
@@ -1414,9 +1416,18 @@ textarea.code-input::placeholder {
 }
 
 .market-intel-source div {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.market-intel-source strong {
+  overflow-wrap: anywhere;
+}
+
+.market-intel-source > .status {
+  justify-self: end;
+  width: max-content;
 }
 
 .market-intel-source span,
@@ -1427,6 +1438,7 @@ textarea.code-input::placeholder {
 }
 
 .market-intel-source p {
+  grid-column: 1 / -1;
   margin: 0;
   color: #991b1b;
   font-size: 13px;
