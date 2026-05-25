@@ -188,6 +188,23 @@ DEEPSEEK_API_BASE=
 - `SIGNAL_ENABLE_MARKET_INTEL=0` 时，自动 AI 分析保持原有搜索 + LLM 路径。
 - 只有在目标环境确认 provider 缓存行为正常后，再设置 `SIGNAL_ENABLE_MARKET_INTEL=1`。
 
+### Market Intel source expansion
+
+Stable HTTP providers are controlled by `MARKET_INTEL_PROVIDER_ORDER` and the
+per-provider `MARKET_INTEL_ENABLE_*` flags. The default order is:
+
+`cailianpress,sina,tradingview,eastmoney,global_index`
+
+`SIGNAL_ENABLE_MARKET_INTEL=0` keeps richer provider data out of automated
+signal analysis by default. Turning on live Market Intel for the API/UI does not
+increase screening search or LLM calls unless `SIGNAL_ENABLE_MARKET_INTEL=1` is
+also set.
+
+Search-like providers (`iwencai`, `eastmoney_search`) and browser/cookie
+providers (`xueqiu`) stay disabled until their contracts and operating limits
+are verified. `MARKET_INTEL_BROWSER_PROVIDERS_ALLOWED=0` prevents browser-backed
+providers from running in normal screening paths.
+
 生成 `AGENT_TOKEN` 示例：
 
 ```bash

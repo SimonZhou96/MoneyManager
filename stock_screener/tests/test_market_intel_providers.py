@@ -429,5 +429,20 @@ class MarketIntelSourceRegistryTests(unittest.TestCase):
             self.assertTrue(config_by_provider()["xueqiu"].enabled())
 
 
+class MarketIntelSourceDocsTests(unittest.TestCase):
+    def test_env_example_documents_source_expansion_flags(self):
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        text = (root / ".env.example").read_text(encoding="utf-8")
+
+        self.assertIn("MARKET_INTEL_PROVIDER_ORDER=", text)
+        self.assertIn("MARKET_INTEL_ENABLE_CAILIANPRESS=1", text)
+        self.assertIn("MARKET_INTEL_ENABLE_SINA=1", text)
+        self.assertIn("MARKET_INTEL_ENABLE_TRADINGVIEW=1", text)
+        self.assertIn("MARKET_INTEL_ENABLE_XUEQIU=0", text)
+        self.assertIn("MARKET_INTEL_BROWSER_PROVIDERS_ALLOWED=0", text)
+
+
 if __name__ == "__main__":
     unittest.main()
