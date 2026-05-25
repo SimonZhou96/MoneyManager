@@ -315,6 +315,26 @@ class MarketIntelProviderTests(unittest.TestCase):
         self.assertEqual(items[0].title, "AI chip stocks rise")
         self.assertEqual(items[0].summary, "")
 
+    def test_tradingview_provider_keeps_list_items_when_detail_request_raises(self):
+        from market_intel.providers.tradingview import TradingViewNewsIntelProvider
+
+        session = FakeSession([
+            {
+                "items": [
+                    {"id": "tv-1", "title": "AI chip stocks rise", "published": 1779685200},
+                ]
+            },
+            TimeoutError("detail timeout"),
+        ])
+        provider = TradingViewNewsIntelProvider(session=session, detail_limit=1)
+
+        items = provider.fetch_market("US")
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].provider, "tradingview")
+        self.assertEqual(items[0].title, "AI chip stocks rise")
+        self.assertEqual(items[0].summary, "")
+
     def test_global_index_fetch_market_returns_index_snapshot(self):
         session = FakeSession([
             {

@@ -50,12 +50,12 @@ class TradingViewNewsIntelProvider(MarketIntelProvider):
             story_id = str(row.get("id") or "")
             if not story_id:
                 continue
-            response = self.session.get(
-                "https://news-headlines.tradingview.com/v3/story",
-                params={"id": story_id, "lang": "zh-Hans"},
-                timeout=self.timeout_sec,
-            )
             try:
+                response = self.session.get(
+                    "https://news-headlines.tradingview.com/v3/story",
+                    params={"id": story_id, "lang": "zh-Hans"},
+                    timeout=self.timeout_sec,
+                )
                 response.raise_for_status()
                 payload = response.json()
             except Exception:
