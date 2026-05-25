@@ -37,6 +37,7 @@ from .errors import (
     http_exception_handler,
     request_validation_exception_handler,
 )
+from .market_intel import router as market_intel_router
 from .options import router as options_router
 from .quant import router as quant_router
 from .rate_limit import (
@@ -68,6 +69,7 @@ app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
 app.include_router(options_router)
 app.include_router(quant_router)
+app.include_router(market_intel_router)
 
 
 class LoginRequest(BaseModel):
@@ -203,6 +205,7 @@ def startup() -> None:
     db = MarketDatabase(mysql_config_from_env())
     try:
         db.init_web_schema()
+        db.init_market_intel_schema()
         username = os.getenv("WEB_BOOTSTRAP_USERNAME", "").strip()
         password = os.getenv("WEB_BOOTSTRAP_PASSWORD", "").strip()
         if username and password and not db.get_web_user_by_username(username):
