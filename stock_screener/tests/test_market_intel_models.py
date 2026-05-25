@@ -83,7 +83,7 @@ class MarketIntelModelTests(unittest.TestCase):
         self.assertEqual(payload["market"], "US")
         self.assertEqual(payload["code"], "AAPL")
         self.assertEqual(
-            [item["title"] for item in payload["items"]["market_news"]],
+            [item["title"] for item in payload["groups"]["market_news"]],
             ["Newer", "Older"],
         )
         self.assertEqual(payload["source_status"]["provider-a"]["item_count"], 2)

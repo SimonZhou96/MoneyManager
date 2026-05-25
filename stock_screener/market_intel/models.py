@@ -138,7 +138,7 @@ class StockIntelBundle:
             "scope_type": "stock",
             "market": self.market,
             "code": self.code,
-            "items": _group_item_dicts(self.items),
+            "groups": _group_item_dicts(self.items),
             "freshness_status": self.freshness_status,
             "source_status": _source_status_dicts(self.source_status),
         }
@@ -156,7 +156,7 @@ class MarketIntelBundle:
             "scope_type": "market",
             "market": self.market,
             "code": "",
-            "items": _group_item_dicts(self.items),
+            "groups": _group_item_dicts(self.items),
             "freshness_status": self.freshness_status,
             "source_status": _source_status_dicts(self.source_status),
         }
