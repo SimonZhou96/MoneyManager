@@ -177,6 +177,17 @@ DEEPSEEK_API_BASE=
 
 如果后续要使用 Codex/OpenAI，建议单独部署香港/新加坡/日本等 OpenAI 支持地区的 AI worker，而不是让大陆 ECS 直接请求 OpenAI API。
 
+### Market Intel
+
+`market_intel` 提供后端缓存的市场和个股证据，用于 Web 页面查看，也可以选择性增强 `signal_analysis`。
+
+- API 路由位于 `/api/market-intel`。
+- 表结构由 `MarketDatabase.init_market_intel_schema()` 初始化。
+- Provider 失败会记录到 `market_intel_provider_runs`。
+- Market Intel provider 失败不会阻断筛选任务。
+- `SIGNAL_ENABLE_MARKET_INTEL=0` 时，自动 AI 分析保持原有搜索 + LLM 路径。
+- 只有在目标环境确认 provider 缓存行为正常后，再设置 `SIGNAL_ENABLE_MARKET_INTEL=1`。
+
 生成 `AGENT_TOKEN` 示例：
 
 ```bash
