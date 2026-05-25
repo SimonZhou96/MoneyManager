@@ -5,9 +5,10 @@ from market_intel.models import (
     DataSourceStatus,
     EvidencePack,
     IntelItem,
+    MarketIntelBundle,
     StockIntelBundle,
 )
-from market_intel.providers.base import dedupe_items, ttl_for_item_type
+from market_intel.providers.base import dedupe_items, group_items, ttl_for_item_type
 
 
 class MarketIntelModelTests(unittest.TestCase):
@@ -146,6 +147,44 @@ class MarketIntelModelTests(unittest.TestCase):
         self.assertEqual(ttl_for_item_type("index_snapshot"), timedelta(minutes=15))
         self.assertEqual(ttl_for_item_type("search_document"), timedelta(hours=2))
         self.assertEqual(ttl_for_item_type("unknown"), timedelta(hours=6))
+
+    def test_group_sort_handles_mixed_timezone_datetimes(self):
+        aware = IntelItem.from_dict({
+            "scope_type": "market",
+            "market": "US",
+            "code": "",
+            "source": "news",
+            "provider": "provider-a",
+            "item_type": "market_news",
+            "title": "Aware timestamp",
+            "fetched_at": "2026-05-25T10:00:00Z",
+            "expires_at": "2026-05-25T10:15:00Z",
+            "dedupe_key": "aware",
+        })
+        naive = IntelItem(
+            scope_type="market",
+            market="US",
+            code="",
+            source="news",
+            provider="provider-a",
+            item_type="market_news",
+            title="Naive timestamp",
+            fetched_at=datetime(2026, 5, 25, 11, 0, 0),
+            expires_at=datetime(2026, 5, 25, 11, 15, 0),
+            dedupe_key="naive",
+        )
+
+        bundle_payload = MarketIntelBundle(market="US", items=[aware, naive]).to_dict()
+        provider_groups = group_items([aware, naive])
+
+        self.assertEqual(
+            [item["title"] for item in bundle_payload["groups"]["market_news"]],
+            ["Naive timestamp", "Aware timestamp"],
+        )
+        self.assertEqual(
+            [item.title for item in provider_groups["market_news"]],
+            ["Naive timestamp", "Aware timestamp"],
+        )
 
 
 if __name__ == "__main__":

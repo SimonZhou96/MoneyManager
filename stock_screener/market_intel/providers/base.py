@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, List, Tuple
 
 from market_intel.models import IntelItem
@@ -71,10 +71,22 @@ def dedupe_items(items: Iterable[IntelItem]) -> List[IntelItem]:
     return deduped
 
 
+def _datetime_sort_timestamp(value: datetime | None) -> float:
+    if value is None:
+        return 0.0
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.timestamp()
+
+
+def _item_sort_timestamp(item: IntelItem) -> float:
+    return _datetime_sort_timestamp(item.published_at or item.fetched_at)
+
+
 def group_items(items: Iterable[IntelItem]) -> Dict[str, List[IntelItem]]:
     grouped: Dict[str, List[IntelItem]] = {}
     for item in items:
         grouped.setdefault(item.item_type, []).append(item)
     for values in grouped.values():
-        values.sort(key=lambda item: item.published_at or item.fetched_at, reverse=True)
+        values.sort(key=_item_sort_timestamp, reverse=True)
     return grouped

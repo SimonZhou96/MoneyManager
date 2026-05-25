@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 
@@ -24,6 +24,18 @@ def datetime_to_json(value: Optional[datetime]) -> Optional[str]:
     if value is None:
         return None
     return value.isoformat()
+
+
+def _datetime_sort_timestamp(value: Optional[datetime]) -> float:
+    if value is None:
+        return 0.0
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.timestamp()
+
+
+def _item_sort_timestamp(item: "IntelItem") -> float:
+    return _datetime_sort_timestamp(item.published_at or item.fetched_at)
 
 
 @dataclass
@@ -111,7 +123,7 @@ def _group_item_dicts(items: List[IntelItem]) -> Dict[str, List[Dict[str, Any]]]
     return {
         item_type: [item.to_dict() for item in sorted(
             values,
-            key=lambda item: item.published_at or item.fetched_at,
+            key=_item_sort_timestamp,
             reverse=True,
         )]
         for item_type, values in grouped.items()
