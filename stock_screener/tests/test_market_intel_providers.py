@@ -147,8 +147,9 @@ class MarketIntelProviderTests(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].item_type, "market_news")
         self.assertEqual(items[0].title, "市场快讯")
-        self.assertEqual(items[0].provider, "cailianpress")
-        self.assertEqual(provider.name, "cailianpress")
+        self.assertEqual(items[0].provider, "news")
+        self.assertEqual(provider.provider_name, "news")
+        self.assertEqual(provider.name, "news")
 
     def test_cailianpress_fetch_market_accepts_nested_roll_data(self):
         from market_intel.providers.cailianpress import CailianpressIntelProvider
@@ -216,7 +217,27 @@ class MarketIntelProviderTests(unittest.TestCase):
         self.assertEqual(rows, [{"title": "半导体板块快速拉升", "content": "半导体板块快速拉升", "time": "09:31"}])
 
     def test_legacy_news_provider_alias_still_works(self):
-        self.assertEqual(NewsIntelProvider.provider_name, "cailianpress")
+        session = FakeSession([
+            {
+                "roll_data": [
+                    {
+                        "title": "兼容快讯",
+                        "content": "沿用财联社解析逻辑",
+                        "ctime": 1779685200000,
+                        "id": "legacy-news-1",
+                    }
+                ]
+            }
+        ])
+        provider = NewsIntelProvider(session=session)
+
+        items = provider.fetch_market("A")
+
+        self.assertEqual(NewsIntelProvider.provider_name, "news")
+        self.assertEqual(NewsIntelProvider.name, "news")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].provider, "news")
+        self.assertEqual(items[0].dedupe_key, "news:market_news:legacy-news-1")
 
     def test_sina_jsonp_parser_returns_market_news_rows(self):
         from market_intel.providers.sina import parse_sina_live_feed
@@ -273,6 +294,26 @@ class MarketIntelProviderTests(unittest.TestCase):
         self.assertEqual(session.calls[1][0], "https://news-headlines.tradingview.com/v3/story")
         self.assertEqual(items[0].provider, "tradingview")
         self.assertIn("Detailed AI chip context", items[0].summary)
+
+    def test_tradingview_provider_keeps_list_items_when_detail_fails(self):
+        from market_intel.providers.tradingview import TradingViewNewsIntelProvider
+
+        session = FakeSession([
+            {
+                "items": [
+                    {"id": "tv-1", "title": "AI chip stocks rise", "published": 1779685200},
+                ]
+            },
+            ({"error": "bad detail"}, RuntimeError("HTTP 500")),
+        ])
+        provider = TradingViewNewsIntelProvider(session=session, detail_limit=1)
+
+        items = provider.fetch_market("US")
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].provider, "tradingview")
+        self.assertEqual(items[0].title, "AI chip stocks rise")
+        self.assertEqual(items[0].summary, "")
 
     def test_global_index_fetch_market_returns_index_snapshot(self):
         session = FakeSession([

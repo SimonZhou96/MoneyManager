@@ -55,8 +55,11 @@ class TradingViewNewsIntelProvider(MarketIntelProvider):
                 params={"id": story_id, "lang": "zh-Hans"},
                 timeout=self.timeout_sec,
             )
-            response.raise_for_status()
-            payload = response.json()
+            try:
+                response.raise_for_status()
+                payload = response.json()
+            except Exception:
+                continue
             details[story_id] = payload if isinstance(payload, dict) else {}
         return details
 
