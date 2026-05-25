@@ -33,13 +33,24 @@ class CustomListTests(unittest.TestCase):
         self.assertEqual(a_parsed.valid_codes, ["SH.600519", "SZ.000001", "BJ.430047"])
         self.assertEqual(us_parsed.valid_codes, ["US.AAPL", "US.MSFT", "US.TSLA"])
 
-    def test_job_service_creates_custom_job_without_lock_payload(self):
+    def test_job_service_creates_backend_custom_job_with_task_id(self):
         class FakeDB:
             def __init__(self):
                 self.created = None
+                self.updated_job = None
+                self.created_task = None
+
+            def init_schema(self, timeframe="1d"):
+                self.schema_timeframe = timeframe
 
             def create_web_screening_job(self, **kwargs):
                 self.created = kwargs
+
+            def create_screening_task(self, **kwargs):
+                self.created_task = kwargs
+
+            def update_web_screening_job(self, *args, **kwargs):
+                self.updated_job = (args, kwargs)
 
         db = FakeDB()
         parsed = CustomListCodeParser().parse("HK", ["700", "9988"])
@@ -53,14 +64,76 @@ class CustomListTests(unittest.TestCase):
             send_feishu=False,
         )
 
-        self.assertEqual(response["status"], "queued")
+        self.assertEqual(response["status"], "running")
+        self.assertEqual(response["runner"], "web_backend")
         self.assertEqual(response["market"], "HK")
+        self.assertTrue(response["task_id"])
         self.assertEqual(db.created["markets"], ["HK"])
+        self.assertEqual(db.created["execution_mode"], "web_backend")
         options = db.created["options"]
         self.assertEqual(options["job_kind"], "custom_list")
         self.assertEqual(options["result_upload_scope"], "all")
+        self.assertEqual(options["task_id"], response["task_id"])
         self.assertEqual(options["normalized_codes"], ["HK.00700", "HK.09988"])
         self.assertEqual(options["watchlist_by_market"]["HK"][0]["code"], "HK.00700")
+        self.assertEqual(db.created_task["task_id"], response["task_id"])
+        self.assertEqual(db.created_task["total_count"], 2)
+        self.assertEqual(db.updated_job[0][1], "running")
+        self.assertEqual(db.updated_job[1]["task_ids"], [response["task_id"]])
+
+    def test_custom_list_runner_reuses_backend_task_id(self):
+        from custom_list import CustomListScreeningRunner
+
+        class FakeDB:
+            instances = []
+
+            def __init__(self, mysql_config):
+                self.created_tasks = []
+                FakeDB.instances.append(self)
+
+            def init_schema(self, timeframe="1d"):
+                pass
+
+            def create_screening_task(self, **kwargs):
+                self.created_tasks.append(kwargs)
+
+            def close(self):
+                pass
+
+        class FakeProcessor:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def process(self, **kwargs):
+                return []
+
+        job = {
+            "job_id": "job-1",
+            "markets": ["HK"],
+            "timeframe": "1d",
+            "options": {
+                "task_id": "task-existing",
+                "chain_key": "default",
+                "watchlist_by_market": {"HK": [{"code": "HK.00700", "name": "腾讯控股"}]},
+            },
+        }
+
+        with patch("custom_list.MarketDatabase", FakeDB), \
+                patch("custom_list.run_screening_task") as run_task, \
+                patch("custom_list.load_passed_screening_records", return_value=[]), \
+                patch("custom_list.ScreeningPostProcessor", FakeProcessor):
+            result = CustomListScreeningRunner(object()).run(
+                job=job,
+                csv_base="logs/test",
+                today_str="2026-05-25",
+                enable_ai_analysis=False,
+            )
+
+        self.assertEqual(result.task_id, "task-existing")
+        self.assertEqual(FakeDB.instances, [])
+        run_task.assert_called_once()
+        self.assertEqual(run_task.call_args.kwargs["task_id"], "task-existing")
+        self.assertEqual(run_task.call_args.kwargs["watchlist"][0]["code"], "HK.00700")
 
     def test_job_service_builds_ordered_chinese_status_results(self):
         class FakeDB:

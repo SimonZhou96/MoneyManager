@@ -8,15 +8,16 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, Query, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from db import MarketDatabase
-from custom_list import CustomListCodeParser, CustomListJobService
-from market import normalize_market
+from custom_list import CustomListCodeParser, CustomListJobService, CustomListScreeningRunner
+from feishu_notifier import send_screening_result
+from market import market_label, normalize_market
 from rule_engine import RuleRepository
 from stock_pool import CANONICAL_POOL_TYPES, normalize_pool_types, pool_scope_from_types
 from .auth import (
@@ -38,6 +39,7 @@ from .errors import (
     request_validation_exception_handler,
 )
 from .market_intel import router as market_intel_router
+from .jobs import run_web_screening_job
 from .options import router as options_router
 from .quant import router as quant_router
 from .rate_limit import (
@@ -100,6 +102,73 @@ class CustomListScreeningTaskRequest(BaseModel):
     chain_key: Optional[str] = None
     enable_ai_analysis: bool = True
     send_feishu: bool = False
+
+
+def run_custom_list_backend_job(job_id: str) -> None:
+    mysql_config = mysql_config_from_env()
+    db = MarketDatabase(mysql_config)
+    try:
+        job = db.get_web_screening_job(job_id)
+        if not job:
+            return
+        options = job.get("options") or {}
+        task_ids = job.get("task_ids") or []
+        task_id = task_ids[0] if task_ids else options.get("task_id")
+        market = normalize_market((job.get("markets") or [None])[0] or options.get("market") or "HK")
+        timeframe = str(job.get("timeframe") or "1d")
+        result = CustomListScreeningRunner(mysql_config).run(
+            job=job,
+            csv_base=str(artifact_dir() / "screening_result"),
+            today_str=date.today().strftime("%Y-%m-%d"),
+            enable_ai_analysis=bool(options.get("enable_ai_analysis", True)),
+            task_id=task_id,
+        )
+        summary = {
+            "markets": [market],
+            "timeframe": timeframe,
+            "chain_key": options.get("chain_key"),
+            "chain_timeframe": options.get("chain_timeframe"),
+            "chain_name": options.get("chain_name"),
+            "result_upload_scope": options.get("result_upload_scope"),
+            "input_summary": options.get("input_summary") or {},
+            "task_ids": [result.task_id],
+            "market_statuses": {market: {"status": "completed", "task_id": result.task_id}},
+            "passed_count": len(result.passed),
+            "total_count": result.total_count,
+        }
+        db.update_web_screening_job(job_id, "completed", task_ids=[result.task_id], finished=True, summary=summary)
+        webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
+        if options.get("send_feishu") and webhook_url and result.csv_paths:
+            try:
+                send_screening_result(
+                    webhook_url,
+                    f"【Web自定义列表筛选】{date.today()} - {market_label(market)}\n通过: {len(result.passed)} 只",
+                    result.csv_paths,
+                )
+            except Exception as exc:
+                summary["warnings"] = [f"飞书发送失败：{type(exc).__name__}: {exc}"]
+                db.update_web_screening_job(job_id, "completed", task_ids=[result.task_id], summary=summary)
+    except Exception as exc:
+        message = f"{type(exc).__name__}: {exc}"
+        try:
+            job = db.get_web_screening_job(job_id) or {}
+            options = job.get("options") or {}
+            task_ids = job.get("task_ids") or ([options.get("task_id")] if options.get("task_id") else None)
+            task_id = task_ids[0] if task_ids else None
+            if task_id:
+                db.update_task_status(task_id, "failed")
+            db.update_web_screening_job(
+                job_id,
+                "failed",
+                task_ids=task_ids,
+                error_message=message,
+                finished=True,
+                summary={"warnings": [message]},
+            )
+        except Exception:
+            pass
+    finally:
+        db.close()
 
 
 class SyncRunRequest(BaseModel):
@@ -247,6 +316,7 @@ def me(user: Optional[CurrentUser] = Depends(optional_user)):
 @app.post("/api/screening/tasks")
 def create_screening_task(
     payload: ScreeningTaskRequest,
+    background_tasks: BackgroundTasks,
     user: CurrentUser = Depends(require_user),
     db: MarketDatabase = Depends(get_db),
 ):
@@ -282,7 +352,7 @@ def create_screening_task(
         return {
             "job_id": job_id,
             "status": job.get("status") or active[0].get("status"),
-            "runner": "local_agent",
+            "runner": job.get("execution_mode") or "web_backend",
             "reused": True,
             "message": "已有任务运行中，已为你复用该任务",
             "markets": job.get("markets") or sorted({item["market"] for item in active}),
@@ -303,7 +373,14 @@ def create_screening_task(
         "chain_timeframe": chain.get("chain_timeframe"),
         "chain_name": chain.get("chain_name"),
     }
-    db.create_web_screening_job(job_id=job_id, user_id=user.id, markets=markets, timeframe=timeframe, options=options)
+    db.create_web_screening_job(
+        job_id=job_id,
+        user_id=user.id,
+        markets=markets,
+        timeframe=timeframe,
+        options=options,
+        execution_mode="web_backend",
+    )
     try:
         db.create_screening_run_locks(
             job_id=job_id,
@@ -326,7 +403,7 @@ def create_screening_task(
             return {
                 "job_id": active_after_race[0]["job_id"],
                 "status": active_after_race[0]["status"],
-                "runner": "local_agent",
+                "runner": "web_backend",
                 "reused": True,
                 "message": "已有任务运行中，已为你复用该任务",
                 "markets": sorted({item["market"] for item in active_after_race}),
@@ -337,10 +414,22 @@ def create_screening_task(
                 "chain_name": chain.get("chain_name"),
             }
         raise BusinessError("SCREENING_LOCK_CREATE_FAILED", f"创建筛选锁失败：{type(exc).__name__}: {exc}") from exc
+    background_tasks.add_task(
+        run_web_screening_job,
+        mysql_config_from_env(),
+        job_id,
+        markets,
+        timeframe,
+        str(artifact_dir()),
+        bool(payload.enable_ai_analysis),
+        bool(payload.send_feishu),
+        chain_key,
+        pool_types,
+    )
     return {
         "job_id": job_id,
         "status": "queued",
-        "runner": "local_agent",
+        "runner": "web_backend",
         "markets": markets,
         "timeframe": timeframe,
         "pool_types": pool_types,
@@ -353,6 +442,7 @@ def create_screening_task(
 @app.post("/api/screening/custom-list-tasks")
 def create_custom_list_task(
     payload: CustomListScreeningTaskRequest,
+    background_tasks: BackgroundTasks,
     user: CurrentUser = Depends(require_user),
     db: MarketDatabase = Depends(get_db),
 ):
@@ -365,7 +455,7 @@ def create_custom_list_task(
         raise BusinessError("INVALID_CUSTOM_LIST_TASK", str(exc)) from exc
     chain = resolve_rule_chain(db, [market], timeframe=timeframe, chain_key=payload.chain_key)
     try:
-        return CustomListJobService(db).create_job(
+        result = CustomListJobService(db).create_job(
             user_id=user.id,
             market=market,
             timeframe=timeframe,
@@ -374,6 +464,8 @@ def create_custom_list_task(
             enable_ai_analysis=payload.enable_ai_analysis,
             send_feishu=payload.send_feishu,
         )
+        background_tasks.add_task(run_custom_list_backend_job, result["job_id"])
+        return result
     except ValueError as exc:
         raise BusinessError("CUSTOM_LIST_NO_RESOLVED_STOCKS", str(exc)) from exc
 

@@ -1737,14 +1737,22 @@ class MarketDatabase:
         markets: List[str],
         timeframe: str,
         options: Optional[dict] = None,
+        execution_mode: str = "local_agent",
     ) -> None:
         sql = """
             INSERT INTO web_screening_jobs
                 (job_id, user_id, markets, timeframe, status, execution_mode, options_json)
-            VALUES (%s,%s,%s,%s,'queued','local_agent',%s)
+            VALUES (%s,%s,%s,%s,'queued',%s,%s)
         """
         with self.conn.cursor() as cursor:
-            cursor.execute(sql, (job_id, user_id, _json_or_none(markets), timeframe, _json_or_none(options or {})))
+            cursor.execute(sql, (
+                job_id,
+                user_id,
+                _json_or_none(markets),
+                timeframe,
+                execution_mode,
+                _json_or_none(options or {}),
+            ))
 
     def update_web_screening_job(
         self,

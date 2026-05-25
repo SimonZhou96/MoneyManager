@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from db import hash_password, verify_password
 from kline_fetcher import DatabaseKlineFetcher, KlineFetcherFactory
@@ -59,6 +60,13 @@ class WebPlatformTests(unittest.TestCase):
             validate_rule_chain_key("Bad-Key")
 
     def test_create_screening_task_stores_selected_pool_types(self):
+        class FakeBackgroundTasks:
+            def __init__(self):
+                self.tasks = []
+
+            def add_task(self, fn, *args, **kwargs):
+                self.tasks.append((fn, args, kwargs))
+
         class FakeDB:
             def __init__(self):
                 self.created_job = None
@@ -67,19 +75,21 @@ class WebPlatformTests(unittest.TestCase):
             def get_screening_run_locks(self, run_date, markets, timeframe, chain_key=None, pool_scope=None):
                 return []
 
-            def create_web_screening_job(self, job_id, user_id, markets, timeframe, options):
+            def create_web_screening_job(self, job_id, user_id, markets, timeframe, options, execution_mode="local_agent"):
                 self.created_job = {
                     "job_id": job_id,
                     "user_id": user_id,
                     "markets": markets,
                     "timeframe": timeframe,
                     "options": options,
+                    "execution_mode": execution_mode,
                 }
 
             def create_screening_run_locks(self, **kwargs):
                 self.created_locks = kwargs
 
         db = FakeDB()
+        background = FakeBackgroundTasks()
         payload = ScreeningTaskRequest(
             markets=["HK"],
             timeframe="1d",
@@ -87,16 +97,25 @@ class WebPlatformTests(unittest.TestCase):
             enable_ai_analysis=False,
         )
 
-        with unittest.mock.patch("web.main.resolve_rule_chain", return_value={
+        with mock.patch("web.main.resolve_rule_chain", return_value={
             "chain_key": "default_zuoyi_and_other",
             "chain_timeframe": "*",
             "chain_name": "默认链",
         }):
-            result = create_screening_task(payload, CurrentUser(id=7, username="tester", role="admin"), db)
+            result = create_screening_task(
+                payload,
+                background,
+                CurrentUser(id=7, username="tester", role="admin"),
+                db,
+            )
 
+        self.assertEqual(result["runner"], "web_backend")
         self.assertEqual(result["pool_types"], ["major_index", "all_etf"])
+        self.assertEqual(db.created_job["execution_mode"], "web_backend")
         self.assertEqual(db.created_job["options"]["pool_types"], ["major_index", "all_etf"])
         self.assertEqual(db.created_locks["pool_scope"], "major_index,all_etf")
+        self.assertEqual(len(background.tasks), 1)
+        self.assertEqual(background.tasks[0][1][2], ["HK"])
 
     def test_rule_chain_expression_validation_checks_shape_and_refs(self):
         class FakeDB:

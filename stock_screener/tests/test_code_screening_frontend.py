@@ -46,6 +46,35 @@ class CodeScreeningFrontendTest(unittest.TestCase):
         self.assertIn(".code-screening-toggles", styles)
         self.assertIn("grid-column: span 2", styles)
 
+    def test_code_screening_copy_uses_task_queue_terms_not_local_agent(self):
+        source = self.read_main()
+
+        self.assertNotIn("本地 Agent", source)
+        self.assertIn("等待任务创建", source)
+        self.assertIn("已进入执行队列，可在最近任务查看状态", source)
+
+    def test_task_detail_uses_compact_summary_metrics(self):
+        source = self.read_main()
+        styles = STYLES_CSS.read_text(encoding="utf-8")
+
+        self.assertIn('className="metric-grid task-summary-grid"', source)
+        self.assertIn('className="task-summary-rule"', source)
+        self.assertIn(".task-summary-grid", styles)
+        self.assertIn(".task-summary-grid .metric strong", styles)
+
+    def test_full_market_screening_form_prevents_rule_chain_toggle_overlap(self):
+        source = self.read_main()
+        styles = STYLES_CSS.read_text(encoding="utf-8")
+
+        self.assertIn('className="form-grid screening-form-grid"', source)
+        self.assertIn('className="screening-rule-field"', source)
+        self.assertIn('className="screening-toggles"', source)
+        self.assertIn('className="screening-actions"', source)
+        self.assertIn(".screening-form-grid", styles)
+        self.assertIn(".screening-rule-field", styles)
+        self.assertIn(".screening-toggles", styles)
+        self.assertIn(".screening-actions", styles)
+
 
 if __name__ == "__main__":
     unittest.main()

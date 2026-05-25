@@ -168,6 +168,14 @@ class CustomListJobService:
     def __init__(self, db: MarketDatabase):
         self.db = db
 
+    def _params_for_chain(self, chain: dict) -> dict:
+        params = get_default_screening_params()
+        if chain.get("chain_key"):
+            params["chain_key"] = chain.get("chain_key")
+        if chain.get("chain_name"):
+            params["chain_name"] = chain.get("chain_name")
+        return params
+
     def create_job(
         self,
         user_id: Optional[int],
@@ -181,9 +189,12 @@ class CustomListJobService:
         if not parse_result.valid_codes:
             raise ValueError("自定义股票列表没有可筛选的有效代码")
         job_id = str(uuid.uuid4())
+        task_id = str(uuid.uuid4())
         chain_key = chain["chain_key"]
+        params = self._params_for_chain(chain)
         options = {
             "job_kind": CUSTOM_LIST_JOB_KIND,
+            "task_id": task_id,
             "enable_ai_analysis": bool(enable_ai_analysis),
             "send_feishu": bool(send_feishu),
             "result_upload_scope": CUSTOM_LIST_RESULT_SCOPE,
@@ -206,11 +217,37 @@ class CustomListJobService:
             markets=[market],
             timeframe=timeframe,
             options=options,
+            execution_mode="web_backend",
+        )
+        self.db.init_schema(timeframe)
+        self.db.create_screening_task(
+            task_id=task_id,
+            market=market,
+            timeframe=timeframe,
+            total_count=len(parse_result.valid_codes),
+            params_json=params,
+            check_date=date.today(),
+        )
+        self.db.update_web_screening_job(
+            job_id,
+            "running",
+            task_ids=[task_id],
+            summary={
+                "markets": [market],
+                "timeframe": timeframe,
+                "chain_key": chain_key,
+                "chain_timeframe": chain.get("chain_timeframe"),
+                "chain_name": chain.get("chain_name"),
+                "input_summary": parse_result.input_summary,
+                "current_market": market,
+                "stage": "custom_list_screening",
+            },
         )
         return {
             "job_id": job_id,
-            "status": "queued",
-            "runner": "local_agent",
+            "task_id": task_id,
+            "status": "running",
+            "runner": "web_backend",
             "market": market,
             "timeframe": timeframe,
             "chain_key": chain_key,
@@ -226,7 +263,7 @@ class CustomListJobService:
             raise ValueError("任务不是自定义股票列表筛选任务")
 
         task_ids = job.get("task_ids") or []
-        task_id = task_ids[0] if task_ids else None
+        task_id = task_ids[0] if task_ids else options.get("task_id")
         rows_by_code: Dict[str, dict] = {}
         if task_id:
             offset = 0
@@ -302,6 +339,7 @@ class CustomListScreeningRunner:
         csv_base: str,
         today_str: str,
         enable_ai_analysis: bool = True,
+        task_id: Optional[str] = None,
     ) -> CustomListRunResult:
         options = job.get("options") or {}
         market = normalize_market((job.get("markets") or [None])[0] or options.get("market"))
@@ -317,20 +355,22 @@ class CustomListScreeningRunner:
         if options.get("chain_name"):
             params["chain_name"] = options.get("chain_name")
 
-        task_id = str(uuid.uuid4())
-        db = MarketDatabase(self.mysql_config)
-        try:
-            db.init_schema(timeframe)
-            db.create_screening_task(
-                task_id=task_id,
-                market=market,
-                timeframe=timeframe,
-                total_count=len(watchlist),
-                params_json=params,
-                check_date=date.today(),
-            )
-        finally:
-            db.close()
+        existing_task_id = task_id or options.get("task_id")
+        task_id = existing_task_id or str(uuid.uuid4())
+        if not existing_task_id:
+            db = MarketDatabase(self.mysql_config)
+            try:
+                db.init_schema(timeframe)
+                db.create_screening_task(
+                    task_id=task_id,
+                    market=market,
+                    timeframe=timeframe,
+                    total_count=len(watchlist),
+                    params_json=params,
+                    check_date=date.today(),
+                )
+            finally:
+                db.close()
 
         run_screening_task(
             mysql_config=self.mysql_config,

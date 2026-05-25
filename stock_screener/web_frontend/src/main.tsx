@@ -29,6 +29,7 @@ type Task = {
   passed?: boolean
   chain_key?: string
   chain_name?: string
+  summary?: Record<string, unknown>
 }
 type ScreeningResult = {
   market: string
@@ -805,13 +806,37 @@ function mergeRecentTasks(tasks: Task[], jobs: Job[]): Task[] {
     market: (item.markets || []).join(', '),
     total_count: item.task_ids?.length || 0,
     completed_count: item.status === 'completed' ? (item.task_ids?.length || 0) : 0,
-    current_stock_code: item.task_ids && item.task_ids.length > 0 ? item.task_ids[0] : '等待本地 Agent',
+    current_stock_code: webJobCurrentText(item),
     chain_key: item.chain_key,
     chain_name: item.chain_name
   }))
   return [...webJobs, ...marketTasks]
     .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
     .slice(0, 50)
+}
+
+function webJobStageLabel(summary?: Record<string, unknown>) {
+  const stage = String(summary?.stage || '').trim()
+  if (stage === 'screening') return '筛选中'
+  if (stage === 'custom_list_screening') return '代码筛选中'
+  if (stage === 'single_stock') return '单股筛选中'
+  return ''
+}
+
+function webJobCurrentText(job: Pick<Job, 'status' | 'summary' | 'task_ids'>) {
+  if (job.task_ids && job.task_ids.length > 0) return '已生成筛选任务'
+  const currentMarket = String(job.summary?.current_market || '').trim()
+  const stageLabel = webJobStageLabel(job.summary)
+  if (currentMarket && stageLabel) return `${currentMarket} / ${stageLabel}`
+  if (currentMarket) return `执行 ${currentMarket}`
+  if (String(job.status).toLowerCase() === 'queued') return '等待任务创建'
+  if (String(job.status).toLowerCase() === 'running') return stageLabel || '执行中'
+  return '未补齐'
+}
+
+function webJobProgressText(row: Task) {
+  if (row.task_ids && row.task_ids.length > 0) return `${row.task_ids.length} 个筛选任务`
+  return webJobStageLabel(row.summary) || statusLabel(row.status)
 }
 
 function Screening() {
@@ -892,7 +917,7 @@ function Screening() {
       })
       setMessage(result.reused
         ? `已有任务运行中，已复用任务组 ${result.job_id}。`
-        : `已创建任务组 ${result.job_id}，等待本地 Agent 领取执行。`)
+        : `已创建任务组 ${result.job_id}，已进入执行队列，可在最近任务查看状态。`)
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建失败')
     } finally {
@@ -903,20 +928,20 @@ function Screening() {
   return (
     <section>
       <Header title="全市场筛选" subtitle="启动 HK / US / A 批量筛选，后台生成 CSV 和报告" />
-      <form className="form-grid" onSubmit={submit}>
-        <Field label="市场">
+      <form className="form-grid screening-form-grid" onSubmit={submit}>
+        <Field label="市场" className="screening-market-field">
           <div className="segmented">
             {MARKET_OPTIONS.map(market => (
               <button type="button" className={markets.includes(market) ? 'selected' : ''} onClick={() => toggleMarket(market)} key={market}>{market}</button>
             ))}
           </div>
         </Field>
-        <Field label="周期">
+        <Field label="周期" className="screening-timeframe-field">
           <select value={timeframe} onChange={event => setTimeframe(event.target.value)}>
             {TIMEFRAME_OPTIONS.map(item => <option key={item}>{item}</option>)}
           </select>
         </Field>
-        <div className="field field-wide">
+        <div className="field field-wide screening-pool-field">
           <span>股票池类型</span>
           <div className="segmented segmented-wrap">
             {POOL_OPTIONS.map(item => (
@@ -924,7 +949,7 @@ function Screening() {
             ))}
           </div>
         </div>
-        <Field label="规则链">
+        <Field label="规则链" className="screening-rule-field">
           <select value={chainKey} onChange={event => setChainKey(event.target.value)} disabled={chainOptions.length === 0}>
             {chainOptions.length === 0 ? <option value="">暂无共同规则链</option> : chainOptions.map(item => (
               <option key={item.chain_key} value={item.chain_key}>
@@ -933,9 +958,13 @@ function Screening() {
             ))}
           </select>
         </Field>
-        <label className="check"><input type="checkbox" checked={enableAi} onChange={event => setEnableAi(event.target.checked)} /> AI 分析</label>
-        <label className="check"><input type="checkbox" checked={sendFeishu} onChange={event => setSendFeishu(event.target.checked)} /> 发送飞书</label>
-        <button className="primary" disabled={submitting || markets.length === 0 || poolTypes.length === 0 || chainOptions.length === 0}>{submitting ? '创建中...' : '启动筛选'}</button>
+        <div className="screening-toggles">
+          <label className="check"><input type="checkbox" checked={enableAi} onChange={event => setEnableAi(event.target.checked)} /> AI 分析</label>
+          <label className="check"><input type="checkbox" checked={sendFeishu} onChange={event => setSendFeishu(event.target.checked)} /> 发送飞书</label>
+        </div>
+        <div className="screening-actions">
+          <button className="primary" disabled={submitting || markets.length === 0 || poolTypes.length === 0 || chainOptions.length === 0}>{submitting ? '创建中...' : '启动筛选'}</button>
+        </div>
       </form>
       {markets.length === 0 && <div className="inline-error">至少选择一个市场后才能启动筛选。</div>}
       {poolTypes.length === 0 && <div className="inline-error">至少选择一个股票池类型后才能启动筛选。</div>}
@@ -1064,7 +1093,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
           <textarea className="code-input" rows={5} value={codes} onChange={event => setCodes(event.target.value)} placeholder="AAPL, MSFT 或每行一个代码" />
         </Field>
         <div className="code-preview-actions">
-          <button className="primary" disabled={loading || parsedCodes.length === 0 || (rules?.chains || []).length === 0}>{loading ? '等待本地 Agent...' : '启动代码筛选'}</button>
+          <button className="primary" disabled={loading || parsedCodes.length === 0 || (rules?.chains || []).length === 0}>{loading ? '创建任务中...' : '启动代码筛选'}</button>
         </div>
       </form>
       <Panel title="输入预览">
@@ -1115,7 +1144,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
               <div><dt>无效代码</dt><dd>{displayMissing(result.input_summary?.['无效代码数'])}</dd></div>
               <div><dt>重复代码</dt><dd>{displayMissing(result.input_summary?.['重复代码数'])}</dd></div>
               <div><dt>未通过数量</dt><dd>{displayMissing(result.input_summary?.['未通过数量'])}</dd></div>
-              <div><dt>筛选任务</dt><dd>{result.task_id ? <button className="link-button" onClick={() => openTask(result.task_id || '')}>{result.task_id.slice(0, 8)}</button> : '等待本地 Agent 创建'}</dd></div>
+              <div><dt>筛选任务</dt><dd>{result.task_id ? <button className="link-button" onClick={() => openTask(result.task_id || '')}>{result.task_id.slice(0, 8)}</button> : '等待任务创建'}</dd></div>
             </dl>
           </Panel>
           <Panel title="筛选结果">
@@ -1572,9 +1601,9 @@ function TaskDetail({ taskId }: { taskId: string }) {
       </div>
       {error && <div className="error">{error}</div>}
       {task && (
-        <div className="metric-grid">
+        <div className="metric-grid task-summary-grid">
           <Metric label="市场" value={task.market} />
-          <Metric label="规则链" value={task.chain_name || task.chain_key || '默认链/历史任务'} />
+          <Metric label="规则链" value={task.chain_name || task.chain_key || '默认链/历史任务'} className="task-summary-rule" />
           <Metric label="状态" value={<StatusBadge value={task.status} />} />
           <Metric label="进度" value={`${task.completed_count}/${task.total_count}`} />
           <Metric label="通过" value={`${passedCount}/${totalCount}`} />
@@ -1595,7 +1624,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
       </Panel>
       <Panel title="结果表格">
         {uploadedResultScope === 'passed_only' && (
-          <div className="table-note">该任务为本地 Agent 轻量上传模式：云端只保存通过股票明细，失败股票只计入统计。</div>
+          <div className="table-note">该任务为结果轻量存储模式：云端只保存通过股票明细，失败股票只计入统计。</div>
         )}
         <div className="pager">
           <button type="button" disabled={!canPrev} onClick={() => setOffset(Math.max(0, offset - limit))}>上一页</button>
@@ -1612,8 +1641,8 @@ function Header({ title, subtitle }: { title: string; subtitle: string }) {
   return <header className="page-header"><h1>{title}</h1><p>{subtitle}</p></header>
 }
 
-function Metric({ label, value }: { label: string; value: React.ReactNode }) {
-  return <div className="metric"><span>{label}</span><strong>{value}</strong></div>
+function Metric({ label, value, className = '' }: { label: string; value: React.ReactNode; className?: string }) {
+  return <div className={['metric', className].filter(Boolean).join(' ')}><span>{label}</span><strong>{value}</strong></div>
 }
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
@@ -1698,7 +1727,7 @@ function TaskTable({ rows, openTask }: { rows: Task[]; openTask: (taskId: string
             const id = row.task_id
             const stockText = row.current_stock_code || '未补齐'
             const progressText = isWebJob
-                ? (row.task_ids && row.task_ids.length > 0 ? `${row.task_ids.length} 个市场任务` : statusLabel(row.status))
+              ? webJobProgressText(row)
               : `${row.completed_count}/${row.total_count}`
             const firstTaskId = row.task_ids && row.task_ids.length > 0 ? row.task_ids[0] : ''
             return (

@@ -92,6 +92,37 @@ nav button.active, nav button:hover { background: #263449; color: white; }
 .metric span { color: #65758b; }
 .metric strong { font-size: 26px; }
 .metric strong .status { font-size: 13px; vertical-align: middle; }
+.task-summary-grid {
+  grid-template-columns:
+    minmax(110px, 0.7fr)
+    minmax(260px, 1.6fr)
+    minmax(120px, 0.75fr)
+    repeat(3, minmax(120px, 0.8fr));
+  gap: 12px;
+  align-items: stretch;
+}
+.task-summary-grid .metric {
+  min-height: 92px;
+  align-content: center;
+  gap: 8px;
+  padding: 14px 16px;
+}
+.task-summary-grid .metric span {
+  font-size: 13px;
+  line-height: 1.3;
+}
+.task-summary-grid .metric strong {
+  font-size: 22px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.task-summary-grid .task-summary-rule strong {
+  font-size: 18px;
+  line-height: 1.35;
+}
+.task-summary-grid .status {
+  width: fit-content;
+}
 .panel { margin-bottom: 18px; }
 .panel h2 { font-size: 16px; margin: 0 0 14px; }
 .form-grid {
@@ -117,6 +148,51 @@ nav button.active, nav button:hover { background: #263449; color: white; }
   padding: 0 14px;
 }
 .segmented button.selected { background: #e8f1ff; border-color: #1f6feb; color: #1f6feb; }
+.screening-form-grid {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+}
+.screening-form-grid .field {
+  min-width: 0;
+}
+.screening-form-grid .field select {
+  width: 100%;
+  min-width: 0;
+}
+.screening-market-field,
+.screening-timeframe-field {
+  grid-column: span 3;
+}
+.screening-pool-field {
+  grid-column: span 6;
+}
+.screening-rule-field {
+  grid-column: span 5;
+}
+.screening-toggles {
+  grid-column: span 4;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-self: end;
+  gap: 8px 24px;
+  min-width: 0;
+  min-height: 44px;
+}
+.screening-toggles .check {
+  min-height: 36px;
+  white-space: nowrap;
+}
+.screening-actions {
+  grid-column: span 3;
+  display: flex;
+  justify-content: flex-end;
+  align-items: end;
+  min-width: 0;
+}
+.screening-actions .primary {
+  width: 100%;
+  min-width: 180px;
+}
 .toolbar { margin-bottom: 16px; }
 .toolbar-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
 .toolbar-row .field { min-width: 140px; }
@@ -1155,6 +1231,26 @@ textarea.code-input::placeholder {
 }
 
 @media (max-width: 1200px) {
+  .task-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .screening-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .screening-market-field,
+  .screening-timeframe-field {
+    grid-column: span 1;
+  }
+
+  .screening-pool-field,
+  .screening-rule-field,
+  .screening-toggles,
+  .screening-actions {
+    grid-column: 1 / -1;
+  }
+
   .compact-form-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1170,11 +1266,18 @@ textarea.code-input::placeholder {
 @media (max-width: 900px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: static; }
-  .metric-grid, .form-grid, .result-layout, .option-form, .option-fill-form, .option-layout, .option-summary-grid, .quant-grid, .metric-row, .rule-list-toolbar, .rule-editor-layout, .compact-form-grid, .code-preview-grid, .market-intel-layout { grid-template-columns: 1fr; }
+  .metric-grid, .form-grid, .result-layout, .option-form, .option-fill-form, .option-layout, .option-summary-grid, .quant-grid, .metric-row, .rule-list-toolbar, .rule-editor-layout, .compact-form-grid, .code-preview-grid, .market-intel-layout, .task-summary-grid { grid-template-columns: 1fr; }
+  .screening-market-field,
+  .screening-timeframe-field,
+  .screening-pool-field,
+  .screening-rule-field,
+  .screening-toggles,
+  .screening-actions { grid-column: auto; }
   .compact-form-grid .field-wide,
   .compact-form-grid .code-rule-field,
   .code-screening-toggles,
   .code-preview-actions { grid-column: auto; }
+  .screening-actions { justify-content: flex-start; }
   .code-preview-card header { display: grid; }
   .result-actions, .code-result-actions, .code-preview-actions { justify-content: flex-start; }
   .json-editor-heading, .json-editor-footer { display: grid; }
