@@ -10,13 +10,16 @@ from market_intel.providers.news import NewsIntelProvider
 
 
 class FakeResponse:
-    def __init__(self, payload):
+    def __init__(self, payload, status_error=None):
         self.payload = payload
+        self.status_error = status_error
 
     def json(self):
         return self.payload
 
     def raise_for_status(self):
+        if self.status_error is not None:
+            raise self.status_error
         return None
 
 
@@ -29,12 +32,20 @@ class FakeSession:
         self.calls.append((url, kwargs))
         if not self.payloads:
             raise AssertionError(f"Unexpected request: {url}")
-        return FakeResponse(self.payloads.pop(0))
+        payload = self.payloads.pop(0)
+        if isinstance(payload, Exception):
+            raise payload
+        if isinstance(payload, tuple):
+            return FakeResponse(payload[0], status_error=payload[1])
+        return FakeResponse(payload)
 
 
 class MarketIntelProviderTests(unittest.TestCase):
     def test_eastmoney_secu_code_normalizes_market_codes(self):
         self.assertEqual(eastmoney_secu_code("A", "600519"), "600519.SH")
+        self.assertEqual(eastmoney_secu_code("A", "601398"), "601398.SH")
+        self.assertEqual(eastmoney_secu_code("A", "603288"), "603288.SH")
+        self.assertEqual(eastmoney_secu_code("A", "688981"), "688981.SH")
         self.assertEqual(eastmoney_secu_code("A", "000001"), "000001.SZ")
         self.assertEqual(eastmoney_secu_code("HK", "700"), "00700.HK")
         self.assertEqual(eastmoney_secu_code("US", "AAPL.US"), "AAPL")
@@ -83,6 +94,37 @@ class MarketIntelProviderTests(unittest.TestCase):
         self.assertEqual(provider.name, "eastmoney")
         self.assertEqual(provider.provider_name, "eastmoney")
         self.assertTrue(all(item.raw_json for item in items))
+
+    def test_eastmoney_fetch_stock_keeps_other_sub_sources_when_one_fails(self):
+        session = FakeSession([
+            ({"error": "bad request"}, RuntimeError("HTTP 400")),
+            {
+                "data": [
+                    {
+                        "title": "买入评级报告",
+                        "publish_date": "2026-05-23",
+                        "summary": "维持买入评级",
+                        "info_code": "report-1",
+                    }
+                ]
+            },
+            {
+                "data": {
+                    "security_name_abbr": "贵州茅台",
+                    "total_operate_income": 100,
+                    "net_profit": 20,
+                }
+            },
+        ])
+        provider = EastmoneyMarketIntelProvider(session=session)
+
+        items = provider.fetch_stock("A", "600519")
+
+        self.assertEqual(
+            [item.item_type for item in items],
+            ["research_report", "financial"],
+        )
+        self.assertEqual({item.provider for item in items}, {"eastmoney"})
 
     def test_news_fetch_market_returns_market_news(self):
         session = FakeSession([

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List
+from typing import Any, Callable, Dict, Iterable, List
 
 from market_intel.models import IntelItem
 from market_intel.providers.base import MarketIntelProvider, ttl_for_item_type
@@ -16,7 +16,7 @@ def eastmoney_secu_code(market: str, code: str) -> str:
     market_text = (market or "").upper()
     code_text = (code or "").strip().upper()
     if market_text == "A":
-        suffix = ".SH" if code_text.startswith("600") else ".SZ"
+        suffix = ".SH" if code_text.startswith(("600", "601", "603", "605", "688", "689")) else ".SZ"
         return f"{code_text}{suffix}"
     if market_text == "HK":
         return f"{code_text.removesuffix('.HK').zfill(5)}.HK"
@@ -44,13 +44,19 @@ class EastmoneyMarketIntelProvider(MarketIntelProvider):
             return []
         secu_code = eastmoney_secu_code(market, code)
         return [
-            *self._fetch_announcements(market, code, secu_code),
-            *self._fetch_research_reports(market, code, secu_code),
-            *self._fetch_financial_summary(market, code, secu_code),
+            *self._safe_fetch(lambda: self._fetch_announcements(market, code, secu_code)),
+            *self._safe_fetch(lambda: self._fetch_research_reports(market, code, secu_code)),
+            *self._safe_fetch(lambda: self._fetch_financial_summary(market, code, secu_code)),
         ]
 
     def fetch_market(self, market: str) -> List[IntelItem]:
         return []
+
+    def _safe_fetch(self, fetcher: Callable[[], List[IntelItem]]) -> List[IntelItem]:
+        try:
+            return fetcher()
+        except Exception:
+            return []
 
     def _fetch_announcements(self, market: str, code: str, secu_code: str) -> List[IntelItem]:
         payload = self._get_json(
