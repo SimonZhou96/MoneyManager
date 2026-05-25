@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from market import normalize_market
 from market_intel.evidence import EvidencePackBuilder
 from market_intel.providers.factory import build_market_intel_providers
+from market_intel.providers.source_registry import source_status_payload
 from market_intel.repository import MySqlMarketIntelRepository
 from market_intel.service import MarketIntelService
 
@@ -36,6 +37,12 @@ def get_market_intel_service(db=Depends(get_db)) -> MarketIntelService:
         MySqlMarketIntelRepository(db),
         build_market_intel_providers(),
     )
+
+
+@router.get("/sources")
+def list_sources(user: CurrentUser = Depends(require_user)) -> Dict[str, Any]:
+    _ = user
+    return {"sources": source_status_payload()}
 
 
 @router.get("/stocks/{market}/{code}")

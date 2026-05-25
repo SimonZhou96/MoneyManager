@@ -1,6 +1,6 @@
-import { useMemo, useState, type ReactNode } from 'react'
-import { getMarketDigest, getProviderRuns, getStockIntel, previewEvidencePack } from './api'
-import type { EvidencePackPreview, IntelBundle, IntelItem, MarketCode, ProviderRun, SourceStatus } from './types'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { getMarketDigest, getMarketIntelSources, getProviderRuns, getStockIntel, previewEvidencePack } from './api'
+import type { EvidencePackPreview, IntelBundle, IntelItem, MarketCode, MarketIntelSource, ProviderRun, SourceStatus } from './types'
 
 const MARKET_OPTIONS: Array<{ value: MarketCode; label: string; defaultCode: string }> = [
   { value: 'A', label: 'A股', defaultCode: '600519' },
@@ -22,6 +22,7 @@ type MarketIntelState = {
   market: IntelBundle | null
   runs: ProviderRun[]
   pack: EvidencePackPreview | null
+  sourceRegistry: MarketIntelSource[]
 }
 
 export function MarketIntelPage() {
@@ -31,7 +32,8 @@ export function MarketIntelPage() {
     stock: null,
     market: null,
     runs: [],
-    pack: null
+    pack: null,
+    sourceRegistry: []
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -39,6 +41,12 @@ export function MarketIntelPage() {
     () => mergeSourceStatus(data.stock, data.market, data.pack),
     [data.stock, data.market, data.pack]
   )
+
+  useEffect(() => {
+    getMarketIntelSources()
+      .then(result => setData(current => ({ ...current, sourceRegistry: result.sources || [] })))
+      .catch(() => setData(current => ({ ...current, sourceRegistry: [] })))
+  }, [])
 
   async function load(forceRefresh = false) {
     const normalizedCode = code.trim()
@@ -55,12 +63,13 @@ export function MarketIntelPage() {
         getProviderRuns(market, normalizedCode, 20),
         previewEvidencePack(market, normalizedCode, forceRefresh)
       ])
-      setData({
+      setData(current => ({
+        ...current,
         stock,
         market: marketDigest,
         runs: providerRuns.runs || [],
         pack
-      })
+      }))
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载市场情报失败')
     } finally {
@@ -106,6 +115,9 @@ export function MarketIntelPage() {
 
       <div className="market-intel-layout">
         <div>
+          <Panel title="来源覆盖">
+            <SourceRegistryList rows={data.sourceRegistry} />
+          </Panel>
           <Panel title="来源状态">
             <SourceStatusList items={sourceStatuses} />
           </Panel>
@@ -159,6 +171,26 @@ function SourceStatusList({ items }: { items: SourceStatus[] }) {
           </div>
           <span className={`status ${statusClass(item.status)}`}>{statusLabel(item.status)}</span>
           {item.error_message && <p>{item.error_message}</p>}
+        </article>
+      ))}
+    </div>
+  )
+}
+
+function SourceRegistryList({ rows }: { rows: MarketIntelSource[] }) {
+  if (rows.length === 0) return <div className="empty">暂无来源配置</div>
+  return (
+    <div className="market-intel-source-list">
+      {rows.map(row => (
+        <article key={row.provider} className="market-intel-source">
+          <div>
+            <strong>{row.source || row.provider}</strong>
+            <span>
+              {row.provider} · {row.reliability_tier} · {row.markets.join('/')} · {row.item_types.join('/')}
+            </span>
+          </div>
+          <span className={`status ${row.enabled ? 'pass' : 'neutral'}`}>{row.enabled ? '启用' : '停用'}</span>
+          {!row.enabled && row.disabled_reason && <p>{row.disabled_reason}</p>}
         </article>
       ))}
     </div>

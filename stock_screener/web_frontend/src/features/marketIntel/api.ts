@@ -1,5 +1,5 @@
 import { api } from '../../api'
-import type { EvidencePackPreview, IntelBundle, MarketCode, ProviderRunsResponse } from './types'
+import type { EvidencePackPreview, IntelBundle, MarketCode, MarketIntelSourcesResponse, ProviderRunsResponse } from './types'
 
 function query(params: Record<string, string | number | boolean | undefined>) {
   const search = new URLSearchParams()
@@ -30,6 +30,10 @@ export function getProviderRuns(market: MarketCode, code: string, limit = 20) {
   return api<ProviderRunsResponse>(
     `/api/market-intel/provider-runs${query({ market, code, limit })}`
   )
+}
+
+export function getMarketIntelSources() {
+  return api<MarketIntelSourcesResponse>('/api/market-intel/sources')
 }
 
 export function previewEvidencePack(market: MarketCode, code: string, forceRefresh = false) {

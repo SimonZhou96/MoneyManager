@@ -123,6 +123,17 @@ class MarketIntelApiTest(unittest.TestCase):
         self.assertIsInstance(payload["runs"], list)
         self.assertEqual(self.service.run_calls, [(None, market, code, None, 3)])
 
+    def test_sources_endpoint_returns_registry_rows(self):
+        response = self.client.get("/api/market-intel/sources")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("sources", payload)
+        providers = {item["provider"]: item for item in payload["sources"]}
+        self.assertEqual(providers["cailianpress"]["source"], "财联社")
+        self.assertEqual(providers["xueqiu"]["status"], "disabled")
+        self.assertTrue(providers["xueqiu"]["requires_browser"])
+
     def test_evidence_pack_preview_uses_market_intel_without_llm(self):
         response = self.client.post(
             "/api/market-intel/evidence-pack/preview",

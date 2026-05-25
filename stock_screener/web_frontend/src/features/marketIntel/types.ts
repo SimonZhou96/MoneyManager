@@ -52,6 +52,26 @@ export type ProviderRunsResponse = {
   runs: ProviderRun[]
 }
 
+export type MarketIntelSource = {
+  provider: string
+  source: string
+  reliability_tier: string
+  markets: string[]
+  item_types: string[]
+  freshness_minutes: number
+  requires_auth: boolean
+  requires_browser: boolean
+  default_enabled: boolean
+  automated_safe: boolean
+  enabled: boolean
+  status: string
+  disabled_reason?: string
+}
+
+export type MarketIntelSourcesResponse = {
+  sources: MarketIntelSource[]
+}
+
 export type EvidencePackPreview = {
   market: string
   code: string
