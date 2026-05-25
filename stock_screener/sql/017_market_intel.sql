@@ -1,0 +1,60 @@
+CREATE TABLE IF NOT EXISTS market_intel_items (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    scope_type VARCHAR(16) NOT NULL COMMENT 'stock/market',
+    market VARCHAR(8) NOT NULL COMMENT 'HK/US/A',
+    code VARCHAR(32) NOT NULL DEFAULT '' COMMENT '股票代码，市场级为空字符串',
+    source VARCHAR(64) NOT NULL COMMENT '来源展示名',
+    provider VARCHAR(64) NOT NULL COMMENT 'provider key',
+    item_type VARCHAR(64) NOT NULL COMMENT 'financial/announcement/research_report/money_flow/long_tiger/index_snapshot/market_news/search_document/hot_sector/other',
+    title VARCHAR(512) NOT NULL DEFAULT '',
+    summary TEXT NULL,
+    url VARCHAR(1024) NOT NULL DEFAULT '',
+    published_at DATETIME(6) NULL,
+    raw_json JSON NULL,
+    fetched_at DATETIME(6) NOT NULL,
+    expires_at DATETIME(6) NOT NULL,
+    is_stale TINYINT(1) NOT NULL DEFAULT 0,
+    dedupe_key VARCHAR(255) NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_market_intel_dedupe (scope_type, market, code, provider, dedupe_key),
+    KEY idx_market_intel_scope (scope_type, market, code, item_type),
+    KEY idx_market_intel_expires (expires_at),
+    KEY idx_market_intel_published (published_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='市场情报标准化条目';
+
+CREATE TABLE IF NOT EXISTS market_intel_bundles (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    scope_type VARCHAR(16) NOT NULL COMMENT 'stock/market',
+    market VARCHAR(8) NOT NULL,
+    code VARCHAR(32) NOT NULL DEFAULT '',
+    bundle_json JSON NOT NULL,
+    freshness_status VARCHAR(16) NOT NULL COMMENT 'fresh/partial/stale/empty',
+    source_status_json JSON NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_market_intel_bundle_scope (scope_type, market, code),
+    KEY idx_market_intel_bundle_status (freshness_status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='市场情报聚合包';
+
+CREATE TABLE IF NOT EXISTS market_intel_provider_runs (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    provider VARCHAR(64) NOT NULL,
+    scope_type VARCHAR(16) NOT NULL,
+    market VARCHAR(8) NOT NULL,
+    code VARCHAR(32) NOT NULL DEFAULT '',
+    status VARCHAR(16) NOT NULL COMMENT 'success/failed/timeout/skipped',
+    error_message TEXT NULL,
+    duration_ms INT NOT NULL DEFAULT 0,
+    item_count INT NOT NULL DEFAULT 0,
+    raw_json JSON NULL,
+    started_at DATETIME(6) NOT NULL,
+    finished_at DATETIME(6) NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (id),
+    KEY idx_market_intel_runs_scope (provider, scope_type, market, code),
+    KEY idx_market_intel_runs_status (status),
+    KEY idx_market_intel_runs_started (started_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='市场情报 provider 执行记录';

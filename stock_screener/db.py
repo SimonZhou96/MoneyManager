@@ -2444,6 +2444,228 @@ class MarketDatabase:
             cursor.execute(sql, (market, code, timeframe, market, code, timeframe, int(max_bars)))
 
     # ------------------------------------------------------------------
+    # Market Intel
+    # ------------------------------------------------------------------
+
+    def init_market_intel_schema(self) -> None:
+        schema_path = Path(__file__).resolve().parent / "sql" / "017_market_intel.sql"
+        sql_text = schema_path.read_text(encoding="utf-8")
+        statements = [stmt.strip() for stmt in sql_text.split(";") if stmt.strip()]
+        with self.conn.cursor() as cursor:
+            for statement in statements:
+                cursor.execute(statement)
+
+    def upsert_market_intel_items(self, items: Iterable[dict]) -> None:
+        rows = []
+        now = _utcnow()
+        for item in items:
+            scope_type = str(item.get("scope_type") or "stock").strip()
+            market = str(item.get("market") or "").strip()
+            provider = str(item.get("provider") or item.get("source") or "").strip()
+            dedupe_key = str(
+                item.get("dedupe_key") or item.get("source_id") or item.get("url") or item.get("title") or ""
+            ).strip()
+            if not (scope_type and market and provider and dedupe_key):
+                continue
+            fetched_at = _mysql_datetime_or_none(item.get("fetched_at")) or now
+            rows.append((
+                scope_type,
+                market,
+                str(item.get("code") or "").strip(),
+                str(item.get("source") or provider).strip(),
+                provider,
+                str(item.get("item_type") or "other").strip(),
+                str(item.get("title") or "").strip(),
+                item.get("summary"),
+                str(item.get("url") or "").strip(),
+                _mysql_datetime_or_none(item.get("published_at")),
+                fetched_at,
+                _mysql_datetime_or_none(item.get("expires_at")) or fetched_at,
+                1 if item.get("is_stale") else 0,
+                dedupe_key,
+                _json_or_none(item.get("raw_json")),
+            ))
+        if not rows:
+            return
+        sql = """
+            INSERT INTO market_intel_items
+                (scope_type, market, code, source, provider, item_type, title, summary, url,
+                 published_at, fetched_at, expires_at, is_stale, dedupe_key, raw_json)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                source=VALUES(source),
+                item_type=VALUES(item_type),
+                title=VALUES(title),
+                summary=VALUES(summary),
+                url=VALUES(url),
+                published_at=VALUES(published_at),
+                fetched_at=VALUES(fetched_at),
+                expires_at=VALUES(expires_at),
+                is_stale=VALUES(is_stale),
+                raw_json=VALUES(raw_json)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.executemany(sql, rows)
+
+    def list_market_intel_items(
+        self,
+        *,
+        scope_type: str = "stock",
+        market: str,
+        code: str = "",
+        include_stale: bool = True,
+        limit: int = 200,
+    ) -> List[dict]:
+        sql = """
+            SELECT scope_type, market, code, source, provider, item_type, title, summary, url,
+                   published_at, raw_json, fetched_at, expires_at, is_stale, dedupe_key
+            FROM market_intel_items
+            WHERE scope_type=%s AND market=%s AND code=%s
+        """
+        params: List[Any] = [scope_type, market, code or ""]
+        if not include_stale:
+            sql += " AND is_stale=0"
+        sql += " ORDER BY COALESCE(published_at, fetched_at) DESC, id DESC LIMIT %s"
+        params.append(max(1, int(limit)))
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, tuple(params))
+            rows = cursor.fetchall() or []
+        return [
+            {
+                "scope_type": row[0],
+                "market": row[1],
+                "code": row[2],
+                "source": row[3],
+                "provider": row[4],
+                "item_type": row[5],
+                "title": row[6],
+                "summary": row[7],
+                "url": row[8],
+                "published_at": row[9],
+                "raw_json": _decode_json_field(row[10], {}),
+                "fetched_at": row[11],
+                "expires_at": row[12],
+                "is_stale": bool(row[13]),
+                "dedupe_key": row[14],
+            }
+            for row in rows
+        ]
+
+    def upsert_market_intel_bundle(self, row: dict) -> None:
+        sql = """
+            INSERT INTO market_intel_bundles
+                (scope_type, market, code, bundle_json, freshness_status, source_status_json)
+            VALUES (%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                bundle_json=VALUES(bundle_json),
+                freshness_status=VALUES(freshness_status),
+                source_status_json=VALUES(source_status_json)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (
+                row["scope_type"],
+                row["market"],
+                row.get("code") or "",
+                _json_or_none(row.get("bundle_json") or {}),
+                row.get("freshness_status") or "empty",
+                _json_or_none(row.get("source_status_json") or {}),
+            ))
+
+    def get_market_intel_bundle(self, scope_type: str, market: str, code: str = "") -> Optional[dict]:
+        sql = """
+            SELECT scope_type, market, code, bundle_json, freshness_status, source_status_json, updated_at
+            FROM market_intel_bundles
+            WHERE scope_type=%s AND market=%s AND code=%s
+            LIMIT 1
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (scope_type, market, code or ""))
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "scope_type": row[0],
+            "market": row[1],
+            "code": row[2],
+            "bundle_json": _decode_json_field(row[3], {}),
+            "freshness_status": row[4],
+            "source_status_json": _decode_json_field(row[5], {}),
+            "updated_at": row[6],
+        }
+
+    def insert_market_intel_provider_run(self, row: dict) -> None:
+        now = _utcnow()
+        sql = """
+            INSERT INTO market_intel_provider_runs
+                (provider, scope_type, market, code, status, error_message, duration_ms,
+                 item_count, raw_json, started_at, finished_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (
+                row["provider"],
+                row.get("scope_type") or "stock",
+                row["market"],
+                row.get("code") or "",
+                row.get("status") or "failed",
+                row.get("error_message"),
+                int(row.get("duration_ms") or 0),
+                int(row.get("item_count") or 0),
+                _json_or_none(row.get("raw_json")),
+                _mysql_datetime_or_none(row.get("started_at")) or now,
+                _mysql_datetime_or_none(row.get("finished_at")) or now,
+            ))
+
+    def list_market_intel_provider_runs(
+        self,
+        provider: Optional[str] = None,
+        market: Optional[str] = None,
+        code: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[dict]:
+        sql = """
+            SELECT provider, scope_type, market, code, status, error_message, duration_ms,
+                   item_count, raw_json, started_at, finished_at
+            FROM market_intel_provider_runs
+            WHERE 1=1
+        """
+        params: List[Any] = []
+        if provider:
+            sql += " AND provider=%s"
+            params.append(provider)
+        if market:
+            sql += " AND market=%s"
+            params.append(market)
+        if code is not None:
+            sql += " AND code=%s"
+            params.append(code or "")
+        if status:
+            sql += " AND status=%s"
+            params.append(status)
+        sql += " ORDER BY started_at DESC, id DESC LIMIT %s"
+        params.append(max(1, int(limit)))
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, tuple(params))
+            rows = cursor.fetchall() or []
+        return [
+            {
+                "provider": row[0],
+                "scope_type": row[1],
+                "market": row[2],
+                "code": row[3],
+                "status": row[4],
+                "error_message": row[5],
+                "duration_ms": row[6],
+                "item_count": row[7],
+                "raw_json": _decode_json_field(row[8], None),
+                "started_at": row[9],
+                "finished_at": row[10],
+            }
+            for row in rows
+        ]
+
+    # ------------------------------------------------------------------
     # Option Lab
     # ------------------------------------------------------------------
 
