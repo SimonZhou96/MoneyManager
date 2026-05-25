@@ -48,6 +48,9 @@ def intel_items_to_search_documents(items: Iterable[IntelItem]) -> List[SearchDo
 
 
 class EvidencePackBuilder:
+    def __init__(self, service: Any = None):
+        self.service = service
+
     def build(
         self,
         *,
@@ -60,7 +63,10 @@ class EvidencePackBuilder:
         source_status: Optional[Dict[str, Any]] = None,
         data_gaps: Optional[Iterable[str]] = None,
         citations: Optional[Iterable[Dict[str, Any]]] = None,
+        force_refresh: bool = False,
     ) -> EvidencePack:
+        stock_bundle = self._resolve_stock_bundle(market, code, stock_bundle, force_refresh)
+        market_bundle = self._resolve_market_bundle(market, market_bundle, force_refresh)
         stock_items = flatten_bundle_items(stock_bundle)
         market_items = flatten_bundle_items(market_bundle)
         manual_intel_items = [
@@ -76,6 +82,16 @@ class EvidencePackBuilder:
         merged_source_status.update(_bundle_source_status(stock_bundle))
         merged_source_status.update(_bundle_source_status(market_bundle))
         merged_source_status.update(dict(source_status or {}))
+        merged_data_gaps = _dedupe_strings([
+            *_bundle_data_gaps(stock_bundle, "stock intel", code or market),
+            *_bundle_data_gaps(market_bundle, "market intel", market),
+            *[str(item) for item in (data_gaps or []) if str(item).strip()],
+        ])
+        merged_citations = _dedupe_citations([
+            *_item_citations([*stock_items, *market_items, *manual_intel_items]),
+            *_search_document_citations(search_documents or []),
+            *[dict(item) for item in (citations or [])],
+        ])
 
         return EvidencePack(
             market=market,
@@ -86,9 +102,25 @@ class EvidencePackBuilder:
             stock_context={"items": [item.to_dict() for item in stock_items]},
             market_context={"items": [item.to_dict() for item in market_items]},
             source_status=merged_source_status,
-            data_gaps=[str(item) for item in (data_gaps or []) if str(item).strip()],
-            citations=[dict(item) for item in (citations or [])],
+            data_gaps=merged_data_gaps,
+            citations=merged_citations,
         )
+
+    def _resolve_stock_bundle(self, market: str, code: str, bundle: Any, force_refresh: bool) -> Any:
+        if bundle is not None or self.service is None or not code:
+            return bundle
+        getter = getattr(self.service, "get_stock_intel", None)
+        if not callable(getter):
+            return bundle
+        return getter(market, code, force_refresh=force_refresh)
+
+    def _resolve_market_bundle(self, market: str, bundle: Any, force_refresh: bool) -> Any:
+        if bundle is not None or self.service is None:
+            return bundle
+        getter = getattr(self.service, "get_market_digest", None)
+        if not callable(getter):
+            return bundle
+        return getter(market, force_refresh=force_refresh)
 
 
 def _bundle_payload(bundle: Any) -> Dict[str, Any]:
@@ -110,6 +142,8 @@ def _bundle_source_status(bundle: Any) -> Dict[str, Any]:
 def _coerce_intel_item(value: Any) -> Optional[IntelItem]:
     if isinstance(value, IntelItem):
         return value
+    if isinstance(value, SearchDocument):
+        return _search_document_to_intel_item(value, market="", code="")
     if isinstance(value, dict):
         try:
             return IntelItem.from_dict(value)
@@ -138,3 +172,79 @@ def _search_document_to_intel_item(document: SearchDocument, *, market: str, cod
             "query": document.query,
         },
     )
+
+
+def _bundle_data_gaps(bundle: Any, label: str, identity: str) -> List[str]:
+    payload = _bundle_payload(bundle)
+    if not payload:
+        return [f"{label} bundle is missing for {identity}"]
+
+    gaps = []
+    freshness = str(payload.get("freshness_status") or "").strip().lower()
+    if freshness in {"empty", "stale"}:
+        gaps.append(f"{label} bundle is {freshness} for {identity}")
+    if not flatten_bundle_items(payload):
+        gaps.append(f"{label} bundle has no usable items for {identity}")
+
+    for provider, status in _bundle_source_status(payload).items():
+        status_text = str(status.get("status") if isinstance(status, dict) else "").strip().lower()
+        if status_text == "failed":
+            message = status.get("error_message") if isinstance(status, dict) else ""
+            suffix = f": {message}" if message else ""
+            gaps.append(f"{label} provider {provider} failed for {identity}{suffix}")
+    return gaps
+
+
+def _item_citations(items: Iterable[IntelItem]) -> List[Dict[str, Any]]:
+    citations = []
+    for item in items:
+        if not item.title and not item.url:
+            continue
+        citations.append({
+            "label": item.title or item.url,
+            "url": item.url,
+        })
+    return citations
+
+
+def _search_document_citations(documents: Iterable[SearchDocument]) -> List[Dict[str, Any]]:
+    citations = []
+    for document in documents:
+        if not document.title and not document.url:
+            continue
+        citations.append({
+            "label": document.title or document.url,
+            "url": document.url,
+        })
+    return citations
+
+
+def _dedupe_citations(citations: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows = []
+    seen = set()
+    for citation in citations:
+        label = str(citation.get("label") or citation.get("title") or citation.get("url") or "").strip()
+        url = str(citation.get("url") or "").strip()
+        if not label and not url:
+            continue
+        key = (url, label)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized = dict(citation)
+        normalized["label"] = label or url
+        normalized["url"] = url
+        rows.append(normalized)
+    return rows
+
+
+def _dedupe_strings(items: Iterable[str]) -> List[str]:
+    rows = []
+    seen = set()
+    for item in items:
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        rows.append(text)
+    return rows

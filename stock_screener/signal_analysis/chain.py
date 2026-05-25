@@ -102,6 +102,8 @@ class SignalAnalysisContext:
     sector_documents: List[SearchDocument] = field(default_factory=list)
     company_documents: Dict[str, List[SearchDocument]] = field(default_factory=dict)
     market_intel_service: Any = None
+    market_intel_market_bundle: Dict[str, Any] = field(default_factory=dict)
+    market_intel_stock_bundles: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     evidence_packs: Dict[str, dict] = field(default_factory=dict)
     hot_sectors: List[str] = field(default_factory=list)
     hot_sector_sources: List[str] = field(default_factory=list)
@@ -298,11 +300,10 @@ class MarketIntelEvidenceStep(AnalysisStep):
         if service is None:
             return
 
-        builder = EvidencePackBuilder()
-        market_bundle = {}
         market_items = []
         try:
             market_bundle = service.get_market_digest(context.market, force_refresh=context.force_refresh)
+            context.market_intel_market_bundle = dict(market_bundle or {})
             market_items = flatten_bundle_items(market_bundle)
             context.market_documents = dedupe_documents([
                 *context.market_documents,
@@ -310,9 +311,7 @@ class MarketIntelEvidenceStep(AnalysisStep):
             ])
         except Exception as exc:
             context.warnings.append(f"市场情报摘要获取失败: {type(exc).__name__}: {exc}")
-            market_bundle = {}
 
-        market_documents = intel_items_to_search_documents(market_items)
         for row in context.rows:
             try:
                 stock_bundle = service.get_stock_intel(
@@ -320,23 +319,13 @@ class MarketIntelEvidenceStep(AnalysisStep):
                     row.code,
                     force_refresh=context.force_refresh,
                 )
+                context.market_intel_stock_bundles[row.code] = dict(stock_bundle or {})
                 stock_items = flatten_bundle_items(stock_bundle)
                 stock_documents = intel_items_to_search_documents(stock_items)
                 context.company_documents[row.code] = dedupe_documents([
                     *(context.company_documents.get(row.code) or []),
                     *stock_documents,
                 ])
-                pack = builder.build(
-                    market=context.market,
-                    code=row.code,
-                    stock_bundle=stock_bundle,
-                    market_bundle=market_bundle,
-                    search_documents=[
-                        *market_documents,
-                        *stock_documents,
-                    ],
-                )
-                context.evidence_packs[row.code] = pack.to_dict()
             except Exception as exc:
                 context.warnings.append(f"{row.code} 市场情报证据包构建失败: {type(exc).__name__}: {exc}")
 
@@ -349,17 +338,56 @@ class ApplyManualHotNewsStep(AnalysisStep):
             return
         config = context.manual_hot_news
         if config.market_hot_news:
-            context.market_documents = config.market_documents(context.market_query)
+            context.market_documents = dedupe_documents([
+                *context.market_documents,
+                *config.market_documents(context.market_query),
+            ])
             context.warnings.append("已使用手动配置的市场热点信息覆盖搜索热点信息")
 
         for row in context.rows:
             if not config.company_hot_news(row.code):
                 continue
-            context.company_documents[row.code] = config.company_documents(
-                row.code,
-                context.company_queries.get(row.code, ""),
-            )
+            context.company_documents[row.code] = dedupe_documents([
+                *(context.company_documents.get(row.code) or []),
+                *config.company_documents(row.code, context.company_queries.get(row.code, "")),
+            ])
             context.warnings.append(f"{row.code} 已使用手动配置的公司热点信息覆盖搜索热点信息")
+
+
+class MarketIntelFinalizeEvidencePacksStep(AnalysisStep):
+    name = "MarketIntelFinalizeEvidencePacksStep"
+
+    def run(self, context: SignalAnalysisContext) -> None:
+        if not context.rows and context.results_by_code:
+            return
+        if context.market_intel_service is None and not context.market_intel_market_bundle and not context.market_intel_stock_bundles:
+            return
+
+        builder = EvidencePackBuilder()
+        for row in context.rows:
+            try:
+                manual_items = [
+                    *context.manual_hot_news.market_documents(context.market_query),
+                    *context.manual_hot_news.company_documents(
+                        row.code,
+                        context.company_queries.get(row.code, ""),
+                    ),
+                ]
+                pack = builder.build(
+                    market=context.market,
+                    code=row.code,
+                    stock_bundle=context.market_intel_stock_bundles.get(row.code, {}),
+                    market_bundle=context.market_intel_market_bundle,
+                    search_documents=[
+                        *context.market_documents,
+                        *(context.company_documents.get(row.code) or []),
+                    ],
+                    manual_items=manual_items,
+                    force_refresh=context.force_refresh,
+                )
+                context.evidence_packs[row.code] = pack.to_dict()
+            except Exception as exc:
+                context.warnings.append(f"{row.code} 市场情报证据包收尾失败: {type(exc).__name__}: {exc}")
 
 
 class ExpandCompanyEvidenceStep(AnalysisStep):
@@ -594,6 +622,7 @@ class SignalAnalysisChain:
             MarketIntelEvidenceStep(),
             SearchContextStep(),
             ApplyManualHotNewsStep(),
+            MarketIntelFinalizeEvidencePacksStep(),
             ExpandCompanyEvidenceStep(),
             ResolveHotSectorsStep(),
             LLMBatchAnalysisStep(),

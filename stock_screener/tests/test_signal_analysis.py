@@ -14,6 +14,8 @@ from unittest.mock import patch
 from signal_analysis.chain import (
     BuildSearchQueriesStep,
     MarketIntelEvidenceStep,
+    MarketIntelFinalizeEvidencePacksStep,
+    ApplyManualHotNewsStep,
     SearchContextStep,
     SignalAnalysisChain,
     SignalAnalysisContext,
@@ -282,11 +284,78 @@ class MarketIntelSignalAnalysisIntegrationTest(unittest.TestCase):
         self.assertEqual(len(context.market_documents), 1)
         self.assertEqual(len(context.company_documents["US.AAPL"]), 1)
         self.assertEqual(len(context.company_documents["US.MSFT"]), 1)
-        self.assertIn("US.AAPL", context.evidence_packs)
+
+    def test_finalized_market_intel_pack_includes_search_and_manual_documents_without_extra_search(self):
+        row = ScreeningSignalRow(
+            index=0,
+            code="US.AAPL",
+            market="US",
+            market_label="美股",
+            name="Apple",
+            pe_ratio="",
+            market_cap="",
+            sector="Technology",
+            conditions_met="左一战法-看涨",
+        )
+        service = FakeMarketIntelService()
+        context = SignalAnalysisContext(
+            task_id="task-US",
+            market="US",
+            csv_path="unused.csv",
+            check_date=date(2026, 5, 25),
+            settings=AnalysisSettings(search_max_results=2),
+            search_provider=NullSearchProvider(),
+            llm_provider=NullLLMProvider(),
+            rows=[row],
+            all_rows=[row],
+            market_documents=[
+                SearchDocument(
+                    title="Existing market search doc",
+                    url="https://example.com/existing-market",
+                    content="Existing market search context.",
+                    query="market",
+                )
+            ],
+            company_documents={
+                "US.AAPL": [
+                    SearchDocument(
+                        title="Existing company search doc",
+                        url="https://example.com/existing-company",
+                        content="Existing company search context.",
+                        query="company",
+                    )
+                ]
+            },
+            manual_hot_news=ManualHotNewsConfig(
+                market_hot_news=["Manual market hot news"],
+                company_hot_news_by_code={"US.AAPL": ["Manual company hot news"]},
+                market_news_sources=["https://example.com/manual-market"],
+                company_news_sources_by_code={"US.AAPL": ["https://example.com/manual-company"]},
+            ),
+        )
+        context.market_intel_service = service
+
+        BuildSearchQueriesStep().run(context)
+        MarketIntelEvidenceStep().run(context)
+        SearchContextStep().run(context)
+        ApplyManualHotNewsStep().run(context)
+        MarketIntelFinalizeEvidencePacksStep().run(context)
+
+        self.assertEqual(service.market_digest_calls, [("US", False)])
+        self.assertEqual(service.stock_intel_calls, [("US", "US.AAPL", False)])
         self.assertEqual(
-            context.evidence_packs["US.AAPL"]["stock_context"]["items"][0]["title"],
+            sum("未配置搜索 provider" in warning for warning in context.warnings),
+            1,
+        )
+        payload = context.evidence_packs["US.AAPL"]
+        self.assertEqual(
+            payload["stock_context"]["items"][0]["title"],
             "US.AAPL stock intel headline",
         )
+        self.assertTrue(any(item["title"] == "Existing market search doc" for item in payload["search_documents"]))
+        self.assertTrue(any(item["title"] == "Existing company search doc" for item in payload["search_documents"]))
+        self.assertTrue(any("Manual market hot news" in item["summary"] for item in payload["manual_items"]))
+        self.assertTrue(any("Manual company hot news" in item["summary"] for item in payload["manual_items"]))
 
 
 class SignalAnalysisTest(unittest.TestCase):

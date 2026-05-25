@@ -126,7 +126,94 @@ class MarketIntelEvidenceTests(unittest.TestCase):
         self.assertEqual(payload["source_status"]["market-provider"]["item_count"], 1)
         self.assertEqual(payload["source_status"]["manual"]["item_count"], 1)
         self.assertEqual(payload["data_gaps"], ["missing long tiger data"])
-        self.assertEqual(payload["citations"], [{"label": "source", "url": "https://example.com/source"}])
+        self.assertIn({"label": "source", "url": "https://example.com/source"}, payload["citations"])
+
+    def test_service_backed_builder_fetches_bundles_with_force_refresh_and_derives_gaps_and_citations(self):
+        class FakeService:
+            def __init__(self):
+                self.stock_calls = []
+                self.market_calls = []
+
+            def get_stock_intel(self, market, code, force_refresh=False):
+                self.stock_calls.append((market, code, force_refresh))
+                return {
+                    "scope_type": "stock",
+                    "market": market,
+                    "code": code,
+                    "groups": {},
+                    "freshness_status": "stale",
+                    "source_status": {"stock-provider": {"status": "failed", "item_count": 0}},
+                }
+
+            def get_market_digest(self, market, force_refresh=False):
+                self.market_calls.append((market, force_refresh))
+                return MarketIntelBundle(
+                    market=market,
+                    items=[
+                        make_item(
+                            scope_type="market",
+                            market=market,
+                            code="",
+                            title="Macro policy shift",
+                            url="https://example.com/macro",
+                            dedupe_key="macro-policy-shift",
+                        )
+                    ],
+                    freshness_status="fresh",
+                    source_status={"market-provider": {"status": "success", "item_count": 1}},
+                ).to_dict()
+
+        search_document = SearchDocument(
+            title="Search sourced catalyst",
+            url="https://example.com/search-catalyst",
+            content="Search document context.",
+            query="AAPL catalyst",
+        )
+
+        service = FakeService()
+        pack = EvidencePackBuilder(service).build(
+            market="US",
+            code="AAPL",
+            search_documents=[search_document],
+            force_refresh=True,
+        )
+        payload = pack.to_dict()
+
+        self.assertEqual(pack.market, "US")
+        self.assertEqual(pack.code, "AAPL")
+        self.assertTrue(any("stock intel" in gap and "stale" in gap for gap in payload["data_gaps"]))
+        self.assertTrue(any(item["title"] == "Macro policy shift" for item in payload["structured_items"]))
+        self.assertIn(
+            {"label": "Macro policy shift", "url": "https://example.com/macro"},
+            payload["citations"],
+        )
+        self.assertIn(
+            {"label": "Search sourced catalyst", "url": "https://example.com/search-catalyst"},
+            payload["citations"],
+        )
+        self.assertEqual(service.stock_calls, [("US", "AAPL", True)])
+        self.assertEqual(service.market_calls, [("US", True)])
+
+    def test_service_backed_builder_passes_force_refresh_to_service(self):
+        class RecordingService:
+            def __init__(self):
+                self.stock_calls = []
+                self.market_calls = []
+
+            def get_stock_intel(self, market, code, force_refresh=False):
+                self.stock_calls.append((market, code, force_refresh))
+                return StockIntelBundle(market=market, code=code).to_dict()
+
+            def get_market_digest(self, market, force_refresh=False):
+                self.market_calls.append((market, force_refresh))
+                return MarketIntelBundle(market=market).to_dict()
+
+        service = RecordingService()
+
+        EvidencePackBuilder(service).build(market="US", code="AAPL", force_refresh=True)
+
+        self.assertEqual(service.stock_calls, [("US", "AAPL", True)])
+        self.assertEqual(service.market_calls, [("US", True)])
 
 
 if __name__ == "__main__":
