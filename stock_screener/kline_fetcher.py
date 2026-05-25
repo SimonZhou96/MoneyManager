@@ -16,10 +16,16 @@ import sys
 import os
 import traceback
 
-from timeframe import (
-    parse_timeframe, is_intraday,
-    get_yf_period, get_akshare_min_period,
-)
+try:
+    from .timeframe import (
+        parse_timeframe, is_intraday,
+        get_yf_period, get_akshare_min_period,
+    )
+except ImportError:
+    from timeframe import (
+        parse_timeframe, is_intraday,
+        get_yf_period, get_akshare_min_period,
+    )
 
 
 # ---------------------------------------------------------------------------

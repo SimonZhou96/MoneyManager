@@ -2400,7 +2400,8 @@ class MarketDatabase:
                 volume=VALUES(volume),
                 turnover=VALUES(turnover),
                 source=VALUES(source),
-                sync_run_id=VALUES(sync_run_id)
+                sync_run_id=VALUES(sync_run_id),
+                updated_at=CURRENT_TIMESTAMP(6)
         """
         with self.conn.cursor() as cursor:
             cursor.executemany(sql, values)
@@ -2408,7 +2409,7 @@ class MarketDatabase:
 
     def get_kline_cache(self, market: str, code: str, timeframe: str, max_count: int = 500) -> pd.DataFrame:
         sql = """
-            SELECT bar_time, open, high, low, close, volume, turnover, source
+            SELECT bar_time, open, high, low, close, volume, turnover, source, updated_at
             FROM stock_kline_cache
             WHERE market=%s AND code=%s AND timeframe=%s
             ORDER BY bar_time DESC
@@ -2429,6 +2430,7 @@ class MarketDatabase:
                 "volume": float(row[5]) if row[5] is not None else None,
                 "turnover": float(row[6]) if row[6] is not None else None,
                 "source": row[7],
+                "updated_at": row[8],
             }
             for row in rows
         ]
