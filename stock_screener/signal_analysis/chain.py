@@ -648,6 +648,7 @@ class SignalAnalysisChain:
             artifact_paths=list(context.artifact_paths),
             warnings=list(context.warnings),
             results_by_code=dict(context.results_by_code),
+            evidence_packs=dict(context.evidence_packs),
             analyzed_count=len(context.results_by_code),
             skipped_reason=context.skipped_reason,
         )

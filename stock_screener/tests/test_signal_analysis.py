@@ -357,6 +357,45 @@ class MarketIntelSignalAnalysisIntegrationTest(unittest.TestCase):
         self.assertTrue(any("Manual market hot news" in item["summary"] for item in payload["manual_items"]))
         self.assertTrue(any("Manual company hot news" in item["summary"] for item in payload["manual_items"]))
 
+    def test_chain_result_exposes_market_intel_evidence_packs(self):
+        row = ScreeningSignalRow(
+            index=0,
+            code="US.AAPL",
+            market="US",
+            market_label="美股",
+            name="Apple",
+            pe_ratio="",
+            market_cap="",
+            sector="Technology",
+            conditions_met="左一战法-看涨",
+        )
+        context = SignalAnalysisContext(
+            task_id="task-US",
+            market="US",
+            csv_path="unused.csv",
+            check_date=date(2026, 5, 25),
+            settings=AnalysisSettings(search_max_results=2),
+            search_provider=NullSearchProvider(),
+            llm_provider=NullLLMProvider(),
+            rows=[row],
+            all_rows=[row],
+            market_intel_service=FakeMarketIntelService(),
+        )
+
+        result = SignalAnalysisChain(steps=[
+            BuildSearchQueriesStep(),
+            MarketIntelEvidenceStep(),
+            SearchContextStep(),
+            ApplyManualHotNewsStep(),
+            MarketIntelFinalizeEvidencePacksStep(),
+        ]).run(context)
+
+        self.assertIn("US.AAPL", result.evidence_packs)
+        self.assertEqual(
+            result.evidence_packs["US.AAPL"]["stock_context"]["items"][0]["title"],
+            "US.AAPL stock intel headline",
+        )
+
 
 class SignalAnalysisTest(unittest.TestCase):
     def signal_rows(self):

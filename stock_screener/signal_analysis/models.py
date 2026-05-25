@@ -372,5 +372,6 @@ class AnalysisRunResult:
     artifact_paths: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     results_by_code: Dict[str, SignalAnalysisResult] = field(default_factory=dict)
+    evidence_packs: Dict[str, dict] = field(default_factory=dict)
     analyzed_count: int = 0
     skipped_reason: str = ""
