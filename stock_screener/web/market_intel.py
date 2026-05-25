@@ -32,7 +32,6 @@ class EvidencePackPreviewRequest(BaseModel):
 
 
 def get_market_intel_service(db=Depends(get_db)) -> MarketIntelService:
-    db.init_market_intel_schema()
     return MarketIntelService(
         MySqlMarketIntelRepository(db),
         build_market_intel_providers(),
@@ -49,7 +48,8 @@ def get_stock_intel(
     user: CurrentUser = Depends(require_user),
     service: MarketIntelService = Depends(get_market_intel_service),
 ) -> Dict[str, Any]:
-    _ = (user, include_search)
+    _ = user
+    _reject_include_search(include_search)
     try:
         normalized_market = normalize_market(market)
         normalized_code = normalize_stock_code(normalized_market, code)
@@ -73,7 +73,8 @@ def refresh_stock_intel(
     user: CurrentUser = Depends(require_user),
     service: MarketIntelService = Depends(get_market_intel_service),
 ) -> Dict[str, Any]:
-    _ = (user, payload.include_search)
+    _ = user
+    _reject_include_search(payload.include_search)
     try:
         normalized_market = normalize_market(market)
         normalized_code = normalize_stock_code(normalized_market, code)
@@ -117,6 +118,8 @@ def list_provider_runs(
     service: MarketIntelService = Depends(get_market_intel_service),
 ) -> Dict[str, Any]:
     _ = user
+    if code and not market:
+        raise BusinessError("MARKET_INTEL_INVALID_REQUEST", "market is required when code is provided")
     try:
         normalized_market = normalize_market(market) if market else None
         normalized_code = normalize_stock_code(normalized_market, code) if normalized_market and code else code
@@ -141,7 +144,8 @@ def preview_evidence_pack(
     user: CurrentUser = Depends(require_user),
     service: MarketIntelService = Depends(get_market_intel_service),
 ) -> Dict[str, Any]:
-    _ = (user, payload.include_search)
+    _ = user
+    _reject_include_search(payload.include_search)
     try:
         normalized_market = normalize_market(payload.market)
         normalized_code = normalize_stock_code(normalized_market, payload.code)
@@ -169,3 +173,11 @@ def _trim_groups(payload: Dict[str, Any], max_items_per_group: int) -> Dict[str,
         for key, values in groups.items()
     }
     return result
+
+
+def _reject_include_search(include_search: bool) -> None:
+    if include_search:
+        raise BusinessError(
+            "MARKET_INTEL_INVALID_REQUEST",
+            "include_search is not supported in Market Intel v1",
+        )

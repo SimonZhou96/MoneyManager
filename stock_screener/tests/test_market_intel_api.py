@@ -5,6 +5,8 @@ from fastapi.testclient import TestClient
 
 from market import normalize_market
 from web.auth import CurrentUser, require_user
+from web.business import BusinessError
+from web.errors import business_error_handler
 from web.market_intel import get_market_intel_service, router
 from web.single_stock import normalize_stock_code
 
@@ -90,6 +92,7 @@ class MarketIntelApiTest(unittest.TestCase):
     def setUp(self):
         self.service = FakeMarketIntelService()
         app = FastAPI()
+        app.add_exception_handler(BusinessError, business_error_handler)
         app.include_router(router)
         app.dependency_overrides[require_user] = lambda: CurrentUser(id=1, username="tester", role="admin")
         app.dependency_overrides[get_market_intel_service] = lambda: self.service
@@ -140,6 +143,63 @@ class MarketIntelApiTest(unittest.TestCase):
         self.assertIn("data_gaps", payload)
         self.assertEqual(self.service.stock_calls, [(market, code, True)])
         self.assertEqual(self.service.digest_calls, [(market, True)])
+
+    def test_stock_intel_rejects_include_search_true(self):
+        response = self.client.get("/api/market-intel/stocks/A/600519?include_search=true")
+
+        self.assertUnsupportedSearch(response)
+        self.assertEqual(self.service.stock_calls, [])
+
+    def test_refresh_stock_intel_rejects_include_search_true(self):
+        response = self.client.post(
+            "/api/market-intel/stocks/A/600519/refresh",
+            json={"include_search": True},
+        )
+
+        self.assertUnsupportedSearch(response)
+        self.assertEqual(self.service.stock_calls, [])
+
+    def test_evidence_pack_preview_rejects_include_search_true(self):
+        response = self.client.post(
+            "/api/market-intel/evidence-pack/preview",
+            json={"market": "A", "code": "600519", "include_search": True},
+        )
+
+        self.assertUnsupportedSearch(response)
+        self.assertEqual(self.service.stock_calls, [])
+        self.assertEqual(self.service.digest_calls, [])
+
+    def test_market_intel_service_dependency_does_not_initialize_schema_per_request(self):
+        class FakeDb:
+            def __init__(self):
+                self.init_calls = 0
+
+            def init_market_intel_schema(self):
+                self.init_calls += 1
+
+        db = FakeDb()
+
+        service = get_market_intel_service(db)
+
+        self.assertIsNotNone(service)
+        self.assertEqual(db.init_calls, 0)
+
+    def test_provider_runs_requires_market_when_code_is_provided(self):
+        response = self.client.get("/api/market-intel/provider-runs?code=600519")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload.get("ok", True))
+        self.assertEqual(payload.get("error_code"), "MARKET_INTEL_INVALID_REQUEST")
+        self.assertIn("market", payload.get("message", ""))
+        self.assertEqual(self.service.run_calls, [])
+
+    def assertUnsupportedSearch(self, response):
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload.get("ok", True))
+        self.assertEqual(payload.get("error_code"), "MARKET_INTEL_INVALID_REQUEST")
+        self.assertIn("include_search", payload.get("message", ""))
 
 
 if __name__ == "__main__":
