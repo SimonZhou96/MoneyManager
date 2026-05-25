@@ -22,7 +22,9 @@ cron 示例（每天 18:00 执行，收盘后）:
     MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
     FEISHU_WEBHOOK_URL  飞书机器人 Webhook 地址（不配置则跳过飞书发送）
     ENABLE_LLM_ANALYSIS  是否自动启用搜索+模型辅助分析，默认 1
-    TAVILY_API_KEY       搜索 provider key（不配置则跳过联网检索）
+    TAVILY_API_KEY       Tavily 搜索 provider key
+    ZHIPUAI_API_KEY, BIGMODEL_API_KEY  智谱 AI Web Search key，作为 Tavily 失败后的搜索兜底
+    SIGNAL_SEARCH_PROVIDER_ORDER  搜索 fallback 顺序，默认 tavily,zhipuai
     SIGNAL_COMPANY_SEARCH_QUERY_MAX_CHARS  Tavily 公司批量搜索 query 长度上限，默认 390
     LLM_PROVIDER=openai_compatible|codex_responses|deepseek  AI 分析模型 provider
     LLM_PROVIDER_ORDER   模型 fallback 顺序，默认 openai_compatible,codex_responses,deepseek

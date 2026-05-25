@@ -20,7 +20,7 @@ from .llm_providers import FallbackLLMProvider, LLMProvider, NullLLMProvider
 from .hot_news import ManualHotNewsConfig
 from .hot_sectors import ManualHotSectorConfig
 from .models import AnalysisRunResult, AnalysisSettings, ScreeningSignalRow, SignalAnalysisResult
-from .search_providers import NullSearchProvider, SearchProvider
+from .search_providers import FallbackSearchProvider, NullSearchProvider, SearchProvider
 
 
 DEFAULT_ANALYSIS_PROFILE = "default"
@@ -210,6 +210,33 @@ def _prepare_analysis_providers(
 
 def _filter_search_provider_by_preflight(search_provider: SearchProvider) -> tuple[SearchProvider, List[str]]:
     warnings: List[str] = []
+    providers = getattr(search_provider, "providers", None)
+    if providers is not None:
+        available: List[SearchProvider] = []
+        for provider in providers:
+            if not getattr(provider, "is_available", False):
+                continue
+            endpoint = getattr(provider, "endpoint", "")
+            if not endpoint:
+                available.append(provider)
+                continue
+            failures = check_host_resolution([endpoint])
+            label = getattr(provider, "name", provider.__class__.__name__)
+            if not failures:
+                available.append(provider)
+                continue
+            for host, reason in failures:
+                warnings.append(
+                    f"[AI分析] 联网检索 provider {label} 预检失败: 域名解析失败 `{host}` | {reason}；"
+                    "已跳过该 provider"
+                )
+
+        if not available:
+            return NullSearchProvider(), warnings
+        if len(available) == 1:
+            return available[0], warnings
+        return FallbackSearchProvider(available), warnings
+
     endpoint = getattr(search_provider, "endpoint", "")
     if not getattr(search_provider, "is_available", False) or not endpoint:
         return search_provider, warnings

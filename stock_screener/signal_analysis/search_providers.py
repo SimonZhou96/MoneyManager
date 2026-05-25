@@ -57,6 +57,59 @@ class NullSearchProvider(SearchProvider):
         return {row.code: [] for row in rows}
 
 
+class FallbackSearchProvider(SearchProvider):
+    """Try search providers in order, only falling back when a provider fails."""
+
+    name = "fallback"
+
+    def __init__(self, providers: List[SearchProvider]):
+        self.providers = [
+            provider
+            for provider in providers
+            if getattr(provider, "is_available", False)
+        ]
+        self.last_errors: List[str] = []
+
+    @property
+    def is_available(self) -> bool:
+        return any(getattr(provider, "is_available", False) for provider in self.providers)
+
+    @property
+    def provider_names(self) -> List[str]:
+        return [getattr(provider, "name", provider.__class__.__name__) for provider in self.providers]
+
+    def search(self, query: str, max_results: int) -> List[SearchDocument]:
+        self.last_errors = []
+        for provider in self.providers:
+            try:
+                return provider.search(query, max_results)
+            except Exception as exc:
+                self.last_errors.append(self._format_provider_error(provider, exc))
+        return []
+
+    def search_companies_batch(
+        self,
+        market: str,
+        rows: List[ScreeningSignalRow],
+        max_results: int,
+    ) -> Dict[str, List[SearchDocument]]:
+        if not rows:
+            return {}
+        self.last_errors = []
+        for provider in self.providers:
+            try:
+                result = provider.search_companies_batch(market, rows, max_results)
+                return {row.code: list((result or {}).get(row.code, [])) for row in rows}
+            except Exception as exc:
+                self.last_errors.append(self._format_provider_error(provider, exc))
+        return {row.code: [] for row in rows}
+
+    @staticmethod
+    def _format_provider_error(provider: SearchProvider, exc: Exception) -> str:
+        label = getattr(provider, "name", provider.__class__.__name__)
+        return f"{label}: {type(exc).__name__}: {exc}"
+
+
 class TavilySearchProvider(SearchProvider):
     """Tavily-backed search implementation."""
 
@@ -129,6 +182,102 @@ class TavilySearchProvider(SearchProvider):
         max_chars = _company_search_query_max_chars()
         for query_rows in _split_rows_by_query_budget(market, rows, max_chars):
             query = _build_company_batch_query(market, query_rows, max_chars=max_chars)
+            batch_max_results = _company_batch_max_results(max_results, len(query_rows))
+            documents = self.search(query, batch_max_results)
+            assigned = _assign_documents_to_stocks(documents, query_rows)
+            _debug_company_batch_search(market, query_rows, query, batch_max_results, documents, assigned)
+            for code, code_documents in assigned.items():
+                grouped.setdefault(code, []).extend(code_documents)
+        return grouped
+
+
+class ZhipuWebSearchProvider(SearchProvider):
+    """BigModel/Zhipu AI Web Search implementation."""
+
+    name = "zhipuai"
+
+    def __init__(
+        self,
+        api_key: str,
+        endpoint: str = "https://open.bigmodel.cn/api/paas/v4/web_search",
+        timeout_sec: int = 30,
+        search_engine: str = "search_std",
+        content_size: str = "medium",
+        recency_filter: str = "noLimit",
+    ):
+        self.api_key = api_key
+        self.endpoint = endpoint
+        self.timeout_sec = timeout_sec
+        self.search_engine = search_engine
+        self.content_size = content_size
+        self.recency_filter = recency_filter
+
+    def search(self, query: str, max_results: int) -> List[SearchDocument]:
+        if requests is None:
+            raise RuntimeError("requests is not installed")
+        query = _fit_search_query(query, _zhipu_search_query_max_chars())
+        if not query:
+            return []
+
+        payload = {
+            "search_query": query,
+            "search_engine": self.search_engine,
+            "search_intent": False,
+            "count": min(50, max(1, int(max_results))),
+            "search_recency_filter": self.recency_filter,
+            "content_size": self.content_size,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout_sec)
+        if response.status_code >= 400:
+            raise RuntimeError(f"Zhipu web search failed: HTTP {response.status_code} {response.text[:200]}")
+        data = response.json() or {}
+        results = data.get("search_result") or data.get("results") or []
+
+        documents: List[SearchDocument] = []
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("link") or item.get("url") or "").strip()
+            title = str(item.get("title") or "").strip()
+            content = str(item.get("content") or item.get("summary") or item.get("snippet") or "").strip()
+            media = str(item.get("media") or "").strip()
+            publish_date = str(item.get("publish_date") or "").strip()
+            content_parts = [part for part in [content, f"来源: {media}" if media else "", f"发布时间: {publish_date}" if publish_date else ""] if part]
+            content = "\n".join(content_parts)
+            if not (url or title or content):
+                continue
+            score = item.get("score")
+            try:
+                score = float(score) if score is not None else None
+            except (TypeError, ValueError):
+                score = None
+            documents.append(
+                SearchDocument(
+                    title=title,
+                    url=url,
+                    content=content,
+                    score=score,
+                    query=query,
+                )
+            )
+        return documents
+
+    def search_companies_batch(
+        self,
+        market: str,
+        rows: List[ScreeningSignalRow],
+        max_results: int,
+    ) -> Dict[str, List[SearchDocument]]:
+        if not rows:
+            return {}
+        grouped: Dict[str, List[SearchDocument]] = {row.code: [] for row in rows}
+        max_chars = _zhipu_search_query_max_chars()
+        for query_rows in _split_rows_by_zhipu_query_budget(market, rows, max_chars):
+            query = _build_zhipu_company_batch_query(market, query_rows, max_chars=max_chars)
             batch_max_results = _company_batch_max_results(max_results, len(query_rows))
             documents = self.search(query, batch_max_results)
             assigned = _assign_documents_to_stocks(documents, query_rows)
@@ -245,6 +394,93 @@ def _company_search_query_max_chars() -> int:
     except ValueError:
         value = 390
     return min(400, max(120, value))
+
+
+def _zhipu_search_query_max_chars() -> int:
+    raw = os.getenv("ZHIPUAI_WEB_SEARCH_QUERY_MAX_CHARS", "").strip()
+    if not raw:
+        raw = os.getenv("BIGMODEL_WEB_SEARCH_QUERY_MAX_CHARS", "70").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 70
+    return min(70, max(20, value))
+
+
+def _fit_search_query(query: str, max_chars: int) -> str:
+    return re.sub(r"\s+", " ", (query or "").strip())[:max_chars].rstrip()
+
+
+def _split_rows_by_zhipu_query_budget(
+    market: str,
+    rows: List[ScreeningSignalRow],
+    max_chars: int,
+) -> List[List[ScreeningSignalRow]]:
+    batches: List[List[ScreeningSignalRow]] = []
+    current: List[ScreeningSignalRow] = []
+    for row in rows:
+        candidate = [*current, row]
+        if current and len(_build_zhipu_company_batch_query(market, candidate, max_chars=max_chars)) > max_chars:
+            batches.append(current)
+            current = [row]
+        else:
+            current = candidate
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _build_zhipu_company_batch_query(
+    market: str,
+    rows: List[ScreeningSignalRow],
+    max_chars: Optional[int] = None,
+) -> str:
+    max_chars = max_chars or _zhipu_search_query_max_chars()
+    prefix = _zhipu_company_batch_prefix(market, rows)
+    if not rows:
+        return prefix[:max_chars].rstrip()
+
+    for name_max_chars in (12, 8, 4, 0):
+        query = _compose_zhipu_company_batch_query(prefix, rows, name_max_chars)
+        if len(query) <= max_chars:
+            return query
+
+    if len(rows) == 1:
+        row = rows[0]
+        base_terms = _stock_query_terms(row)[:2] or [row.code]
+        query = f"{prefix}{' '.join(base_terms)}"
+        return query[:max_chars].rstrip()
+
+    return _compose_zhipu_company_batch_query(prefix, rows, 0)
+
+
+def _zhipu_company_batch_prefix(market: str, rows: List[ScreeningSignalRow]) -> str:
+    key = str(market or "").upper()
+    if rows and all(getattr(row, "is_etf", False) for row in rows):
+        return f"{key} ETF 新闻 "
+    if key == "HK":
+        return "港股 公告 新闻 "
+    if key == "US":
+        return "US stock filings news "
+    if key == "A":
+        return "A股 公告 新闻 "
+    return f"{key} 股票 新闻 "
+
+
+def _compose_zhipu_company_batch_query(
+    prefix: str,
+    rows: List[ScreeningSignalRow],
+    name_max_chars: int,
+) -> str:
+    return f"{prefix}{'; '.join(_zhipu_company_query_item(row, name_max_chars) for row in rows)}"
+
+
+def _zhipu_company_query_item(row: ScreeningSignalRow, name_max_chars: int) -> str:
+    terms = _stock_query_terms(row)[:2] or [row.code]
+    name_fragment = _fit_company_name_fragment(row.name, name_max_chars)
+    if name_fragment and name_fragment not in terms:
+        terms.append(name_fragment)
+    return " ".join(terms)
 
 
 def _company_batch_max_results(max_results: int, row_count: int) -> int:

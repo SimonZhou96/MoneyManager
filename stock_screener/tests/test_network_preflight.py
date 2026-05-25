@@ -11,7 +11,7 @@ from network_preflight import check_host_resolution, extract_host, format_resolu
 from signal_analysis.llm_providers import FallbackLLMProvider
 from signal_analysis.models import AnalysisSettings
 from signal_analysis.service import _prepare_analysis_providers, run_signal_analysis_for_market
-from signal_analysis.search_providers import NullSearchProvider
+from signal_analysis.search_providers import FallbackSearchProvider, NullSearchProvider
 
 
 class NoopRepository:
@@ -60,6 +60,63 @@ class NetworkPreflightTest(unittest.TestCase):
         self.assertIsInstance(search_provider, NullSearchProvider)
         self.assertIs(llm_provider, fake_llm)
         self.assertTrue(any("联网检索" in warning for warning in warnings))
+
+    def test_search_preflight_filters_only_failed_fallback_provider(self):
+        fake_llm = type("FakeLLM", (), {"is_available": True, "api_base": "https://api.deepseek.com", "name": "deepseek"})()
+        tavily = type(
+            "FakeTavilySearch",
+            (),
+            {"is_available": True, "endpoint": "https://api.tavily.com/search", "name": "tavily"},
+        )()
+        zhipu = type(
+            "FakeZhipuSearch",
+            (),
+            {"is_available": True, "endpoint": "https://open.bigmodel.cn/api/paas/v4/web_search", "name": "zhipuai"},
+        )()
+        fallback = FallbackSearchProvider([tavily, zhipu])
+
+        def fake_resolution(hosts, **kwargs):
+            text = ",".join(hosts)
+            if "api.tavily.com" in text:
+                return [("api.tavily.com", "gaierror: dns down")]
+            return []
+
+        with patch("signal_analysis.service.check_host_resolution", side_effect=fake_resolution):
+            search_provider, llm_provider, warnings = _prepare_analysis_providers(fallback, fake_llm)
+
+        self.assertIs(search_provider, zhipu)
+        self.assertIs(llm_provider, fake_llm)
+        self.assertTrue(any("tavily" in warning and "联网检索" in warning for warning in warnings))
+
+    def test_search_preflight_downgrades_when_all_fallback_providers_fail(self):
+        fake_llm = type("FakeLLM", (), {"is_available": True, "api_base": "https://api.deepseek.com", "name": "deepseek"})()
+        tavily = type(
+            "FakeTavilySearch",
+            (),
+            {"is_available": True, "endpoint": "https://api.tavily.com/search", "name": "tavily"},
+        )()
+        zhipu = type(
+            "FakeZhipuSearch",
+            (),
+            {"is_available": True, "endpoint": "https://open.bigmodel.cn/api/paas/v4/web_search", "name": "zhipuai"},
+        )()
+        fallback = FallbackSearchProvider([tavily, zhipu])
+
+        def fake_resolution(hosts, **kwargs):
+            text = ",".join(hosts)
+            if "api.tavily.com" in text:
+                return [("api.tavily.com", "gaierror: dns down")]
+            if "open.bigmodel.cn" in text:
+                return [("open.bigmodel.cn", "gaierror: dns down")]
+            return []
+
+        with patch("signal_analysis.service.check_host_resolution", side_effect=fake_resolution):
+            search_provider, llm_provider, warnings = _prepare_analysis_providers(fallback, fake_llm)
+
+        self.assertIsInstance(search_provider, NullSearchProvider)
+        self.assertIs(llm_provider, fake_llm)
+        self.assertTrue(any("tavily" in warning for warning in warnings))
+        self.assertTrue(any("zhipuai" in warning for warning in warnings))
 
     def test_llm_dns_failure_filters_only_failed_fallback_provider(self):
         bad = type("FakeDeepSeek", (), {"is_available": True, "api_base": "https://api.deepseek.com", "name": "deepseek"})()

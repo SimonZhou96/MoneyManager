@@ -17,7 +17,13 @@ from .llm_providers import (
     OpenAICompatibleLLMProvider,
 )
 from .models import AnalysisSettings
-from .search_providers import NullSearchProvider, SearchProvider, TavilySearchProvider
+from .search_providers import (
+    FallbackSearchProvider,
+    NullSearchProvider,
+    SearchProvider,
+    TavilySearchProvider,
+    ZhipuWebSearchProvider,
+)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -33,14 +39,87 @@ def _env_int(name: str, default: int) -> int:
 class SearchProviderFactory:
     """Create a search provider from environment configuration."""
 
+    DEFAULT_PROVIDER_ORDER = ["tavily", "zhipuai"]
+
     @staticmethod
     def from_env(settings: AnalysisSettings) -> SearchProvider:
+        providers = [
+            provider
+            for provider_name in SearchProviderFactory._provider_order_from_env()
+            for provider in [SearchProviderFactory._provider_from_env(provider_name, settings)]
+            if getattr(provider, "is_available", False)
+        ]
+        if not providers:
+            return NullSearchProvider()
+        if len(providers) == 1:
+            return providers[0]
+        return FallbackSearchProvider(providers)
+
+    @staticmethod
+    def _provider_from_env(provider: str, settings: AnalysisSettings) -> SearchProvider:
+        if provider == "tavily":
+            return SearchProviderFactory._tavily_from_env(settings)
+        if provider == "zhipuai":
+            return SearchProviderFactory._zhipu_from_env(settings)
+        return NullSearchProvider()
+
+    @staticmethod
+    def _tavily_from_env(settings: AnalysisSettings) -> SearchProvider:
         api_key = os.getenv("TAVILY_API_KEY", "").strip()
         if not api_key:
             return NullSearchProvider()
         endpoint = os.getenv("TAVILY_API_ENDPOINT", "https://api.tavily.com/search").strip()
         timeout = _env_int("SIGNAL_SEARCH_TIMEOUT_SEC", min(30, settings.timeout_sec))
         return TavilySearchProvider(api_key=api_key, endpoint=endpoint, timeout_sec=timeout)
+
+    @staticmethod
+    def _zhipu_from_env(settings: AnalysisSettings) -> SearchProvider:
+        api_key = os.getenv("ZHIPUAI_API_KEY", "").strip() or os.getenv("BIGMODEL_API_KEY", "").strip()
+        if not api_key:
+            return NullSearchProvider()
+        endpoint = os.getenv(
+            "ZHIPUAI_WEB_SEARCH_ENDPOINT",
+            "https://open.bigmodel.cn/api/paas/v4/web_search",
+        ).strip()
+        timeout = _env_int("SIGNAL_SEARCH_TIMEOUT_SEC", min(30, settings.timeout_sec))
+        search_engine = os.getenv("ZHIPUAI_WEB_SEARCH_ENGINE", "search_std").strip() or "search_std"
+        content_size = os.getenv("ZHIPUAI_WEB_SEARCH_CONTENT_SIZE", "medium").strip() or "medium"
+        recency_filter = os.getenv("ZHIPUAI_WEB_SEARCH_RECENCY_FILTER", "noLimit").strip() or "noLimit"
+        return ZhipuWebSearchProvider(
+            api_key=api_key,
+            endpoint=endpoint,
+            timeout_sec=timeout,
+            search_engine=search_engine,
+            content_size=content_size,
+            recency_filter=recency_filter,
+        )
+
+    @staticmethod
+    def _provider_order_from_env() -> List[str]:
+        explicit_order = os.getenv("SIGNAL_SEARCH_PROVIDER_ORDER", "").strip()
+        if explicit_order:
+            return SearchProviderFactory._dedupe_provider_names(explicit_order.split(","))
+        return list(SearchProviderFactory.DEFAULT_PROVIDER_ORDER)
+
+    @staticmethod
+    def _dedupe_provider_names(raw_names) -> List[str]:
+        aliases = {
+            "bigmodel": "zhipuai",
+            "zhipu": "zhipuai",
+            "zhipu_ai": "zhipuai",
+            "zhipu_web_search": "zhipuai",
+        }
+        names: List[str] = []
+        seen = set()
+        for raw_name in raw_names:
+            name = aliases.get(str(raw_name).strip().lower(), str(raw_name).strip().lower())
+            if not name or name in seen:
+                continue
+            if name not in set(SearchProviderFactory.DEFAULT_PROVIDER_ORDER):
+                continue
+            names.append(name)
+            seen.add(name)
+        return names
 
 
 class LLMProviderFactory:

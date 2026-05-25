@@ -167,6 +167,8 @@ ENABLE_LLM_ANALYSIS=0
 ```env
 ENABLE_LLM_ANALYSIS=1
 TAVILY_API_KEY=
+ZHIPUAI_API_KEY=
+SIGNAL_SEARCH_PROVIDER_ORDER=tavily,zhipuai
 LLM_PROVIDER_ORDER=deepseek
 DEEPSEEK_API_KEY=
 DEEPSEEK_LLM_MODEL=
@@ -447,7 +449,7 @@ Caddy 自动 HTTPS 需要：
 中国大陆 ECS 不建议直连 OpenAI/Codex API。推荐：
 
 - 大陆 ECS 上设置 `ENABLE_LLM_ANALYSIS=0`，先跑基础筛选。
-- 或设置 `LLM_PROVIDER_ORDER=deepseek`，只使用大陆可访问 provider。
+- 或设置 `LLM_PROVIDER_ORDER=deepseek`，并通过 `ZHIPUAI_API_KEY` 给搜索链增加国内可访问兜底。
 - 或把 AI worker 部署到香港/新加坡/日本等 OpenAI 支持地区，让大陆主站只负责页面、任务和结果展示。
 
 ### 登录失败

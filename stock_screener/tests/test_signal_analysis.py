@@ -33,7 +33,13 @@ from signal_analysis.models import (
     SearchDocument,
     SignalAnalysisResult,
 )
-from signal_analysis.search_providers import NullSearchProvider, TavilySearchProvider, _build_company_batch_query
+from signal_analysis.search_providers import (
+    FallbackSearchProvider,
+    NullSearchProvider,
+    TavilySearchProvider,
+    ZhipuWebSearchProvider,
+    _build_company_batch_query,
+)
 from signal_analysis.service import run_signal_analysis_for_market
 
 
@@ -215,6 +221,39 @@ class SignalAnalysisTest(unittest.TestCase):
             settings = AnalysisSettings()
             self.assertIsInstance(SearchProviderFactory.from_env(settings), NullSearchProvider)
             self.assertIsInstance(LLMProviderFactory.from_env(settings), NullLLMProvider)
+
+    def test_search_factory_builds_tavily_then_zhipu_fallback(self):
+        with patch.dict(
+            os.environ,
+            {
+                "TAVILY_API_KEY": "tavily-key",
+                "ZHIPUAI_API_KEY": "zhipu-key",
+            },
+            clear=True,
+        ):
+            provider = SearchProviderFactory.from_env(AnalysisSettings(timeout_sec=9))
+
+        self.assertIsInstance(provider, FallbackSearchProvider)
+        self.assertEqual([item.name for item in provider.providers], ["tavily", "zhipuai"])
+        self.assertIsInstance(provider.providers[0], TavilySearchProvider)
+        self.assertIsInstance(provider.providers[1], ZhipuWebSearchProvider)
+        self.assertEqual(provider.providers[0].timeout_sec, 9)
+        self.assertEqual(provider.providers[1].timeout_sec, 9)
+
+    def test_search_factory_uses_bigmodel_key_for_zhipu_fallback(self):
+        with patch.dict(
+            os.environ,
+            {
+                "SIGNAL_SEARCH_PROVIDER_ORDER": "zhipuai",
+                "BIGMODEL_API_KEY": "bigmodel-key",
+            },
+            clear=True,
+        ):
+            provider = SearchProviderFactory.from_env(AnalysisSettings(timeout_sec=11))
+
+        self.assertIsInstance(provider, ZhipuWebSearchProvider)
+        self.assertEqual(provider.api_key, "bigmodel-key")
+        self.assertEqual(provider.timeout_sec, 11)
 
     def test_run_signal_analysis_uses_shared_cache_before_llm(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -421,6 +460,152 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertEqual(docs[0].url, "https://example.com/policy")
         self.assertEqual(docs[0].score, 0.91)
         self.assertEqual(post.call_args.kwargs["json"]["max_results"], 3)
+
+    def test_zhipu_provider_parses_search_results_and_uses_bearer_auth(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {
+                    "search_result": [
+                        {
+                            "title": "小米汽车交付进展",
+                            "link": "https://example.com/xiaomi",
+                            "content": "小米汽车交付量继续增长",
+                            "media": "示例媒体",
+                            "publish_date": "2026-05-24",
+                        }
+                    ]
+                }
+
+        with patch("signal_analysis.search_providers.requests.post", return_value=Response()) as post:
+            provider = ZhipuWebSearchProvider(api_key="zhipu-key", timeout_sec=5)
+            docs = provider.search("HK.01810 小米集团 最新公告 新闻 机器人 AI", 3)
+
+        self.assertEqual(len(docs), 1)
+        self.assertEqual(docs[0].title, "小米汽车交付进展")
+        self.assertEqual(docs[0].url, "https://example.com/xiaomi")
+        self.assertIn("示例媒体", docs[0].content)
+        self.assertIn("2026-05-24", docs[0].content)
+        self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer zhipu-key")
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["count"], 3)
+        self.assertLessEqual(len(payload["search_query"]), 70)
+
+    def test_zhipu_company_batch_query_stays_under_provider_limit(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"search_result": []}
+
+        rows = [
+            ScreeningSignalRow(index, code, "HK", "港股", name, "", "", "", "")
+            for index, (code, name) in enumerate([
+                ("HK.01810", "小米集团-W"),
+                ("HK.00700", "腾讯控股"),
+                ("HK.03690", "美团-W"),
+            ])
+        ]
+
+        with patch("signal_analysis.search_providers.requests.post", return_value=Response()) as post:
+            provider = ZhipuWebSearchProvider(api_key="zhipu-key", timeout_sec=5)
+            grouped = provider.search_companies_batch("HK", rows, 5)
+
+        self.assertGreaterEqual(post.call_count, 1)
+        for call in post.call_args_list:
+            self.assertLessEqual(len(call.kwargs["json"]["search_query"]), 70)
+        self.assertEqual(set(grouped.keys()), {"HK.01810", "HK.00700", "HK.03690"})
+
+    def test_fallback_search_provider_uses_tavily_without_zhipu_when_tavily_succeeds(self):
+        class Provider:
+            is_available = True
+
+            def __init__(self, name, docs=None, should_fail=False):
+                self.name = name
+                self.docs = docs or []
+                self.should_fail = should_fail
+                self.search_calls = 0
+
+            def search(self, query, max_results):
+                self.search_calls += 1
+                if self.should_fail:
+                    raise RuntimeError(f"{self.name} boom")
+                return self.docs
+
+            def search_companies_batch(self, market, rows, max_results):
+                return {row.code: [] for row in rows}
+
+        tavily_doc = SearchDocument(title="Tavily", url="https://example.com/tavily", content="ok")
+        tavily = Provider("tavily", [tavily_doc])
+        zhipu = Provider("zhipuai", [SearchDocument(title="Zhipu", url="", content="unused")])
+
+        docs = FallbackSearchProvider([tavily, zhipu]).search("query", 2)
+
+        self.assertEqual(docs, [tavily_doc])
+        self.assertEqual(tavily.search_calls, 1)
+        self.assertEqual(zhipu.search_calls, 0)
+
+    def test_fallback_search_provider_uses_zhipu_when_tavily_batch_fails(self):
+        class Provider:
+            is_available = True
+
+            def __init__(self, name, should_fail=False):
+                self.name = name
+                self.should_fail = should_fail
+                self.batch_calls = 0
+
+            def search(self, query, max_results):
+                return []
+
+            def search_companies_batch(self, market, rows, max_results):
+                self.batch_calls += 1
+                if self.should_fail:
+                    raise RuntimeError(f"{self.name} boom")
+                return {
+                    row.code: [
+                        SearchDocument(
+                            title=f"{self.name} {row.code}",
+                            url=f"https://example.com/{row.code}",
+                            content=row.name,
+                        )
+                    ]
+                    for row in rows
+                }
+
+        rows = [ScreeningSignalRow(0, "HK.01810", "HK", "港股", "小米集团-W", "", "", "", "")]
+        tavily = Provider("tavily", should_fail=True)
+        zhipu = Provider("zhipuai")
+
+        grouped = FallbackSearchProvider([tavily, zhipu]).search_companies_batch("HK", rows, 3)
+
+        self.assertEqual(tavily.batch_calls, 1)
+        self.assertEqual(zhipu.batch_calls, 1)
+        self.assertEqual(grouped["HK.01810"][0].title, "zhipuai HK.01810")
+
+    def test_fallback_search_provider_returns_empty_when_all_providers_fail(self):
+        class Provider:
+            is_available = True
+
+            def __init__(self, name):
+                self.name = name
+
+            def search(self, query, max_results):
+                raise RuntimeError(f"{self.name} boom")
+
+            def search_companies_batch(self, market, rows, max_results):
+                raise RuntimeError(f"{self.name} boom")
+
+        rows = [
+            ScreeningSignalRow(0, "US.AAPL", "US", "美股", "Apple Inc", "", "", "", ""),
+            ScreeningSignalRow(1, "HK.01810", "HK", "港股", "小米集团-W", "", "", "", ""),
+        ]
+        provider = FallbackSearchProvider([Provider("tavily"), Provider("zhipuai")])
+
+        self.assertEqual(provider.search("query", 3), [])
+        self.assertEqual(provider.search_companies_batch("HK", rows, 3), {"US.AAPL": [], "HK.01810": []})
 
     def test_tavily_provider_assigns_batch_documents_to_matching_stocks(self):
         class Response:
