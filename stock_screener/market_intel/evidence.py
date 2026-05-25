@@ -77,6 +77,13 @@ class EvidencePackBuilder:
             _search_document_to_intel_item(document, market=market, code=code)
             for document in (search_documents or [])
         ]
+        manual_intel_items = _rank_and_dedupe_items(manual_intel_items)
+        structured_items = _rank_and_dedupe_items([*stock_items, *market_items])
+        structured_keys = {_evidence_key(item) for item in [*manual_intel_items, *structured_items]}
+        search_intel_items = _rank_and_dedupe_items([
+            item for item in search_intel_items
+            if _evidence_key(item) not in structured_keys
+        ])
 
         merged_source_status: Dict[str, Any] = {}
         merged_source_status.update(_bundle_source_status(stock_bundle))
@@ -96,11 +103,11 @@ class EvidencePackBuilder:
         return EvidencePack(
             market=market,
             code=code,
-            structured_items=[*stock_items, *market_items],
+            structured_items=structured_items,
             search_documents=search_intel_items,
             manual_items=manual_intel_items,
-            stock_context={"items": [item.to_dict() for item in stock_items]},
-            market_context={"items": [item.to_dict() for item in market_items]},
+            stock_context={"items": [item.to_dict() for item in _rank_and_dedupe_items(stock_items)]},
+            market_context={"items": [item.to_dict() for item in _rank_and_dedupe_items(market_items)]},
             source_status=merged_source_status,
             data_gaps=merged_data_gaps,
             citations=merged_citations,
@@ -248,3 +255,59 @@ def _dedupe_strings(items: Iterable[str]) -> List[str]:
         seen.add(text)
         rows.append(text)
     return rows
+
+
+def _canonical_url(value: str) -> str:
+    text = str(value or "").strip()
+    if text.endswith("/"):
+        text = text[:-1]
+    return text
+
+
+def _canonical_title(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _evidence_key(item: IntelItem) -> tuple:
+    url = _canonical_url(item.url)
+    if url:
+        return ("url", url)
+    title = _canonical_title(item.title)
+    published = item.published_at.date().isoformat() if item.published_at else ""
+    return ("title", title, published or item.source)
+
+
+def _rank_item(item: IntelItem) -> tuple:
+    provider_rank = {
+        "manual": 0,
+        "eastmoney": 1,
+        "cailianpress": 2,
+        "sina": 3,
+        "tradingview": 4,
+        "global_index": 5,
+        "signal_analysis": 8,
+    }.get(item.provider, 6)
+    type_rank = {
+        "announcement": 0,
+        "financial": 1,
+        "research_report": 2,
+        "market_news": 3,
+        "news": 4,
+        "search_document": 8,
+    }.get(item.item_type, 6)
+    published = item.published_at or item.fetched_at
+    timestamp = published.timestamp() if published else 0
+    return (provider_rank, type_rank, -timestamp, item.title)
+
+
+def _rank_and_dedupe_items(items: Iterable[IntelItem]) -> List[IntelItem]:
+    rows = sorted(list(items), key=_rank_item)
+    result: List[IntelItem] = []
+    seen = set()
+    for item in rows:
+        key = _evidence_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result

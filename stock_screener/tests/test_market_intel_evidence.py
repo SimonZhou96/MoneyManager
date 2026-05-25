@@ -62,6 +62,7 @@ class MarketIntelEvidenceTests(unittest.TestCase):
             code="AAPL",
             title="Stock headline",
             summary="Company-specific development.",
+            url="https://example.com/stock-headline",
             dedupe_key="stock-headline",
         )
         market_item = make_item(
@@ -69,6 +70,7 @@ class MarketIntelEvidenceTests(unittest.TestCase):
             code="",
             title="Market headline",
             summary="Macro development.",
+            url="https://example.com/market-headline",
             dedupe_key="market-headline",
         )
         manual_item = make_item(
@@ -77,6 +79,7 @@ class MarketIntelEvidenceTests(unittest.TestCase):
             item_type="manual_note",
             title="Manual context",
             summary="Analyst supplied context.",
+            url="https://example.com/manual-context",
             dedupe_key="manual-context",
         )
         search_document = SearchDocument(
@@ -114,7 +117,7 @@ class MarketIntelEvidenceTests(unittest.TestCase):
 
         self.assertEqual(payload["market"], "US")
         self.assertEqual(payload["code"], "AAPL")
-        self.assertEqual(
+        self.assertCountEqual(
             [item["title"] for item in payload["structured_items"]],
             ["Stock headline", "Market headline"],
         )
@@ -214,6 +217,87 @@ class MarketIntelEvidenceTests(unittest.TestCase):
 
         self.assertEqual(service.stock_calls, [("US", "AAPL", True)])
         self.assertEqual(service.market_calls, [("US", True)])
+
+    def test_evidence_pack_dedupes_by_url_and_prefers_high_reliability_source(self):
+        cailian = make_item(
+            scope_type="market",
+            market="A",
+            code="",
+            source="财联社",
+            provider="cailianpress",
+            title="AI算力板块走强",
+            summary="财联社快讯",
+            url="https://example.com/same-event/",
+            dedupe_key="cls-1",
+        )
+        search = SearchDocument(
+            title="AI算力板块走强",
+            url="https://example.com/same-event",
+            content="搜索重复结果",
+            query="AI 算力",
+        )
+
+        pack = EvidencePackBuilder().build(
+            market="A",
+            market_bundle=MarketIntelBundle(
+                market="A",
+                items=[cailian],
+                freshness_status="fresh",
+            ).to_dict(),
+            search_documents=[search],
+        )
+        payload = pack.to_dict()
+
+        self.assertEqual([item["provider"] for item in payload["structured_items"]], ["cailianpress"])
+        self.assertEqual(payload["search_documents"], [])
+        self.assertEqual(payload["structured_items"][0]["title"], "AI算力板块走强")
+
+    def test_evidence_pack_ranks_manual_then_official_then_news_then_search(self):
+        manual = make_item(
+            source="manual",
+            provider="manual",
+            title="人工重点",
+            dedupe_key="manual",
+        )
+        announcement = make_item(
+            source="东方财富",
+            provider="eastmoney",
+            item_type="announcement",
+            title="公司公告",
+            url="https://example.com/announcement",
+            dedupe_key="ann",
+        )
+        sina = make_item(
+            source="新浪财经",
+            provider="sina",
+            item_type="market_news",
+            title="新浪快讯",
+            url="https://example.com/sina",
+            dedupe_key="sina",
+        )
+        search = SearchDocument(
+            title="搜索补充",
+            url="https://example.com/search-only",
+            content="搜索内容",
+            query="query",
+        )
+
+        pack = EvidencePackBuilder().build(
+            market="A",
+            stock_bundle=StockIntelBundle(
+                market="A",
+                code="600519",
+                items=[sina, announcement],
+                freshness_status="fresh",
+            ).to_dict(),
+            manual_items=[manual],
+            search_documents=[search],
+        )
+        payload = pack.to_dict()
+
+        self.assertEqual([item["title"] for item in payload["manual_items"]], ["人工重点"])
+        self.assertEqual([item["title"] for item in payload["structured_items"]], ["公司公告", "新浪快讯"])
+        self.assertEqual([item["title"] for item in payload["search_documents"]], ["搜索补充"])
 
 
 if __name__ == "__main__":
