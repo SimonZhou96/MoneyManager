@@ -251,6 +251,14 @@ class MarketIntelEvidenceTests(unittest.TestCase):
         self.assertEqual([item["provider"] for item in payload["structured_items"]], ["cailianpress"])
         self.assertEqual(payload["search_documents"], [])
         self.assertEqual(payload["structured_items"][0]["title"], "AI算力板块走强")
+        self.assertIn(
+            {"label": "AI算力板块走强", "url": "https://example.com/same-event/"},
+            payload["citations"],
+        )
+        self.assertNotIn(
+            {"label": "AI算力板块走强", "url": "https://example.com/same-event"},
+            payload["citations"],
+        )
 
     def test_evidence_pack_dedupes_title_only_structured_item_before_search(self):
         cailian = make_item(

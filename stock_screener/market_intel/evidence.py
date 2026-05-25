@@ -95,8 +95,7 @@ class EvidencePackBuilder:
             *[str(item) for item in (data_gaps or []) if str(item).strip()],
         ])
         merged_citations = _dedupe_citations([
-            *_item_citations([*stock_items, *market_items, *manual_intel_items]),
-            *_search_document_citations(search_documents or []),
+            *_item_citations([*structured_items, *manual_intel_items, *search_intel_items]),
             *[dict(item) for item in (citations or [])],
         ])
 
