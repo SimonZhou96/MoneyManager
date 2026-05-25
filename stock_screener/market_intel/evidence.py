@@ -274,7 +274,9 @@ def _evidence_key(item: IntelItem) -> tuple:
         return ("url", url)
     title = _canonical_title(item.title)
     published = item.published_at.date().isoformat() if item.published_at else ""
-    return ("title", title, published or item.source)
+    if published:
+        return ("title", title, published)
+    return ("title", title)
 
 
 def _rank_item(item: IntelItem) -> tuple:

@@ -252,6 +252,39 @@ class MarketIntelEvidenceTests(unittest.TestCase):
         self.assertEqual(payload["search_documents"], [])
         self.assertEqual(payload["structured_items"][0]["title"], "AI算力板块走强")
 
+    def test_evidence_pack_dedupes_title_only_structured_item_before_search(self):
+        cailian = make_item(
+            scope_type="market",
+            market="A",
+            code="",
+            source="财联社",
+            provider="cailianpress",
+            title="低空经济政策落地",
+            summary="财联社结构化快讯",
+            url="",
+            dedupe_key="cls-title-only",
+        )
+        search = SearchDocument(
+            title="  低空经济政策落地  ",
+            url="",
+            content="搜索重复结果",
+            query="低空经济 政策",
+        )
+
+        pack = EvidencePackBuilder().build(
+            market="A",
+            market_bundle=MarketIntelBundle(
+                market="A",
+                items=[cailian],
+                freshness_status="fresh",
+            ).to_dict(),
+            search_documents=[search],
+        )
+        payload = pack.to_dict()
+
+        self.assertEqual([item["title"] for item in payload["structured_items"]], ["低空经济政策落地"])
+        self.assertEqual(payload["search_documents"], [])
+
     def test_evidence_pack_ranks_manual_then_official_then_news_then_search(self):
         manual = make_item(
             source="manual",
