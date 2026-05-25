@@ -7,6 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIN_TSX = ROOT / "web_frontend" / "src" / "main.tsx"
+STYLES_CSS = ROOT / "web_frontend" / "src" / "styles.css"
 
 
 class CodeScreeningFrontendTest(unittest.TestCase):
@@ -34,6 +35,16 @@ class CodeScreeningFrontendTest(unittest.TestCase):
         self.assertNotIn("single_stock_runs", source)
         self.assertNotIn("SingleRunDetail", source)
         self.assertNotIn("openSingle", source)
+
+    def test_code_screening_form_prevents_rule_chain_checkbox_overlap(self):
+        source = self.read_main()
+        styles = STYLES_CSS.read_text(encoding="utf-8")
+
+        self.assertIn('className="code-rule-field"', source)
+        self.assertIn('className="code-screening-toggles"', source)
+        self.assertIn(".compact-form-grid .code-rule-field", styles)
+        self.assertIn(".code-screening-toggles", styles)
+        self.assertIn("grid-column: span 2", styles)
 
 
 if __name__ == "__main__":

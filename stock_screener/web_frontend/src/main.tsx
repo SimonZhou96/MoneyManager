@@ -1047,7 +1047,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
             {TIMEFRAME_OPTIONS.map(item => <option key={item}>{item}</option>)}
           </select>
         </Field>
-        <Field label="规则链">
+        <Field label="规则链" className="code-rule-field">
           <select value={chainKey} onChange={event => setChainKey(event.target.value)}>
             {(rules?.chains || []).map(item => (
               <option key={item.chain_key} value={item.chain_key}>
@@ -1056,9 +1056,11 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
             ))}
           </select>
         </Field>
-        <label className="check"><input type="checkbox" checked={enableAi} onChange={event => setEnableAi(event.target.checked)} /> AI 分析</label>
-        <label className="check"><input type="checkbox" checked={sendFeishu} onChange={event => setSendFeishu(event.target.checked)} /> 发送飞书</label>
-        <Field label="代码列表" className="field-wide">
+        <div className="code-screening-toggles">
+          <label className="check"><input type="checkbox" checked={enableAi} onChange={event => setEnableAi(event.target.checked)} /> AI 分析</label>
+          <label className="check"><input type="checkbox" checked={sendFeishu} onChange={event => setSendFeishu(event.target.checked)} /> 发送飞书</label>
+        </div>
+        <Field label="代码列表" className="field-wide code-list-field">
           <textarea className="code-input" rows={5} value={codes} onChange={event => setCodes(event.target.value)} placeholder="AAPL, MSFT 或每行一个代码" />
         </Field>
         <div className="code-preview-actions">
