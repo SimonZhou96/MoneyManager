@@ -114,6 +114,38 @@ class FailingProvider:
         raise RuntimeError("provider unavailable")
 
 
+class MarketIndexCodeProvider:
+    name = "index-provider"
+
+    @property
+    def is_available(self):
+        return True
+
+    def fetch_stock(self, market, code):
+        return [
+            make_item(
+                market=market,
+                code=code,
+                provider=self.name,
+                title="Stock code remains scoped",
+                dedupe_key=f"{market}-{code}-stock-code",
+            )
+        ]
+
+    def fetch_market(self, market):
+        return [
+            make_item(
+                scope_type="market",
+                market=market,
+                code="IXIC",
+                provider=self.name,
+                item_type="index_snapshot",
+                title="Nasdaq Composite snapshot",
+                dedupe_key=f"{market}-ixic",
+            )
+        ]
+
+
 class MarketIntelServiceTests(unittest.TestCase):
     def test_force_refresh_then_cached_get_does_not_call_provider_again(self):
         repo = InMemoryMarketIntelRepository()
@@ -174,6 +206,20 @@ class MarketIntelServiceTests(unittest.TestCase):
         self.assertIn("provider-name-only", payload["source_status"])
         runs = service.list_provider_runs(provider="provider-name-only", market="US", code="MSFT", status="success")
         self.assertEqual(len(runs), 1)
+
+    def test_market_digest_normalizes_item_code_for_stale_fallback(self):
+        repo = InMemoryMarketIntelRepository()
+        service = MarketIntelService(repo, [MarketIndexCodeProvider()])
+
+        fresh = service.get_market_digest("US", force_refresh=True)
+        stock = service.refresh_stock_intel("US", "AAPL")
+        stale = MarketIntelService(repo, [FailingProvider()]).get_market_digest("US", force_refresh=True)
+
+        self.assertEqual(fresh["groups"]["index_snapshot"][0]["code"], "")
+        self.assertEqual(stock["groups"]["market_news"][0]["code"], "AAPL")
+        self.assertEqual(stale["freshness_status"], "stale")
+        self.assertEqual(stale["groups"]["index_snapshot"][0]["title"], "Nasdaq Composite snapshot")
+        self.assertTrue(stale["groups"]["index_snapshot"][0]["is_stale"])
 
 
 if __name__ == "__main__":

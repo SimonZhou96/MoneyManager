@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Iterable, List, Optional
@@ -65,7 +66,10 @@ class MarketIntelService:
                 if scope_type == "stock":
                     items = list(provider.fetch_stock(market, code))
                 else:
-                    items = list(provider.fetch_market(market))
+                    items = [
+                        replace(item, code="")
+                        for item in provider.fetch_market(market)
+                    ]
                 finished_at = self._now()
                 duration_ms = int((perf_counter() - started_clock) * 1000)
                 collected.extend(items)
