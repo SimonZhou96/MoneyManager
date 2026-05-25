@@ -42,6 +42,7 @@ from .market_intel import router as market_intel_router
 from .jobs import run_web_screening_job
 from .options import router as options_router
 from .quant import router as quant_router
+from .stock_terminal import router as stock_terminal_router
 from .rate_limit import (
     ARTIFACT_DOWNLOAD_RULE,
     CREATE_TASK_RULE,
@@ -72,6 +73,7 @@ app.add_exception_handler(RequestValidationError, request_validation_exception_h
 app.include_router(options_router)
 app.include_router(quant_router)
 app.include_router(market_intel_router)
+app.include_router(stock_terminal_router)
 
 
 class LoginRequest(BaseModel):
@@ -275,6 +277,7 @@ def startup() -> None:
     try:
         db.init_web_schema()
         db.init_market_intel_schema()
+        db.init_stock_terminal_schema()
         username = os.getenv("WEB_BOOTSTRAP_USERNAME", "").strip()
         password = os.getenv("WEB_BOOTSTRAP_PASSWORD", "").strip()
         if username and password and not db.get_web_user_by_username(username):
