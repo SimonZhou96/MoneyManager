@@ -3,8 +3,8 @@ import { createRoot } from 'react-dom/client'
 import CodeMirror from '@uiw/react-codemirror'
 import { json } from '@codemirror/lang-json'
 import { api } from './api'
-import { MarketIntelPage } from './features/marketIntel/MarketIntelPage'
 import { QuantLab } from './features/quant/QuantLab'
+import { StockTerminalPanel, type StockTerminalRow } from './features/stockTerminal/StockTerminalPanel'
 import './styles.css'
 
 type User = { id: number; username: string; role: string }
@@ -398,8 +398,7 @@ function App() {
         <nav>
           <button className={page === 'dashboard' ? 'active' : ''} onClick={() => setPage('dashboard')}>总览</button>
           <button className={page === 'screening' ? 'active' : ''} onClick={() => setPage('screening')}>全市场筛选</button>
-          <button className={page === 'codeScreening' ? 'active' : ''} onClick={() => setPage('codeScreening')}>代码筛选</button>
-          <button className={page === 'marketIntel' ? 'active' : ''} onClick={() => setPage('marketIntel')}>市场情报</button>
+          <button className={page === 'codeScreening' ? 'active' : ''} onClick={() => setPage('codeScreening')}>个股筛选器</button>
           <button className={page === 'options' ? 'active' : ''} onClick={() => setPage('options')}>期权实验室</button>
           <button className={page === 'quant' ? 'active' : ''} onClick={() => setPage('quant')}>量化实验室</button>
           <button className={page === 'rules' ? 'active' : ''} onClick={() => setPage('rules')}>规则链</button>
@@ -415,7 +414,6 @@ function App() {
         />}
         {page === 'screening' && <Screening />}
         {page === 'codeScreening' && <CodeScreening openTask={(taskId) => { setSelectedTaskId(taskId); setPage('task') }} />}
-        {page === 'marketIntel' && <MarketIntelPage />}
         {page === 'options' && <OptionLab />}
         {page === 'quant' && <QuantLab />}
         {page === 'rules' && <Rules />}
@@ -985,6 +983,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
   const [sendFeishu, setSendFeishu] = useState(false)
   const [jobId, setJobId] = useState('')
   const [result, setResult] = useState<CustomListResultsResponse | null>(null)
+  const [selectedTerminalRow, setSelectedTerminalRow] = useState<StockTerminalRow | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const parsedCodes = useMemo(() => splitCodes(codes), [codes])
@@ -993,6 +992,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
     event.preventDefault()
     setError('')
     setResult(null)
+    setSelectedTerminalRow(null)
     setJobId('')
     if (parsedCodes.length === 0) {
       setError('至少输入一个代码')
@@ -1147,16 +1147,37 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
               <div><dt>筛选任务</dt><dd>{result.task_id ? <button className="link-button" onClick={() => openTask(result.task_id || '')}>{result.task_id.slice(0, 8)}</button> : '等待任务创建'}</dd></div>
             </dl>
           </Panel>
-          <Panel title="筛选结果">
-            <CodeScreeningResultTable rows={result.rows || []} taskId={result.task_id} openTask={openTask} />
-          </Panel>
+          <div className="code-screening-workbench">
+            <Panel title="筛选结果">
+              <CodeScreeningResultTable
+                rows={result.rows || []}
+                taskId={result.task_id}
+                openTask={openTask}
+                selectedCode={selectedTerminalRow?.code}
+                onSelectRow={setSelectedTerminalRow}
+              />
+            </Panel>
+            <StockTerminalPanel row={selectedTerminalRow} />
+          </div>
         </>
       )}
     </section>
   )
 }
 
-function CodeScreeningResultTable({ rows, taskId, openTask }: { rows: CustomListResultRow[]; taskId?: string; openTask: (taskId: string) => void }) {
+function CodeScreeningResultTable({
+  rows,
+  taskId,
+  openTask,
+  selectedCode,
+  onSelectRow
+}: {
+  rows: CustomListResultRow[]
+  taskId?: string
+  openTask: (taskId: string) => void
+  selectedCode?: string
+  onSelectRow: (row: StockTerminalRow) => void
+}) {
   if (!rows || rows.length === 0) return <div className="empty">暂无数据</div>
   return (
     <div className="table-wrap">
@@ -1179,8 +1200,13 @@ function CodeScreeningResultTable({ rows, taskId, openTask }: { rows: CustomList
         <tbody>
           {rows.map((row, index) => {
             const rowTaskId = row.task_id || taskId || ''
+            const isSelected = Boolean(row.code && row.code === selectedCode)
             return (
-              <tr key={`${row.input || row.code || 'row'}-${index}`}>
+              <tr
+                key={`${row.input || row.code || 'row'}-${index}`}
+                className={`${isSelected ? 'selected-row ' : ''}clickable-row`}
+                onClick={() => onSelectRow(row)}
+              >
                 <td>{displayMissing(row.input || row.code)}</td>
                 <td>{displayMissing(row.code)}</td>
                 <td>{displayMissing(row.name)}</td>
@@ -1191,7 +1217,7 @@ function CodeScreeningResultTable({ rows, taskId, openTask }: { rows: CustomList
                 <td>{displayMissing(row.close_price)}</td>
                 <td>{displayMissing(row.filter_summary)}</td>
                 <td>{displayMissing(row.reason)}</td>
-                <td>{rowTaskId ? <button className="link-button" onClick={() => openTask(rowTaskId)}>{rowTaskId.slice(0, 8)}</button> : '等待创建'}</td>
+                <td>{rowTaskId ? <button className="link-button" onClick={event => { event.stopPropagation(); openTask(rowTaskId) }}>{rowTaskId.slice(0, 8)}</button> : '等待创建'}</td>
               </tr>
             )
           })}
