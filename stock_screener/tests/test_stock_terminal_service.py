@@ -4,6 +4,12 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 from stock_terminal.models import FundFlowPoint, KlinePoint, MinutePoint, QuoteSnapshot
+from stock_terminal.providers.eastmoney import (
+    EastmoneyStockTerminalProvider,
+    parse_eastmoney_fund_flow_rows,
+    parse_eastmoney_minute_rows,
+    parse_eastmoney_quote,
+)
 from stock_terminal.repository import InMemoryStockTerminalRepository, MySqlStockTerminalRepository
 from stock_terminal.service import StockTerminalService
 
@@ -69,6 +75,119 @@ class FakeKlineDb:
         row_list = list(rows)
         self.saved_kline_rows.extend(row_list)
         return len(row_list)
+
+
+class FakeHttpResponse:
+    def __init__(self, payload):
+        self.payload = payload
+        self.raise_calls = 0
+
+    def raise_for_status(self):
+        self.raise_calls += 1
+
+    def json(self):
+        return self.payload
+
+
+class RecordingSession:
+    def __init__(self, payloads):
+        self.payloads = list(payloads)
+        self.calls = []
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append({"url": url, "params": params or {}, "timeout": timeout})
+        return FakeHttpResponse(self.payloads.pop(0))
+
+
+class EastmoneyProviderParserTest(unittest.TestCase):
+    def test_parse_quote_shape(self):
+        payload = {
+            "data": {
+                "f43": 168800,
+                "f44": 169900,
+                "f45": 167000,
+                "f46": 168000,
+                "f47": 100000,
+                "f48": 2000000,
+                "f57": "600519",
+                "f58": "贵州茅台",
+                "f60": 166800,
+                "f169": 2000,
+                "f170": 120,
+            }
+        }
+
+        quote = parse_eastmoney_quote("A", "SH.600519", payload)
+
+        self.assertEqual(quote.name, "贵州茅台")
+        self.assertEqual(quote.price, 1688.0)
+        self.assertEqual(quote.change_percent, 1.2)
+        self.assertEqual(quote.source, "eastmoney")
+
+    def test_parse_quote_handles_empty_markers(self):
+        payload = {"data": {"f43": "-", "f57": "AAPL", "f58": "Apple"}}
+
+        quote = parse_eastmoney_quote("US", "US.AAPL", payload)
+
+        self.assertIsNone(quote.price)
+        self.assertEqual(quote.name, "Apple")
+
+    def test_parse_minute_shape(self):
+        payload = {
+            "data": {
+                "trends": [
+                    "2026-05-25 09:30,10.0,10.1,100,1000",
+                    "2026-05-25 09:31,10.2,10.15,120,1300",
+                ]
+            }
+        }
+
+        rows = parse_eastmoney_minute_rows(payload)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1].price, 10.2)
+        self.assertEqual(rows[1].average_price, 10.15)
+        self.assertEqual(rows[1].turnover, 1300.0)
+
+    def test_parse_fund_flow_shape(self):
+        payload = {"data": {"klines": ["2026-05-25,10,4,6,5,1"]}}
+
+        rows = parse_eastmoney_fund_flow_rows(payload)
+
+        self.assertEqual(rows[0].inflow, 10.0)
+        self.assertEqual(rows[0].net_inflow, 6.0)
+        self.assertEqual(rows[0].main_net_inflow, 5.0)
+
+    def test_live_provider_uses_market_specific_secid(self):
+        self.assertEqual(EastmoneyStockTerminalProvider()._secid("A", "SH.600519"), "1.600519")
+        self.assertEqual(EastmoneyStockTerminalProvider()._secid("A", "SZ.000001"), "0.000001")
+        self.assertEqual(EastmoneyStockTerminalProvider()._secid("HK", "HK.700"), "116.00700")
+        self.assertEqual(EastmoneyStockTerminalProvider()._secid("US", "US.AAPL"), "105.AAPL")
+
+    def test_live_provider_fetches_quote_minute_and_fund_flow(self):
+        session = RecordingSession(
+            [
+                {"data": {"f43": 168800, "f58": "贵州茅台"}},
+                {"data": {"trends": ["2026-05-25 09:30,10.0,10.1,100,1000"]}},
+                {"data": {"klines": ["2026-05-25,10,4,6,5,1"]}},
+            ]
+        )
+        provider = EastmoneyStockTerminalProvider(session=session, timeout_sec=1.5)
+
+        quote = provider.fetch_quote("A", "SH.600519")
+        minute = provider.fetch_minute("HK", "HK.700")
+        fund_flow = provider.fetch_fund_flow("US", "US.AAPL")
+
+        self.assertEqual(quote.price, 1688.0)
+        self.assertEqual(minute[0].price, 10.0)
+        self.assertEqual(fund_flow[0].net_inflow, 6.0)
+        self.assertEqual(session.calls[0]["params"]["secid"], "1.600519")
+        self.assertEqual(session.calls[1]["params"]["secid"], "116.00700")
+        self.assertEqual(session.calls[2]["params"]["secid"], "105.AAPL")
+        self.assertTrue(session.calls[0]["url"].endswith("/api/qt/stock/get"))
+        self.assertTrue(session.calls[1]["url"].endswith("/api/qt/stock/trends2/get"))
+        self.assertTrue(session.calls[2]["url"].endswith("/api/qt/stock/fflow/daykline/get"))
+        self.assertTrue(all(call["timeout"] == 1.5 for call in session.calls))
 
 
 class StockTerminalServiceTest(unittest.TestCase):
