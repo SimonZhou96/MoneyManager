@@ -187,3 +187,8 @@ class MySqlMarketIntelRepository:
             status=status,
             limit=limit,
         )
+
+    def close(self) -> None:
+        close = getattr(self.db, "close", None)
+        if callable(close):
+            close()

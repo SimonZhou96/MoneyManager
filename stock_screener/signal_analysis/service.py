@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import List, Optional
 
 from db import MarketDatabase, MySqlConfig
+from market_intel.providers.factory import build_market_intel_providers
+from market_intel.repository import MySqlMarketIntelRepository
+from market_intel.service import MarketIntelService
 from network_preflight import check_host_resolution
 
 from .chain import SignalAnalysisChain, SignalAnalysisContext
@@ -89,6 +92,20 @@ def settings_from_env() -> AnalysisSettings:
     )
 
 
+def build_market_intel_service(mysql_config: MySqlConfig):
+    if not env_flag("SIGNAL_ENABLE_MARKET_INTEL", False):
+        return None
+
+    db = MarketDatabase(mysql_config)
+    try:
+        db.init_market_intel_schema()
+        repository = MySqlMarketIntelRepository(db)
+        return MarketIntelService(repository, build_market_intel_providers())
+    except Exception:
+        db.close()
+        raise
+
+
 def run_signal_analysis_for_market(
     mysql_config: MySqlConfig,
     task_id: str,
@@ -118,23 +135,31 @@ def run_signal_analysis_for_market(
         else:
             preflight_warnings = [*preflight_warnings, "未配置可用 LLM provider，仅返回命中的缓存结果"]
 
-    context = SignalAnalysisContext(
-        task_id=task_id,
-        market=market,
-        csv_path=csv_path,
-        check_date=check_date or date.today(),
-        settings=settings,
-        search_provider=search_provider,
-        llm_provider=llm_provider,
-        timeframe=timeframe,
-        repository=repository_override or MySqlSignalAnalysisRepository(mysql_config),
-        manual_hot_news=ManualHotNewsConfig.from_env(market),
-        manual_hot_sectors=ManualHotSectorConfig.from_env(market),
-        warnings=list(preflight_warnings),
-        analysis_profile=analysis_profile,
-        force_refresh=force_refresh,
-    )
-    return SignalAnalysisChain().run(context)
+    market_intel_service = build_market_intel_service(mysql_config)
+    try:
+        context = SignalAnalysisContext(
+            task_id=task_id,
+            market=market,
+            csv_path=csv_path,
+            check_date=check_date or date.today(),
+            settings=settings,
+            search_provider=search_provider,
+            llm_provider=llm_provider,
+            timeframe=timeframe,
+            repository=repository_override or MySqlSignalAnalysisRepository(mysql_config),
+            manual_hot_news=ManualHotNewsConfig.from_env(market),
+            manual_hot_sectors=ManualHotSectorConfig.from_env(market),
+            warnings=list(preflight_warnings),
+            analysis_profile=analysis_profile,
+            force_refresh=force_refresh,
+            market_intel_service=market_intel_service,
+        )
+        return SignalAnalysisChain().run(context)
+    finally:
+        repository = getattr(market_intel_service, "repository", None)
+        close = getattr(repository, "close", None)
+        if callable(close):
+            close()
 
 
 def run_signal_analysis_for_row(

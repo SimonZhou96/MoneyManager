@@ -11,7 +11,14 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
-from signal_analysis.chain import SignalAnalysisChain, SignalAnalysisContext, write_analysis_columns_to_csv
+from signal_analysis.chain import (
+    BuildSearchQueriesStep,
+    MarketIntelEvidenceStep,
+    SearchContextStep,
+    SignalAnalysisChain,
+    SignalAnalysisContext,
+    write_analysis_columns_to_csv,
+)
 from signal_analysis.evidence import expand_company_documents
 from signal_analysis.hot_news import ManualHotNewsConfig
 from signal_analysis.hot_sectors import ManualHotSectorConfig
@@ -159,6 +166,127 @@ class CacheAwareRepository:
 
     def get_signal_analysis_cache(self, market, code, timeframe, analysis_profile, trade_date):
         return self.cached_rows.get((market, code, timeframe, analysis_profile, str(trade_date)))
+
+
+class FakeMarketIntelService:
+    def __init__(self):
+        self.market_digest_calls = []
+        self.stock_intel_calls = []
+
+    def get_market_digest(self, market, force_refresh=False):
+        self.market_digest_calls.append((market, force_refresh))
+        return {
+            "scope_type": "market",
+            "market": market,
+            "code": "",
+            "groups": {
+                "market_news": [{
+                    "scope_type": "market",
+                    "market": market,
+                    "code": "",
+                    "source": "fixture",
+                    "provider": "fixture",
+                    "item_type": "market_news",
+                    "title": "Market intel headline",
+                    "summary": "Market intel summary",
+                    "url": "https://example.com/market",
+                    "fetched_at": "2026-05-25T09:00:00",
+                    "expires_at": "2026-05-25T10:00:00",
+                    "dedupe_key": "market-intel",
+                }],
+            },
+            "freshness_status": "fresh",
+            "source_status": {"market-provider": {"status": "success", "item_count": 1}},
+        }
+
+    def get_stock_intel(self, market, code, force_refresh=False):
+        self.stock_intel_calls.append((market, code, force_refresh))
+        return {
+            "scope_type": "stock",
+            "market": market,
+            "code": code,
+            "groups": {
+                "market_news": [{
+                    "scope_type": "stock",
+                    "market": market,
+                    "code": code,
+                    "source": "fixture",
+                    "provider": "fixture",
+                    "item_type": "market_news",
+                    "title": f"{code} stock intel headline",
+                    "summary": f"{code} stock intel summary",
+                    "url": f"https://example.com/{code}",
+                    "fetched_at": "2026-05-25T09:00:00",
+                    "expires_at": "2026-05-25T10:00:00",
+                    "dedupe_key": f"{code}-stock-intel",
+                }],
+            },
+            "freshness_status": "fresh",
+            "source_status": {f"{code}-provider": {"status": "success", "item_count": 1}},
+        }
+
+
+class MarketIntelSignalAnalysisIntegrationTest(unittest.TestCase):
+    def test_market_intel_evidence_step_fetches_once_per_scope_before_search(self):
+        rows = [
+            ScreeningSignalRow(
+                index=0,
+                code="US.AAPL",
+                market="US",
+                market_label="美股",
+                name="Apple",
+                pe_ratio="",
+                market_cap="",
+                sector="Technology",
+                conditions_met="左一战法-看涨",
+            ),
+            ScreeningSignalRow(
+                index=1,
+                code="US.MSFT",
+                market="US",
+                market_label="美股",
+                name="Microsoft",
+                pe_ratio="",
+                market_cap="",
+                sector="Technology",
+                conditions_met="左一战法-看涨",
+            ),
+        ]
+        service = FakeMarketIntelService()
+        context = SignalAnalysisContext(
+            task_id="task-US",
+            market="US",
+            csv_path="unused.csv",
+            check_date=date(2026, 5, 25),
+            settings=AnalysisSettings(search_max_results=2),
+            search_provider=NullSearchProvider(),
+            llm_provider=NullLLMProvider(),
+            rows=rows,
+            all_rows=list(rows),
+        )
+        context.market_intel_service = service
+
+        BuildSearchQueriesStep().run(context)
+        MarketIntelEvidenceStep().run(context)
+        SearchContextStep().run(context)
+
+        self.assertEqual(service.market_digest_calls, [("US", False)])
+        self.assertEqual(
+            service.stock_intel_calls,
+            [("US", "US.AAPL", False), ("US", "US.MSFT", False)],
+        )
+        self.assertEqual(
+            sum("未配置搜索 provider" in warning for warning in context.warnings),
+            1,
+        )
+        self.assertEqual(len(context.market_documents), 1)
+        self.assertEqual(len(context.company_documents["US.AAPL"]), 1)
+        self.assertEqual(len(context.company_documents["US.MSFT"]), 1)
+        self.assertIn("US.AAPL", context.evidence_packs)
+        self.assertEqual(
+            context.evidence_packs["US.AAPL"]["stock_context"]["items"][0]["title"],
+            "US.AAPL stock intel headline",
+        )
 
 
 class SignalAnalysisTest(unittest.TestCase):

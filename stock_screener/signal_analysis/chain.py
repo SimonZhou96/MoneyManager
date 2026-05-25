@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from report_naming import analysis_report_path_for_csv, market_signal_report_stem
 
+from market_intel.evidence import EvidencePackBuilder, flatten_bundle_items, intel_items_to_search_documents
+
 from .evidence import apply_evidence_to_result, dedupe_documents, expand_company_documents
 from .llm_providers import LLMProvider
 from .hot_news import ManualHotNewsConfig
@@ -99,6 +101,8 @@ class SignalAnalysisContext:
     market_documents: List[SearchDocument] = field(default_factory=list)
     sector_documents: List[SearchDocument] = field(default_factory=list)
     company_documents: Dict[str, List[SearchDocument]] = field(default_factory=dict)
+    market_intel_service: Any = None
+    evidence_packs: Dict[str, dict] = field(default_factory=dict)
     hot_sectors: List[str] = field(default_factory=list)
     hot_sector_sources: List[str] = field(default_factory=list)
     results_by_code: Dict[str, SignalAnalysisResult] = field(default_factory=dict)
@@ -208,22 +212,26 @@ class SearchContextStep(AnalysisStep):
             return
 
         try:
-            context.market_documents = context.search_provider.search(
-                context.market_query,
-                context.settings.search_max_results,
-            )
+            context.market_documents = dedupe_documents([
+                *context.market_documents,
+                *context.search_provider.search(
+                    context.market_query,
+                    context.settings.search_max_results,
+                ),
+            ])
         except Exception as exc:
             context.warnings.append(f"市场上下文搜索失败: {type(exc).__name__}: {exc}")
-            context.market_documents = []
 
         try:
-            context.sector_documents = context.search_provider.search(
-                context.sector_query,
-                context.settings.search_max_results,
-            )
+            context.sector_documents = dedupe_documents([
+                *context.sector_documents,
+                *context.search_provider.search(
+                    context.sector_query,
+                    context.settings.search_max_results,
+                ),
+            ])
         except Exception as exc:
             context.warnings.append(f"热点板块搜索失败: {type(exc).__name__}: {exc}")
-            context.sector_documents = []
 
         for row in context.rows:
             context.company_documents.setdefault(row.code, [])
@@ -243,13 +251,16 @@ class SearchContextStep(AnalysisStep):
                     f"公司事件批量搜索失败: {type(exc).__name__}: {exc}; codes={','.join(codes)}"
                 )
                 for row in batch:
-                    context.company_documents[row.code] = []
+                    context.company_documents.setdefault(row.code, [])
                 continue
 
             missing_codes = []
             for row in batch:
                 documents = list((batch_documents or {}).get(row.code, []))
-                context.company_documents[row.code] = documents
+                context.company_documents[row.code] = dedupe_documents([
+                    *(context.company_documents.get(row.code) or []),
+                    *documents,
+                ])
                 if not documents:
                     missing_codes.append(row.code)
             if missing_codes:
@@ -271,7 +282,63 @@ class SearchContextStep(AnalysisStep):
                 )
                 documents = []
             for row in batch:
-                context.company_documents[row.code] = list(documents)
+                context.company_documents[row.code] = dedupe_documents([
+                    *(context.company_documents.get(row.code) or []),
+                    *documents,
+                ])
+
+
+class MarketIntelEvidenceStep(AnalysisStep):
+    name = "MarketIntelEvidenceStep"
+
+    def run(self, context: SignalAnalysisContext) -> None:
+        if not context.rows and context.results_by_code:
+            return
+        service = context.market_intel_service
+        if service is None:
+            return
+
+        builder = EvidencePackBuilder()
+        market_bundle = {}
+        market_items = []
+        try:
+            market_bundle = service.get_market_digest(context.market, force_refresh=context.force_refresh)
+            market_items = flatten_bundle_items(market_bundle)
+            context.market_documents = dedupe_documents([
+                *context.market_documents,
+                *intel_items_to_search_documents(market_items),
+            ])
+        except Exception as exc:
+            context.warnings.append(f"市场情报摘要获取失败: {type(exc).__name__}: {exc}")
+            market_bundle = {}
+
+        market_documents = intel_items_to_search_documents(market_items)
+        for row in context.rows:
+            try:
+                stock_bundle = service.get_stock_intel(
+                    context.market,
+                    row.code,
+                    force_refresh=context.force_refresh,
+                )
+                stock_items = flatten_bundle_items(stock_bundle)
+                stock_documents = intel_items_to_search_documents(stock_items)
+                context.company_documents[row.code] = dedupe_documents([
+                    *(context.company_documents.get(row.code) or []),
+                    *stock_documents,
+                ])
+                pack = builder.build(
+                    market=context.market,
+                    code=row.code,
+                    stock_bundle=stock_bundle,
+                    market_bundle=market_bundle,
+                    search_documents=[
+                        *market_documents,
+                        *stock_documents,
+                    ],
+                )
+                context.evidence_packs[row.code] = pack.to_dict()
+            except Exception as exc:
+                context.warnings.append(f"{row.code} 市场情报证据包构建失败: {type(exc).__name__}: {exc}")
 
 
 class ApplyManualHotNewsStep(AnalysisStep):
@@ -524,6 +591,7 @@ class SignalAnalysisChain:
             LoadCsvSignalsStep(),
             LoadCachedResultsStep(),
             BuildSearchQueriesStep(),
+            MarketIntelEvidenceStep(),
             SearchContextStep(),
             ApplyManualHotNewsStep(),
             ExpandCompanyEvidenceStep(),
