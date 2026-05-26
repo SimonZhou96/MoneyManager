@@ -63,7 +63,7 @@ class MacroScoreParser:
             raise ValueError("macro score payload must be a dict")
 
         raw_macro_score = payload.get("macro_score", 0.0)
-        valid_macro_score = _coerce_score(raw_macro_score) is not None
+        valid_macro_score = "macro_score" in payload and _coerce_score(raw_macro_score) is not None
         macro_score = _clamp_score(raw_macro_score)
         threshold_value = _to_float(threshold, DEFAULT_MACRO_SCORE_THRESHOLD)
         sub_scores = _normalize_sub_scores(payload.get("sub_scores"))
