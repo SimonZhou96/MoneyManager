@@ -1,8 +1,10 @@
 import json
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 try:
+    from market_intel.macro_llm import MacroScorePromptBuilder, MacroScoreLLMScorer
     from market_intel.macro_scoring import (
         DEFAULT_MACRO_SUB_WEIGHTS,
         MacroEvidencePreprocessor,
@@ -11,6 +13,7 @@ try:
     )
     from market_intel.models import EvidencePack, IntelItem
 except ModuleNotFoundError:
+    from stock_screener.market_intel.macro_llm import MacroScorePromptBuilder, MacroScoreLLMScorer
     from stock_screener.market_intel.macro_scoring import (
         DEFAULT_MACRO_SUB_WEIGHTS,
         MacroEvidencePreprocessor,
@@ -18,6 +21,23 @@ except ModuleNotFoundError:
         aggregate_rule_scores,
     )
     from stock_screener.market_intel.models import EvidencePack, IntelItem
+
+try:
+    from signal_analysis.llm_providers import (
+        CodexResponsesLLMProvider,
+        FallbackLLMProvider,
+        OpenAICompatibleLLMProvider,
+    )
+
+    LLM_PROVIDERS_POST = "signal_analysis.llm_providers.requests.post"
+except ModuleNotFoundError:
+    from stock_screener.signal_analysis.llm_providers import (
+        CodexResponsesLLMProvider,
+        FallbackLLMProvider,
+        OpenAICompatibleLLMProvider,
+    )
+
+    LLM_PROVIDERS_POST = "stock_screener.signal_analysis.llm_providers.requests.post"
 
 
 _DEFAULT_FETCHED_AT = object()
@@ -51,6 +71,38 @@ def make_item(
         expires_at=fetched_at + timedelta(hours=3) if fetched_at is not None else None,
         dedupe_key=title,
     )
+
+
+class FakeJsonClient:
+    model_name = "fake-model"
+
+    def __init__(self):
+        self.calls = []
+
+    def complete_json(self, *, system_prompt, user_prompt, json_schema):
+        self.calls.append({
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "json_schema": json_schema,
+        })
+        return {
+            "macro_score": 61,
+            "passed": False,
+            "threshold": 60,
+            "sub_scores": {
+                "company_event_strength": 60,
+                "sector_heat": 70,
+                "news_validation": 50,
+                "impact_direction": 70,
+                "source_credibility": 60,
+                "freshness": 65,
+            },
+            "weighted_contribution": {},
+            "summary": "宏观共振刚达到阈值",
+            "temporal_summary": "较新事件未反转较早信号",
+            "risks": [],
+            "evidence_refs": [],
+        }
 
 
 class MacroEvidencePreprocessorTests(unittest.TestCase):
@@ -275,6 +327,185 @@ class MacroEvidencePreprocessorTests(unittest.TestCase):
         self.assertIn("upstream gap", package.data_gaps)
         self.assertIn("无时间新闻 缺少 event_time/published_at", package.data_gaps)
         self.assertIn("无抓取时间 缺少 fetched_at", package.data_gaps)
+
+
+class MacroScoreLLMScorerTests(unittest.TestCase):
+    def test_macro_llm_scorer_builds_prompt_and_recomputes_passed(self):
+        pack = EvidencePack(
+            market="A",
+            code="SZ.000001",
+            structured_items=[
+                make_item(title="AI 订单公告", item_type="announcement", summary="新增 AI 订单")
+            ],
+        )
+        package = MacroEvidencePreprocessor().build(
+            pack,
+            as_of=datetime(2026, 5, 26, 15, 0, tzinfo=timezone.utc),
+        )
+        client = FakeJsonClient()
+
+        result = MacroScoreLLMScorer(client).score(package, threshold=60)
+
+        self.assertEqual(result.macro_score, 61)
+        self.assertTrue(result.passed)
+        self.assertEqual(MacroScoreLLMScorer(client).model_name, "fake-model")
+        self.assertIn("不能编造事实", client.calls[0]["system_prompt"])
+        self.assertIn("event_time", client.calls[0]["user_prompt"])
+        self.assertEqual(client.calls[0]["json_schema"]["type"], "object")
+
+    def test_prompt_builder_includes_time_fields_weights_and_output_rules(self):
+        pack = EvidencePack(
+            market="A",
+            code="SZ.000001",
+            structured_items=[
+                make_item(title="AI 订单公告", item_type="announcement", summary="新增 AI 订单")
+            ],
+        )
+        package = MacroEvidencePreprocessor().build(
+            pack,
+            as_of=datetime(2026, 5, 26, 15, 0, tzinfo=timezone.utc),
+        )
+        builder = MacroScorePromptBuilder()
+
+        system_prompt = builder.system_prompt()
+        user_prompt = builder.user_prompt(package, threshold=60)
+        schema = builder.json_schema()
+
+        for field in ("event_time", "published_at", "fetched_at", "expires_at", "age_hours", "is_stale"):
+            self.assertIn(field, system_prompt)
+            self.assertIn(field, user_prompt)
+        self.assertIn("不能编造事实", system_prompt)
+        self.assertIn("-100", system_prompt)
+        self.assertIn("100", system_prompt)
+        self.assertIn("contradictory", system_prompt.lower())
+        self.assertIn("sub_weights", user_prompt)
+        self.assertIn("output_rules", user_prompt)
+        self.assertEqual(schema["required"], ["macro_score", "sub_scores", "summary"])
+
+
+class MacroJsonProviderAdapterTests(unittest.TestCase):
+    def test_openai_compatible_complete_json_posts_json_object_payload(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {
+                    "choices": [{
+                        "message": {
+                            "content": '```json\n{"macro_score": 42, "sub_scores": {}, "summary": "ok"}\n```'
+                        }
+                    }]
+                }
+
+        with patch(LLM_PROVIDERS_POST, return_value=Response()) as post:
+            provider = OpenAICompatibleLLMProvider(
+                api_key="key",
+                model="model-x",
+                api_base="https://llm.example.com/v1",
+                timeout_sec=10,
+            )
+            result = provider.complete_json(
+                system_prompt="system",
+                user_prompt='{"event_time":"2026-05-26T15:00:00+00:00"}',
+                json_schema={"type": "object"},
+            )
+
+        self.assertEqual(result["macro_score"], 42)
+        self.assertEqual(post.call_args.args[0], "https://llm.example.com/v1/chat/completions")
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+        self.assertEqual(payload["messages"][0]["content"], "system")
+        self.assertIn("event_time", payload["messages"][1]["content"])
+
+    def test_codex_responses_complete_json_posts_schema_format_payload(self):
+        class Response:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"output_text": '{"macro_score": 55, "sub_scores": {}, "summary": "ok"}'}
+
+        with patch(LLM_PROVIDERS_POST, return_value=Response()) as post:
+            provider = CodexResponsesLLMProvider(
+                api_key="key",
+                model="gpt-5.2-codex",
+                api_base="https://api.openai.com/v1",
+                timeout_sec=10,
+                reasoning_effort="high",
+            )
+            result = provider.complete_json(
+                system_prompt="system",
+                user_prompt='{"event_time":"2026-05-26T15:00:00+00:00"}',
+                json_schema={"type": "object", "properties": {"macro_score": {"type": "number"}}},
+            )
+
+        self.assertEqual(result["macro_score"], 55)
+        self.assertEqual(post.call_args.args[0], "https://api.openai.com/v1/responses")
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["reasoning"], {"effort": "high"})
+        self.assertEqual(payload["text"]["format"]["type"], "json_schema")
+        self.assertEqual(payload["text"]["format"]["name"], "macro_score_result")
+        self.assertIn("event_time", payload["input"][1]["content"])
+
+    def test_codex_responses_complete_json_retries_json_object_format(self):
+        class BadSchemaResponse:
+            status_code = 400
+            text = "unsupported json_schema in text.format"
+
+            def json(self):
+                return {}
+
+        class OkResponse:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"output_text": '{"macro_score": 55, "sub_scores": {}, "summary": "ok"}'}
+
+        with patch(LLM_PROVIDERS_POST, side_effect=[BadSchemaResponse(), OkResponse()]) as post:
+            provider = CodexResponsesLLMProvider(api_key="key")
+            result = provider.complete_json(
+                system_prompt="system",
+                user_prompt="user",
+                json_schema={"type": "object"},
+            )
+
+        self.assertEqual(result["macro_score"], 55)
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.call_args_list[0].kwargs["json"]["text"]["format"]["type"], "json_schema")
+        self.assertEqual(post.call_args_list[1].kwargs["json"]["text"]["format"]["type"], "json_object")
+
+    def test_fallback_complete_json_tries_available_providers_in_order(self):
+        class Provider:
+            is_available = True
+
+            def __init__(self, name, model_name, result=None, error=None):
+                self.name = name
+                self.model_name = model_name
+                self.result = result
+                self.error = error
+                self.calls = 0
+
+            def complete_json(self, *, system_prompt, user_prompt, json_schema):
+                self.calls += 1
+                if self.error:
+                    raise self.error
+                return self.result
+
+        first = Provider("first", "model-a", error=RuntimeError("boom"))
+        second = Provider("second", "model-b", result={"macro_score": 66, "sub_scores": {}, "summary": "ok"})
+        provider = FallbackLLMProvider([first, second])
+
+        result = provider.complete_json(system_prompt="system", user_prompt="user", json_schema={"type": "object"})
+        warnings = provider.drain_warnings()
+
+        self.assertEqual(result["macro_score"], 66)
+        self.assertEqual(first.calls, 1)
+        self.assertEqual(second.calls, 1)
+        self.assertTrue(any("first:model-a 失败" in warning for warning in warnings))
+        self.assertTrue(any("fallback 使用 second:model-b 成功返回" in warning for warning in warnings))
+        self.assertEqual(provider.model_name, "second:model-b")
 
 
 class MacroScoreParserTests(unittest.TestCase):

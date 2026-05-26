@@ -9,7 +9,7 @@ import json
 import os
 import re
 from abc import ABC, abstractmethod
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from .models import ScreeningSignalRow, SearchDocument, SignalAnalysisResult
 
@@ -45,6 +45,15 @@ class LLMProvider(ABC):
     def drain_warnings(self) -> List[str]:
         """Return and clear provider-local warnings from the last call."""
         return []
+
+    def complete_json(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        json_schema: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        raise RuntimeError("LLM provider does not support JSON completion")
 
 
 class NullLLMProvider(LLMProvider):
@@ -128,6 +137,39 @@ class FallbackLLMProvider(LLMProvider):
             if self._warnings:
                 self._warnings.append(f"LLM provider fallback 使用 {label} 成功返回")
             return results
+
+        failed_text = ", ".join(failed_labels) if failed_labels else "无可用 provider"
+        raise RuntimeError(f"所有 LLM provider 均失败: {failed_text}")
+
+    def complete_json(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        json_schema: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        self._warnings = []
+        self._last_success_provider = ""
+        failed_labels: List[str] = []
+
+        for provider in self.providers:
+            label = _llm_provider_label(provider)
+            try:
+                result = provider.complete_json(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    json_schema=json_schema,
+                )
+                result = _ensure_json_object(result)
+            except Exception as exc:
+                failed_labels.append(label)
+                self._warnings.append(f"LLM provider {label} 失败: {type(exc).__name__}: {exc}")
+                continue
+
+            self._last_success_provider = label
+            if self._warnings:
+                self._warnings.append(f"LLM provider fallback 使用 {label} 成功返回")
+            return result
 
         failed_text = ", ".join(failed_labels) if failed_labels else "无可用 provider"
         raise RuntimeError(f"所有 LLM provider 均失败: {failed_text}")
@@ -365,6 +407,51 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         parsed = _parse_json_content(content)
         return _results_from_parsed_json(parsed, self.model)
 
+    def complete_json(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        json_schema: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if requests is None:
+            raise RuntimeError("requests is not installed")
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        response = requests.post(
+            self.chat_completions_url,
+            headers=headers,
+            json=payload,
+            timeout=self.timeout_sec,
+        )
+        if response.status_code >= 400 and "response_format" in payload:
+            payload = dict(payload)
+            payload.pop("response_format", None)
+            response = requests.post(
+                self.chat_completions_url,
+                headers=headers,
+                json=payload,
+                timeout=self.timeout_sec,
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(f"LLM JSON completion failed: HTTP {response.status_code} {response.text[:300]}")
+
+        data = response.json() or {}
+        content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+        return _ensure_json_object(_parse_json_content(content))
+
 
 class DeepSeekLLMProvider(OpenAICompatibleLLMProvider):
     """DeepSeek Chat Completions implementation."""
@@ -487,6 +574,55 @@ class CodexResponsesLLMProvider(LLMProvider):
         parsed = _parse_json_content(content)
         return _results_from_parsed_json(parsed, self.model)
 
+    def complete_json(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        json_schema: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if requests is None:
+            raise RuntimeError("requests is not installed")
+
+        payload = self._build_json_completion_payload(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            text_format={
+                "type": "json_schema",
+                "name": "macro_score_result",
+                "schema": json_schema,
+                "strict": True,
+            },
+        )
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        response = requests.post(
+            self.responses_url,
+            headers=headers,
+            json=payload,
+            timeout=self.timeout_sec,
+        )
+        if response.status_code >= 400 and _should_retry_responses_json_object(response):
+            payload = self._build_json_completion_payload(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                text_format={"type": "json_object"},
+            )
+            response = requests.post(
+                self.responses_url,
+                headers=headers,
+                json=payload,
+                timeout=self.timeout_sec,
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(f"Codex Responses JSON completion failed: HTTP {response.status_code} {response.text[:300]}")
+
+        data = response.json() or {}
+        content = _extract_responses_output_text(data)
+        return _ensure_json_object(_parse_json_content(content))
+
     def _build_payload(
         self,
         market: str,
@@ -517,6 +653,23 @@ class CodexResponsesLLMProvider(LLMProvider):
             "text": {"format": text_format},
         }
 
+    def _build_json_completion_payload(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        text_format: Dict[str, object],
+    ) -> Dict[str, object]:
+        return {
+            "model": self.model,
+            "input": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "reasoning": {"effort": self.reasoning_effort},
+            "text": {"format": text_format},
+        }
+
 
 def _parse_json_content(content: str):
     """Parse raw JSON content, tolerating fenced code blocks from compatible providers."""
@@ -527,6 +680,12 @@ def _parse_json_content(content: str):
     if match:
         text = match.group(1).strip()
     return json.loads(text)
+
+
+def _ensure_json_object(parsed: Any) -> Dict[str, Any]:
+    if not isinstance(parsed, dict):
+        raise RuntimeError("LLM response JSON must be an object")
+    return parsed
 
 
 def _llm_provider_label(provider: LLMProvider) -> str:
