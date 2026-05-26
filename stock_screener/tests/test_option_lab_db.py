@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from db import MarketDatabase, _decode_json_field, _json_or_none
 
@@ -44,7 +45,8 @@ class OptionLabDbTests(unittest.TestCase):
         self.assertEqual(decoded["策略名称"], "买入看涨期权")
 
     def test_option_lab_schema_file_mentions_all_tables(self):
-        with open("sql/013_option_lab.sql", "r", encoding="utf-8") as f:
+        sql_path = Path(__file__).resolve().parents[1] / "sql" / "013_option_lab.sql"
+        with sql_path.open("r", encoding="utf-8") as f:
             sql = f.read()
 
         for table in [

@@ -97,6 +97,18 @@ class CodeScreeningFrontendTest(unittest.TestCase):
         self.assertIn("normalizeCodeScreeningTerminalRow", source)
         self.assertIn("/api/stock-terminal", api_source)
 
+    def test_task_detail_score_panel_requires_result_selection(self):
+        source = self.read_main()
+
+        self.assertIn("选择结果行查看评分明细", source)
+        self.assertNotIn("setSelectedResult(results[0])", source)
+
+    def test_task_detail_stops_polling_terminal_status(self):
+        source = self.read_main()
+
+        self.assertIn("isTerminalTaskStatus(task?.status)", source)
+        self.assertIn("task?.status", source)
+
     def test_frontend_renders_macro_score_details_and_temporal_summary(self):
         source = self.read_main()
 

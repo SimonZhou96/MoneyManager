@@ -1299,6 +1299,10 @@ function codeScreeningResultValue(row: CustomListResultRow) {
   return row.status || row.status_text || 'queued'
 }
 
+function isTerminalTaskStatus(status?: string | null) {
+  return ['completed', 'failed', 'error', 'cancelled'].includes(String(status || '').toLowerCase())
+}
+
 function Rules() {
   const [market, setMarket] = useState('HK')
   const [timeframe, setTimeframe] = useState('1d')
@@ -1655,20 +1659,24 @@ function TaskDetail({ taskId }: { taskId: string }) {
 
   useEffect(() => {
     refresh().catch(console.error)
+  }, [taskId, limit, offset, passedOnly])
+
+  useEffect(() => {
     if (!taskId) return
+    if (isTerminalTaskStatus(task?.status)) return
     const timer = window.setInterval(() => refresh().catch(console.error), 8000)
     return () => window.clearInterval(timer)
-  }, [taskId, limit, offset, passedOnly])
+  }, [taskId, limit, offset, passedOnly, task?.status])
 
   useEffect(() => {
     if (results.length === 0) {
       setSelectedResult(null)
       return
     }
-    if (!selectedResult || !results.some(row => row.code === selectedResult.code && row.market === selectedResult.market)) {
-      setSelectedResult(results[0])
+    if (selectedResult && !results.some(row => row.code === selectedResult.code && row.market === selectedResult.market)) {
+      setSelectedResult(null)
     }
-  }, [results])
+  }, [results, selectedResult])
 
   if (!taskId) {
     return <section><Header title="任务详情" subtitle="请选择一个筛选任务" /></section>
@@ -1730,16 +1738,20 @@ function TaskDetail({ taskId }: { taskId: string }) {
           onRowClick={row => setSelectedResult(row)}
         />
       </Panel>
-      {selectedResult && (
-        <Panel title={`评分明细 ${selectedResult.code}`}>
-          <div className="metric-grid">
-            <Metric label="技术分" value={formatScore(selectedResult.technical_score)} />
-            <Metric label="宏观分" value={formatScore(selectedResult.macro_score)} />
-            <Metric label="综合分" value={formatScore(selectedResult.final_score)} />
-          </div>
-          <MacroScoreDetails details={selectedMacroDetails} />
-        </Panel>
-      )}
+      <Panel title={selectedResult ? `评分明细 ${selectedResult.code}` : '评分明细'}>
+        {selectedResult ? (
+          <>
+            <div className="metric-grid">
+              <Metric label="技术分" value={formatScore(selectedResult.technical_score)} />
+              <Metric label="宏观分" value={formatScore(selectedResult.macro_score)} />
+              <Metric label="综合分" value={formatScore(selectedResult.final_score)} />
+            </div>
+            <MacroScoreDetails details={selectedMacroDetails} />
+          </>
+        ) : (
+          <div className="empty">选择结果行查看评分明细</div>
+        )}
+      </Panel>
     </section>
   )
 }

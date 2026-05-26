@@ -53,7 +53,7 @@ class FeishuNotifierTest(unittest.TestCase):
                 patch.dict(
                     "os.environ",
                     {"FEISHU_SEND_RETRY_ATTEMPTS": "4", "FEISHU_SEND_RETRY_DELAY_SEC": "0.1"},
-                    clear=False,
+                    clear=True,
                 ):
             self.assertFalse(send_screening_result("https://open.feishu.cn/webhook/test", "summary", ["result.csv"]))
 
