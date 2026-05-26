@@ -349,8 +349,26 @@ class MacroScoreParserTests(unittest.TestCase):
         self.assertEqual(result.macro_score, 0.0)
         self.assertFalse(result.passed)
 
+    def test_parser_boolean_false_macro_score_does_not_pass_zero_threshold(self):
+        result = MacroScoreParser.parse({"macro_score": False}, threshold=0)
+
+        self.assertEqual(result.macro_score, 0.0)
+        self.assertFalse(result.passed)
+
+    def test_parser_boolean_true_macro_score_is_sanitized_and_invalid(self):
+        result = MacroScoreParser.parse({"macro_score": True}, threshold=0)
+
+        self.assertEqual(result.macro_score, 0.0)
+        self.assertFalse(result.passed)
+
     def test_parser_uses_default_threshold_for_malformed_threshold(self):
         result = MacroScoreParser.parse({"macro_score": 10}, threshold="bad-threshold")
+
+        self.assertEqual(result.threshold, 60.0)
+        self.assertFalse(result.passed)
+
+    def test_parser_boolean_threshold_uses_default_threshold(self):
+        result = MacroScoreParser.parse({"macro_score": 10}, threshold=False)
 
         self.assertEqual(result.threshold, 60.0)
         self.assertFalse(result.passed)
@@ -368,6 +386,21 @@ class MacroScoreParserTests(unittest.TestCase):
                 "sub_scores": {
                     "company_event_strength": float("inf"),
                     "sector_heat": float("nan"),
+                },
+            },
+            threshold=70,
+        )
+
+        self.assertEqual(result.sub_scores["company_event_strength"], 0.0)
+        self.assertEqual(result.sub_scores["sector_heat"], 0.0)
+
+    def test_parser_treats_boolean_subscores_as_zero(self):
+        result = MacroScoreParser.parse(
+            {
+                "macro_score": 10,
+                "sub_scores": {
+                    "company_event_strength": True,
+                    "sector_heat": False,
                 },
             },
             threshold=70,
@@ -544,6 +577,25 @@ class AggregateRuleScoresTests(unittest.TestCase):
         self.assertEqual(result["macro_weight"], 0.4)
         self.assertEqual(result["final_score"], 92.0)
 
+    def test_aggregate_uses_default_weights_for_boolean_weights(self):
+        result = aggregate_rule_scores(
+            [
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "pass", "details": {}},
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "pass",
+                    "details": {"macro_score": 80},
+                },
+            ],
+            technical_weight=False,
+            macro_weight=True,
+        )
+
+        self.assertEqual(result["technical_weight"], 0.6)
+        self.assertEqual(result["macro_weight"], 0.4)
+        self.assertEqual(result["final_score"], 92.0)
+
     def test_aggregate_preserves_valid_zero_weights(self):
         result = aggregate_rule_scores(
             [
@@ -658,6 +710,27 @@ class AggregateRuleScoresTests(unittest.TestCase):
 
         self.assertEqual(result["macro_score"], 60.0)
         self.assertEqual(result["final_score"], 60.0)
+
+    def test_aggregate_ignores_boolean_macro_scores(self):
+        result = aggregate_rule_scores(
+            [
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "pass",
+                    "details": {"macro_score": True},
+                },
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "fail",
+                    "details": {"macro_score": False},
+                },
+            ]
+        )
+
+        self.assertIsNone(result["macro_score"])
+        self.assertIsNone(result["final_score"])
 
     def test_aggregate_ignores_macro_rows_that_are_not_strategies(self):
         result = aggregate_rule_scores(

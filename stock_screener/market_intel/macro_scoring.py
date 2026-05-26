@@ -87,7 +87,7 @@ def aggregate_rule_scores(
     rows: Iterable[Dict[str, Any]],
     technical_weight: float = DEFAULT_TECHNICAL_WEIGHT,
     macro_weight: float = DEFAULT_MACRO_WEIGHT,
-) -> Dict[str, Optional[float]]:
+) -> Dict[str, Any]:
     technical_values: List[float] = []
     macro_values: List[float] = []
 
@@ -369,6 +369,8 @@ def _dedupe_strings(values: Iterable[str]) -> List[str]:
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
+    if isinstance(value, bool):
+        return default
     try:
         result = float(value)
     except (TypeError, ValueError):
@@ -379,6 +381,8 @@ def _to_float(value: Any, default: float = 0.0) -> float:
 
 
 def _coerce_score(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
     try:
         result = float(value)
     except (TypeError, ValueError):
