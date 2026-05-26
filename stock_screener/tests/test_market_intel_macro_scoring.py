@@ -330,6 +330,19 @@ class MacroScoreParserTests(unittest.TestCase):
         self.assertEqual(result.macro_score, 0.0)
         self.assertFalse(result.passed)
 
+    def test_parser_invalid_nan_macro_score_does_not_pass_zero_threshold(self):
+        result = MacroScoreParser.parse({"macro_score": "nan"}, threshold=0)
+
+        self.assertEqual(result.macro_score, 0.0)
+        self.assertFalse(result.passed)
+
+    def test_parser_invalid_infinite_macro_score_does_not_pass_zero_threshold(self):
+        result = MacroScoreParser.parse({"macro_score": float("inf")}, threshold=0)
+
+        self.assertEqual(result.macro_score, 0.0)
+        self.assertFalse(result.passed)
+        json.dumps(result.to_details(), ensure_ascii=False, allow_nan=False)
+
     def test_parser_uses_default_threshold_for_malformed_threshold(self):
         result = MacroScoreParser.parse({"macro_score": 10}, threshold="bad-threshold")
 
