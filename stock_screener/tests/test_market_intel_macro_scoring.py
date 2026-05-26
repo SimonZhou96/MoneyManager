@@ -487,6 +487,94 @@ class AggregateRuleScoresTests(unittest.TestCase):
         self.assertEqual(result["macro_score"], -50.0)
         self.assertEqual(result["final_score"], 40.0)
 
+    def test_aggregate_uses_default_weights_for_malformed_weights(self):
+        result = aggregate_rule_scores(
+            [
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "pass", "details": {}},
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "pass",
+                    "details": {"macro_score": 80},
+                },
+            ],
+            technical_weight="bad",
+            macro_weight="bad",
+        )
+
+        self.assertEqual(result["technical_weight"], 0.6)
+        self.assertEqual(result["macro_weight"], 0.4)
+        self.assertEqual(result["final_score"], 92.0)
+
+    def test_aggregate_uses_default_weights_for_non_finite_weights(self):
+        result = aggregate_rule_scores(
+            [
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "pass", "details": {}},
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "pass",
+                    "details": {"macro_score": 80},
+                },
+            ],
+            technical_weight=float("nan"),
+            macro_weight=float("inf"),
+        )
+
+        self.assertEqual(result["technical_weight"], 0.6)
+        self.assertEqual(result["macro_weight"], 0.4)
+        self.assertEqual(result["final_score"], 92.0)
+
+    def test_aggregate_preserves_valid_zero_weights(self):
+        result = aggregate_rule_scores(
+            [
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "pass", "details": {}},
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "pass",
+                    "details": {"macro_score": 80},
+                },
+            ],
+            technical_weight=0,
+            macro_weight=0,
+        )
+
+        self.assertEqual(result["technical_weight"], 0.0)
+        self.assertEqual(result["macro_weight"], 0.0)
+        self.assertEqual(result["final_score"], 0.0)
+
+    def test_aggregate_rounds_scores_to_two_decimals(self):
+        result = aggregate_rule_scores(
+            [
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "pass", "details": {}},
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "fail", "details": {}},
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "fail", "details": {}},
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "pass",
+                    "details": {"macro_score": 100},
+                },
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "fail",
+                    "details": {"macro_score": 0},
+                },
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "pass",
+                    "details": {"macro_score": 100},
+                },
+            ]
+        )
+
+        self.assertEqual(result["technical_score"], 33.33)
+        self.assertEqual(result["macro_score"], 66.67)
+        self.assertEqual(result["final_score"], 46.67)
+
     def test_aggregate_clamps_final_score_above_upper_bound(self):
         result = aggregate_rule_scores(
             [

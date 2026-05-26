@@ -24,6 +24,8 @@ DEFAULT_MACRO_SUB_WEIGHTS = {
 
 DEFAULT_MACRO_SCORE_THRESHOLD = 60.0
 JSON_SAFE_MAX_DEPTH = 100
+DEFAULT_TECHNICAL_WEIGHT = 0.6
+DEFAULT_MACRO_WEIGHT = 0.4
 
 
 @dataclass(frozen=True)
@@ -81,8 +83,8 @@ class MacroScoreParser:
 
 def aggregate_rule_scores(
     rows: Iterable[Dict[str, Any]],
-    technical_weight: float = 0.6,
-    macro_weight: float = 0.4,
+    technical_weight: float = DEFAULT_TECHNICAL_WEIGHT,
+    macro_weight: float = DEFAULT_MACRO_WEIGHT,
 ) -> Dict[str, Optional[float]]:
     technical_values: List[float] = []
     macro_values: List[float] = []
@@ -112,8 +114,8 @@ def aggregate_rule_scores(
 
     technical_score = _average(technical_values)
     macro_score = _average(macro_values)
-    technical_weight_value = _to_float(technical_weight)
-    macro_weight_value = _to_float(macro_weight)
+    technical_weight_value = _to_float(technical_weight, DEFAULT_TECHNICAL_WEIGHT)
+    macro_weight_value = _to_float(macro_weight, DEFAULT_MACRO_WEIGHT)
     final_score = _aggregate_scores(
         technical_score,
         macro_score,
@@ -459,7 +461,11 @@ def _json_safe(value: Any, _seen: Optional[set[int]] = None, _depth: int = 0) ->
 def _average(values: List[float]) -> Optional[float]:
     if not values:
         return None
-    return sum(values) / len(values)
+    return _round_score(sum(values) / len(values))
+
+
+def _round_score(value: float) -> float:
+    return round(float(value), 2)
 
 
 def _aggregate_scores(
@@ -470,11 +476,11 @@ def _aggregate_scores(
     macro_weight: float,
 ) -> Optional[float]:
     if technical_score is not None and macro_score is not None:
-        return _clamp_score(technical_score * technical_weight + macro_score * macro_weight)
+        return _round_score(_clamp_score(technical_score * technical_weight + macro_score * macro_weight))
     if technical_score is not None:
-        return technical_score
+        return _round_score(technical_score)
     if macro_score is not None:
-        return macro_score
+        return _round_score(macro_score)
     return None
 
 
