@@ -47,6 +47,7 @@ class MacroScoreResult:
             "temporal_summary": self.temporal_summary,
             "risks": _json_safe(self.risks),
             "evidence_refs": _json_safe(self.evidence_refs),
+            "raw": _json_safe(self.raw),
         }
 
 
@@ -415,11 +416,27 @@ def _normalize_dict_list(value: Any) -> List[Dict[str, Any]]:
     return [dict(item) for item in values if isinstance(item, dict)]
 
 
-def _json_safe(value: Any) -> Any:
+def _json_safe(value: Any, _seen: Optional[set[int]] = None) -> Any:
+    if _seen is None:
+        _seen = set()
     if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
+        object_id = id(value)
+        if object_id in _seen:
+            return "<cycle>"
+        _seen.add(object_id)
+        try:
+            return {str(key): _json_safe(item, _seen) for key, item in value.items()}
+        finally:
+            _seen.remove(object_id)
     if isinstance(value, (list, tuple)):
-        return [_json_safe(item) for item in value]
+        object_id = id(value)
+        if object_id in _seen:
+            return "<cycle>"
+        _seen.add(object_id)
+        try:
+            return [_json_safe(item, _seen) for item in value]
+        finally:
+            _seen.remove(object_id)
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, float) and not math.isfinite(value):

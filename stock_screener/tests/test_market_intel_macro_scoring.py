@@ -378,6 +378,44 @@ class MacroScoreParserTests(unittest.TestCase):
         self.assertIsNone(details["evidence_refs"][0]["quality"])
         self.assertIsNone(details["evidence_refs"][0]["weight"])
 
+    def test_to_details_includes_json_safe_raw_payload(self):
+        published_at = datetime(2026, 5, 26, 9, 30, tzinfo=timezone.utc)
+        result = MacroScoreParser.parse(
+            {
+                "macro_score": 80,
+                "raw_event": {
+                    "published_at": published_at,
+                    "quality": float("nan"),
+                },
+            },
+            threshold=70,
+        )
+
+        details = result.to_details()
+        json.dumps(details, ensure_ascii=False, allow_nan=False)
+
+        self.assertEqual(
+            details["raw"]["raw_event"]["published_at"],
+            "2026-05-26T09:30:00+00:00",
+        )
+        self.assertIsNone(details["raw"]["raw_event"]["quality"])
+
+    def test_to_details_handles_cyclic_evidence_refs(self):
+        cyclic_ref = {"title": "循环证据"}
+        cyclic_ref["self"] = cyclic_ref
+        result = MacroScoreParser.parse(
+            {
+                "macro_score": 80,
+                "evidence_refs": [cyclic_ref],
+            },
+            threshold=70,
+        )
+
+        details = result.to_details()
+        json.dumps(details, ensure_ascii=False, allow_nan=False)
+
+        self.assertEqual(details["evidence_refs"][0]["self"]["self"], "<cycle>")
+
 
 class AggregateRuleScoresTests(unittest.TestCase):
     def test_aggregate_combines_technical_and_macro_scores(self):
