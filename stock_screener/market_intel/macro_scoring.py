@@ -191,29 +191,40 @@ class MacroEvidencePreprocessor:
         if len(company_rows) < 2:
             return []
 
-        newest = company_rows[0]
-        older = company_rows[-1]
-        newest_text = f"{newest.title} {newest.summary}"
-        older_text = f"{older.title} {older.summary}"
-        if _looks_negative(newest_text) and _looks_positive(older_text):
-            return [
-                TemporalFinding(
-                    type="newer_event_reverses_older_signal",
-                    description="较新的公司事件包含风险或利空表述，可能反转较早利好信号",
-                    older_evidence_title=older.title,
-                    newer_evidence_title=newest.title,
-                )
-            ]
-        if _looks_positive(newest_text) and _looks_positive(older_text):
-            return [
-                TemporalFinding(
-                    type="newer_event_confirms_older_signal",
-                    description="较新的公司事件延续或确认较早利好信号",
-                    older_evidence_title=older.title,
-                    newer_evidence_title=newest.title,
-                )
-            ]
-        return []
+        reversal = None
+        confirmation = None
+        for newer_index, newer in enumerate(company_rows):
+            newer_text = f"{newer.title} {newer.summary}"
+            for older in company_rows[newer_index + 1:]:
+                older_text = f"{older.title} {older.summary}"
+                if reversal is None and _looks_negative(newer_text) and _looks_positive(older_text):
+                    reversal = TemporalFinding(
+                        type="newer_event_reverses_older_signal",
+                        description="较新的公司事件包含风险或利空表述，可能反转较早利好信号",
+                        older_evidence_title=older.title,
+                        newer_evidence_title=newer.title,
+                    )
+                if (
+                    confirmation is None
+                    and _looks_positive(newer_text)
+                    and not _looks_negative(newer_text)
+                    and _looks_positive(older_text)
+                ):
+                    confirmation = TemporalFinding(
+                        type="newer_event_confirms_older_signal",
+                        description="较新的公司事件延续或确认较早利好信号",
+                        older_evidence_title=older.title,
+                        newer_evidence_title=newer.title,
+                    )
+                if reversal is not None and confirmation is not None:
+                    return [reversal, confirmation]
+
+        findings = []
+        if reversal is not None:
+            findings.append(reversal)
+        if confirmation is not None:
+            findings.append(confirmation)
+        return findings
 
 
 def _effective_time(item: IntelItem) -> Optional[datetime]:

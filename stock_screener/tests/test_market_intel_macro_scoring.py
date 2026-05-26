@@ -128,6 +128,84 @@ class MacroEvidencePreprocessorTests(unittest.TestCase):
         self.assertEqual(finding.older_evidence_title, "公司中标新订单")
         self.assertEqual(finding.newer_evidence_title, "公司提示交付风险")
 
+    def test_detects_reversal_when_newest_event_is_neutral(self):
+        pack = EvidencePack(
+            market="A",
+            code="SZ.000001",
+            structured_items=[
+                make_item(
+                    title="公司发布例行说明",
+                    item_type="announcement",
+                    event_time=datetime(2026, 5, 26, 15, 0, tzinfo=timezone.utc),
+                    summary="管理层说明经营计划",
+                ),
+                make_item(
+                    title="公司提示履约风险",
+                    item_type="announcement",
+                    event_time=datetime(2026, 5, 26, 14, 0, tzinfo=timezone.utc),
+                    summary="订单延期风险增加",
+                ),
+                make_item(
+                    title="公司获得增长订单",
+                    item_type="announcement",
+                    event_time=datetime(2026, 5, 26, 9, 0, tzinfo=timezone.utc),
+                    summary="订单增长形成利好",
+                ),
+            ],
+        )
+
+        package = MacroEvidencePreprocessor().build(
+            pack,
+            as_of=datetime(2026, 5, 26, 16, 0, tzinfo=timezone.utc),
+        )
+
+        reversals = [
+            finding for finding in package.temporal_findings
+            if finding.type == "newer_event_reverses_older_signal"
+        ]
+        self.assertEqual(len(reversals), 1)
+        self.assertEqual(reversals[0].older_evidence_title, "公司获得增长订单")
+        self.assertEqual(reversals[0].newer_evidence_title, "公司提示履约风险")
+
+    def test_detects_confirmation_when_newest_event_is_neutral(self):
+        pack = EvidencePack(
+            market="A",
+            code="SZ.000001",
+            structured_items=[
+                make_item(
+                    title="公司发布例行说明",
+                    item_type="announcement",
+                    event_time=datetime(2026, 5, 26, 15, 0, tzinfo=timezone.utc),
+                    summary="管理层说明经营计划",
+                ),
+                make_item(
+                    title="公司上调盈利预期",
+                    item_type="announcement",
+                    event_time=datetime(2026, 5, 26, 14, 0, tzinfo=timezone.utc),
+                    summary="盈利增长",
+                ),
+                make_item(
+                    title="公司获得新订单",
+                    item_type="announcement",
+                    event_time=datetime(2026, 5, 26, 9, 0, tzinfo=timezone.utc),
+                    summary="订单增长形成利好",
+                ),
+            ],
+        )
+
+        package = MacroEvidencePreprocessor().build(
+            pack,
+            as_of=datetime(2026, 5, 26, 16, 0, tzinfo=timezone.utc),
+        )
+
+        confirmations = [
+            finding for finding in package.temporal_findings
+            if finding.type == "newer_event_confirms_older_signal"
+        ]
+        self.assertEqual(len(confirmations), 1)
+        self.assertEqual(confirmations[0].older_evidence_title, "公司获得新订单")
+        self.assertEqual(confirmations[0].newer_evidence_title, "公司上调盈利预期")
+
     def test_computes_age_hours_with_timezone_normalization(self):
         pack = EvidencePack(
             market="US",
