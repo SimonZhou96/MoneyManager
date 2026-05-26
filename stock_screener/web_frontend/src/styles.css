@@ -433,6 +433,60 @@ tr.selected-row td:first-child { box-shadow: inset 3px 0 0 #2563eb, inset 0 1px 
   border-color: #1f6feb;
   background: #dbeafe;
 }
+.macro-score-card {
+  display: grid;
+  gap: 12px;
+}
+.macro-score-card p {
+  margin: 0;
+  color: #334155;
+  line-height: 1.55;
+}
+.macro-score-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.macro-score-heading strong {
+  font-size: 18px;
+}
+.macro-score-heading span,
+.temporal-summary {
+  color: #65758b;
+}
+.subscore-grid {
+  display: grid;
+  gap: 8px;
+}
+.subscore-row {
+  display: grid;
+  grid-template-columns: 120px minmax(120px, 1fr) 64px;
+  align-items: center;
+  gap: 10px;
+}
+.subscore-row span {
+  color: #475569;
+  font-weight: 700;
+}
+.subscore-row meter {
+  width: 100%;
+}
+.risk-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #991b1b;
+}
+.temporal-finding-list {
+  display: grid;
+  gap: 8px;
+}
+.temporal-finding-row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 10px;
+  color: #475569;
+}
 .subsection {
   margin-top: 16px;
 }

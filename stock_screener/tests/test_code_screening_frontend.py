@@ -97,6 +97,14 @@ class CodeScreeningFrontendTest(unittest.TestCase):
         self.assertIn("normalizeCodeScreeningTerminalRow", source)
         self.assertIn("/api/stock-terminal", api_source)
 
+    def test_frontend_renders_macro_score_details_and_temporal_summary(self):
+        source = self.read_main()
+
+        self.assertIn("MacroScoreDetails", source)
+        self.assertIn("temporal_summary", source)
+        self.assertIn("sub_scores", source)
+        self.assertIn("final_score", source)
+
 
 if __name__ == "__main__":
     unittest.main()

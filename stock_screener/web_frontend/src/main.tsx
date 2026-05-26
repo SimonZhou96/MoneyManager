@@ -39,7 +39,12 @@ type ScreeningResult = {
   sector?: string
   industry?: string
   filter_summary?: string
+  filter_details?: FilterDetailRow[]
   close_price?: number
+  technical_score?: number
+  macro_score?: number
+  final_score?: number
+  score_details?: Record<string, unknown>
 }
 type TaskResultsResponse = {
   rows: ScreeningResult[]
@@ -128,6 +133,25 @@ type EvidenceLink = {
   title?: string
   domain?: string
   source_type?: string
+}
+type MacroScoreDetails = {
+  macro_score?: number
+  threshold?: number
+  summary?: string
+  temporal_summary?: string
+  sub_scores?: Record<string, number>
+  risks?: string[]
+  evidence_refs?: EvidenceLink[]
+  temporal_findings?: Array<Record<string, string>>
+}
+type FilterDetailRow = {
+  rule_key?: string
+  rule_type?: string
+  strategy_category?: string
+  filter_name?: string
+  result?: string
+  reason?: string
+  details?: Record<string, unknown>
 }
 type FactorCitations = Record<string, EvidenceLink[]>
 type OptionCandidate = {
@@ -234,6 +258,7 @@ const COLUMN_LABELS: Record<string, string> = {
   file_name: '文件名',
   file_size: '文件大小',
   filter_summary: '筛选摘要',
+  final_score: '综合分',
   implementation: '实现类',
   industry: '行业',
   input: '原始输入',
@@ -251,8 +276,11 @@ const COLUMN_LABELS: Record<string, string> = {
   rule_type: '规则类型',
   signal_direction_label: '方向',
   sector: '所属板块',
+  score_details: '评分明细',
   status: '状态',
+  macro_score: '宏观分',
   task_id: '任务 ID',
+  technical_score: '技术分',
   timeframe: '周期',
   position_id: '持仓编号',
   strategy_name: '策略名称',
@@ -1195,6 +1223,9 @@ function CodeScreeningResultTable({
             <th>所属板块</th>
             <th>行业</th>
             <th>最新收盘价</th>
+            <th>技术分</th>
+            <th>宏观分</th>
+            <th>综合分</th>
             <th>筛选摘要</th>
             <th>原因</th>
             <th>任务详情</th>
@@ -1219,6 +1250,9 @@ function CodeScreeningResultTable({
                 <td>{displayMissing(row.sector)}</td>
                 <td>{displayMissing(row.industry)}</td>
                 <td>{displayMissing(row.close_price)}</td>
+                <td>{formatScore(row.technical_score)}</td>
+                <td>{formatScore(row.macro_score)}</td>
+                <td>{formatScore(row.final_score)}</td>
                 <td>{displayMissing(row.filter_summary)}</td>
                 <td>{displayMissing(row.reason)}</td>
                 <td>{rowTaskId ? <button className="link-button" onClick={event => { event.stopPropagation(); openTask(rowTaskId) }}>{rowTaskId.slice(0, 8)}</button> : '等待创建'}</td>
@@ -1591,6 +1625,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
   const [passedOnly, setPassedOnly] = useState(false)
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [uploadedResultScope, setUploadedResultScope] = useState('')
+  const [selectedResult, setSelectedResult] = useState<ScreeningResult | null>(null)
   const [error, setError] = useState('')
 
   async function refresh() {
@@ -1625,6 +1660,16 @@ function TaskDetail({ taskId }: { taskId: string }) {
     return () => window.clearInterval(timer)
   }, [taskId, limit, offset, passedOnly])
 
+  useEffect(() => {
+    if (results.length === 0) {
+      setSelectedResult(null)
+      return
+    }
+    if (!selectedResult || !results.some(row => row.code === selectedResult.code && row.market === selectedResult.market)) {
+      setSelectedResult(results[0])
+    }
+  }, [results])
+
   if (!taskId) {
     return <section><Header title="任务详情" subtitle="请选择一个筛选任务" /></section>
   }
@@ -1634,6 +1679,7 @@ function TaskDetail({ taskId }: { taskId: string }) {
   const currentEnd = Math.min(offset + results.length, filteredTotal)
   const canPrev = offset > 0
   const canNext = offset + limit < filteredTotal
+  const selectedMacroDetails = selectedResult ? macroScoreDetailsFromResult(selectedResult) : null
   return (
     <section>
       <Header title={`任务 ${taskId.slice(0, 8)}`} subtitle={taskId} />
@@ -1678,8 +1724,22 @@ function TaskDetail({ taskId }: { taskId: string }) {
           <span>第 {filteredTotal === 0 ? 0 : Math.floor(offset / limit) + 1} 页</span>
           <button type="button" disabled={!canNext} onClick={() => setOffset(offset + limit)}>下一页</button>
         </div>
-        <Table rows={results} columns={['is_passed', 'code', 'name', 'sector', 'industry', 'close_price', 'filter_summary']} />
+        <Table
+          rows={results}
+          columns={['is_passed', 'code', 'name', 'sector', 'industry', 'close_price', 'technical_score', 'macro_score', 'final_score', 'filter_summary']}
+          onRowClick={row => setSelectedResult(row)}
+        />
       </Panel>
+      {selectedResult && (
+        <Panel title={`评分明细 ${selectedResult.code}`}>
+          <div className="metric-grid">
+            <Metric label="技术分" value={formatScore(selectedResult.technical_score)} />
+            <Metric label="宏观分" value={formatScore(selectedResult.macro_score)} />
+            <Metric label="综合分" value={formatScore(selectedResult.final_score)} />
+          </div>
+          <MacroScoreDetails details={selectedMacroDetails} />
+        </Panel>
+      )}
     </section>
   )
 }
@@ -1730,6 +1790,50 @@ function CitationTags({ links }: { links: EvidenceLink[] }) {
         )
       })}
     </span>
+  )
+}
+
+function MacroScoreDetails({ details }: { details?: MacroScoreDetails | null }) {
+  if (!details || details.macro_score === undefined || details.macro_score === null) return <div className="empty">暂无宏观评分明细</div>
+  const subScores = Object.entries(details.sub_scores || {})
+  const risks = details.risks || []
+  const temporalFindings = details.temporal_findings || []
+  return (
+    <div className="macro-score-card">
+      <div className="macro-score-heading">
+        <strong>宏观评分 {formatScore(details.macro_score)}</strong>
+        <span>阈值 {formatScore(details.threshold)}</span>
+      </div>
+      {details.summary && <p>{details.summary}</p>}
+      {details.temporal_summary && <p className="temporal-summary">{details.temporal_summary}</p>}
+      {subScores.length > 0 && (
+        <div className="subscore-grid">
+          {subScores.map(([key, value]) => (
+            <div className="subscore-row" key={key}>
+              <span>{macroDimensionLabel(key)}</span>
+              <meter min={-100} max={100} low={0} high={60} optimum={80} value={Number(value)} />
+              <strong>{formatScore(value)}</strong>
+            </div>
+          ))}
+        </div>
+      )}
+      {risks.length > 0 && (
+        <ul className="risk-list">
+          {risks.map(item => <li key={item}>{item}</li>)}
+        </ul>
+      )}
+      {temporalFindings.length > 0 && (
+        <div className="temporal-finding-list">
+          {temporalFindings.map((item, index) => (
+            <div className="temporal-finding-row" key={`${item.type || 'finding'}-${index}`}>
+              <strong>{displayMissing(item.type)}</strong>
+              <span>{displayMissing(item.description)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <CitationTags links={details.evidence_refs || []} />
+    </div>
   )
 }
 
@@ -1983,9 +2087,44 @@ function columnLabel(column: string) {
   return COLUMN_LABELS[column] || column
 }
 
+function macroScoreDetailsFromResult(result: ScreeningResult): MacroScoreDetails | null {
+  const macroRow = (result.filter_details || []).find(item => {
+    const details = item.details || {}
+    return details.macro_score !== undefined && details.macro_score !== null
+  })
+  const scoreDetails = result.score_details || {}
+  const nested = scoreDetails.macro_details
+  const source = (isRecord(nested) ? nested : macroRow?.details || scoreDetails) as Record<string, unknown>
+  if (source.macro_score === undefined || source.macro_score === null) return null
+  return source as MacroScoreDetails
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function formatScore(value?: number | string | null) {
+  if (value === undefined || value === null || value === '') return '-'
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric.toFixed(1) : String(value)
+}
+
+function macroDimensionLabel(key: string) {
+  const labels: Record<string, string> = {
+    company_event_strength: '公司事件强度',
+    sector_heat: '板块热度',
+    news_validation: '新闻验证',
+    impact_direction: '影响方向',
+    source_credibility: '来源可信度',
+    freshness: '时效性',
+  }
+  return labels[key] || key
+}
+
 function formatCell(value: any, column?: string): React.ReactNode {
   if (column === 'status' || column === 'is_passed' || column === 'result') return <StatusBadge value={value} />
   if (column === 'market') return optionMarketLabel(value)
+  if (column === 'technical_score' || column === 'macro_score' || column === 'final_score') return formatScore(value)
   if (column === 'enabled') return typeof value === 'string' ? value : (value ? '启用' : '停用')
   if ((column === 'sector' || column === 'industry') && (value === undefined || value === null || value === '')) return '未补齐'
   if (Array.isArray(value)) return value.join(', ')
