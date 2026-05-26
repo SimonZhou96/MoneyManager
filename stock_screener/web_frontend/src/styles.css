@@ -1559,8 +1559,46 @@ textarea.code-input::placeholder {
 
 @media (max-width: 900px) {
   .app-shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; }
+  .sidebar {
+    position: static;
+    padding: 14px;
+    gap: 12px;
+  }
+  .brand {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 4px;
+  }
+  nav {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  nav button,
+  .sidebar-footer button {
+    min-height: 44px;
+    text-align: center;
+    padding: 0 8px;
+  }
+  .sidebar-footer {
+    margin-top: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 4px;
+  }
+  .sidebar-footer span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .content { padding: 20px; }
   .metric-grid, .form-grid, .result-layout, .option-form, .option-fill-form, .option-layout, .option-summary-grid, .quant-grid, .metric-row, .rule-list-toolbar, .rule-editor-layout, .compact-form-grid, .code-preview-grid, .market-intel-layout, .task-summary-grid { grid-template-columns: 1fr; }
+  .code-screening-workbench { grid-template-columns: 1fr; }
+  .stock-terminal-panel { position: static; }
   .screening-market-field,
   .screening-timeframe-field,
   .screening-pool-field,

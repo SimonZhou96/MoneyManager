@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client'
 import CodeMirror from '@uiw/react-codemirror'
 import { json } from '@codemirror/lang-json'
 import { api } from './api'
-import { MarketIntelPage } from './features/marketIntel/MarketIntelPage'
 import { QuantLab } from './features/quant/QuantLab'
 import { StockTerminalPanel, type StockTerminalRow } from './features/stockTerminal/StockTerminalPanel'
 import './styles.css'
@@ -400,7 +399,6 @@ function App() {
           <button className={page === 'dashboard' ? 'active' : ''} onClick={() => setPage('dashboard')}>总览</button>
           <button className={page === 'screening' ? 'active' : ''} onClick={() => setPage('screening')}>全市场筛选</button>
           <button className={page === 'codeScreening' ? 'active' : ''} onClick={() => setPage('codeScreening')}>个股筛选器</button>
-          <button className={page === 'marketIntel' ? 'active' : ''} onClick={() => setPage('marketIntel')}>市场情报</button>
           <button className={page === 'options' ? 'active' : ''} onClick={() => setPage('options')}>期权实验室</button>
           <button className={page === 'quant' ? 'active' : ''} onClick={() => setPage('quant')}>量化实验室</button>
           <button className={page === 'rules' ? 'active' : ''} onClick={() => setPage('rules')}>规则链</button>
@@ -416,7 +414,6 @@ function App() {
         />}
         {page === 'screening' && <Screening />}
         {page === 'codeScreening' && <CodeScreening openTask={(taskId) => { setSelectedTaskId(taskId); setPage('task') }} />}
-        {page === 'marketIntel' && <MarketIntelPage />}
         {page === 'options' && <OptionLab />}
         {page === 'quant' && <QuantLab />}
         {page === 'rules' && <Rules />}
@@ -1067,7 +1064,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
 
   return (
     <section className="code-screening-layout">
-      <Header title="代码筛选" subtitle="输入一个或多个代码，使用自定义列表任务按原始顺序返回筛选结果" />
+      <Header title="个股筛选器" subtitle="输入一个或多个代码，使用自定义列表任务按原始顺序返回筛选结果" />
       <form className="compact-form-grid" onSubmit={submit}>
         <Field label="市场">
           <select value={market} onChange={event => setMarket(event.target.value)}>
@@ -1154,6 +1151,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
             <Panel title="筛选结果">
               <CodeScreeningResultTable
                 rows={result.rows || []}
+                terminalMarket={result.market || market}
                 taskId={result.task_id}
                 openTask={openTask}
                 selectedCode={selectedTerminalRow?.code}
@@ -1170,12 +1168,14 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
 
 function CodeScreeningResultTable({
   rows,
+  terminalMarket,
   taskId,
   openTask,
   selectedCode,
   onSelectRow
 }: {
   rows: CustomListResultRow[]
+  terminalMarket: string
   taskId?: string
   openTask: (taskId: string) => void
   selectedCode?: string
@@ -1203,12 +1203,13 @@ function CodeScreeningResultTable({
         <tbody>
           {rows.map((row, index) => {
             const rowTaskId = row.task_id || taskId || ''
-            const isSelected = Boolean(row.code && row.code === selectedCode)
+            const terminalRow = normalizeCodeScreeningTerminalRow(row, terminalMarket)
+            const isSelected = Boolean(terminalRow.code && terminalRow.code === selectedCode)
             return (
               <tr
                 key={`${row.input || row.code || 'row'}-${index}`}
                 className={`${isSelected ? 'selected-row ' : ''}clickable-row`}
-                onClick={() => onSelectRow(row)}
+                onClick={() => onSelectRow(terminalRow)}
               >
                 <td>{displayMissing(row.input || row.code)}</td>
                 <td>{displayMissing(row.code)}</td>
@@ -1228,6 +1229,23 @@ function CodeScreeningResultTable({
       </table>
     </div>
   )
+}
+
+function normalizeCodeScreeningTerminalRow(row: CustomListResultRow, fallbackMarket: string): StockTerminalRow {
+  const code = (row.code || row.input || '').trim()
+  return {
+    ...row,
+    code,
+    market: row.market || inferMarketFromCode(code) || fallbackMarket
+  }
+}
+
+function inferMarketFromCode(code?: string) {
+  const value = String(code || '').trim().toUpperCase()
+  if (value.startsWith('US.')) return 'US'
+  if (value.startsWith('HK.')) return 'HK'
+  if (value.startsWith('SH.') || value.startsWith('SZ.') || value.startsWith('BJ.')) return 'A'
+  return ''
 }
 
 function codeScreeningStatusLabel(row: CustomListResultRow) {

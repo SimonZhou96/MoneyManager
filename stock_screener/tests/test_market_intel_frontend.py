@@ -14,13 +14,13 @@ MARKET_INTEL_TYPES = FRONTEND_SRC / "features" / "marketIntel" / "types.ts"
 
 
 class MarketIntelFrontendTest(unittest.TestCase):
-    def test_main_wires_market_intel_navigation(self):
+    def test_main_does_not_expose_standalone_market_intel_navigation(self):
         source = MAIN_TSX.read_text(encoding="utf-8")
 
-        self.assertIn("MarketIntelPage", source)
-        self.assertIn("市场情报", source)
-        self.assertIn("page === 'marketIntel'", source)
-        self.assertIn("setPage('marketIntel')", source)
+        self.assertNotIn("MarketIntelPage", source)
+        self.assertNotIn(">市场情报<", source)
+        self.assertNotIn("page === 'marketIntel'", source)
+        self.assertNotIn("setPage('marketIntel')", source)
 
     def test_market_intel_page_exports_feature_view(self):
         source = MARKET_INTEL_PAGE.read_text(encoding="utf-8")

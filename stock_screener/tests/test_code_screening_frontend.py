@@ -21,7 +21,7 @@ class CodeScreeningFrontendTest(unittest.TestCase):
     def test_navigation_replaces_single_stock_with_code_screening(self):
         source = self.read_main()
 
-        self.assertIn("代码筛选", source)
+        self.assertIn('Header title="个股筛选器"', source)
         self.assertNotIn(">单股选股<", source)
         self.assertNotIn("page === 'single'", source)
         self.assertNotIn("setPage('single')", source)
@@ -93,6 +93,8 @@ class CodeScreeningFrontendTest(unittest.TestCase):
 
         self.assertIn("selectedTerminalRow", source)
         self.assertIn("setSelectedTerminalRow", source)
+        self.assertIn("terminalMarket={result.market || market}", source)
+        self.assertIn("normalizeCodeScreeningTerminalRow", source)
         self.assertIn("/api/stock-terminal", api_source)
 
 
