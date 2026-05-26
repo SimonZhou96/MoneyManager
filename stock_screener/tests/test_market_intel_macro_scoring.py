@@ -2,10 +2,20 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 try:
-    from market_intel.macro_scoring import MacroEvidencePreprocessor
+    from market_intel.macro_scoring import (
+        DEFAULT_MACRO_SUB_WEIGHTS,
+        MacroEvidencePreprocessor,
+        MacroScoreParser,
+        aggregate_rule_scores,
+    )
     from market_intel.models import EvidencePack, IntelItem
 except ModuleNotFoundError:
-    from stock_screener.market_intel.macro_scoring import MacroEvidencePreprocessor
+    from stock_screener.market_intel.macro_scoring import (
+        DEFAULT_MACRO_SUB_WEIGHTS,
+        MacroEvidencePreprocessor,
+        MacroScoreParser,
+        aggregate_rule_scores,
+    )
     from stock_screener.market_intel.models import EvidencePack, IntelItem
 
 
@@ -264,6 +274,97 @@ class MacroEvidencePreprocessorTests(unittest.TestCase):
         self.assertIn("upstream gap", package.data_gaps)
         self.assertIn("无时间新闻 缺少 event_time/published_at", package.data_gaps)
         self.assertIn("无抓取时间 缺少 fetched_at", package.data_gaps)
+
+
+class MacroScoreParserTests(unittest.TestCase):
+    def test_parser_clamps_values_and_recomputes_passed(self):
+        result = MacroScoreParser.parse(
+            {
+                "macro_score": 120,
+                "passed": False,
+                "sub_scores": {
+                    "company_event_strength": 130,
+                    "sector_heat": -150,
+                },
+                "weighted_contribution": {
+                    "company_event_strength": "12.5",
+                },
+                "summary": "strong setup",
+                "temporal_summary": "newer evidence confirms",
+                "risks": ["crowded", 123],
+                "evidence_refs": [{"title": "公告"}, "bad-ref"],
+            },
+            threshold=70,
+        )
+
+        self.assertEqual(result.macro_score, 100.0)
+        self.assertTrue(result.passed)
+        self.assertEqual(result.sub_scores["company_event_strength"], 100.0)
+        self.assertEqual(result.sub_scores["sector_heat"], -100.0)
+        self.assertEqual(result.weighted_contribution["company_event_strength"], 12.5)
+        self.assertEqual(result.risks, ["crowded", "123"])
+        self.assertEqual(result.evidence_refs, [{"title": "公告"}])
+        self.assertEqual(result.to_details()["macro_score"], 100.0)
+
+    def test_parser_defaults_missing_subscore_keys_to_zero(self):
+        result = MacroScoreParser.parse(
+            {
+                "macro_score": 10,
+                "sub_scores": {
+                    "company_event_strength": 20,
+                },
+            },
+            threshold=30,
+        )
+
+        self.assertFalse(result.passed)
+        self.assertEqual(set(DEFAULT_MACRO_SUB_WEIGHTS).difference(result.sub_scores), set())
+        self.assertEqual(result.sub_scores["company_event_strength"], 20.0)
+        self.assertEqual(result.sub_scores["news_validation"], 0.0)
+        self.assertEqual(result.sub_scores["freshness"], 0.0)
+
+    def test_parser_rejects_non_dict_payload(self):
+        with self.assertRaises(ValueError):
+            MacroScoreParser.parse(["not", "a", "dict"], threshold=60)
+
+
+class AggregateRuleScoresTests(unittest.TestCase):
+    def test_aggregate_combines_technical_and_macro_scores(self):
+        result = aggregate_rule_scores(
+            [
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "pass", "details": {}},
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "fail", "details": {}},
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "pass",
+                    "details": {"macro_score": 80},
+                },
+            ]
+        )
+
+        self.assertEqual(result["technical_score"], 50.0)
+        self.assertEqual(result["macro_score"], 80.0)
+        self.assertEqual(result["final_score"], 62.0)
+        self.assertEqual(result["technical_weight"], 0.6)
+        self.assertEqual(result["macro_weight"], 0.4)
+
+    def test_aggregate_negative_macro_score_reduces_final_score(self):
+        result = aggregate_rule_scores(
+            [
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "pass", "details": {}},
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "fail",
+                    "details": {"macro_score": -50},
+                },
+            ]
+        )
+
+        self.assertEqual(result["technical_score"], 100.0)
+        self.assertEqual(result["macro_score"], -50.0)
+        self.assertEqual(result["final_score"], 40.0)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,102 @@ DEFAULT_MACRO_SUB_WEIGHTS = {
 
 
 @dataclass(frozen=True)
+class MacroScoreResult:
+    macro_score: float
+    passed: bool
+    threshold: float
+    sub_scores: Dict[str, float]
+    weighted_contribution: Dict[str, float]
+    summary: str
+    temporal_summary: str = ""
+    risks: List[str] = field(default_factory=list)
+    evidence_refs: List[Dict[str, Any]] = field(default_factory=list)
+    raw: Dict[str, Any] = field(default_factory=dict)
+
+    def to_details(self) -> Dict[str, Any]:
+        return {
+            "macro_score": self.macro_score,
+            "passed": self.passed,
+            "threshold": self.threshold,
+            "sub_scores": dict(self.sub_scores),
+            "weighted_contribution": dict(self.weighted_contribution),
+            "summary": self.summary,
+            "temporal_summary": self.temporal_summary,
+            "risks": list(self.risks),
+            "evidence_refs": [dict(item) for item in self.evidence_refs],
+        }
+
+
+class MacroScoreParser:
+    @staticmethod
+    def parse(payload: Dict[str, Any], *, threshold: float) -> MacroScoreResult:
+        if not isinstance(payload, dict):
+            raise ValueError("macro score payload must be a dict")
+
+        macro_score = _clamp_score(payload.get("macro_score", 0.0))
+        threshold_value = _to_float(threshold)
+        sub_scores = _normalize_sub_scores(payload.get("sub_scores"))
+        weighted_contribution = _normalize_float_dict(payload.get("weighted_contribution"))
+
+        return MacroScoreResult(
+            macro_score=macro_score,
+            passed=macro_score >= threshold_value,
+            threshold=threshold_value,
+            sub_scores=sub_scores,
+            weighted_contribution=weighted_contribution,
+            summary=str(payload.get("summary") or ""),
+            temporal_summary=str(payload.get("temporal_summary") or ""),
+            risks=_normalize_string_list(payload.get("risks")),
+            evidence_refs=_normalize_dict_list(payload.get("evidence_refs")),
+            raw=dict(payload),
+        )
+
+
+def aggregate_rule_scores(
+    rows: Iterable[Dict[str, Any]],
+    technical_weight: float = 0.6,
+    macro_weight: float = 0.4,
+) -> Dict[str, Optional[float]]:
+    technical_values: List[float] = []
+    macro_values: List[float] = []
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        rule_type = str(row.get("rule_type") or "").lower()
+        strategy_category = str(row.get("strategy_category") or "").lower()
+        details = row.get("details")
+        details = details if isinstance(details, dict) else {}
+
+        if strategy_category == "macro":
+            if "macro_score" in details:
+                macro_values.append(_clamp_score(details.get("macro_score")))
+            continue
+
+        if rule_type == "strategy":
+            technical_values.append(100.0 if str(row.get("result") or "").lower() == "pass" else 0.0)
+
+    technical_score = _average(technical_values)
+    macro_score = _average(macro_values)
+    technical_weight_value = _to_float(technical_weight)
+    macro_weight_value = _to_float(macro_weight)
+    final_score = _aggregate_scores(
+        technical_score,
+        macro_score,
+        technical_weight=technical_weight_value,
+        macro_weight=macro_weight_value,
+    )
+
+    return {
+        "technical_score": technical_score,
+        "macro_score": macro_score,
+        "final_score": final_score,
+        "technical_weight": technical_weight_value,
+        "macro_weight": macro_weight_value,
+    }
+
+
+@dataclass(frozen=True)
 class MacroEvidenceRow:
     title: str
     summary: str
@@ -254,6 +350,72 @@ def _dedupe_strings(values: Iterable[str]) -> List[str]:
         seen.add(text)
         rows.append(text)
     return rows
+
+
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clamp_score(value: Any) -> float:
+    score = _to_float(value)
+    return max(-100.0, min(100.0, score))
+
+
+def _normalize_sub_scores(value: Any) -> Dict[str, float]:
+    source = value if isinstance(value, dict) else {}
+    sub_scores = {
+        key: _clamp_score(source.get(key, 0.0))
+        for key in DEFAULT_MACRO_SUB_WEIGHTS
+    }
+    for key, raw_value in source.items():
+        if key not in sub_scores:
+            sub_scores[str(key)] = _clamp_score(raw_value)
+    return sub_scores
+
+
+def _normalize_float_dict(value: Any) -> Dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): _to_float(raw_value) for key, raw_value in value.items()}
+
+
+def _normalize_string_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    values = value if isinstance(value, list) else [value]
+    return [str(item) for item in values if item is not None]
+
+
+def _normalize_dict_list(value: Any) -> List[Dict[str, Any]]:
+    if value is None:
+        return []
+    values = value if isinstance(value, list) else [value]
+    return [dict(item) for item in values if isinstance(item, dict)]
+
+
+def _average(values: List[float]) -> Optional[float]:
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _aggregate_scores(
+    technical_score: Optional[float],
+    macro_score: Optional[float],
+    *,
+    technical_weight: float,
+    macro_weight: float,
+) -> Optional[float]:
+    if technical_score is not None and macro_score is not None:
+        return technical_score * technical_weight + macro_score * macro_weight
+    if technical_score is not None:
+        return technical_score
+    if macro_score is not None:
+        return macro_score
+    return None
 
 
 def _looks_positive(text: str) -> bool:
