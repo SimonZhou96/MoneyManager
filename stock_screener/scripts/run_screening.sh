@@ -25,6 +25,10 @@ if [[ -z "${PYTHON_BIN:-}" ]]; then
   fi
 fi
 
+if [[ "${1:-}" == "--mode" ]]; then
+  exec "$PYTHON_BIN" "interactive_screening.py" "$@"
+fi
+
 if [[ $# -eq 0 && "${INTERACTIVE:-1}" == "1" && -t 0 && -t 1 ]]; then
   exec "$PYTHON_BIN" "interactive_screening.py"
 fi

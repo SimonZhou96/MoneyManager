@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import uuid
@@ -82,23 +83,26 @@ class ScreeningInteractiveApp:
         self.input = input_func
         self.print = print_func
 
-    def run(self) -> int:
+    def run(self, default_mode: Optional[str] = None) -> int:
         _load_dotenv()
         self.print("")
         self.print("MoneyManager 股票筛选")
         self.print("=" * 40)
-        options = self.prompt_options()
+        options = self.prompt_options(default_mode=default_mode)
         if options.mode == "custom":
             return self.run_custom_code_screening(get_db_config(), options)
         return self.run_full_market_screening(get_db_config(), options)
 
-    def prompt_options(self) -> InteractiveScreeningOptions:
-        mode = self._prompt_choice(
-            "请选择运行模式",
-            choices={"1": "full", "2": "custom"},
-            labels={"1": "全市场筛选", "2": "自选股票代码筛选"},
-            default="1",
-        )
+    def prompt_options(self, default_mode: Optional[str] = None) -> InteractiveScreeningOptions:
+        if default_mode:
+            mode = default_mode
+        else:
+            mode = self._prompt_choice(
+                "请选择运行模式",
+                choices={"1": "full", "2": "custom"},
+                labels={"1": "全市场筛选", "2": "个股筛选器"},
+                default="1",
+            )
         timeframe = self._prompt_timeframe("K 线周期", "1d")
         enable_ai_analysis = self._prompt_bool(
             "是否启用搜索+模型辅助分析",
@@ -466,7 +470,10 @@ class ScreeningInteractiveApp:
 
 
 def main() -> int:
-    return ScreeningInteractiveApp().run()
+    parser = argparse.ArgumentParser(description="MoneyManager 股票筛选交互式 shell")
+    parser.add_argument("--mode", choices=["full", "custom"], default=None, help="直接进入全市场筛选或个股筛选器")
+    args = parser.parse_args()
+    return ScreeningInteractiveApp().run(default_mode=args.mode)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ class InteractiveScreeningTests(unittest.TestCase):
 
     def test_prompt_custom_code_options(self):
         answers = iter([
-            "2",        # 自选股票代码筛选
+            "2",        # 个股筛选器
             "",         # timeframe
             "n",        # AI 分析
             "y",        # 主力资金外部数据
@@ -22,7 +22,11 @@ class InteractiveScreeningTests(unittest.TestCase):
             "US",       # market
             "AAPL,MSFT",
         ])
-        app = ScreeningInteractiveApp(input_func=lambda _: next(answers), print_func=lambda *args, **kwargs: None)
+        output = []
+        app = ScreeningInteractiveApp(
+            input_func=lambda _: next(answers),
+            print_func=lambda *args, **kwargs: output.append(" ".join(str(arg) for arg in args)),
+        )
 
         options = app.prompt_options()
 
@@ -32,6 +36,34 @@ class InteractiveScreeningTests(unittest.TestCase):
         self.assertFalse(options.enable_ai_analysis)
         self.assertTrue(options.enable_main_force_external_data)
         self.assertFalse(options.send_feishu)
+        text = "\n".join(output)
+        self.assertIn("全市场筛选", text)
+        self.assertIn("个股筛选器", text)
+        self.assertNotIn("自选股票代码筛选", text)
+
+    def test_prompt_options_can_enter_frontend_aligned_mode_directly(self):
+        answers = iter([
+            "",         # timeframe
+            "n",        # AI 分析
+            "n",        # 主力资金外部数据
+            "n",        # 飞书
+            "",         # CSV
+            "",         # chain_key
+            "US",       # market
+            "AAPL,MSFT",
+        ])
+        output = []
+        app = ScreeningInteractiveApp(
+            input_func=lambda _: next(answers),
+            print_func=lambda *args, **kwargs: output.append(" ".join(str(arg) for arg in args)),
+        )
+
+        options = app.prompt_options(default_mode="custom")
+
+        self.assertEqual(options.mode, "custom")
+        self.assertEqual(options.market, "US")
+        self.assertEqual(options.codes, ["AAPL", "MSFT"])
+        self.assertNotIn("请选择运行模式", "\n".join(output))
 
     def test_prompt_timeframe_lists_options_and_retries_invalid_value(self):
         answers = iter(["bad", "1h"])
