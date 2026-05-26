@@ -330,6 +330,18 @@ class MacroScoreParserTests(unittest.TestCase):
         self.assertEqual(result.macro_score, 0.0)
         self.assertFalse(result.passed)
 
+    def test_parser_uses_default_threshold_for_malformed_threshold(self):
+        result = MacroScoreParser.parse({"macro_score": 10}, threshold="bad-threshold")
+
+        self.assertEqual(result.threshold, 60.0)
+        self.assertFalse(result.passed)
+
+    def test_parser_preserves_valid_zero_threshold(self):
+        result = MacroScoreParser.parse({"macro_score": 0}, threshold=0)
+
+        self.assertEqual(result.threshold, 0.0)
+        self.assertTrue(result.passed)
+
     def test_parser_treats_non_finite_subscores_as_zero(self):
         result = MacroScoreParser.parse(
             {
@@ -415,6 +427,26 @@ class MacroScoreParserTests(unittest.TestCase):
         json.dumps(details, ensure_ascii=False, allow_nan=False)
 
         self.assertEqual(details["evidence_refs"][0]["self"]["self"], "<cycle>")
+
+    def test_to_details_handles_deeply_nested_raw_payload(self):
+        nested = "leaf"
+        for _ in range(300):
+            nested = {"child": nested}
+        result = MacroScoreParser.parse(
+            {
+                "macro_score": 80,
+                "raw_event": nested,
+            },
+            threshold=70,
+        )
+
+        details = result.to_details()
+        json.dumps(details, ensure_ascii=False, allow_nan=False)
+
+        cursor = details["raw"]["raw_event"]
+        for _ in range(100):
+            cursor = cursor["child"]
+        self.assertEqual(cursor, "<max_depth>")
 
 
 class AggregateRuleScoresTests(unittest.TestCase):
@@ -519,6 +551,21 @@ class AggregateRuleScoresTests(unittest.TestCase):
 
         self.assertEqual(result["macro_score"], 60.0)
         self.assertEqual(result["final_score"], 60.0)
+
+    def test_aggregate_ignores_macro_rows_that_are_not_strategies(self):
+        result = aggregate_rule_scores(
+            [
+                {
+                    "rule_type": "filter",
+                    "strategy_category": "macro",
+                    "result": "pass",
+                    "details": {"macro_score": 80},
+                }
+            ]
+        )
+
+        self.assertIsNone(result["macro_score"])
+        self.assertIsNone(result["final_score"])
 
     def test_aggregate_ignores_technical_skip_and_error_rows(self):
         result = aggregate_rule_scores(

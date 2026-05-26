@@ -22,6 +22,9 @@ DEFAULT_MACRO_SUB_WEIGHTS = {
     "freshness": 0.1,
 }
 
+DEFAULT_MACRO_SCORE_THRESHOLD = 60.0
+JSON_SAFE_MAX_DEPTH = 100
+
 
 @dataclass(frozen=True)
 class MacroScoreResult:
@@ -58,7 +61,7 @@ class MacroScoreParser:
             raise ValueError("macro score payload must be a dict")
 
         macro_score = _clamp_score(payload.get("macro_score", 0.0))
-        threshold_value = _to_float(threshold)
+        threshold_value = _to_float(threshold, DEFAULT_MACRO_SCORE_THRESHOLD)
         sub_scores = _normalize_sub_scores(payload.get("sub_scores"))
         weighted_contribution = _normalize_float_dict(payload.get("weighted_contribution"))
 
@@ -96,6 +99,8 @@ def aggregate_rule_scores(
             continue
 
         if strategy_category == "macro":
+            if rule_type != "strategy":
+                continue
             if "macro_score" in details:
                 macro_score = _coerce_score(details.get("macro_score"))
                 if macro_score is not None:
@@ -416,16 +421,21 @@ def _normalize_dict_list(value: Any) -> List[Dict[str, Any]]:
     return [dict(item) for item in values if isinstance(item, dict)]
 
 
-def _json_safe(value: Any, _seen: Optional[set[int]] = None) -> Any:
+def _json_safe(value: Any, _seen: Optional[set[int]] = None, _depth: int = 0) -> Any:
     if _seen is None:
         _seen = set()
+    if _depth > JSON_SAFE_MAX_DEPTH:
+        return "<max_depth>"
     if isinstance(value, dict):
         object_id = id(value)
         if object_id in _seen:
             return "<cycle>"
         _seen.add(object_id)
         try:
-            return {str(key): _json_safe(item, _seen) for key, item in value.items()}
+            return {
+                str(key): _json_safe(item, _seen, _depth + 1)
+                for key, item in value.items()
+            }
         finally:
             _seen.remove(object_id)
     if isinstance(value, (list, tuple)):
@@ -434,7 +444,7 @@ def _json_safe(value: Any, _seen: Optional[set[int]] = None) -> Any:
             return "<cycle>"
         _seen.add(object_id)
         try:
-            return [_json_safe(item, _seen) for item in value]
+            return [_json_safe(item, _seen, _depth + 1) for item in value]
         finally:
             _seen.remove(object_id)
     if isinstance(value, datetime):
