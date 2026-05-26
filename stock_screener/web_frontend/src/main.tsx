@@ -31,6 +31,24 @@ type Task = {
   chain_name?: string
   summary?: Record<string, unknown>
 }
+type ReportSectionItem = {
+  label?: string
+  title?: string
+  value?: unknown
+  status?: string
+  reason?: string
+  url?: string
+  source_type?: string
+  rule_type?: string
+  strategy_category?: string
+  details?: Record<string, unknown>
+}
+type ReportSection = {
+  section_key: string
+  title: string
+  summary?: string
+  items?: ReportSectionItem[]
+}
 type ScreeningResult = {
   market: string
   code: string
@@ -45,6 +63,7 @@ type ScreeningResult = {
   macro_score?: number
   final_score?: number
   score_details?: Record<string, unknown>
+  report_sections?: ReportSection[]
 }
 type TaskResultsResponse = {
   rows: ScreeningResult[]
@@ -1012,6 +1031,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
   const [jobId, setJobId] = useState('')
   const [result, setResult] = useState<CustomListResultsResponse | null>(null)
   const [selectedTerminalRow, setSelectedTerminalRow] = useState<StockTerminalRow | null>(null)
+  const [selectedReportRow, setSelectedReportRow] = useState<CustomListResultRow | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const parsedCodes = useMemo(() => splitCodes(codes), [codes])
@@ -1021,6 +1041,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
     setError('')
     setResult(null)
     setSelectedTerminalRow(null)
+    setSelectedReportRow(null)
     setJobId('')
     if (parsedCodes.length === 0) {
       setError('至少输入一个代码')
@@ -1071,6 +1092,10 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
     if (result.status === 'completed' || result.status === 'failed' || result.status === 'error') {
       setLoading(false)
     }
+    if (selectedReportRow && !(result.rows || []).some(row => row.code === selectedReportRow.code && row.input === selectedReportRow.input)) {
+      setSelectedReportRow(null)
+      setSelectedTerminalRow(null)
+    }
   }, [result, jobId])
 
   useEffect(() => {
@@ -1089,6 +1114,10 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
   }, [market, timeframe])
 
   const selectedChain = (rules?.chains || []).find(item => item.chain_key === chainKey) || rules?.chain
+  const selectResultRow = (row: CustomListResultRow) => {
+    setSelectedReportRow(row)
+    setSelectedTerminalRow(normalizeCodeScreeningTerminalRow(row, result?.market || market))
+  }
 
   return (
     <section className="code-screening-layout">
@@ -1183,10 +1212,13 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
                 taskId={result.task_id}
                 openTask={openTask}
                 selectedCode={selectedTerminalRow?.code}
-                onSelectRow={setSelectedTerminalRow}
+                onSelectRow={selectResultRow}
               />
             </Panel>
-            <StockTerminalPanel row={selectedTerminalRow} />
+            <div className="code-screening-side-panel">
+              <CodeScreeningReportPanel row={selectedReportRow} />
+              <StockTerminalPanel row={selectedTerminalRow} />
+            </div>
           </div>
         </>
       )}
@@ -1207,7 +1239,7 @@ function CodeScreeningResultTable({
   taskId?: string
   openTask: (taskId: string) => void
   selectedCode?: string
-  onSelectRow: (row: StockTerminalRow) => void
+  onSelectRow: (row: CustomListResultRow) => void
 }) {
   if (!rows || rows.length === 0) return <div className="empty">暂无数据</div>
   return (
@@ -1240,7 +1272,7 @@ function CodeScreeningResultTable({
               <tr
                 key={`${row.input || row.code || 'row'}-${index}`}
                 className={`${isSelected ? 'selected-row ' : ''}clickable-row`}
-                onClick={() => onSelectRow(terminalRow)}
+                onClick={() => onSelectRow(row)}
               >
                 <td>{displayMissing(row.input || row.code)}</td>
                 <td>{displayMissing(row.code)}</td>
@@ -1262,6 +1294,79 @@ function CodeScreeningResultTable({
         </tbody>
       </table>
     </div>
+  )
+}
+
+const REPORT_SECTION_TITLES: Record<string, string> = {
+  decision: '筛选结论',
+  failure_reasons: '关键未通过原因',
+  strategy_process: '策略过程',
+  score_breakdown: '评分拆解',
+  macro_evidence: '宏观证据',
+}
+
+function CodeScreeningReportPanel({ row }: { row?: CustomListResultRow | null }) {
+  if (!row) {
+    return (
+      <Panel title="分析报告">
+        <div className="empty">选择结果行查看未通过原因、分析思路和每条策略过程</div>
+      </Panel>
+    )
+  }
+  const sections = row.report_sections || []
+  return (
+    <Panel title={`分析报告 ${displayMissing(row.code || row.input)}`}>
+      {sections.length === 0 ? (
+        <div className="empty">暂无报告明细</div>
+      ) : (
+        <div className="code-report">
+          {sections.map(section => (
+            <ReportSectionBlock section={section} key={section.section_key || section.title} />
+          ))}
+        </div>
+      )}
+    </Panel>
+  )
+}
+
+function ReportSectionBlock({ section }: { section: ReportSection }) {
+  const items = section.items || []
+  return (
+    <section className={`code-report-section section-${section.section_key || 'default'}`}>
+      <header>
+        <h3>{section.title || REPORT_SECTION_TITLES[section.section_key] || '报告明细'}</h3>
+      </header>
+      {section.summary && <p className="code-report-summary">{section.summary}</p>}
+      {items.length > 0 && (
+        <div className="code-report-items">
+          {items.map((item, index) => (
+            <article className="code-report-item" key={`${item.title || item.label || 'item'}-${index}`}>
+              <div className="code-report-item-main">
+                <strong>{item.title || item.label || `明细 ${index + 1}`}</strong>
+                {item.status && <StatusBadge value={item.status} />}
+              </div>
+              {item.label && item.title && <span className="code-report-label">{item.label}</span>}
+              {item.value !== undefined && (
+                item.url
+                  ? <a href={String(item.url)} target="_blank" rel="noreferrer">{formatReportValue(item.value)}</a>
+                  : <span>{formatReportValue(item.value)}</span>
+              )}
+              {item.reason && <p>{item.reason}</p>}
+              {item.details && Object.keys(item.details).length > 0 && (
+                <dl className="code-report-details">
+                  {Object.entries(item.details).map(([key, value]) => (
+                    <div key={key}>
+                      <dt>{key}</dt>
+                      <dd>{formatReportValue(value)}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -2119,6 +2224,19 @@ function formatScore(value?: number | string | null) {
   if (value === undefined || value === null || value === '') return '-'
   const numeric = Number(value)
   return Number.isFinite(numeric) ? numeric.toFixed(1) : String(value)
+}
+
+function formatReportValue(value: unknown): string {
+  if (value === undefined || value === null || value === '') return '未补齐'
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '无'
+    return value.map(item => formatReportValue(item)).join('；')
+  }
+  if (typeof value === 'object') {
+    return JSON.stringify(value)
+  }
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  return String(value)
 }
 
 function macroDimensionLabel(key: string) {

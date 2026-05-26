@@ -128,6 +128,18 @@ class CodeScreeningFrontendTest(unittest.TestCase):
         self.assertIn("accent-color: #1f6feb", styles)
         self.assertNotIn("min-height: 36px", styles)
 
+    def test_code_screening_renders_backend_report_sections(self):
+        source = self.read_main()
+        styles = STYLES_CSS.read_text(encoding="utf-8")
+
+        self.assertIn("report_sections?: ReportSection[]", source)
+        self.assertIn("selectedReportRow", source)
+        self.assertIn("CodeScreeningReportPanel", source)
+        self.assertIn("report_sections", source)
+        self.assertIn("策略过程", source)
+        self.assertIn(".code-report", styles)
+        self.assertIn(".code-report-section", styles)
+
 
 if __name__ == "__main__":
     unittest.main()

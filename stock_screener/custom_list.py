@@ -162,6 +162,196 @@ class CustomListCodeParser:
         return row
 
 
+def build_custom_list_report_sections(row: dict) -> List[dict]:
+    """Build report-style explanation blocks for one custom-list result row."""
+    filter_details = row.get("filter_details") if isinstance(row.get("filter_details"), list) else []
+    macro_details = _extract_macro_details(row, filter_details)
+    sections = [
+        _decision_section(row),
+        _failure_reason_section(row, filter_details),
+        _strategy_process_section(filter_details),
+        _score_breakdown_section(row, macro_details),
+        _macro_evidence_section(macro_details),
+    ]
+    return [section for section in sections if section]
+
+
+def _decision_section(row: dict) -> dict:
+    is_passed = row.get("is_passed")
+    if is_passed is True:
+        decision = "通过"
+        status = "pass"
+    elif is_passed is False:
+        decision = "未通过"
+        status = "fail"
+    else:
+        decision = str(row.get("状态") or row.get("status_text") or "等待筛选")
+        status = str(row.get("status") or "queued")
+    items = [
+        {"label": "结论", "value": decision, "status": status},
+        {"label": "代码", "value": row.get("code") or row.get("input") or "-"},
+    ]
+    if row.get("filter_summary"):
+        items.append({"label": "筛选摘要", "value": row.get("filter_summary")})
+    elif row.get("reason"):
+        items.append({"label": "原因", "value": row.get("reason")})
+    return {
+        "section_key": "decision",
+        "title": "筛选结论",
+        "summary": row.get("filter_summary") or row.get("reason") or "",
+        "items": items,
+    }
+
+
+def _failure_reason_section(row: dict, filter_details: List[dict]) -> Optional[dict]:
+    failures = [
+        item for item in filter_details
+        if str(item.get("result") or "").lower() in {"fail", "error"}
+    ]
+    if not failures and row.get("reason"):
+        failures = [{"result": row.get("status"), "reason": row.get("reason"), "rule_key": row.get("code") or row.get("input")}]
+    if not failures:
+        return None
+    return {
+        "section_key": "failure_reasons",
+        "title": "关键未通过原因",
+        "summary": f"共 {len(failures)} 条规则未通过或异常",
+        "items": [_report_rule_item(item) for item in failures],
+    }
+
+
+def _strategy_process_section(filter_details: List[dict]) -> Optional[dict]:
+    if not filter_details:
+        return None
+    return {
+        "section_key": "strategy_process",
+        "title": "策略过程",
+        "summary": "按规则链执行顺序展示每一条策略/筛选条件的判断结果",
+        "items": [_report_rule_item(item) for item in filter_details],
+    }
+
+
+def _score_breakdown_section(row: dict, macro_details: dict) -> Optional[dict]:
+    has_score = any(row.get(key) is not None for key in ("technical_score", "macro_score", "final_score"))
+    if not has_score and not macro_details:
+        return None
+    items = []
+    for label, key in (("技术分", "technical_score"), ("宏观分", "macro_score"), ("综合分", "final_score")):
+        if row.get(key) is not None:
+            items.append({"label": label, "value": row.get(key)})
+    for key, value in (macro_details.get("sub_scores") or {}).items():
+        items.append({"label": _macro_dimension_label(str(key)), "value": value})
+    summary = macro_details.get("summary") or row.get("filter_summary") or ""
+    return {
+        "section_key": "score_breakdown",
+        "title": "评分拆解",
+        "summary": summary,
+        "items": items,
+    }
+
+
+def _macro_evidence_section(macro_details: dict) -> Optional[dict]:
+    if not macro_details:
+        return None
+    items = []
+    if macro_details.get("temporal_summary"):
+        items.append({"label": "证据时效", "value": macro_details.get("temporal_summary")})
+    for value in macro_details.get("risks") or []:
+        items.append({"label": "风险提示", "value": value, "status": "fail"})
+    for value in macro_details.get("data_gaps") or []:
+        items.append({"label": "信息缺口", "value": value, "status": "warning"})
+    for index, link in enumerate(_normalize_evidence_links(macro_details), 1):
+        items.append({
+            "label": link.get("label") or f"来源{index}",
+            "value": link.get("title") or link.get("url") or link.get("label"),
+            "url": link.get("url"),
+            "source_type": link.get("source_type"),
+        })
+    for finding in macro_details.get("temporal_findings") or []:
+        if isinstance(finding, dict):
+            items.append({
+                "label": str(finding.get("type") or "时间线"),
+                "value": str(finding.get("description") or finding.get("summary") or ""),
+            })
+    if not items:
+        return None
+    return {
+        "section_key": "macro_evidence",
+        "title": "宏观证据",
+        "summary": macro_details.get("temporal_summary") or macro_details.get("summary") or "",
+        "items": items,
+    }
+
+
+def _report_rule_item(item: dict) -> dict:
+    title = item.get("rule_key") or item.get("rule_name") or item.get("filter_name") or "规则"
+    return {
+        "title": title,
+        "label": item.get("rule_name") or item.get("filter_name") or title,
+        "status": item.get("result") or "unknown",
+        "reason": item.get("reason") or "",
+        "rule_type": item.get("rule_type") or "",
+        "strategy_category": item.get("strategy_category") or "",
+        "details": _details_preview(item.get("details") or {}),
+    }
+
+
+def _extract_macro_details(row: dict, filter_details: List[dict]) -> dict:
+    score_details = row.get("score_details") if isinstance(row.get("score_details"), dict) else {}
+    nested = score_details.get("macro_details")
+    if isinstance(nested, dict):
+        return nested
+    for item in filter_details:
+        details = item.get("details") if isinstance(item.get("details"), dict) else {}
+        if details.get("macro_score") is not None:
+            return details
+    return {}
+
+
+def _details_preview(details: dict, max_items: int = 6) -> dict:
+    preview = {}
+    for key, value in details.items():
+        if key in {"evidence_refs", "evidence_links", "factor_citations"}:
+            continue
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            preview[key] = value
+        elif isinstance(value, list):
+            preview[key] = value[:3]
+        if len(preview) >= max_items:
+            break
+    return preview
+
+
+def _normalize_evidence_links(macro_details: dict) -> List[dict]:
+    links = []
+    raw_values = []
+    for key in ("evidence_refs", "evidence_links", "引用来源"):
+        value = macro_details.get(key)
+        if isinstance(value, list):
+            raw_values.extend(value)
+    for value in macro_details.get("source_urls") or []:
+        raw_values.append(value)
+    for item in raw_values:
+        if isinstance(item, str):
+            links.append({"label": item, "url": item, "title": item})
+        elif isinstance(item, dict):
+            if item.get("url") or item.get("label"):
+                links.append(dict(item))
+    return links
+
+
+def _macro_dimension_label(key: str) -> str:
+    labels = {
+        "company_event_strength": "公司事件强度",
+        "sector_heat": "板块热度",
+        "news_validation": "新闻验证",
+        "impact_direction": "影响方向",
+        "source_credibility": "来源可信度",
+        "freshness": "时效性",
+    }
+    return labels.get(key, key)
+
+
 class CustomListJobService:
     """Create and read custom-list web screening jobs."""
 
@@ -295,6 +485,7 @@ class CustomListJobService:
                     merged = {**item, "status_text": STATUS_TEXT_VALID, "状态": STATUS_TEXT_VALID}
             else:
                 merged = dict(item)
+            merged["report_sections"] = build_custom_list_report_sections(merged)
             merged_rows.append(merged)
 
         passed_count = len([row for row in merged_rows if row.get("status_text") == STATUS_TEXT_PASSED])
