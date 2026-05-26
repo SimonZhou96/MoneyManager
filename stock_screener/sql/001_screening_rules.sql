@@ -57,6 +57,7 @@ VALUES
     ('HK', 'daily_rise_4_45', '当日涨 4%~4.5%', 'strategy', 'technical', 'DailyRise4To45Strategizer', '{"pct_min": 4.0, "pct_max": 4.5}', 1, 170, '当日涨幅在指定区间'),
     ('HK', 'company_event_hot_sector_link', '公司时事与热点板块关联', 'strategy', 'macro', 'CompanyEventHotSectorStrategizer', '{}', 1, 210, '复用 AI 分析结果，判断公司时事是否与热点板块形成共振'),
     ('HK', 'company_event_hot_news_link', '公司时事与热点新闻关联', 'strategy', 'macro', 'CompanyEventHotNewsStrategizer', '{}', 1, 220, '复用 AI 分析结果，判断公司时事是否被热点新闻验证'),
+    ('HK', 'market_intel_macro_score_link', '市场情报宏观评分', 'strategy', 'macro', 'MarketIntelMacroScoreStrategizer', '{"threshold": 60, "refresh_policy": "cache_or_refresh", "technical_weight": 0.6, "macro_weight": 0.4}', 1, 230, '基于公司事件、热点板块与新闻证据生成时间感知宏观评分'),
 
     ('US', 'market_cap_range', '市值范围', 'filter', '', 'MarketCapFilter', '{"min_cap": 5000000000, "max_cap": null, "min_exclusive": true}', 1, 10, '按市值上下限筛选'),
     ('US', 'avg_daily_volume_range', '10天平均成交额范围', 'filter', '', 'AvgDailyVolumeFilter', '{"min_volume": 20000000, "max_volume": null, "lookback_days": 10, "metric": "turnover", "min_exclusive": true}', 1, 20, '复用每日平均交易量规则，按 K 线计算最近10天平均成交额'),
@@ -72,6 +73,7 @@ VALUES
     ('US', 'daily_rise_4_45', '当日涨 4%~4.5%', 'strategy', 'technical', 'DailyRise4To45Strategizer', '{"pct_min": 4.0, "pct_max": 4.5}', 1, 170, '当日涨幅在指定区间'),
     ('US', 'company_event_hot_sector_link', '公司时事与热点板块关联', 'strategy', 'macro', 'CompanyEventHotSectorStrategizer', '{}', 1, 210, '复用 AI 分析结果，判断公司时事是否与热点板块形成共振'),
     ('US', 'company_event_hot_news_link', '公司时事与热点新闻关联', 'strategy', 'macro', 'CompanyEventHotNewsStrategizer', '{}', 1, 220, '复用 AI 分析结果，判断公司时事是否被热点新闻验证'),
+    ('US', 'market_intel_macro_score_link', '市场情报宏观评分', 'strategy', 'macro', 'MarketIntelMacroScoreStrategizer', '{"threshold": 60, "refresh_policy": "cache_or_refresh", "technical_weight": 0.6, "macro_weight": 0.4}', 1, 230, '基于公司事件、热点板块与新闻证据生成时间感知宏观评分'),
 
     ('A', 'market_cap_range', '市值范围', 'filter', '', 'MarketCapFilter', '{"min_cap": null, "max_cap": null}', 1, 10, '按市值上下限筛选'),
     ('A', 'avg_daily_volume_range', '每日平均交易量范围', 'filter', '', 'AvgDailyVolumeFilter', '{"min_volume": null, "max_volume": null}', 1, 20, '按 K 线计算每日平均交易量'),
@@ -86,7 +88,8 @@ VALUES
     ('A', 'daily_drop_6_65', '当日跌 6%~6.5%', 'strategy', 'technical', 'DailyDrop6To65Strategizer', '{"pct_min": -6.5, "pct_max": -6.0}', 1, 160, '当日跌幅在指定区间'),
     ('A', 'daily_rise_4_45', '当日涨 4%~4.5%', 'strategy', 'technical', 'DailyRise4To45Strategizer', '{"pct_min": 4.0, "pct_max": 4.5}', 1, 170, '当日涨幅在指定区间'),
     ('A', 'company_event_hot_sector_link', '公司时事与热点板块关联', 'strategy', 'macro', 'CompanyEventHotSectorStrategizer', '{}', 1, 210, '复用 AI 分析结果，判断公司时事是否与热点板块形成共振'),
-    ('A', 'company_event_hot_news_link', '公司时事与热点新闻关联', 'strategy', 'macro', 'CompanyEventHotNewsStrategizer', '{}', 1, 220, '复用 AI 分析结果，判断公司时事是否被热点新闻验证');
+    ('A', 'company_event_hot_news_link', '公司时事与热点新闻关联', 'strategy', 'macro', 'CompanyEventHotNewsStrategizer', '{}', 1, 220, '复用 AI 分析结果，判断公司时事是否被热点新闻验证'),
+    ('A', 'market_intel_macro_score_link', '市场情报宏观评分', 'strategy', 'macro', 'MarketIntelMacroScoreStrategizer', '{"threshold": 60, "refresh_policy": "cache_or_refresh", "technical_weight": 0.6, "macro_weight": 0.4}', 1, 230, '基于公司事件、热点板块与新闻证据生成时间感知宏观评分');
 
 INSERT IGNORE INTO screening_rule_metadata
     (market, rule_key, rule_name, rule_type, strategy_category, implementation, params_json, enabled, display_order, description)

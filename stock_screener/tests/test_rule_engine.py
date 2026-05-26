@@ -301,6 +301,134 @@ class RuleEngineTest(unittest.TestCase):
         self.assertTrue(result.passed)
         self.assertEqual(result.filter_outputs[0].result, FilterResult.SKIP)
 
+    def test_requires_signal_analysis_for_referenced_company_event_rules(self):
+        metadata_items = [
+            metadata(
+                "company_event_hot_sector_link",
+                "strategy",
+                "CompanyEventHotSectorStrategizer",
+                strategy_category="macro",
+            ),
+            metadata(
+                "company_event_hot_news_link",
+                "strategy",
+                "CompanyEventHotNewsStrategizer",
+                strategy_category="macro",
+            ),
+        ]
+        engine = RuleEngine(
+            metadata_items,
+            chain({"any_enabled": ["company_event_hot_sector_link", "company_event_hot_news_link"]}),
+        )
+
+        self.assertTrue(engine.requires_signal_analysis())
+        self.assertFalse(engine.requires_market_intel_macro_score())
+        self.assertTrue(engine.requires_macro_analysis())
+
+    def test_requires_market_intel_macro_score_for_referenced_score_rule(self):
+        metadata_items = [
+            metadata(
+                "market_intel_macro_score_link",
+                "strategy",
+                "MarketIntelMacroScoreStrategizer",
+                strategy_category="macro",
+            ),
+        ]
+        engine = RuleEngine(metadata_items, chain({"ref": "market_intel_macro_score_link"}))
+
+        self.assertFalse(engine.requires_signal_analysis())
+        self.assertTrue(engine.requires_market_intel_macro_score())
+        self.assertTrue(engine.requires_macro_analysis())
+
+    def test_macro_requirement_ignores_metadata_not_referenced_by_expression(self):
+        metadata_items = [
+            metadata(
+                "company_event_hot_news_link",
+                "strategy",
+                "CompanyEventHotNewsStrategizer",
+                strategy_category="macro",
+            ),
+            metadata(
+                "market_intel_macro_score_link",
+                "strategy",
+                "MarketIntelMacroScoreStrategizer",
+                strategy_category="macro",
+            ),
+            metadata("zuoyi_signal", "strategy", "ZuoYiStrategizer", strategy_category="technical"),
+        ]
+        engine = RuleEngine(metadata_items, chain({"ref": "zuoyi_signal"}))
+
+        self.assertFalse(engine.requires_signal_analysis())
+        self.assertFalse(engine.requires_market_intel_macro_score())
+        self.assertFalse(engine.requires_macro_analysis())
+
+    def test_macro_requirement_ignores_disabled_referenced_metadata(self):
+        cases = [
+            (
+                "company_event_hot_news_link",
+                "CompanyEventHotNewsStrategizer",
+                "requires_signal_analysis",
+            ),
+            (
+                "market_intel_macro_score_link",
+                "MarketIntelMacroScoreStrategizer",
+                "requires_market_intel_macro_score",
+            ),
+        ]
+        for rule_key, implementation, method_name in cases:
+            with self.subTest(rule_key=rule_key):
+                engine = RuleEngine(
+                    [
+                        metadata(
+                            rule_key,
+                            "strategy",
+                            implementation,
+                            enabled=False,
+                            strategy_category="macro",
+                        )
+                    ],
+                    chain({"ref": rule_key}),
+                )
+
+                self.assertFalse(getattr(engine, method_name)())
+                self.assertFalse(engine.requires_macro_analysis())
+
+    def test_macro_requirement_matches_any_enabled_referenced_implementation(self):
+        metadata_items = [
+            metadata(
+                "company_event_hot_sector_link",
+                "strategy",
+                "CompanyEventHotSectorStrategizer",
+                enabled=False,
+                strategy_category="macro",
+            ),
+            metadata(
+                "company_event_hot_news_link",
+                "strategy",
+                "CompanyEventHotNewsStrategizer",
+                strategy_category="macro",
+            ),
+            metadata(
+                "market_intel_macro_score_link",
+                "strategy",
+                "MarketIntelMacroScoreStrategizer",
+                strategy_category="macro",
+            ),
+        ]
+        engine = RuleEngine(
+            metadata_items,
+            chain({
+                "and": [
+                    {"any": [{"ref": "company_event_hot_sector_link"}, {"ref": "company_event_hot_news_link"}]},
+                    {"all_enabled": ["market_intel_macro_score_link"]},
+                ]
+            }),
+        )
+
+        self.assertTrue(engine.requires_signal_analysis())
+        self.assertTrue(engine.requires_market_intel_macro_score())
+        self.assertTrue(engine.requires_macro_analysis())
+
     def test_market_intel_macro_score_rule_passes_and_returns_details(self):
         metadata_items = [
             metadata(
@@ -653,6 +781,12 @@ class RuleEngineTest(unittest.TestCase):
         self.assertIn("UNIQUE KEY uk_rule_chains_market_timeframe_key (market, timeframe, chain_key)", content)
         self.assertIn("company_event_hot_sector_link", content)
         self.assertIn("company_event_hot_news_link", content)
+        self.assertIn("market_intel_macro_score_link", content)
+        self.assertIn("MarketIntelMacroScoreStrategizer", content)
+        self.assertIn(
+            """'{"threshold": 60, "refresh_policy": "cache_or_refresh", "technical_weight": 0.6, "macro_weight": 0.4}', 1, 230""",
+            content,
+        )
         for market in ("HK", "A"):
             self.assertIn(f"('{market}', 'zuoyi_signal'", content)
             self.assertIn(f"('{market}', '*', 'default_zuoyi_and_other'", content)

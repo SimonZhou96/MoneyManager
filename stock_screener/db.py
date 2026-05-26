@@ -292,6 +292,9 @@ DEFAULT_RULE_METADATA = (
      {}, True, 210, "复用 AI 分析结果，判断公司时事是否与热点板块形成共振"),
     ("company_event_hot_news_link", "公司时事与热点新闻关联", "strategy", "macro", "CompanyEventHotNewsStrategizer",
      {}, True, 220, "复用 AI 分析结果，判断公司时事是否被热点新闻验证"),
+    ("market_intel_macro_score_link", "市场情报宏观评分", "strategy", "macro", "MarketIntelMacroScoreStrategizer",
+     {"threshold": 60, "refresh_policy": "cache_or_refresh", "technical_weight": 0.6, "macro_weight": 0.4},
+     True, 230, "基于公司事件、热点板块与新闻证据生成时间感知宏观评分"),
 ) + _technical_pattern_rule_rows()
 
 

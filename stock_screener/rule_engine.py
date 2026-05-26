@@ -505,6 +505,13 @@ class RuleEngine:
         "DailyRise4To45Strategizer",
         "TechnicalPatternStrategizer",
     }
+    SIGNAL_ANALYSIS_IMPLEMENTATIONS = {
+        "CompanyEventHotSectorStrategizer",
+        "CompanyEventHotNewsStrategizer",
+    }
+    MARKET_INTEL_MACRO_IMPLEMENTATIONS = {
+        "MarketIntelMacroScoreStrategizer",
+    }
 
     def __init__(
         self,
@@ -522,14 +529,23 @@ class RuleEngine:
     def has_rules(self) -> bool:
         return bool(self.referenced_rule_keys)
 
+    def requires_signal_analysis(self) -> bool:
+        return self._references_enabled_implementations(self.SIGNAL_ANALYSIS_IMPLEMENTATIONS)
+
+    def requires_market_intel_macro_score(self) -> bool:
+        return self._references_enabled_implementations(self.MARKET_INTEL_MACRO_IMPLEMENTATIONS)
+
     def requires_macro_analysis(self) -> bool:
+        return self.requires_signal_analysis() or self.requires_market_intel_macro_score()
+
+    def _references_enabled_implementations(self, implementations: Set[str]) -> bool:
         for rule_key in self.referenced_rule_keys:
             metadata = self.metadata_by_key.get(rule_key)
             if (
                 metadata
                 and metadata.enabled
                 and metadata.rule_type == RULE_TYPE_STRATEGY
-                and str(metadata.strategy_category or "").lower() == "macro"
+                and metadata.implementation in implementations
             ):
                 return True
         return False
