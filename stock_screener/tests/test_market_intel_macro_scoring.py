@@ -324,6 +324,27 @@ class MacroScoreParserTests(unittest.TestCase):
         self.assertEqual(result.sub_scores["news_validation"], 0.0)
         self.assertEqual(result.sub_scores["freshness"], 0.0)
 
+    def test_parser_treats_non_finite_macro_score_as_zero(self):
+        result = MacroScoreParser.parse({"macro_score": "nan"}, threshold=70)
+
+        self.assertEqual(result.macro_score, 0.0)
+        self.assertFalse(result.passed)
+
+    def test_parser_treats_non_finite_subscores_as_zero(self):
+        result = MacroScoreParser.parse(
+            {
+                "macro_score": 10,
+                "sub_scores": {
+                    "company_event_strength": float("inf"),
+                    "sector_heat": float("nan"),
+                },
+            },
+            threshold=70,
+        )
+
+        self.assertEqual(result.sub_scores["company_event_strength"], 0.0)
+        self.assertEqual(result.sub_scores["sector_heat"], 0.0)
+
     def test_parser_rejects_non_dict_payload(self):
         with self.assertRaises(ValueError):
             MacroScoreParser.parse(["not", "a", "dict"], threshold=60)
@@ -338,6 +359,8 @@ class MacroScoreParserTests(unittest.TestCase):
                         "title": "公告",
                         "published_at": published_at,
                         "tags": ("订单", "增长"),
+                        "quality": float("nan"),
+                        "weight": float("inf"),
                     }
                 ],
             },
@@ -345,13 +368,15 @@ class MacroScoreParserTests(unittest.TestCase):
         )
 
         details = result.to_details()
-        json.dumps(details, ensure_ascii=False)
+        json.dumps(details, ensure_ascii=False, allow_nan=False)
 
         self.assertEqual(
             details["evidence_refs"][0]["published_at"],
             "2026-05-26T09:30:00+00:00",
         )
         self.assertEqual(details["evidence_refs"][0]["tags"], ["订单", "增长"])
+        self.assertIsNone(details["evidence_refs"][0]["quality"])
+        self.assertIsNone(details["evidence_refs"][0]["weight"])
 
 
 class AggregateRuleScoresTests(unittest.TestCase):
@@ -391,6 +416,45 @@ class AggregateRuleScoresTests(unittest.TestCase):
         self.assertEqual(result["technical_score"], 100.0)
         self.assertEqual(result["macro_score"], -50.0)
         self.assertEqual(result["final_score"], 40.0)
+
+    def test_aggregate_ignores_macro_skip_and_error_rows(self):
+        result = aggregate_rule_scores(
+            [
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "skip",
+                    "details": {"macro_score": 90},
+                },
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "error",
+                    "details": {"macro_score": -80},
+                },
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "pass",
+                    "details": {"macro_score": 60},
+                },
+            ]
+        )
+
+        self.assertEqual(result["macro_score"], 60.0)
+        self.assertEqual(result["final_score"], 60.0)
+
+    def test_aggregate_ignores_technical_skip_and_error_rows(self):
+        result = aggregate_rule_scores(
+            [
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "skip", "details": {}},
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "error", "details": {}},
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "pass", "details": {}},
+            ]
+        )
+
+        self.assertEqual(result["technical_score"], 100.0)
+        self.assertEqual(result["final_score"], 100.0)
 
 
 if __name__ == "__main__":

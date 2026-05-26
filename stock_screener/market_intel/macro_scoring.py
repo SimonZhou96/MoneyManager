@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
@@ -89,14 +90,19 @@ def aggregate_rule_scores(
         strategy_category = str(row.get("strategy_category") or "").lower()
         details = row.get("details")
         details = details if isinstance(details, dict) else {}
+        result = str(row.get("result") or "").lower()
+        if result not in {"pass", "fail"}:
+            continue
 
         if strategy_category == "macro":
             if "macro_score" in details:
-                macro_values.append(_clamp_score(details.get("macro_score")))
+                macro_score = _coerce_score(details.get("macro_score"))
+                if macro_score is not None:
+                    macro_values.append(_clamp_score(macro_score))
             continue
 
         if rule_type == "strategy":
-            technical_values.append(100.0 if str(row.get("result") or "").lower() == "pass" else 0.0)
+            technical_values.append(100.0 if result == "pass" else 0.0)
 
     technical_score = _average(technical_values)
     macro_score = _average(macro_values)
@@ -354,9 +360,22 @@ def _dedupe_strings(values: Iterable[str]) -> List[str]:
 
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
-        return float(value)
+        result = float(value)
     except (TypeError, ValueError):
         return default
+    if not math.isfinite(result):
+        return default
+    return result
+
+
+def _coerce_score(value: Any) -> Optional[float]:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(result):
+        return None
+    return result
 
 
 def _clamp_score(value: Any) -> float:
@@ -403,6 +422,8 @@ def _json_safe(value: Any) -> Any:
         return [_json_safe(item) for item in value]
     if isinstance(value, datetime):
         return value.isoformat()
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
