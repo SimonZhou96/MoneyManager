@@ -436,7 +436,12 @@ class RuleEngineTest(unittest.TestCase):
                 "strategy",
                 "MarketIntelMacroScoreStrategizer",
                 strategy_category="macro",
-                params={"threshold": 60, "refresh_policy": "cache_or_refresh"},
+                params={
+                    "threshold": 60,
+                    "refresh_policy": "cache_or_refresh",
+                    "technical_weight": 0.7,
+                    "macro_weight": 0.3,
+                },
             )
         ]
         engine = RuleEngine(metadata_items, chain({"ref": "market_intel_macro_score_link"}), registry=RuleRegistry.default())
@@ -455,6 +460,8 @@ class RuleEngineTest(unittest.TestCase):
         self.assertEqual(output.details["temporal_summary"], "没有较新事件反转信号")
         self.assertEqual(output.details["model"], "fake")
         self.assertIn("evidence_digest", output.details)
+        self.assertEqual(output.details["technical_weight"], 0.7)
+        self.assertEqual(output.details["macro_weight"], 0.3)
         self.assertEqual(scorer.calls[0][1], 60.0)
 
     def test_market_intel_macro_score_missing_service_skips(self):
@@ -610,6 +617,40 @@ class RuleEngineTest(unittest.TestCase):
                 self.assertEqual(output.result, FilterResult.ERROR)
                 self.assertIn("refresh_policy", output.reason)
 
+    def test_market_intel_macro_score_invalid_weight_returns_error(self):
+        cases = [
+            {"technical_weight": "bad"},
+            {"technical_weight": True},
+            {"macro_weight": float("inf")},
+            {"macro_weight": None},
+        ]
+        for params in cases:
+            with self.subTest(params=params):
+                metadata_items = [
+                    metadata(
+                        "market_intel_macro_score_link",
+                        "strategy",
+                        "MarketIntelMacroScoreStrategizer",
+                        strategy_category="macro",
+                        params=params,
+                    )
+                ]
+                engine = RuleEngine(
+                    metadata_items,
+                    chain({"ref": "market_intel_macro_score_link"}),
+                    registry=RuleRegistry.default(),
+                )
+                context = FilterContext(check_date=date(2026, 5, 26), market="A")
+                context.set_cache("market_intel_service", FakeMarketIntelService())
+                context.set_cache("macro_score_scorer", FakeMacroScorer())
+
+                result = engine.evaluate_stock(StockInfo(market="A", code="SZ.000001", name="平安银行"), context)
+
+                self.assertFalse(result.passed)
+                output = result.filter_outputs[0]
+                self.assertEqual(output.result, FilterResult.ERROR)
+                self.assertRegex(output.reason, "technical_weight|macro_weight")
+
     def test_market_intel_macro_score_default_params_are_valid(self):
         metadata_items = [
             metadata(
@@ -630,6 +671,8 @@ class RuleEngineTest(unittest.TestCase):
         output = result.filter_outputs[0]
         self.assertEqual(output.result, FilterResult.PASS)
         self.assertEqual(output.details["threshold"], 60.0)
+        self.assertEqual(output.details["technical_weight"], 0.6)
+        self.assertEqual(output.details["macro_weight"], 0.4)
 
     def test_market_intel_macro_score_no_scoreable_evidence_skips_with_gaps(self):
         metadata_items = [

@@ -11,13 +11,21 @@ from typing import Optional
 if __package__:
     from .filters import FilterContext, StockInfo
     from .market_intel.evidence import EvidencePackBuilder
-    from .market_intel.macro_scoring import MacroEvidencePreprocessor
+    from .market_intel.macro_scoring import (
+        DEFAULT_MACRO_WEIGHT,
+        DEFAULT_TECHNICAL_WEIGHT,
+        MacroEvidencePreprocessor,
+    )
     from .strategizers import Strategizer, StrategizerOutput
     from .signal_analysis.models import SignalAnalysisResult
 else:
     from filters import FilterContext, StockInfo
     from market_intel.evidence import EvidencePackBuilder
-    from market_intel.macro_scoring import MacroEvidencePreprocessor
+    from market_intel.macro_scoring import (
+        DEFAULT_MACRO_WEIGHT,
+        DEFAULT_TECHNICAL_WEIGHT,
+        MacroEvidencePreprocessor,
+    )
     from strategizers import Strategizer, StrategizerOutput
     from signal_analysis.models import SignalAnalysisResult
 
@@ -57,6 +65,18 @@ def _validate_threshold(value) -> float:
     if not math.isfinite(threshold):
         raise ValueError("MarketIntelMacroScoreStrategizer threshold must be finite")
     return threshold
+
+
+def _validate_weight(name: str, value) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"MarketIntelMacroScoreStrategizer {name} must be a finite number, not bool")
+    try:
+        weight = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"MarketIntelMacroScoreStrategizer {name} must be a finite number")
+    if not math.isfinite(weight):
+        raise ValueError(f"MarketIntelMacroScoreStrategizer {name} must be finite")
+    return weight
 
 
 def _validate_refresh_policy(value) -> str:
@@ -154,12 +174,16 @@ class MarketIntelMacroScoreStrategizer(Strategizer):
         self,
         threshold=60,
         refresh_policy: str = "cache_or_refresh",
+        technical_weight=DEFAULT_TECHNICAL_WEIGHT,
+        macro_weight=DEFAULT_MACRO_WEIGHT,
         name: str = "MarketIntelMacroScoreStrategizer",
         enabled: bool = True,
     ):
         super().__init__(name=name, enabled=enabled)
         self.threshold = _validate_threshold(threshold)
         self.refresh_policy = _validate_refresh_policy(refresh_policy)
+        self.technical_weight = _validate_weight("technical_weight", technical_weight)
+        self.macro_weight = _validate_weight("macro_weight", macro_weight)
 
     def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
         service = context.get_cache(_MARKET_INTEL_SERVICE_KEY)
@@ -216,6 +240,8 @@ class MarketIntelMacroScoreStrategizer(Strategizer):
                         "data_gaps": data_gaps,
                         "temporal_findings": temporal_findings,
                         "evidence_digest": evidence_digest,
+                        "technical_weight": self.technical_weight,
+                        "macro_weight": self.macro_weight,
                     },
                 )
 
@@ -228,6 +254,8 @@ class MarketIntelMacroScoreStrategizer(Strategizer):
                 "source_status": source_status,
                 "data_gaps": data_gaps,
                 "temporal_findings": temporal_findings,
+                "technical_weight": self.technical_weight,
+                "macro_weight": self.macro_weight,
             })
             is_pass = bool(score.passed)
             return StrategizerOutput(

@@ -331,6 +331,8 @@ class RuleRegistry:
             lambda params: MarketIntelMacroScoreStrategizer(
                 threshold=params.get("threshold", 60),
                 refresh_policy=params.get("refresh_policy", "cache_or_refresh"),
+                technical_weight=params.get("technical_weight", 0.6),
+                macro_weight=params.get("macro_weight", 0.4),
             ),
         )
         return registry
