@@ -1,7 +1,15 @@
 import json
 import unittest
+from datetime import datetime
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from db import MarketDatabase
+
+
+SQL_DIR = Path(__file__).resolve().parents[1] / "sql"
 
 
 class FakeCursor:
@@ -39,7 +47,7 @@ class FakeConnection:
 
 class MarketIntelRepositoryTests(unittest.TestCase):
     def test_schema_file_mentions_all_three_tables(self):
-        with open("sql/017_market_intel.sql", "r", encoding="utf-8") as f:
+        with open(SQL_DIR / "017_market_intel.sql", "r", encoding="utf-8") as f:
             sql = f.read()
 
         for table in [
@@ -51,6 +59,7 @@ class MarketIntelRepositoryTests(unittest.TestCase):
         self.assertIn("raw_json JSON", sql)
         self.assertIn("bundle_json JSON", sql)
         self.assertIn("source_status_json JSON", sql)
+        self.assertIn("event_time DATETIME(6) NULL", sql)
 
     def test_init_market_intel_schema_executes_deployment_sql(self):
         conn = FakeConnection()
@@ -132,9 +141,92 @@ class MarketIntelRepositoryTests(unittest.TestCase):
 
         sql, values = conn.cursor_obj.executemany_calls[-1]
         self.assertIn("market_intel_items", sql)
+        self.assertIn("event_time", sql)
         raw_json = values[0][-1]
         self.assertIn("政策利好", raw_json)
         self.assertEqual(json.loads(raw_json)["摘要"], "中文摘要")
+
+    def test_upsert_market_intel_items_persists_event_time(self):
+        conn = FakeConnection()
+        db = MarketDatabase.__new__(MarketDatabase)
+        db.conn = conn
+
+        db.upsert_market_intel_items([
+            {
+                "market": "US",
+                "code": "AAPL",
+                "item_type": "market_news",
+                "source": "fixture",
+                "title": "Apple event",
+                "event_time": "2026-05-26T09:00:00+00:00",
+                "fetched_at": "2026-05-26T10:00:00+00:00",
+                "dedupe_key": "aapl-event",
+            }
+        ])
+
+        sql, values = conn.cursor_obj.executemany_calls[-1]
+        self.assertIn("event_time", sql)
+        self.assertEqual(values[0][9], datetime(2026, 5, 26, 9, 0, 0))
+
+    def test_list_market_intel_items_returns_and_orders_by_event_time(self):
+        conn = FakeConnection()
+        conn.cursor_obj.rows = [(
+            "stock",
+            "US",
+            "AAPL",
+            "fixture",
+            "fixture",
+            "market_news",
+            "Apple event",
+            "",
+            "https://example.com/aapl",
+            datetime(2026, 5, 26, 9, 0, 0),
+            datetime(2026, 5, 25, 9, 0, 0),
+            '{"source":"fixture"}',
+            datetime(2026, 5, 26, 10, 0, 0),
+            datetime(2026, 5, 26, 10, 15, 0),
+            0,
+            "aapl-event",
+        )]
+        db = MarketDatabase.__new__(MarketDatabase)
+        db.conn = conn
+
+        rows = db.list_market_intel_items(market="US", code="AAPL")
+
+        sql, _ = conn.cursor_obj.executed[-1]
+        self.assertIn("event_time", sql)
+        self.assertIn("ORDER BY COALESCE(event_time, published_at, fetched_at) DESC", sql)
+        self.assertEqual(rows[0]["event_time"], datetime(2026, 5, 26, 9, 0, 0))
+
+    def test_in_memory_repository_sorts_by_event_time_first(self):
+        from market_intel.repository import InMemoryMarketIntelRepository
+
+        repo = InMemoryMarketIntelRepository()
+        repo.upsert_items([
+            {
+                "market": "US",
+                "code": "AAPL",
+                "provider": "fixture",
+                "dedupe_key": "published",
+                "title": "Published fallback",
+                "published_at": "2026-05-25T09:00:00+00:00",
+                "fetched_at": "2026-05-25T10:00:00+00:00",
+            },
+            {
+                "market": "US",
+                "code": "AAPL",
+                "provider": "fixture",
+                "dedupe_key": "event",
+                "title": "Event time wins",
+                "event_time": "2026-05-26T09:00:00+00:00",
+                "published_at": "2026-05-20T09:00:00+00:00",
+                "fetched_at": "2026-05-20T10:00:00+00:00",
+            },
+        ])
+
+        rows = repo.list_items(market="US", code="AAPL")
+
+        self.assertEqual([row["title"] for row in rows], ["Event time wins", "Published fallback"])
 
 
 if __name__ == "__main__":

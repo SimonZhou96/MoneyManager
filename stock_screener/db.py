@@ -2585,6 +2585,20 @@ class MarketDatabase:
         with self.conn.cursor() as cursor:
             for statement in statements:
                 cursor.execute(statement)
+            self._ensure_market_intel_schema_migrations(cursor)
+
+    def _ensure_market_intel_schema_migrations(self, cursor) -> None:
+        market_intel_alters = [
+            ("event_time", "ALTER TABLE market_intel_items ADD COLUMN event_time DATETIME(6) NULL AFTER url"),
+        ]
+        for column, alter_sql in market_intel_alters:
+            try:
+                cursor.execute(f"SELECT `{column}` FROM market_intel_items LIMIT 1")
+            except Exception:
+                try:
+                    cursor.execute(alter_sql)
+                except Exception:
+                    pass
 
     def upsert_market_intel_items(self, items: Iterable[dict]) -> None:
         rows = []
@@ -2609,6 +2623,7 @@ class MarketDatabase:
                 str(item.get("title") or "").strip(),
                 item.get("summary"),
                 str(item.get("url") or "").strip(),
+                _mysql_datetime_or_none(item.get("event_time")),
                 _mysql_datetime_or_none(item.get("published_at")),
                 fetched_at,
                 _mysql_datetime_or_none(item.get("expires_at")) or fetched_at,
@@ -2621,14 +2636,15 @@ class MarketDatabase:
         sql = """
             INSERT INTO market_intel_items
                 (scope_type, market, code, source, provider, item_type, title, summary, url,
-                 published_at, fetched_at, expires_at, is_stale, dedupe_key, raw_json)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 event_time, published_at, fetched_at, expires_at, is_stale, dedupe_key, raw_json)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
                 source=VALUES(source),
                 item_type=VALUES(item_type),
                 title=VALUES(title),
                 summary=VALUES(summary),
                 url=VALUES(url),
+                event_time=VALUES(event_time),
                 published_at=VALUES(published_at),
                 fetched_at=VALUES(fetched_at),
                 expires_at=VALUES(expires_at),
@@ -2649,14 +2665,14 @@ class MarketDatabase:
     ) -> List[dict]:
         sql = """
             SELECT scope_type, market, code, source, provider, item_type, title, summary, url,
-                   published_at, raw_json, fetched_at, expires_at, is_stale, dedupe_key
+                   event_time, published_at, raw_json, fetched_at, expires_at, is_stale, dedupe_key
             FROM market_intel_items
             WHERE scope_type=%s AND market=%s AND code=%s
         """
         params: List[Any] = [scope_type, market, code or ""]
         if not include_stale:
             sql += " AND is_stale=0"
-        sql += " ORDER BY COALESCE(published_at, fetched_at) DESC, id DESC LIMIT %s"
+        sql += " ORDER BY COALESCE(event_time, published_at, fetched_at) DESC, id DESC LIMIT %s"
         params.append(max(1, int(limit)))
         with self.conn.cursor() as cursor:
             cursor.execute(sql, tuple(params))
@@ -2672,12 +2688,13 @@ class MarketDatabase:
                 "title": row[6],
                 "summary": row[7],
                 "url": row[8],
-                "published_at": row[9],
-                "raw_json": _decode_json_field(row[10], {}),
-                "fetched_at": row[11],
-                "expires_at": row[12],
-                "is_stale": bool(row[13]),
-                "dedupe_key": row[14],
+                "event_time": row[9],
+                "published_at": row[10],
+                "raw_json": _decode_json_field(row[11], {}),
+                "fetched_at": row[12],
+                "expires_at": row[13],
+                "is_stale": bool(row[14]),
+                "dedupe_key": row[15],
             }
             for row in rows
         ]

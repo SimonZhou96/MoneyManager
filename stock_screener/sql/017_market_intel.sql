@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS market_intel_items (
     title VARCHAR(512) NOT NULL DEFAULT '',
     summary TEXT NULL,
     url VARCHAR(1024) NOT NULL DEFAULT '',
+    event_time DATETIME(6) NULL,
     published_at DATETIME(6) NULL,
     raw_json JSON NULL,
     fetched_at DATETIME(6) NOT NULL,

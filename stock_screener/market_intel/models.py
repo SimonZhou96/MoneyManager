@@ -35,7 +35,7 @@ def _datetime_sort_timestamp(value: Optional[datetime]) -> float:
 
 
 def _item_sort_timestamp(item: "IntelItem") -> float:
-    return _datetime_sort_timestamp(item.published_at or item.fetched_at)
+    return _datetime_sort_timestamp(item.event_time or item.published_at or item.fetched_at)
 
 
 @dataclass
@@ -52,6 +52,7 @@ class IntelItem:
     code: str = ""
     summary: str = ""
     url: str = ""
+    event_time: Optional[datetime] = None
     published_at: Optional[datetime] = None
     raw_json: Dict[str, Any] = field(default_factory=dict)
     is_stale: bool = False
@@ -67,6 +68,7 @@ class IntelItem:
             "title": self.title,
             "summary": self.summary,
             "url": self.url,
+            "event_time": datetime_to_json(self.event_time),
             "published_at": datetime_to_json(self.published_at),
             "raw_json": dict(self.raw_json),
             "fetched_at": datetime_to_json(self.fetched_at),
@@ -87,6 +89,7 @@ class IntelItem:
             title=data["title"],
             summary=data.get("summary") or "",
             url=data.get("url") or "",
+            event_time=parse_datetime(data.get("event_time")),
             published_at=parse_datetime(data.get("published_at")),
             raw_json=dict(data.get("raw_json") or {}),
             fetched_at=parse_datetime(data.get("fetched_at")),

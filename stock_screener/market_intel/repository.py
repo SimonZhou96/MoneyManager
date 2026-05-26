@@ -97,7 +97,7 @@ class InMemoryMarketIntelRepository:
             if not include_stale and bool(item.get("is_stale")):
                 continue
             rows.append(deepcopy(item))
-        rows.sort(key=lambda item: str(item.get("published_at") or item.get("fetched_at") or ""), reverse=True)
+        rows.sort(key=lambda item: str(item.get("event_time") or item.get("published_at") or item.get("fetched_at") or ""), reverse=True)
         return rows[: max(1, int(limit))]
 
     def upsert_bundle(self, row: dict) -> None:

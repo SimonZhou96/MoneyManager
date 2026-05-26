@@ -1,5 +1,9 @@
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from market_intel.models import (
     DataSourceStatus,
@@ -12,6 +16,28 @@ from market_intel.providers.base import dedupe_items, group_items, ttl_for_item_
 
 
 class MarketIntelModelTests(unittest.TestCase):
+    def test_intel_item_round_trip_preserves_event_time(self):
+        event_time = datetime(2026, 5, 26, 9, 0, 0, tzinfo=timezone.utc)
+        item = IntelItem(
+            scope_type="stock",
+            market="US",
+            code="AAPL",
+            source="news",
+            provider="fixture",
+            item_type="market_news",
+            title="Apple product event",
+            fetched_at=datetime(2026, 5, 26, 10, 0, 0, tzinfo=timezone.utc),
+            expires_at=datetime(2026, 5, 26, 10, 15, 0, tzinfo=timezone.utc),
+            dedupe_key="aapl-event",
+            event_time=event_time,
+        )
+
+        payload = item.to_dict()
+        restored = IntelItem.from_dict(payload)
+
+        self.assertEqual(payload["event_time"], "2026-05-26T09:00:00+00:00")
+        self.assertEqual(restored.event_time, event_time)
+
     def test_intel_item_round_trip_preserves_metadata(self):
         item = IntelItem(
             scope_type="stock",
@@ -89,6 +115,58 @@ class MarketIntelModelTests(unittest.TestCase):
         )
         self.assertEqual(payload["source_status"]["provider-a"]["item_count"], 2)
         self.assertFalse(payload["source_status"]["provider-a"]["stale"])
+
+    def test_stock_intel_bundle_groups_sort_by_event_time_before_other_timestamps(self):
+        event_time_item = IntelItem(
+            scope_type="stock",
+            market="US",
+            code="AAPL",
+            source="news",
+            provider="provider-a",
+            item_type="market_news",
+            title="Event time wins",
+            event_time=datetime(2026, 5, 26, 9, 0, 0, tzinfo=timezone.utc),
+            published_at=datetime(2026, 5, 20, 9, 0, 0, tzinfo=timezone.utc),
+            fetched_at=datetime(2026, 5, 20, 10, 0, 0, tzinfo=timezone.utc),
+            expires_at=datetime(2026, 5, 26, 10, 15, 0, tzinfo=timezone.utc),
+            dedupe_key="event-time",
+        )
+        published_at_item = IntelItem(
+            scope_type="stock",
+            market="US",
+            code="AAPL",
+            source="news",
+            provider="provider-a",
+            item_type="market_news",
+            title="Published fallback",
+            published_at=datetime(2026, 5, 25, 9, 0, 0, tzinfo=timezone.utc),
+            fetched_at=datetime(2026, 5, 25, 10, 0, 0, tzinfo=timezone.utc),
+            expires_at=datetime(2026, 5, 26, 10, 15, 0, tzinfo=timezone.utc),
+            dedupe_key="published",
+        )
+        fetched_at_item = IntelItem(
+            scope_type="stock",
+            market="US",
+            code="AAPL",
+            source="news",
+            provider="provider-a",
+            item_type="market_news",
+            title="Fetched fallback",
+            fetched_at=datetime(2026, 5, 24, 10, 0, 0, tzinfo=timezone.utc),
+            expires_at=datetime(2026, 5, 26, 10, 15, 0, tzinfo=timezone.utc),
+            dedupe_key="fetched",
+        )
+
+        payload = StockIntelBundle(
+            market="US",
+            code="AAPL",
+            items=[fetched_at_item, published_at_item, event_time_item],
+        ).to_dict()
+
+        self.assertEqual(
+            [item["title"] for item in payload["groups"]["market_news"]],
+            ["Event time wins", "Published fallback", "Fetched fallback"],
+        )
 
     def test_evidence_pack_carries_data_gaps_and_citations(self):
         pack = EvidencePack(
