@@ -460,7 +460,7 @@ def _aggregate_scores(
     macro_weight: float,
 ) -> Optional[float]:
     if technical_score is not None and macro_score is not None:
-        return technical_score * technical_weight + macro_score * macro_weight
+        return _clamp_score(technical_score * technical_weight + macro_score * macro_weight)
     if technical_score is not None:
         return technical_score
     if macro_score is not None:

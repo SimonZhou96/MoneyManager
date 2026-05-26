@@ -455,6 +455,44 @@ class AggregateRuleScoresTests(unittest.TestCase):
         self.assertEqual(result["macro_score"], -50.0)
         self.assertEqual(result["final_score"], 40.0)
 
+    def test_aggregate_clamps_final_score_above_upper_bound(self):
+        result = aggregate_rule_scores(
+            [
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "pass", "details": {}},
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "pass",
+                    "details": {"macro_score": 100},
+                },
+            ],
+            technical_weight=2,
+            macro_weight=2,
+        )
+
+        self.assertEqual(result["technical_score"], 100.0)
+        self.assertEqual(result["macro_score"], 100.0)
+        self.assertEqual(result["final_score"], 100.0)
+
+    def test_aggregate_clamps_final_score_below_lower_bound(self):
+        result = aggregate_rule_scores(
+            [
+                {"rule_type": "strategy", "strategy_category": "technical", "result": "fail", "details": {}},
+                {
+                    "rule_type": "strategy",
+                    "strategy_category": "macro",
+                    "result": "fail",
+                    "details": {"macro_score": -100},
+                },
+            ],
+            technical_weight=1,
+            macro_weight=2,
+        )
+
+        self.assertEqual(result["technical_score"], 0.0)
+        self.assertEqual(result["macro_score"], -100.0)
+        self.assertEqual(result["final_score"], -100.0)
+
     def test_aggregate_ignores_macro_skip_and_error_rows(self):
         result = aggregate_rule_scores(
             [
