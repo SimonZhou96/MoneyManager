@@ -32,6 +32,14 @@ class WebPlatformTests(unittest.TestCase):
         self.assertIn("market_intel_service", content)
         self.assertIn("macro_score_scorer", content)
 
+    def test_screening_results_api_exposes_score_fields(self):
+        db_source = (Path(__file__).resolve().parents[1] / "db.py").read_text(encoding="utf-8")
+        main_source = (Path(__file__).resolve().parents[1] / "web" / "main.py").read_text(encoding="utf-8")
+
+        for field in ("technical_score", "macro_score", "final_score", "score_details"):
+            self.assertIn(field, db_source)
+            self.assertIn(field, main_source)
+
     def test_password_hash_round_trip(self):
         hashed = hash_password("secret-password")
         self.assertTrue(verify_password("secret-password", hashed))

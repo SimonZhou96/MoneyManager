@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from filters import StockInfo, StockFilterResult
 from filters import FilterOutput, FilterResult
+from rule_engine import RuleMetadata
 from strategizers import StrategizerOutput, StrategyChainResult
 import api.screen_service as screen_service
 from api.screen_service import evaluate_strategy_gate
@@ -33,6 +34,15 @@ class ScreenServiceStrategyGateTest(unittest.TestCase):
         self.assertIn("build_market_intel_service(mysql_config, enabled=True)", content)
         self.assertIn("market_intel_service", content)
         self.assertIn("macro_score_scorer", content)
+
+    def test_screen_service_writes_score_summary_from_rule_details(self):
+        content = (Path(__file__).resolve().parents[1] / "api" / "screen_service.py").read_text(encoding="utf-8")
+
+        self.assertIn("aggregate_rule_scores", content)
+        self.assertIn("technical_score", content)
+        self.assertIn("macro_score", content)
+        self.assertIn("final_score", content)
+        self.assertIn("strategy_category", content)
 
     def test_zuoyi_and_other_strategy_passes(self):
         result = make_strategy_result([
@@ -178,6 +188,33 @@ class ScreenServiceStrategyGateTest(unittest.TestCase):
                 chain_key = "fake_chain"
 
             chain_config = ChainConfig()
+            metadata = [
+                RuleMetadata(
+                    market="HK",
+                    rule_key="zuoyi_signal",
+                    rule_name="左一战法",
+                    rule_type="strategy",
+                    strategy_category="technical",
+                    implementation="ZuoYiStrategizer",
+                ),
+                RuleMetadata(
+                    market="HK",
+                    rule_key="ema_breakout",
+                    rule_name="EMA突破",
+                    rule_type="strategy",
+                    strategy_category="technical",
+                    implementation="EMABreakoutStrategizer",
+                ),
+                RuleMetadata(
+                    market="HK",
+                    rule_key="market_intel_macro_score_link",
+                    rule_name="市场情报宏观评分",
+                    rule_type="strategy",
+                    strategy_category="macro",
+                    implementation="MarketIntelMacroScoreStrategizer",
+                ),
+            ]
+            metadata_by_key = {item.rule_key: item for item in metadata}
 
             def has_rules(self):
                 return True
@@ -210,6 +247,12 @@ class ScreenServiceStrategyGateTest(unittest.TestCase):
                             result=FilterResult.PASS,
                             reason="pass",
                         ),
+                        FilterOutput(
+                            filter_name="MarketIntelMacroScoreStrategizer",
+                            result=FilterResult.PASS,
+                            reason="macro pass",
+                            details={"macro_score": 50, "technical_weight": 0.6, "macro_weight": 0.4},
+                        ),
                     ],
                 )
 
@@ -229,8 +272,13 @@ class ScreenServiceStrategyGateTest(unittest.TestCase):
         self.assertTrue(record["is_passed"])
         self.assertEqual(
             [item["filter_name"] for item in record["filter_details"]],
-            ["ZuoYiStrategizer", "EMABreakoutStrategizer"],
+            ["ZuoYiStrategizer", "EMABreakoutStrategizer", "MarketIntelMacroScoreStrategizer"],
         )
+        self.assertEqual(record["technical_score"], 100.0)
+        self.assertEqual(record["macro_score"], 50.0)
+        self.assertEqual(record["final_score"], 80.0)
+        self.assertEqual(record["score_details"]["technical_weight"], 0.6)
+        self.assertEqual(record["filter_details"][2]["strategy_category"], "macro")
 
 
 if __name__ == "__main__":

@@ -473,6 +473,10 @@ class MarketDatabase:
                     check_date DATE NOT NULL,
                     is_passed TINYINT(1) NOT NULL DEFAULT 0,
                     filter_summary VARCHAR(512) NULL,
+                    technical_score DECIMAL(8,2) NULL,
+                    macro_score DECIMAL(8,2) NULL,
+                    final_score DECIMAL(8,2) NULL,
+                    score_details JSON NULL,
                     filter_details JSON NULL,
                     sector VARCHAR(128) NULL,
                     industry VARCHAR(128) NULL,
@@ -491,6 +495,7 @@ class MarketDatabase:
                 """
             )
             self._ensure_screening_results_task_scope(cursor)
+            self._ensure_screening_result_score_columns(cursor)
 
             # watchlist_cache 表（自选股缓存，Futu 失败时兜底）
             cursor.execute(
@@ -561,6 +566,34 @@ class MarketDatabase:
             )
         except Exception:
             pass
+
+    def _ensure_screening_result_score_columns(self, cursor):
+        score_alters = [
+            (
+                "technical_score",
+                "ALTER TABLE screening_results ADD COLUMN technical_score DECIMAL(8,2) NULL AFTER filter_summary",
+            ),
+            (
+                "macro_score",
+                "ALTER TABLE screening_results ADD COLUMN macro_score DECIMAL(8,2) NULL AFTER technical_score",
+            ),
+            (
+                "final_score",
+                "ALTER TABLE screening_results ADD COLUMN final_score DECIMAL(8,2) NULL AFTER macro_score",
+            ),
+            (
+                "score_details",
+                "ALTER TABLE screening_results ADD COLUMN score_details JSON NULL AFTER final_score",
+            ),
+        ]
+        for column, alter_sql in score_alters:
+            try:
+                cursor.execute(f"SELECT `{column}` FROM screening_results LIMIT 1")
+            except Exception:
+                try:
+                    cursor.execute(alter_sql)
+                except Exception:
+                    pass
 
     def init_web_schema(self):
         """初始化 Web、Agent、K 线缓存和 artifact 相关表。"""
@@ -1179,12 +1212,15 @@ class MarketDatabase:
         for item in results:
             fd = item.get("filter_details")
             fd_str = json.dumps(fd, ensure_ascii=False) if isinstance(fd, (dict, list)) else fd
+            score_details = _json_or_none(item.get("score_details") or {})
             task_id = item.get("task_id")
             rows.append((
                 task_id,
                 item.get("market"), str(item.get("code") or "").strip(), item.get("name"),
                 check_date, 1 if item.get("is_passed") else 0,
-                item.get("filter_summary"), fd_str,
+                item.get("filter_summary"),
+                item.get("technical_score"), item.get("macro_score"), item.get("final_score"), score_details,
+                fd_str,
                 item.get("sector"), item.get("industry"),
                 item.get("market_cap"), item.get("pe_ratio"), item.get("close_price"),
             ))
@@ -1193,13 +1229,19 @@ class MarketDatabase:
             return
         sql = """
             INSERT INTO screening_results
-                (task_id, market, code, name, check_date, is_passed, filter_summary, filter_details,
+                (task_id, market, code, name, check_date, is_passed, filter_summary,
+                 technical_score, macro_score, final_score, score_details, filter_details,
                  sector, industry, market_cap, pe_ratio, close_price)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
                 task_id=VALUES(task_id),
                 name=VALUES(name), is_passed=VALUES(is_passed),
-                filter_summary=VALUES(filter_summary), filter_details=VALUES(filter_details),
+                filter_summary=VALUES(filter_summary),
+                technical_score=VALUES(technical_score),
+                macro_score=VALUES(macro_score),
+                final_score=VALUES(final_score),
+                score_details=VALUES(score_details),
+                filter_details=VALUES(filter_details),
                 sector=VALUES(sector), industry=VALUES(industry),
                 market_cap=VALUES(market_cap), pe_ratio=VALUES(pe_ratio),
                 close_price=VALUES(close_price)
@@ -1554,6 +1596,7 @@ class MarketDatabase:
             conditions.append("is_passed=1")
         sql = """
             SELECT market, code, name, check_date, is_passed, filter_summary,
+                   technical_score, macro_score, final_score, score_details,
                    filter_details, sector, industry, market_cap, pe_ratio, close_price,
                    created_at
             FROM screening_results
@@ -1573,13 +1616,17 @@ class MarketDatabase:
                 "check_date": str(row[3]) if row[3] else None,
                 "is_passed": bool(row[4]),
                 "filter_summary": row[5],
-                "filter_details": _decode_json_field(row[6], []),
-                "sector": row[7],
-                "industry": row[8],
-                "market_cap": float(row[9]) if row[9] is not None else None,
-                "pe_ratio": float(row[10]) if row[10] is not None else None,
-                "close_price": float(row[11]) if row[11] is not None else None,
-                "created_at": str(row[12]) if row[12] else None,
+                "technical_score": float(row[6]) if row[6] is not None else None,
+                "macro_score": float(row[7]) if row[7] is not None else None,
+                "final_score": float(row[8]) if row[8] is not None else None,
+                "score_details": _decode_json_field(row[9], {}),
+                "filter_details": _decode_json_field(row[10], []),
+                "sector": row[11],
+                "industry": row[12],
+                "market_cap": float(row[13]) if row[13] is not None else None,
+                "pe_ratio": float(row[14]) if row[14] is not None else None,
+                "close_price": float(row[15]) if row[15] is not None else None,
+                "created_at": str(row[16]) if row[16] else None,
             }
             for row in rows
         ]

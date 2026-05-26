@@ -75,6 +75,8 @@ app.include_router(quant_router)
 app.include_router(market_intel_router)
 app.include_router(stock_terminal_router)
 
+SCREENING_RESULT_SCORE_FIELDS = ("technical_score", "macro_score", "final_score", "score_details")
+
 
 class LoginRequest(BaseModel):
     username: str
@@ -521,13 +523,17 @@ def get_task_results(
     else:
         total_count = db.count_screening_results_by_task(task_id)
         passed_count = db.count_screening_results_by_task(task_id, passed_only=True)
+    rows = db.get_screening_results_by_task(
+        task_id,
+        limit=limit,
+        offset=offset,
+        passed_only=passed_only,
+    )
+    for row in rows:
+        for field in SCREENING_RESULT_SCORE_FIELDS:
+            row.setdefault(field, {} if field == "score_details" else None)
     return {
-        "rows": db.get_screening_results_by_task(
-            task_id,
-            limit=limit,
-            offset=offset,
-            passed_only=passed_only,
-        ),
+        "rows": rows,
         "total_count": total_count,
         "passed_count": passed_count,
         "uploaded_result_scope": task.get("uploaded_result_scope") if task else None,

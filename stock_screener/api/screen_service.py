@@ -26,6 +26,7 @@ from filters import (
 )
 from kline_fetcher import KlineFetcherFactory
 from market import normalize_market, market_label
+from market_intel.macro_scoring import aggregate_rule_scores
 from rule_engine import RuleEngine, RuleRegistry, RuleRepository
 from strategizers import (
     StrategizerChain,
@@ -254,6 +255,34 @@ def _build_macro_signal_row(stock: StockInfo, market: str) -> ScreeningSignalRow
         conditions_met="",
         raw={},
     )
+
+
+def _rule_metadata_for_output(rule_engine: Optional[RuleEngine], output: FilterOutput):
+    if rule_engine is None:
+        return None
+    details = output.details if isinstance(output.details, dict) else {}
+    pattern_key = str(details.get("pattern_key") or "")
+    if output.filter_name == "TechnicalPatternStrategizer" and pattern_key:
+        metadata = getattr(rule_engine, "metadata_by_key", {}).get(pattern_key)
+        if metadata and metadata.implementation == "TechnicalPatternStrategizer":
+            return metadata
+    for metadata in getattr(rule_engine, "metadata", []):
+        if metadata.implementation == output.filter_name:
+            return metadata
+    return None
+
+
+def _score_weights_from_filter_details(filter_details: list[dict]) -> dict:
+    for item in filter_details:
+        details = item.get("details") if isinstance(item, dict) else {}
+        if not isinstance(details, dict):
+            continue
+        if "macro_score" in details:
+            return {
+                "technical_weight": details.get("technical_weight", 0.6),
+                "macro_weight": details.get("macro_weight", 0.4),
+            }
+    return {}
 
 
 def run_screening_task(
@@ -617,12 +646,20 @@ def run_screening_task(
             filter_details = []
             for o in result.filter_outputs:
                 details = _json_safe_value(o.details or {})
+                metadata = _rule_metadata_for_output(rule_engine, o)
                 filter_details.append({
+                    "rule_key": metadata.rule_key if metadata else o.filter_name,
+                    "rule_type": metadata.rule_type if metadata else "",
+                    "strategy_category": metadata.strategy_category if metadata else "",
                     "filter_name": o.filter_name,
                     "result": o.result.value,
                     "reason": o.reason or "",
                     "details": details,
                 })
+            score_summary = aggregate_rule_scores(
+                filter_details,
+                **_score_weights_from_filter_details(filter_details),
+            )
             
             db_record = {
                 "task_id": task_id,
@@ -632,6 +669,10 @@ def run_screening_task(
                 "is_passed": result.passed,
                 "filter_summary": result.get_summary(),
                 "filter_details": filter_details,
+                "technical_score": score_summary.get("technical_score"),
+                "macro_score": score_summary.get("macro_score"),
+                "final_score": score_summary.get("final_score"),
+                "score_details": score_summary,
                 "sector": stock.sector,
                 "industry": stock.industry,
                 "market_cap": stock.market_cap,
