@@ -589,9 +589,8 @@ class CodexResponsesLLMProvider(LLMProvider):
             user_prompt=user_prompt,
             text_format={
                 "type": "json_schema",
-                "name": "macro_score_result",
+                "name": "json_completion_result",
                 "schema": json_schema,
-                "strict": True,
             },
         )
         headers = {

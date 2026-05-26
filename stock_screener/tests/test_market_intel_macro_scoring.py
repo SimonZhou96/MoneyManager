@@ -491,15 +491,18 @@ class MacroJsonProviderAdapterTests(unittest.TestCase):
             result = provider.complete_json(
                 system_prompt="system",
                 user_prompt='{"event_time":"2026-05-26T15:00:00+00:00"}',
-                json_schema={"type": "object", "properties": {"macro_score": {"type": "number"}}},
+                json_schema=MacroScorePromptBuilder.json_schema(),
             )
 
         self.assertEqual(result["macro_score"], 55)
+        self.assertEqual(post.call_count, 1)
         self.assertEqual(post.call_args.args[0], "https://api.openai.com/v1/responses")
         payload = post.call_args.kwargs["json"]
         self.assertEqual(payload["reasoning"], {"effort": "high"})
         self.assertEqual(payload["text"]["format"]["type"], "json_schema")
-        self.assertEqual(payload["text"]["format"]["name"], "macro_score_result")
+        self.assertEqual(payload["text"]["format"]["name"], "json_completion_result")
+        self.assertEqual(payload["text"]["format"]["schema"], MacroScorePromptBuilder.json_schema())
+        self.assertNotIn("strict", payload["text"]["format"])
         self.assertIn("event_time", payload["input"][1]["content"])
 
     def test_codex_responses_complete_json_retries_json_object_format(self):
