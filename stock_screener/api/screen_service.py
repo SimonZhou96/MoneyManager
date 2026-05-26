@@ -38,7 +38,7 @@ from strategizers import (
     DailyPctChangeBandStrategizer,
 )
 from signal_analysis.models import ScreeningSignalRow
-from signal_analysis.service import run_signal_analysis_for_row
+from signal_analysis.service import build_macro_score_scorer, build_market_intel_service, run_signal_analysis_for_row
 from timeframe import parse_timeframe
 from universe import fetch_stock_list_akshare
 from universe_filter import UniverseFilterFactory
@@ -425,6 +425,11 @@ def run_screening_task(
         )
         # 注入 timeframe 供 AvgDailyVolumeFilter 使用
         context.timeframe = timeframe
+        if rule_engine is not None and rule_engine.requires_market_intel_macro_score():
+            market_intel_service = build_market_intel_service(mysql_config)
+            macro_score_scorer = build_macro_score_scorer()
+            context.set_cache("market_intel_service", market_intel_service)
+            context.set_cache("macro_score_scorer", macro_score_scorer)
         
         # 主循环：遍历每只股票，在同一个循环中完成以下步骤
         # 步骤1: 获取K线数据
@@ -477,7 +482,7 @@ def run_screening_task(
             # 步骤2: 应用规则。默认由 DB 规则引擎计算；兼容模式保留旧链路。
             if rule_engine is not None:
                 signal_analysis_loader = None
-                if rule_engine.requires_macro_analysis():
+                if rule_engine.requires_signal_analysis():
                     def load_signal_analysis(current_stock: StockInfo):
                         cached = macro_analysis_cache.get(current_stock.code)
                         if cached is not None:
@@ -669,6 +674,13 @@ def run_screening_task(
                 quote_ctx.close()
             except Exception:
                 pass
+
+        if 'context' in locals():
+            market_intel_service = context.get_cache("market_intel_service")
+            repository = getattr(market_intel_service, "repository", None)
+            close = getattr(repository, "close", None)
+            if callable(close):
+                close()
 
         # 关闭数据库连接
         if db:

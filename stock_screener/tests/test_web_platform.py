@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from db import hash_password, verify_password
@@ -22,6 +23,14 @@ from web.validation import (
 
 
 class WebPlatformTests(unittest.TestCase):
+    def test_single_stock_wires_signal_and_market_intel_runtime_gates(self):
+        content = (Path(__file__).resolve().parents[1] / "web" / "single_stock.py").read_text(encoding="utf-8")
+
+        self.assertIn("requires_signal_analysis()", content)
+        self.assertIn("requires_market_intel_macro_score()", content)
+        self.assertIn("market_intel_service", content)
+        self.assertIn("macro_score_scorer", content)
+
     def test_password_hash_round_trip(self):
         hashed = hash_password("secret-password")
         self.assertTrue(verify_password("secret-password", hashed))

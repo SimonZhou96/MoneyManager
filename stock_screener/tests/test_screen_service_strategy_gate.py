@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from filters import StockInfo, StockFilterResult
@@ -24,6 +25,14 @@ def output(name, satisfied):
 
 
 class ScreenServiceStrategyGateTest(unittest.TestCase):
+    def test_screen_service_wires_signal_and_market_intel_runtime_gates(self):
+        content = (Path(__file__).resolve().parents[1] / "api" / "screen_service.py").read_text(encoding="utf-8")
+
+        self.assertIn("requires_signal_analysis()", content)
+        self.assertIn("requires_market_intel_macro_score()", content)
+        self.assertIn("market_intel_service", content)
+        self.assertIn("macro_score_scorer", content)
+
     def test_zuoyi_and_other_strategy_passes(self):
         result = make_strategy_result([
             output("ZuoYiStrategizer", True),
@@ -173,6 +182,12 @@ class ScreenServiceStrategyGateTest(unittest.TestCase):
                 return True
 
             def requires_kline(self):
+                return False
+
+            def requires_signal_analysis(self):
+                return False
+
+            def requires_market_intel_macro_score(self):
                 return False
 
             def requires_macro_analysis(self):

@@ -14,7 +14,7 @@ from filters import FilterContext, StockInfo
 from kline_fetcher import KlineFetcherFactory
 from market import normalize_market
 from stock_pool import POOL_TYPE_ALL_ETF
-from signal_analysis.service import run_signal_analysis_for_market
+from signal_analysis.service import build_macro_score_scorer, build_market_intel_service, run_signal_analysis_for_market
 from signal_analysis.service import run_signal_analysis_for_row
 from signal_analysis.models import ScreeningSignalRow
 from timeframe import parse_timeframe
@@ -91,8 +91,13 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
         context = FilterContext(check_date=date.today(), market=market, db=db, verbose=False)
         context.timeframe = timeframe
         rule_engine = create_rule_engine_from_db(db, market, timeframe, request.chain_key)
+        if rule_engine.requires_market_intel_macro_score():
+            market_intel_service = build_market_intel_service(mysql_config)
+            macro_score_scorer = build_macro_score_scorer()
+            context.set_cache("market_intel_service", market_intel_service)
+            context.set_cache("macro_score_scorer", macro_score_scorer)
         signal_analysis_loader = None
-        if rule_engine.requires_macro_analysis():
+        if rule_engine.requires_signal_analysis():
             def load_signal_analysis(current_stock: StockInfo):
                 cached = macro_analysis_cache.get(current_stock.code)
                 if cached is not None:
@@ -115,11 +120,11 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
 
         db.insert_single_stock_rule_details(run_id, rule_details)
 
-        if rule_engine.requires_macro_analysis():
+        if rule_engine.requires_signal_analysis():
             analysis = macro_analysis_cache.get(stock.code)
             if analysis is not None:
                 ai_analysis = _analysis_to_response_dict(analysis)
-        elif result.passed:
+        elif result.passed and not rule_engine.requires_market_intel_macro_score():
             ai_analysis, ai_warnings = _run_single_ai(mysql_config, run_id, market, timeframe, stock, result.filter_outputs)
             warnings.extend(ai_warnings)
 
@@ -168,6 +173,12 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
         )
         raise
     finally:
+        if 'context' in locals():
+            market_intel_service = context.get_cache("market_intel_service")
+            repository = getattr(market_intel_service, "repository", None)
+            close = getattr(repository, "close", None)
+            if callable(close):
+                close()
         db.close()
 
 

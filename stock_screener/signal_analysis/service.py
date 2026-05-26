@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from db import MarketDatabase, MySqlConfig
+from market_intel.macro_llm import MacroScoreJsonClient, MacroScoreLLMScorer
 from market_intel.providers.factory import build_market_intel_providers
 from market_intel.repository import MySqlMarketIntelRepository
 from market_intel.service import MarketIntelService
@@ -104,6 +105,14 @@ def build_market_intel_service(mysql_config: MySqlConfig):
     except Exception:
         db.close()
         raise
+
+
+def build_macro_score_scorer(settings: Optional[AnalysisSettings] = None):
+    settings = settings or settings_from_env()
+    llm_provider = LLMProviderFactory.from_env(settings)
+    if not getattr(llm_provider, "is_available", False):
+        return None
+    return MacroScoreLLMScorer(MacroScoreJsonClient(llm_provider))
 
 
 def run_signal_analysis_for_market(
