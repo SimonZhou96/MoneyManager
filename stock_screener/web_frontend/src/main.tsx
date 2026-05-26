@@ -1515,7 +1515,7 @@ function Rules() {
             ))}
           </select>
         </Field>
-        <button type="button" onClick={startNewChain}>新建</button>
+        <button type="button" className="secondary-button" onClick={startNewChain}>新建</button>
       </div>
       <div className="table-note">规则链表达式使用 JSON DSL。可从下方原子规则复制 `ref` 节点；当前版本不做可视化编排器。</div>
       {error && <div className="error">{error}</div>}
@@ -1572,7 +1572,7 @@ function Rules() {
               <div className="toolbar-row json-editor-actions">
                 <button type="button" className="secondary-button" onClick={formatExpressionJson}>格式化 JSON</button>
                 <button type="button" className="primary" disabled={saving || !jsonStatus.ok} onClick={saveChain}>{saving ? '保存中...' : '保存'}</button>
-                <button type="button" disabled={saving || !editor.chain_key} onClick={deleteChain}>删除</button>
+                <button type="button" className="secondary-button" disabled={saving || !editor.chain_key} onClick={deleteChain}>删除</button>
               </div>
             </div>
           </div>

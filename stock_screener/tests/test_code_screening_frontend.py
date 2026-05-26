@@ -117,6 +117,17 @@ class CodeScreeningFrontendTest(unittest.TestCase):
         self.assertIn("sub_scores", source)
         self.assertIn("final_score", source)
 
+    def test_mobile_touch_targets_use_accessible_minimums(self):
+        source = self.read_main()
+        styles = STYLES_CSS.read_text(encoding="utf-8")
+
+        self.assertIn('className="secondary-button" onClick={startNewChain}', source)
+        self.assertIn('className="secondary-button" disabled={saving || !editor.chain_key}', source)
+        self.assertIn(".check input", styles)
+        self.assertIn("width: 18px", styles)
+        self.assertIn("accent-color: #1f6feb", styles)
+        self.assertNotIn("min-height: 36px", styles)
+
 
 if __name__ == "__main__":
     unittest.main()

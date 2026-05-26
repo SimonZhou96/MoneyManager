@@ -135,8 +135,24 @@ nav button.active, nav button:hover { background: #263449; color: white; }
   border-radius: 8px;
   padding: 18px;
 }
-.check { min-height: 44px; display: flex; align-items: center; gap: 10px; font-weight: 600; }
-.check input { min-height: auto; }
+.check {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 6px;
+  padding: 0 4px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.check input {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  flex: 0 0 18px;
+  margin: 0;
+  accent-color: #1f6feb;
+}
 .segmented { display: flex; gap: 8px; }
 .segmented-wrap { flex-wrap: wrap; }
 .field-wide { grid-column: span 2; }
@@ -179,7 +195,7 @@ nav button.active, nav button:hover { background: #263449; color: white; }
   min-height: 44px;
 }
 .screening-toggles .check {
-  min-height: 36px;
+  min-height: 44px;
   white-space: nowrap;
 }
 .screening-actions {
@@ -233,7 +249,7 @@ tr.selected-row td:first-child { box-shadow: inset 3px 0 0 #2563eb, inset 0 1px 
   color: #475569;
 }
 .pager button {
-  min-height: 36px;
+  min-height: 44px;
   border: 1px solid #cbd5e1;
   border-radius: 6px;
   background: white;
@@ -1051,7 +1067,7 @@ pre { overflow: auto; background: #0f172a; color: #e2e8f0; padding: 12px; border
 }
 
 .code-screening-toggles .check {
-  min-height: 36px;
+  min-height: 44px;
   white-space: nowrap;
 }
 
