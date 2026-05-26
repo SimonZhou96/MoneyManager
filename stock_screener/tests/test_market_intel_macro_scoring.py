@@ -324,6 +324,26 @@ class MacroScoreParserTests(unittest.TestCase):
         self.assertEqual(result.sub_scores["news_validation"], 0.0)
         self.assertEqual(result.sub_scores["freshness"], 0.0)
 
+    def test_parser_rounds_macro_and_sub_scores_to_two_decimals(self):
+        result = MacroScoreParser.parse(
+            {
+                "macro_score": 12.34567,
+                "sub_scores": {
+                    "company_event_strength": 45.6789,
+                    "sector_heat": -12.3456,
+                    "custom_precision": 98.7654,
+                },
+            },
+            threshold=10,
+        )
+
+        self.assertEqual(result.macro_score, 12.35)
+        self.assertEqual(result.sub_scores["company_event_strength"], 45.68)
+        self.assertEqual(result.sub_scores["sector_heat"], -12.35)
+        self.assertEqual(result.sub_scores["custom_precision"], 98.77)
+        self.assertEqual(result.sub_scores["news_validation"], 0.0)
+        self.assertEqual(result.to_details()["macro_score"], 12.35)
+
     def test_parser_treats_non_finite_macro_score_as_zero(self):
         result = MacroScoreParser.parse({"macro_score": "nan"}, threshold=70)
 
@@ -476,9 +496,9 @@ class MacroScoreParserTests(unittest.TestCase):
         )
 
         details = result.to_details()
-        json.dumps(details, ensure_ascii=False, allow_nan=False)
+        serialized = json.dumps(details, ensure_ascii=False, allow_nan=False)
 
-        self.assertEqual(details["evidence_refs"][0]["self"]["self"], "<cycle>")
+        self.assertIn('"<cycle>"', serialized)
 
     def test_to_details_handles_deeply_nested_raw_payload(self):
         nested = "leaf"

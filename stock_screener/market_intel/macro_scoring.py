@@ -394,7 +394,7 @@ def _coerce_score(value: Any) -> Optional[float]:
 
 def _clamp_score(value: Any) -> float:
     score = _to_float(value)
-    return max(-100.0, min(100.0, score))
+    return _round_score(max(-100.0, min(100.0, score)))
 
 
 def _normalize_sub_scores(value: Any) -> Dict[str, float]:
