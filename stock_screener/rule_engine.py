@@ -16,35 +16,66 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set
 
-from filters import (
-    AvgDailyVolumeFilter,
-    Filter,
-    FilterContext,
-    FilterOutput,
-    FilterResult,
-    MarketCapFilter,
-    PEFilter,
-    PriceFilter,
-    ProfitabilityFilter,
-    StockFilterResult,
-    StockInfo,
-)
-from macro_strategies import (
-    CompanyEventHotNewsStrategizer,
-    CompanyEventHotSectorStrategizer,
-    MarketIntelMacroScoreStrategizer,
-)
-from strategizers import (
-    DailyPctChangeBandStrategizer,
-    EMABreakoutStrategizer,
-    RSIOverboughtStrategizer,
-    RSIOversoldStrategizer,
-    Strategizer,
-    StrategizerOutput,
-    TechnicalPatternStrategizer,
-    TodayVolumeExceedsPrior3MaxStrategizer,
-    ZuoYiStrategizer,
-)
+if __package__:
+    from .filters import (
+        AvgDailyVolumeFilter,
+        Filter,
+        FilterContext,
+        FilterOutput,
+        FilterResult,
+        MarketCapFilter,
+        PEFilter,
+        PriceFilter,
+        ProfitabilityFilter,
+        StockFilterResult,
+        StockInfo,
+    )
+    from .macro_strategies import (
+        CompanyEventHotNewsStrategizer,
+        CompanyEventHotSectorStrategizer,
+        MarketIntelMacroScoreStrategizer,
+    )
+    from .strategizers import (
+        DailyPctChangeBandStrategizer,
+        EMABreakoutStrategizer,
+        RSIOverboughtStrategizer,
+        RSIOversoldStrategizer,
+        Strategizer,
+        StrategizerOutput,
+        TechnicalPatternStrategizer,
+        TodayVolumeExceedsPrior3MaxStrategizer,
+        ZuoYiStrategizer,
+    )
+else:
+    from filters import (
+        AvgDailyVolumeFilter,
+        Filter,
+        FilterContext,
+        FilterOutput,
+        FilterResult,
+        MarketCapFilter,
+        PEFilter,
+        PriceFilter,
+        ProfitabilityFilter,
+        StockFilterResult,
+        StockInfo,
+    )
+    from macro_strategies import (
+        CompanyEventHotNewsStrategizer,
+        CompanyEventHotSectorStrategizer,
+        MarketIntelMacroScoreStrategizer,
+    )
+    from strategizers import (
+        DailyPctChangeBandStrategizer,
+        EMABreakoutStrategizer,
+        RSIOverboughtStrategizer,
+        RSIOversoldStrategizer,
+        Strategizer,
+        StrategizerOutput,
+        TechnicalPatternStrategizer,
+        TodayVolumeExceedsPrior3MaxStrategizer,
+        ZuoYiStrategizer,
+    )
 
 
 RULE_TYPE_FILTER = "filter"

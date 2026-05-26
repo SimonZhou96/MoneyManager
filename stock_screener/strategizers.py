@@ -17,15 +17,26 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from filters import FilterContext, StockInfo
-from strategy import (
-    check_ema_breakout,
-    check_zuoyi_strategy,
-    EMABreakoutResult,
-    analyze_technical_pattern,
-    compute_daily_volume_vs_prior3_and_pct_change,
-    get_latest_rsi,
-)
+if __package__:
+    from .filters import FilterContext, StockInfo
+    from .strategy import (
+        check_ema_breakout,
+        check_zuoyi_strategy,
+        EMABreakoutResult,
+        analyze_technical_pattern,
+        compute_daily_volume_vs_prior3_and_pct_change,
+        get_latest_rsi,
+    )
+else:
+    from filters import FilterContext, StockInfo
+    from strategy import (
+        check_ema_breakout,
+        check_zuoyi_strategy,
+        EMABreakoutResult,
+        analyze_technical_pattern,
+        compute_daily_volume_vs_prior3_and_pct_change,
+        get_latest_rsi,
+    )
 
 
 @dataclass

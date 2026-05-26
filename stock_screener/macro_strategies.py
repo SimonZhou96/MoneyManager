@@ -7,11 +7,18 @@ from __future__ import annotations
 
 from typing import Optional
 
-from filters import FilterContext, StockInfo
-from market_intel.evidence import EvidencePackBuilder
-from market_intel.macro_scoring import MacroEvidencePreprocessor
-from strategizers import Strategizer, StrategizerOutput
-from signal_analysis.models import SignalAnalysisResult
+if __package__:
+    from .filters import FilterContext, StockInfo
+    from .market_intel.evidence import EvidencePackBuilder
+    from .market_intel.macro_scoring import MacroEvidencePreprocessor
+    from .strategizers import Strategizer, StrategizerOutput
+    from .signal_analysis.models import SignalAnalysisResult
+else:
+    from filters import FilterContext, StockInfo
+    from market_intel.evidence import EvidencePackBuilder
+    from market_intel.macro_scoring import MacroEvidencePreprocessor
+    from strategizers import Strategizer, StrategizerOutput
+    from signal_analysis.models import SignalAnalysisResult
 
 
 _SIGNAL_ANALYSIS_LOADER_KEY = "signal_analysis_loader"

@@ -3,8 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
-from market_intel.models import EvidencePack, IntelItem
-from signal_analysis.models import SearchDocument
+if str(__package__ or "").startswith("stock_screener."):
+    from .models import EvidencePack, IntelItem
+    from ..signal_analysis.models import SearchDocument
+else:
+    from market_intel.models import EvidencePack, IntelItem
+    from signal_analysis.models import SearchDocument
 
 
 def flatten_bundle_items(bundle: Any) -> List[IntelItem]:

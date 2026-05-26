@@ -806,7 +806,10 @@ class AvgDailyVolumeFilter(Filter):
             return self._skip("K线数据无成交量")
         
         try:
-            from timeframe import is_intraday
+            try:
+                from timeframe import is_intraday
+            except ModuleNotFoundError:
+                from .timeframe import is_intraday
             timeframe = getattr(context, "timeframe", "1d")
             
             df = stock.kline_df.copy()

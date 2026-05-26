@@ -2,28 +2,22 @@
 # -*- coding: utf-8 -*-
 
 import unittest
-import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from filters import AvgDailyVolumeFilter, Filter, FilterContext, FilterResult, StockInfo
-from rule_engine import (
+from stock_screener.filters import AvgDailyVolumeFilter, Filter, FilterContext, FilterResult, StockInfo
+from stock_screener.rule_engine import (
     RuleChainConfig,
     RuleEngine,
     RuleMetadata,
     RuleRegistry,
     RuleRepository,
 )
-from strategizers import Strategizer, StrategizerOutput
+from stock_screener.strategizers import Strategizer, StrategizerOutput
 
-try:
-    from market_intel.models import IntelItem, MarketIntelBundle, StockIntelBundle
-except ModuleNotFoundError:
-    from stock_screener.market_intel.models import IntelItem, MarketIntelBundle, StockIntelBundle
+from stock_screener.market_intel.models import IntelItem, MarketIntelBundle, StockIntelBundle
 
 
 class StaticFilter(Filter):
