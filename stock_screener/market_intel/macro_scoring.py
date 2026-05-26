@@ -40,12 +40,12 @@ class MacroScoreResult:
             "macro_score": self.macro_score,
             "passed": self.passed,
             "threshold": self.threshold,
-            "sub_scores": dict(self.sub_scores),
-            "weighted_contribution": dict(self.weighted_contribution),
+            "sub_scores": _json_safe(self.sub_scores),
+            "weighted_contribution": _json_safe(self.weighted_contribution),
             "summary": self.summary,
             "temporal_summary": self.temporal_summary,
-            "risks": list(self.risks),
-            "evidence_refs": [dict(item) for item in self.evidence_refs],
+            "risks": _json_safe(self.risks),
+            "evidence_refs": _json_safe(self.evidence_refs),
         }
 
 
@@ -394,6 +394,18 @@ def _normalize_dict_list(value: Any) -> List[Dict[str, Any]]:
         return []
     values = value if isinstance(value, list) else [value]
     return [dict(item) for item in values if isinstance(item, dict)]
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
 
 
 def _average(values: List[float]) -> Optional[float]:

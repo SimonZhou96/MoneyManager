@@ -1,3 +1,4 @@
+import json
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -326,6 +327,31 @@ class MacroScoreParserTests(unittest.TestCase):
     def test_parser_rejects_non_dict_payload(self):
         with self.assertRaises(ValueError):
             MacroScoreParser.parse(["not", "a", "dict"], threshold=60)
+
+    def test_to_details_is_json_safe_for_nested_evidence_datetimes(self):
+        published_at = datetime(2026, 5, 26, 9, 30, tzinfo=timezone.utc)
+        result = MacroScoreParser.parse(
+            {
+                "macro_score": 80,
+                "evidence_refs": [
+                    {
+                        "title": "公告",
+                        "published_at": published_at,
+                        "tags": ("订单", "增长"),
+                    }
+                ],
+            },
+            threshold=70,
+        )
+
+        details = result.to_details()
+        json.dumps(details, ensure_ascii=False)
+
+        self.assertEqual(
+            details["evidence_refs"][0]["published_at"],
+            "2026-05-26T09:30:00+00:00",
+        )
+        self.assertEqual(details["evidence_refs"][0]["tags"], ["订单", "增长"])
 
 
 class AggregateRuleScoresTests(unittest.TestCase):
