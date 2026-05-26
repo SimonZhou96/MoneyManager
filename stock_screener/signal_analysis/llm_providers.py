@@ -436,7 +436,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             json=payload,
             timeout=self.timeout_sec,
         )
-        if response.status_code >= 400 and "response_format" in payload:
+        if "response_format" in payload and _should_retry_chat_json_object(response):
             payload = dict(payload)
             payload.pop("response_format", None)
             response = requests.post(
@@ -748,6 +748,20 @@ def _should_retry_responses_json_object(response) -> bool:
         or "response_format" in text
         or "unsupported" in text
     )
+
+
+def _should_retry_chat_json_object(response) -> bool:
+    text = (getattr(response, "text", "") or "").lower()
+    if response.status_code not in {400, 422}:
+        return False
+    mentions_json_mode = "response_format" in text or "json_object" in text
+    mentions_unsupported = (
+        "unsupported" in text
+        or "not support" in text
+        or "invalid" in text
+        or "unknown parameter" in text
+    )
+    return mentions_json_mode and mentions_unsupported
 
 
 def _normalize_reasoning_effort(value: str) -> str:

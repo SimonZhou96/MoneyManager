@@ -418,6 +418,60 @@ class MacroJsonProviderAdapterTests(unittest.TestCase):
         self.assertEqual(payload["messages"][0]["content"], "system")
         self.assertIn("event_time", payload["messages"][1]["content"])
 
+    def test_openai_compatible_complete_json_retries_only_unsupported_response_format(self):
+        class UnsupportedResponse:
+            status_code = 422
+            text = "unsupported response_format json_object"
+
+            def json(self):
+                return {}
+
+        class OkResponse:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {"choices": [{"message": {"content": '{"macro_score": 42, "sub_scores": {}, "summary": "ok"}'}}]}
+
+        with patch(LLM_PROVIDERS_POST, side_effect=[UnsupportedResponse(), OkResponse()]) as post:
+            provider = OpenAICompatibleLLMProvider(api_key="key", model="model-x")
+            result = provider.complete_json(
+                system_prompt="system",
+                user_prompt="user",
+                json_schema={"type": "object"},
+            )
+
+        self.assertEqual(result["macro_score"], 42)
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.call_args_list[0].kwargs["json"]["response_format"], {"type": "json_object"})
+        self.assertNotIn("response_format", post.call_args_list[1].kwargs["json"])
+
+    def test_openai_compatible_complete_json_does_not_retry_auth_or_server_errors(self):
+        class ErrorResponse:
+            def __init__(self, status_code, text):
+                self.status_code = status_code
+                self.text = text
+
+            def json(self):
+                return {}
+
+        for response in (
+            ErrorResponse(401, "invalid api key"),
+            ErrorResponse(500, "internal server error"),
+        ):
+            with self.subTest(status_code=response.status_code):
+                with patch(LLM_PROVIDERS_POST, return_value=response) as post:
+                    provider = OpenAICompatibleLLMProvider(api_key="key", model="model-x")
+                    with self.assertRaisesRegex(RuntimeError, f"HTTP {response.status_code}"):
+                        provider.complete_json(
+                            system_prompt="system",
+                            user_prompt="user",
+                            json_schema={"type": "object"},
+                        )
+
+                self.assertEqual(post.call_count, 1)
+                self.assertEqual(post.call_args.kwargs["json"]["response_format"], {"type": "json_object"})
+
     def test_codex_responses_complete_json_posts_schema_format_payload(self):
         class Response:
             status_code = 200
