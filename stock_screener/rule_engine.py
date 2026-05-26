@@ -32,6 +32,7 @@ from filters import (
 from macro_strategies import (
     CompanyEventHotNewsStrategizer,
     CompanyEventHotSectorStrategizer,
+    MarketIntelMacroScoreStrategizer,
 )
 from strategizers import (
     DailyPctChangeBandStrategizer,
@@ -293,6 +294,13 @@ class RuleRegistry:
         registry.register_strategy(
             "CompanyEventHotNewsStrategizer",
             lambda params: CompanyEventHotNewsStrategizer(),
+        )
+        registry.register_strategy(
+            "MarketIntelMacroScoreStrategizer",
+            lambda params: MarketIntelMacroScoreStrategizer(
+                threshold=params.get("threshold", 60),
+                refresh_policy=params.get("refresh_policy", "cache_or_refresh"),
+            ),
         )
         return registry
 

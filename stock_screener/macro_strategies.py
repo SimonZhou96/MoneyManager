@@ -8,11 +8,16 @@ from __future__ import annotations
 from typing import Optional
 
 from filters import FilterContext, StockInfo
+from market_intel.evidence import EvidencePackBuilder
+from market_intel.macro_scoring import MacroEvidencePreprocessor
 from strategizers import Strategizer, StrategizerOutput
 from signal_analysis.models import SignalAnalysisResult
 
 
 _SIGNAL_ANALYSIS_LOADER_KEY = "signal_analysis_loader"
+_MARKET_INTEL_SERVICE_KEY = "market_intel_service"
+_MACRO_SCORE_SCORER_KEY = "macro_score_scorer"
+_DEFAULT_MACRO_SCORE_THRESHOLD = 60.0
 
 
 def _analysis_cache_key(code: str) -> str:
@@ -30,6 +35,20 @@ def _load_signal_analysis(stock: StockInfo, context: FilterContext) -> Optional[
             context.set_cache(_analysis_cache_key(stock.code), analysis)
             return analysis
     return None
+
+
+def _safe_float(value, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _temporal_findings_details(package) -> list:
+    return [
+        item.to_dict() if hasattr(item, "to_dict") else dict(item)
+        for item in (getattr(package, "temporal_findings", []) or [])
+    ]
 
 
 class CompanyEventHotSectorStrategizer(Strategizer):
@@ -83,6 +102,96 @@ class CompanyEventHotSectorStrategizer(Strategizer):
                 "hot_sector_reason": analysis.hot_sector_reason,
             },
         )
+
+
+class MarketIntelMacroScoreStrategizer(Strategizer):
+    def __init__(
+        self,
+        threshold=60,
+        refresh_policy: str = "cache_or_refresh",
+        name: str = "MarketIntelMacroScoreStrategizer",
+        enabled: bool = True,
+    ):
+        super().__init__(name=name, enabled=enabled)
+        self.threshold = _safe_float(threshold, _DEFAULT_MACRO_SCORE_THRESHOLD)
+        self.refresh_policy = str(refresh_policy or "cache_or_refresh")
+
+    def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
+        service = context.get_cache(_MARKET_INTEL_SERVICE_KEY)
+        if service is None:
+            return StrategizerOutput(
+                name=self.name,
+                satisfied=False,
+                result="skip",
+                reason="缺少 market_intel_service，无法执行宏观评分",
+                details={"code": stock.code},
+            )
+
+        scorer = context.get_cache(_MACRO_SCORE_SCORER_KEY)
+        if scorer is None:
+            return StrategizerOutput(
+                name=self.name,
+                satisfied=False,
+                result="error",
+                reason="缺少 macro_score_scorer，无法执行宏观评分",
+                details={"code": stock.code, "error": True},
+            )
+
+        market = stock.market or context.market
+        force_refresh = self.refresh_policy == "force_refresh"
+        try:
+            pack = EvidencePackBuilder(service).build(
+                market=market,
+                code=stock.code,
+                force_refresh=force_refresh,
+            )
+            package = MacroEvidencePreprocessor().build(pack)
+            source_status = dict(getattr(package, "source_status", {}) or {})
+            data_gaps = list(getattr(package, "data_gaps", []) or [])
+            temporal_findings = _temporal_findings_details(package)
+            evidence_digest = package.evidence_digest() if hasattr(package, "evidence_digest") else ""
+
+            if not package.has_scoreable_evidence:
+                return StrategizerOutput(
+                    name=self.name,
+                    satisfied=False,
+                    result="skip",
+                    reason="缺少可评分的宏观证据，跳过宏观评分",
+                    details={
+                        "code": stock.code,
+                        "source_status": source_status,
+                        "data_gaps": data_gaps,
+                        "temporal_findings": temporal_findings,
+                        "evidence_digest": evidence_digest,
+                    },
+                )
+
+            score = scorer.score(package, threshold=self.threshold)
+            details = score.to_details()
+            details.update({
+                "code": stock.code,
+                "model": str(getattr(scorer, "model_name", "") or ""),
+                "evidence_digest": evidence_digest,
+                "source_status": source_status,
+                "data_gaps": data_gaps,
+                "temporal_findings": temporal_findings,
+            })
+            is_pass = bool(score.passed)
+            return StrategizerOutput(
+                name=self.name,
+                satisfied=is_pass,
+                result="pass" if is_pass else "fail",
+                reason=score.summary or ("宏观评分通过" if is_pass else "宏观评分未达标"),
+                details=details,
+            )
+        except Exception as exc:
+            return StrategizerOutput(
+                name=self.name,
+                satisfied=False,
+                result="error",
+                reason=f"宏观评分执行失败: {exc}",
+                details={"code": stock.code, "error": True},
+            )
 
 
 class CompanyEventHotNewsStrategizer(Strategizer):
