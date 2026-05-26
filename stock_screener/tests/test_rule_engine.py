@@ -391,10 +391,117 @@ class RuleEngineTest(unittest.TestCase):
         self.assertEqual(
             service.calls,
             [
-                ("stock", "A", "SZ.000001", True),
                 ("market", "A", "", True),
+                ("stock", "A", "SZ.000001", True),
             ],
         )
+
+    def test_market_intel_macro_score_force_refresh_reuses_market_digest_per_context(self):
+        metadata_items = [
+            metadata(
+                "market_intel_macro_score_link",
+                "strategy",
+                "MarketIntelMacroScoreStrategizer",
+                strategy_category="macro",
+                params={"refresh_policy": "force_refresh"},
+            )
+        ]
+        engine = RuleEngine(metadata_items, chain({"ref": "market_intel_macro_score_link"}), registry=RuleRegistry.default())
+        context = FilterContext(check_date=date(2026, 5, 26), market="A")
+        service = FakeMarketIntelService()
+        context.set_cache("market_intel_service", service)
+        context.set_cache("macro_score_scorer", FakeMacroScorer())
+
+        first = engine.evaluate_stock(StockInfo(market="A", code="SZ.000001", name="平安银行"), context)
+        second = engine.evaluate_stock(StockInfo(market="A", code="SZ.000002", name="万科A"), context)
+
+        self.assertTrue(first.passed)
+        self.assertTrue(second.passed)
+        self.assertEqual(
+            service.calls,
+            [
+                ("market", "A", "", True),
+                ("stock", "A", "SZ.000001", True),
+                ("stock", "A", "SZ.000002", True),
+            ],
+        )
+
+    def test_market_intel_macro_score_invalid_threshold_returns_error(self):
+        for threshold in ("bad", True, float("inf")):
+            with self.subTest(threshold=threshold):
+                metadata_items = [
+                    metadata(
+                        "market_intel_macro_score_link",
+                        "strategy",
+                        "MarketIntelMacroScoreStrategizer",
+                        strategy_category="macro",
+                        params={"threshold": threshold},
+                    )
+                ]
+                engine = RuleEngine(
+                    metadata_items,
+                    chain({"ref": "market_intel_macro_score_link"}),
+                    registry=RuleRegistry.default(),
+                )
+                context = FilterContext(check_date=date(2026, 5, 26), market="A")
+                context.set_cache("market_intel_service", FakeMarketIntelService())
+                context.set_cache("macro_score_scorer", FakeMacroScorer())
+
+                result = engine.evaluate_stock(StockInfo(market="A", code="SZ.000001", name="平安银行"), context)
+
+                self.assertFalse(result.passed)
+                output = result.filter_outputs[0]
+                self.assertEqual(output.result, FilterResult.ERROR)
+                self.assertIn("threshold", output.reason)
+
+    def test_market_intel_macro_score_invalid_refresh_policy_returns_error(self):
+        for refresh_policy in ("always", None, ""):
+            with self.subTest(refresh_policy=refresh_policy):
+                metadata_items = [
+                    metadata(
+                        "market_intel_macro_score_link",
+                        "strategy",
+                        "MarketIntelMacroScoreStrategizer",
+                        strategy_category="macro",
+                        params={"refresh_policy": refresh_policy},
+                    )
+                ]
+                engine = RuleEngine(
+                    metadata_items,
+                    chain({"ref": "market_intel_macro_score_link"}),
+                    registry=RuleRegistry.default(),
+                )
+                context = FilterContext(check_date=date(2026, 5, 26), market="A")
+                context.set_cache("market_intel_service", FakeMarketIntelService())
+                context.set_cache("macro_score_scorer", FakeMacroScorer())
+
+                result = engine.evaluate_stock(StockInfo(market="A", code="SZ.000001", name="平安银行"), context)
+
+                self.assertFalse(result.passed)
+                output = result.filter_outputs[0]
+                self.assertEqual(output.result, FilterResult.ERROR)
+                self.assertIn("refresh_policy", output.reason)
+
+    def test_market_intel_macro_score_default_params_are_valid(self):
+        metadata_items = [
+            metadata(
+                "market_intel_macro_score_link",
+                "strategy",
+                "MarketIntelMacroScoreStrategizer",
+                strategy_category="macro",
+            )
+        ]
+        engine = RuleEngine(metadata_items, chain({"ref": "market_intel_macro_score_link"}), registry=RuleRegistry.default())
+        context = FilterContext(check_date=date(2026, 5, 26), market="A")
+        context.set_cache("market_intel_service", FakeMarketIntelService())
+        context.set_cache("macro_score_scorer", FakeMacroScorer())
+
+        result = engine.evaluate_stock(StockInfo(market="A", code="SZ.000001", name="平安银行"), context)
+
+        self.assertTrue(result.passed)
+        output = result.filter_outputs[0]
+        self.assertEqual(output.result, FilterResult.PASS)
+        self.assertEqual(output.details["threshold"], 60.0)
 
     def test_market_intel_macro_score_no_scoreable_evidence_skips_with_gaps(self):
         metadata_items = [

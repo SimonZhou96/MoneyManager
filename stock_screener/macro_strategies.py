@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 if __package__:
@@ -25,6 +26,8 @@ _SIGNAL_ANALYSIS_LOADER_KEY = "signal_analysis_loader"
 _MARKET_INTEL_SERVICE_KEY = "market_intel_service"
 _MACRO_SCORE_SCORER_KEY = "macro_score_scorer"
 _DEFAULT_MACRO_SCORE_THRESHOLD = 60.0
+_REFRESH_POLICIES = {"cache_or_refresh", "force_refresh"}
+_MISSING_MARKET_BUNDLE = object()
 
 
 def _analysis_cache_key(code: str) -> str:
@@ -44,11 +47,46 @@ def _load_signal_analysis(stock: StockInfo, context: FilterContext) -> Optional[
     return None
 
 
-def _safe_float(value, default: float) -> float:
+def _validate_threshold(value) -> float:
+    if isinstance(value, bool):
+        raise ValueError("MarketIntelMacroScoreStrategizer threshold must be a finite number, not bool")
     try:
-        return float(value)
+        threshold = float(value)
     except (TypeError, ValueError):
-        return default
+        raise ValueError("MarketIntelMacroScoreStrategizer threshold must be a finite number")
+    if not math.isfinite(threshold):
+        raise ValueError("MarketIntelMacroScoreStrategizer threshold must be finite")
+    return threshold
+
+
+def _validate_refresh_policy(value) -> str:
+    refresh_policy = str(value)
+    if refresh_policy not in _REFRESH_POLICIES:
+        allowed = ", ".join(sorted(_REFRESH_POLICIES))
+        raise ValueError(f"MarketIntelMacroScoreStrategizer refresh_policy must be one of: {allowed}")
+    return refresh_policy
+
+
+def _market_bundle_cache_key(market: str, refresh_policy: str) -> str:
+    return f"market_intel_market_bundle:{market}:{refresh_policy}"
+
+
+def _get_cached_market_bundle(service, context: FilterContext, *, market: str, force_refresh: bool, refresh_policy: str):
+    cache_key = _market_bundle_cache_key(market, refresh_policy)
+    cached = context.get_cache(cache_key)
+    if cached is _MISSING_MARKET_BUNDLE:
+        return None
+    if cached is not None:
+        return cached
+
+    getter = getattr(service, "get_market_digest", None)
+    if not callable(getter):
+        context.set_cache(cache_key, _MISSING_MARKET_BUNDLE)
+        return None
+
+    market_bundle = getter(market, force_refresh=force_refresh)
+    context.set_cache(cache_key, market_bundle if market_bundle is not None else _MISSING_MARKET_BUNDLE)
+    return market_bundle
 
 
 def _temporal_findings_details(package) -> list:
@@ -120,8 +158,8 @@ class MarketIntelMacroScoreStrategizer(Strategizer):
         enabled: bool = True,
     ):
         super().__init__(name=name, enabled=enabled)
-        self.threshold = _safe_float(threshold, _DEFAULT_MACRO_SCORE_THRESHOLD)
-        self.refresh_policy = str(refresh_policy or "cache_or_refresh")
+        self.threshold = _validate_threshold(threshold)
+        self.refresh_policy = _validate_refresh_policy(refresh_policy)
 
     def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
         service = context.get_cache(_MARKET_INTEL_SERVICE_KEY)
@@ -147,9 +185,17 @@ class MarketIntelMacroScoreStrategizer(Strategizer):
         market = stock.market or context.market
         force_refresh = self.refresh_policy == "force_refresh"
         try:
+            market_bundle = _get_cached_market_bundle(
+                service,
+                context,
+                market=market,
+                force_refresh=force_refresh,
+                refresh_policy=self.refresh_policy,
+            )
             pack = EvidencePackBuilder(service).build(
                 market=market,
                 code=stock.code,
+                market_bundle=market_bundle,
                 force_refresh=force_refresh,
             )
             package = MacroEvidencePreprocessor().build(pack)
@@ -197,7 +243,12 @@ class MarketIntelMacroScoreStrategizer(Strategizer):
                 satisfied=False,
                 result="error",
                 reason=f"宏观评分执行失败: {exc}",
-                details={"code": stock.code, "error": True},
+                details={
+                    "code": stock.code,
+                    "error": True,
+                    "exception_type": exc.__class__.__name__,
+                    "phase": "macro_score",
+                },
             )
 
 
