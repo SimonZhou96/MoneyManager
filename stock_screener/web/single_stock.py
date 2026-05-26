@@ -92,7 +92,7 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
         context.timeframe = timeframe
         rule_engine = create_rule_engine_from_db(db, market, timeframe, request.chain_key)
         if rule_engine.requires_market_intel_macro_score():
-            market_intel_service = build_market_intel_service(mysql_config)
+            market_intel_service = build_market_intel_service(mysql_config, enabled=True)
             macro_score_scorer = build_macro_score_scorer()
             context.set_cache("market_intel_service", market_intel_service)
             context.set_cache("macro_score_scorer", macro_score_scorer)

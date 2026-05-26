@@ -426,7 +426,7 @@ def run_screening_task(
         # 注入 timeframe 供 AvgDailyVolumeFilter 使用
         context.timeframe = timeframe
         if rule_engine is not None and rule_engine.requires_market_intel_macro_score():
-            market_intel_service = build_market_intel_service(mysql_config)
+            market_intel_service = build_market_intel_service(mysql_config, enabled=True)
             macro_score_scorer = build_macro_score_scorer()
             context.set_cache("market_intel_service", market_intel_service)
             context.set_cache("macro_score_scorer", macro_score_scorer)

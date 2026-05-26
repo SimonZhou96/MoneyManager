@@ -50,6 +50,7 @@ from signal_analysis.search_providers import (
     ZhipuWebSearchProvider,
     _build_company_batch_query,
 )
+import signal_analysis.service as signal_service
 from signal_analysis.service import run_signal_analysis_for_market
 
 
@@ -455,6 +456,39 @@ class MarketIntelSignalAnalysisIntegrationTest(unittest.TestCase):
 
 
 class SignalAnalysisTest(unittest.TestCase):
+    def test_build_market_intel_service_requires_env_unless_explicitly_enabled(self):
+        class FakeDB:
+            instances = []
+
+            def __init__(self, config):
+                self.config = config
+                self.schema_initialized = False
+                self.closed = False
+                self.__class__.instances.append(self)
+
+            def init_market_intel_schema(self):
+                self.schema_initialized = True
+
+            def close(self):
+                self.closed = True
+
+        FakeDB.instances = []
+        with patch.dict(os.environ, {"SIGNAL_ENABLE_MARKET_INTEL": "0"}), \
+                patch.object(signal_service, "MarketDatabase", FakeDB), \
+                patch.object(signal_service, "MySqlMarketIntelRepository", lambda db: {"db": db}), \
+                patch.object(signal_service, "build_market_intel_providers", return_value=["provider"]), \
+                patch.object(
+                    signal_service,
+                    "MarketIntelService",
+                    lambda repository, providers: {"repository": repository, "providers": providers},
+                ):
+            self.assertIsNone(signal_service.build_market_intel_service(object()))
+            service = signal_service.build_market_intel_service(object(), enabled=True)
+
+        self.assertEqual(len(FakeDB.instances), 1)
+        self.assertTrue(FakeDB.instances[0].schema_initialized)
+        self.assertEqual(service["providers"], ["provider"])
+
     def signal_rows(self):
         return [
             ScreeningSignalRow(

@@ -93,8 +93,9 @@ def settings_from_env() -> AnalysisSettings:
     )
 
 
-def build_market_intel_service(mysql_config: MySqlConfig):
-    if not env_flag("SIGNAL_ENABLE_MARKET_INTEL", False):
+def build_market_intel_service(mysql_config: MySqlConfig, *, enabled: Optional[bool] = None):
+    should_build = env_flag("SIGNAL_ENABLE_MARKET_INTEL", False) if enabled is None else bool(enabled)
+    if not should_build:
         return None
 
     db = MarketDatabase(mysql_config)

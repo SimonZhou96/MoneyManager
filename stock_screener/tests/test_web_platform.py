@@ -28,6 +28,7 @@ class WebPlatformTests(unittest.TestCase):
 
         self.assertIn("requires_signal_analysis()", content)
         self.assertIn("requires_market_intel_macro_score()", content)
+        self.assertIn("build_market_intel_service(mysql_config, enabled=True)", content)
         self.assertIn("market_intel_service", content)
         self.assertIn("macro_score_scorer", content)
 
