@@ -29,6 +29,8 @@ with a configured weight.
 - Keep a rule-chain-compatible `pass` / `fail` result through a threshold.
 - Always return score details when the macro rule executes, including failed or
   negative results.
+- Preserve evidence time for every macro item so scoring can account for
+  freshness, stale evidence, and signal reversal between older and newer events.
 - Support a final weighted score made from technical score and macro score.
 - Preserve existing technical strategy semantics.
 - Keep old macro rules available for backward compatibility.
@@ -131,8 +133,8 @@ Default internal macro weights:
 | `sector_heat` | 20% | 相关板块是否处于热点或资金聚焦状态 |
 | `news_validation` | 20% | 公司事件是否被公司新闻或市场热点新闻验证 |
 | `impact_direction` | 20% | 信息整体偏利好、偏利空还是中性 |
-| `source_credibility` | 10% | 来源是否可靠、是否有明确出处 |
-| `freshness` | 10% | 信息是否足够新，是否已经过期 |
+| `source_credibility` | 10% | 来源是否可靠、是否有明确出处，并结合发布时间判断可信度 |
+| `freshness` | 10% | 信息是否足够新，是否已经过期，是否被更新事件反转 |
 
 Each dimension should be scored from `-100` to `100`. The weighted macro score
 is the weighted sum of the six subscores.
@@ -191,12 +193,18 @@ Recommended evidence shape:
   "market": "A",
   "code": "000001",
   "trade_date": "2026-05-26",
+  "as_of": "2026-05-26T15:00:00",
   "company_events": [
     {
       "title": "example",
       "summary": "example",
       "source": "eastmoney",
+      "event_time": "2026-05-26T09:00:00",
       "published_at": "2026-05-26T09:30:00",
+      "fetched_at": "2026-05-26T10:00:00",
+      "expires_at": "2026-05-27T10:00:00",
+      "age_hours": 5.5,
+      "is_stale": false,
       "url": "https://example.com"
     }
   ],
@@ -205,11 +213,24 @@ Recommended evidence shape:
       "name": "AI 应用",
       "heat_reason": "资金流入和新闻热度同步上升",
       "source": "market_intel",
-      "published_at": "2026-05-26T10:00:00"
+      "event_time": "2026-05-26T10:00:00",
+      "published_at": "2026-05-26T10:00:00",
+      "fetched_at": "2026-05-26T10:05:00",
+      "expires_at": "2026-05-26T16:00:00",
+      "age_hours": 5,
+      "is_stale": false
     }
   ],
   "company_hot_news": [],
   "market_hot_news": [],
+  "temporal_findings": [
+    {
+      "type": "newer_event_reverses_older_signal",
+      "description": "较新的公告削弱了较早新闻的利好含义",
+      "older_evidence_title": "example old event",
+      "newer_evidence_title": "example new event"
+    }
+  ],
   "source_status": [],
   "data_gaps": []
 }
@@ -219,7 +240,49 @@ The preprocessor should prefer concise evidence over dumping long raw text. It
 should preserve title, source, publish time, URL, provider, item type, and stale
 state so AI can cite evidence.
 
-## 9. AI Output Schema
+Every evidence item must preserve these time fields when available:
+
+- `event_time`: when the underlying company or market event happened.
+- `published_at`: when the source published the item.
+- `fetched_at`: when MoneyManager fetched the item.
+- `expires_at`: when the cached item should be considered stale.
+- `age_hours`: age relative to the scoring `as_of` time.
+- `is_stale`: whether the item is stale at scoring time.
+
+`published_at` is not always the same as `event_time`. If a provider only has
+one timestamp, the preprocessor should copy it into the available field and add
+a `data_gaps` entry for the missing timestamp type.
+
+## 9. Temporal Evidence Handling
+
+Macro scoring must treat evidence as time-sensitive.
+
+The preprocessor should sort company and market evidence by effective time:
+
+```text
+effective_time = event_time if present else published_at if present else fetched_at
+```
+
+The AI scorer must receive the sorted evidence and a concise
+`temporal_findings` list. The list should call out situations that can change
+the direction of the macro signal:
+
+- newer company events that reverse or weaken older positive events;
+- newer company events that confirm older positive events;
+- old market hot-sector evidence whose heat may have already faded;
+- fresh negative news that should override older positive news;
+- stale source data that should lower `freshness` and possibly
+  `source_credibility`.
+
+When two events for the same company point in opposite directions, the newer
+event should normally carry more weight unless the older event is materially
+stronger and still valid. The AI output must explain this judgment in
+`temporal_summary`.
+
+The scoring prompt must explicitly forbid treating all evidence as equally
+current. Time order is part of the investment signal, not just metadata.
+
+## 10. AI Output Schema
 
 The AI macro scorer must return strict JSON:
 
@@ -245,12 +308,17 @@ The AI macro scorer must return strict JSON:
     "freshness": 7.8
   },
   "summary": "公司事件与当前热点方向存在较强共振，新闻验证充分，整体偏利好。",
+  "temporal_summary": "最新事件延续了早盘热点方向，未发现更新事件反转信号。",
   "risks": ["新闻热度可能衰减", "部分来源可信度一般"],
   "evidence_refs": [
     {
       "dimension": "sector_heat",
       "title": "AI 应用板块持续活跃",
       "source": "market_intel",
+      "event_time": "2026-05-26T10:00:00",
+      "published_at": "2026-05-26T10:00:00",
+      "fetched_at": "2026-05-26T10:05:00",
+      "age_hours": 5,
       "url": "https://example.com"
     }
   ]
@@ -262,10 +330,11 @@ Validation rules:
 - `macro_score` must be clamped to `-100` to `100`.
 - Every subscore must be clamped to `-100` to `100`.
 - `passed` must be recomputed by code from `macro_score >= threshold`.
+- `temporal_summary` is required when more than one timed evidence item exists.
 - Missing optional arrays should become empty arrays.
 - Invalid JSON should make the rule return `error`, not a fabricated score.
 
-## 10. Missing Data and Error Handling
+## 11. Missing Data and Error Handling
 
 When `market_intel` succeeds but a dimension lacks evidence:
 
@@ -284,6 +353,13 @@ When provider refresh partially fails:
 - The rule can still score from remaining evidence.
 - `details.source_status` and `details.data_gaps` must include failures.
 
+When evidence is present but lacks reliable time:
+
+- The rule can still score from that evidence.
+- `source_credibility` and `freshness` should be penalized.
+- `details.data_gaps` must identify which item lacks `event_time`,
+  `published_at`, or `fetched_at`.
+
 When AI call fails or output schema is invalid:
 
 - The rule returns `error`.
@@ -295,14 +371,14 @@ When `macro_score < threshold`:
 - The rule returns `fail`.
 - Frontend still shows subscore details, summary, risks, and evidence refs.
 
-## 11. Score Cache
+## 12. Score Cache
 
 To avoid repeated AI cost, add or reuse a cache keyed by evidence identity.
 
 Recommended cache identity:
 
 ```text
-market + code + trade_date + rule_key + rule_version + evidence_digest + model
+market + code + trade_date + as_of + rule_key + rule_version + evidence_digest + model
 ```
 
 Recommended stored payload:
@@ -310,6 +386,7 @@ Recommended stored payload:
 - `market`
 - `code`
 - `trade_date`
+- `as_of`
 - `rule_key`
 - `rule_version`
 - `evidence_digest`
@@ -325,7 +402,7 @@ existing rule-execution result store if that store already preserves detailed
 JSON. The implementation plan should choose the least invasive storage path
 after checking the current persistence layer.
 
-## 12. Frontend Behavior
+## 13. Frontend Behavior
 
 The stock screener result page should treat the aggregate macro rule as a
 scoreable macro block.
@@ -338,6 +415,7 @@ For `fail`:
 
 - Still show macro score, threshold, summary, weak dimensions, risks, and
   evidence refs.
+- Show the time reason when newer evidence weakens or reverses older evidence.
 
 For negative score:
 
@@ -355,15 +433,23 @@ For `error`:
 The UI should not hide score details simply because the macro rule failed the
 threshold.
 
-## 13. Testing Plan
+## 14. Testing Plan
 
 Backend tests:
 
 - Evidence preprocessor groups stock and market items into six dimensions.
+- Evidence preprocessor preserves `event_time`, `published_at`, `fetched_at`,
+  `expires_at`, `age_hours`, and `is_stale` for every item when available.
+- Evidence preprocessor sorts evidence by effective time and marks newer events
+  that reverse older signals.
 - Missing evidence returns `skip` without calling AI when both stock and market
   intelligence are empty.
+- Evidence with missing time fields penalizes freshness / credibility and emits
+  `data_gaps`.
 - Partial evidence still calls AI and returns score details.
 - AI JSON parser clamps scores and recomputes `passed`.
+- AI output includes `temporal_summary` when multiple timed evidence items are
+  scored.
 - Invalid AI JSON returns `error`.
 - `macro_score < threshold` returns `fail` with full score details.
 - Score cache avoids repeated AI calls for the same evidence digest.
@@ -375,6 +461,8 @@ Frontend tests:
 - Macro details render for `pass`.
 - Macro details render for `fail`.
 - Negative score renders risk-oriented details.
+- Evidence refs render source time and stale state.
+- Signal reversal renders the newer event and older event relationship.
 - `skip` and `error` states are distinguishable.
 
 Integration tests:
@@ -384,8 +472,10 @@ Integration tests:
   final weighted score.
 - A stale or missing market-intel cache triggers refresh according to
   `refresh_policy = cache_or_refresh`.
+- Two opposite company events with different effective times produce a score
+  explanation that favors or explicitly weighs the newer evidence.
 
-## 14. Rollout Notes
+## 15. Rollout Notes
 
 Recommended rollout order:
 
