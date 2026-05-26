@@ -603,7 +603,7 @@ class CodexResponsesLLMProvider(LLMProvider):
             json=payload,
             timeout=self.timeout_sec,
         )
-        if response.status_code >= 400 and _should_retry_responses_json_object(response):
+        if response.status_code >= 400 and _should_retry_responses_json_completion(response):
             payload = self._build_json_completion_payload(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
@@ -746,6 +746,16 @@ def _should_retry_responses_json_object(response) -> bool:
         or "text.format" in text
         or "response_format" in text
         or "unsupported" in text
+    )
+
+
+def _should_retry_responses_json_completion(response) -> bool:
+    text = (getattr(response, "text", "") or "").lower()
+    return response.status_code in {400, 422} and (
+        "json_schema" in text
+        or "text.format" in text
+        or "response_format" in text
+        or "json_object" in text
     )
 
 

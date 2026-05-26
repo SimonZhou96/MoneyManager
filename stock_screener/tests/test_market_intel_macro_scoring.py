@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 try:
-    from market_intel.macro_llm import MacroScorePromptBuilder, MacroScoreLLMScorer
+    from market_intel.macro_llm import MacroScoreJsonClient, MacroScorePromptBuilder, MacroScoreLLMScorer
     from market_intel.macro_scoring import (
         DEFAULT_MACRO_SUB_WEIGHTS,
         MacroEvidencePreprocessor,
@@ -13,7 +13,11 @@ try:
     )
     from market_intel.models import EvidencePack, IntelItem
 except ModuleNotFoundError:
-    from stock_screener.market_intel.macro_llm import MacroScorePromptBuilder, MacroScoreLLMScorer
+    from stock_screener.market_intel.macro_llm import (
+        MacroScoreJsonClient,
+        MacroScorePromptBuilder,
+        MacroScoreLLMScorer,
+    )
     from stock_screener.market_intel.macro_scoring import (
         DEFAULT_MACRO_SUB_WEIGHTS,
         MacroEvidencePreprocessor,
@@ -533,6 +537,57 @@ class MacroJsonProviderAdapterTests(unittest.TestCase):
         self.assertEqual(post.call_args_list[0].kwargs["json"]["text"]["format"]["type"], "json_schema")
         self.assertEqual(post.call_args_list[1].kwargs["json"]["text"]["format"]["type"], "json_object")
 
+    def test_codex_responses_complete_json_does_not_retry_unrelated_unsupported_errors(self):
+        class UnsupportedModelResponse:
+            status_code = 400
+            text = '{"error":"unsupported model"}'
+
+            def json(self):
+                return {}
+
+        with patch(LLM_PROVIDERS_POST, return_value=UnsupportedModelResponse()) as post:
+            provider = CodexResponsesLLMProvider(api_key="key")
+            with self.assertRaisesRegex(RuntimeError, "HTTP 400"):
+                provider.complete_json(
+                    system_prompt="system",
+                    user_prompt="user",
+                    json_schema={"type": "object"},
+                )
+
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(post.call_args.kwargs["json"]["text"]["format"]["type"], "json_schema")
+
+    def test_macro_score_json_client_delegates_and_rejects_unsupported_provider(self):
+        class Provider:
+            model_name = "provider-model"
+
+            def __init__(self):
+                self.calls = []
+
+            def complete_json(self, *, system_prompt, user_prompt, json_schema):
+                self.calls.append((system_prompt, user_prompt, json_schema))
+                return {"macro_score": 70, "sub_scores": {}, "summary": "ok"}
+
+        provider = Provider()
+        client = MacroScoreJsonClient(provider)
+
+        result = client.complete_json(
+            system_prompt="system",
+            user_prompt="user",
+            json_schema={"type": "object"},
+        )
+
+        self.assertEqual(client.model_name, "provider-model")
+        self.assertEqual(result["macro_score"], 70)
+        self.assertEqual(provider.calls, [("system", "user", {"type": "object"})])
+
+        with self.assertRaisesRegex(RuntimeError, "does not support macro JSON completion"):
+            MacroScoreJsonClient(object()).complete_json(
+                system_prompt="system",
+                user_prompt="user",
+                json_schema={"type": "object"},
+            )
+
     def test_fallback_complete_json_tries_available_providers_in_order(self):
         class Provider:
             is_available = True
@@ -563,6 +618,87 @@ class MacroJsonProviderAdapterTests(unittest.TestCase):
         self.assertTrue(any("first:model-a 失败" in warning for warning in warnings))
         self.assertTrue(any("fallback 使用 second:model-b 成功返回" in warning for warning in warnings))
         self.assertEqual(provider.model_name, "second:model-b")
+
+    def test_fallback_complete_json_stops_after_first_success(self):
+        class Provider:
+            is_available = True
+
+            def __init__(self, name, model_name, result):
+                self.name = name
+                self.model_name = model_name
+                self.result = result
+                self.calls = 0
+
+            def complete_json(self, *, system_prompt, user_prompt, json_schema):
+                self.calls += 1
+                return self.result
+
+        first = Provider("first", "model-a", {"macro_score": 66, "sub_scores": {}, "summary": "ok"})
+        second = Provider("second", "model-b", {"macro_score": 88, "sub_scores": {}, "summary": "late"})
+        provider = FallbackLLMProvider([first, second])
+
+        result = provider.complete_json(system_prompt="system", user_prompt="user", json_schema={"type": "object"})
+
+        self.assertEqual(result["macro_score"], 66)
+        self.assertEqual(first.calls, 1)
+        self.assertEqual(second.calls, 0)
+        self.assertEqual(provider.drain_warnings(), [])
+
+    def test_fallback_complete_json_raises_after_all_providers_fail(self):
+        class Provider:
+            is_available = True
+
+            def __init__(self, name, model_name):
+                self.name = name
+                self.model_name = model_name
+                self.calls = 0
+
+            def complete_json(self, *, system_prompt, user_prompt, json_schema):
+                self.calls += 1
+                raise RuntimeError("boom")
+
+        first = Provider("first", "model-a")
+        second = Provider("second", "model-b")
+        provider = FallbackLLMProvider([first, second])
+
+        with self.assertRaisesRegex(RuntimeError, "所有 LLM provider 均失败"):
+            provider.complete_json(system_prompt="system", user_prompt="user", json_schema={"type": "object"})
+
+        warnings = provider.drain_warnings()
+        self.assertEqual(first.calls, 1)
+        self.assertEqual(second.calls, 1)
+        self.assertTrue(any("first:model-a 失败" in warning for warning in warnings))
+        self.assertTrue(any("second:model-b 失败" in warning for warning in warnings))
+
+    def test_fallback_complete_json_treats_non_object_json_as_failure(self):
+        class Provider:
+            is_available = True
+
+            def __init__(self, name, model_name, result):
+                self.name = name
+                self.model_name = model_name
+                self.result = result
+                self.calls = 0
+
+            def complete_json(self, *, system_prompt, user_prompt, json_schema):
+                self.calls += 1
+                return self.result
+
+        first = Provider("first", "model-a", ["not-object"])
+        second = Provider("second", "model-b", {"macro_score": 88, "sub_scores": {}, "summary": "ok"})
+        provider = FallbackLLMProvider([first, second])
+
+        result = provider.complete_json(system_prompt="system", user_prompt="user", json_schema={"type": "object"})
+        warnings = provider.drain_warnings()
+
+        self.assertEqual(result["macro_score"], 88)
+        self.assertEqual(first.calls, 1)
+        self.assertEqual(second.calls, 1)
+        self.assertTrue(any("first:model-a 失败" in warning for warning in warnings))
+
+        all_bad = FallbackLLMProvider([Provider("bad", "model-c", ["not-object"])])
+        with self.assertRaisesRegex(RuntimeError, "所有 LLM provider 均失败"):
+            all_bad.complete_json(system_prompt="system", user_prompt="user", json_schema={"type": "object"})
 
 
 class MacroScoreParserTests(unittest.TestCase):
