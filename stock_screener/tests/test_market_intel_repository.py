@@ -45,6 +45,15 @@ class FakeConnection:
         return self.cursor_obj
 
 
+class FailedMarketIntelAlterCursor(FakeCursor):
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+        if "SELECT `event_time` FROM market_intel_items" in sql:
+            raise Exception("Unknown column 'event_time'")
+        if "ALTER TABLE market_intel_items ADD COLUMN event_time" in sql:
+            raise RuntimeError("alter failed")
+
+
 class MarketIntelRepositoryTests(unittest.TestCase):
     def test_schema_file_mentions_all_three_tables(self):
         with open(SQL_DIR / "017_market_intel.sql", "r", encoding="utf-8") as f:
@@ -72,6 +81,13 @@ class MarketIntelRepositoryTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS market_intel_items", executed_sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS market_intel_bundles", executed_sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS market_intel_provider_runs", executed_sql)
+
+    def test_market_intel_event_time_migration_raises_when_alter_fails(self):
+        cursor = FailedMarketIntelAlterCursor()
+        db = MarketDatabase.__new__(MarketDatabase)
+
+        with self.assertRaises(RuntimeError):
+            db._ensure_market_intel_schema_migrations(cursor)
 
     def test_in_memory_repository_stores_items_bundle_and_provider_runs(self):
         from market_intel.repository import InMemoryMarketIntelRepository
@@ -227,6 +243,33 @@ class MarketIntelRepositoryTests(unittest.TestCase):
         rows = repo.list_items(market="US", code="AAPL")
 
         self.assertEqual([row["title"] for row in rows], ["Event time wins", "Published fallback"])
+
+    def test_in_memory_repository_sorts_offset_event_times_by_utc_instant(self):
+        from market_intel.repository import InMemoryMarketIntelRepository
+
+        repo = InMemoryMarketIntelRepository()
+        repo.upsert_items([
+            {
+                "market": "US",
+                "code": "AAPL",
+                "provider": "fixture",
+                "dedupe_key": "local-offset-earlier",
+                "title": "Local offset earlier",
+                "event_time": "2026-05-26T09:00:00+08:00",
+            },
+            {
+                "market": "US",
+                "code": "AAPL",
+                "provider": "fixture",
+                "dedupe_key": "utc-later",
+                "title": "UTC later",
+                "event_time": "2026-05-26T02:00:00+00:00",
+            },
+        ])
+
+        rows = repo.list_items(market="US", code="AAPL")
+
+        self.assertEqual([row["title"] for row in rows], ["UTC later", "Local offset earlier"])
 
 
 if __name__ == "__main__":

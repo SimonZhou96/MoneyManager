@@ -2597,8 +2597,10 @@ class MarketDatabase:
             except Exception:
                 try:
                     cursor.execute(alter_sql)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Failed to add market_intel_items.{column}; schema is incompatible with market intel SQL"
+                    ) from exc
 
     def upsert_market_intel_items(self, items: Iterable[dict]) -> None:
         rows = []

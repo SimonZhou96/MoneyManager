@@ -4,7 +4,20 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import timezone
 from typing import Dict, List, Optional, Protocol
+
+from market_intel.models import parse_datetime
+
+
+def _item_sort_timestamp(item: dict) -> float:
+    value = item.get("event_time") or item.get("published_at") or item.get("fetched_at")
+    parsed = parse_datetime(value)
+    if parsed is None:
+        return 0.0
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed.timestamp()
 
 
 class MarketIntelRepository(Protocol):
@@ -97,7 +110,7 @@ class InMemoryMarketIntelRepository:
             if not include_stale and bool(item.get("is_stale")):
                 continue
             rows.append(deepcopy(item))
-        rows.sort(key=lambda item: str(item.get("event_time") or item.get("published_at") or item.get("fetched_at") or ""), reverse=True)
+        rows.sort(key=_item_sort_timestamp, reverse=True)
         return rows[: max(1, int(limit))]
 
     def upsert_bundle(self, row: dict) -> None:
