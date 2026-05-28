@@ -686,6 +686,466 @@ TotalScore = 0.30M + 0.25I + 0.25C + 0.10V + 0.10T
 - `enterprise_potential_scorer`
 - `enterprise_potential:{code}`
 
+### 12.4 宏观结构化因子持久化表结构建议
+
+本节补充“宏观结构化因子”的 MySQL 持久化设计。这里的命名尽量对齐当前仓库已有表结构风格：
+
+- `*_metadata`
+- `*_values`
+- `*_bundles`
+- `*_provider_runs`
+- `*_cache`
+
+重点参考的现有表：
+
+- `market_intel_items`
+- `market_intel_bundles`
+- `market_intel_provider_runs`
+- `signal_analysis_cache`
+- `screening_rule_metadata`
+
+#### 12.4.1 `macro_factor_metadata`
+
+用途：
+
+- 定义宏观因子字典
+- 描述因子频率、类型、展示顺序和扩展参数
+- 供快照构建器和前端共用
+
+建议表结构：
+
+```sql
+CREATE TABLE IF NOT EXISTS macro_factor_metadata (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    factor_key VARCHAR(64) NOT NULL COMMENT '因子键，如 policy_rate / cpi_yoy / vix',
+    factor_name VARCHAR(128) NOT NULL COMMENT '因子名称',
+    factor_category VARCHAR(32) NOT NULL COMMENT 'rate/inflation/growth/employment/liquidity/fx/volatility/policy',
+    value_type VARCHAR(16) NOT NULL COMMENT 'number/text/json',
+    unit VARCHAR(32) NULL COMMENT '%, bp, index 等',
+    frequency VARCHAR(16) NOT NULL COMMENT 'daily/weekly/monthly/quarterly/event',
+    enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+    display_order INT NOT NULL DEFAULT 100 COMMENT '展示顺序',
+    params_json JSON NULL COMMENT '扩展参数，如 TTL、缺失策略、口径说明',
+    description VARCHAR(512) NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_macro_factor_metadata_key (factor_key),
+    KEY idx_macro_factor_metadata_category (factor_category, enabled)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='宏观因子元数据';
+```
+
+字段命名对齐点：
+
+- 参考 `screening_rule_metadata` 的 `*_key`、`enabled`、`display_order`、`params_json`
+- 不额外引入过于数仓化的 `dimension_table` 风格命名
+
+#### 12.4.2 `macro_factor_values`
+
+用途：
+
+- 存放宏观因子的持久化取值明细
+- 支持不同频率
+- 支持数值、枚举、JSON 类型
+- 支持“先查库，再决定是否回源”
+
+建议表结构：
+
+```sql
+CREATE TABLE IF NOT EXISTS macro_factor_values (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    scope_type VARCHAR(16) NOT NULL COMMENT 'market/global',
+    market VARCHAR(8) NOT NULL COMMENT 'A/HK/US/GLOBAL',
+    code VARCHAR(32) NOT NULL DEFAULT '' COMMENT '宏观因子通常为空字符串，保留以对齐现有 items/bundles 表结构',
+    source VARCHAR(64) NOT NULL COMMENT '来源展示名',
+    provider VARCHAR(64) NOT NULL COMMENT 'provider key',
+    factor_key VARCHAR(64) NOT NULL COMMENT '对应 macro_factor_metadata.factor_key',
+    item_type VARCHAR(32) NOT NULL DEFAULT 'macro_factor' COMMENT '固定 macro_factor，便于与现有 item_type 语义对齐',
+    value DECIMAL(20,8) NULL COMMENT '数值型因子值',
+    value_text VARCHAR(128) NULL COMMENT '文本型因子值',
+    value_json JSON NULL COMMENT '结构化因子值',
+    unit VARCHAR(32) NULL COMMENT '本条取值单位，允许覆盖 metadata.unit',
+    period_type VARCHAR(16) NOT NULL COMMENT 'day/week/month/quarter/event',
+    period_start DATE NULL,
+    period_end DATE NULL,
+    event_time DATETIME(6) NULL COMMENT '统计期或事件发生时间',
+    published_at DATETIME(6) NULL COMMENT '数据发布时间',
+    fetched_at DATETIME(6) NOT NULL COMMENT '抓取时间',
+    effective_at DATETIME(6) NULL COMMENT '可被策略安全使用的生效时间',
+    expires_at DATETIME(6) NULL COMMENT '缓存过期时间',
+    value_status VARCHAR(16) NOT NULL DEFAULT 'confirmed' COMMENT 'confirmed/estimated/revised/manual',
+    is_stale TINYINT(1) NOT NULL DEFAULT 0,
+    dedupe_key VARCHAR(255) NOT NULL COMMENT '同一 factor_key 在同一 provider 下的去重键',
+    raw_json JSON NULL COMMENT '原始响应',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_macro_factor_value_dedupe (
+        scope_type, market, code, provider, factor_key, dedupe_key
+    ),
+    KEY idx_macro_factor_value_scope (scope_type, market, code, factor_key),
+    KEY idx_macro_factor_value_published (factor_key, published_at),
+    KEY idx_macro_factor_value_effective (factor_key, effective_at),
+    KEY idx_macro_factor_value_expires (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='宏观因子取值明细';
+```
+
+字段命名对齐点：
+
+- 参考 `market_intel_items`：
+  - `scope_type`
+  - `market`
+  - `code`
+  - `source`
+  - `provider`
+  - `item_type`
+  - `event_time`
+  - `published_at`
+  - `fetched_at`
+  - `expires_at`
+  - `is_stale`
+  - `dedupe_key`
+  - `raw_json`
+- 这里没有新增单独的 `cache_key` 列，因为项目现有明细表通常通过“自然唯一键 + dedupe_key”做持久化去重
+
+#### 12.4.3 `macro_factor_bundles`
+
+用途：
+
+- 存放某个市场、某个交易日、某个分析画像下的宏观因子聚合包
+- 直接给规则引擎、LLM 和前端使用
+- 语义上对应当前的 `market_intel_bundles`
+
+建议表结构：
+
+```sql
+CREATE TABLE IF NOT EXISTS macro_factor_bundles (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    scope_type VARCHAR(16) NOT NULL COMMENT 'market/global',
+    market VARCHAR(8) NOT NULL,
+    code VARCHAR(32) NOT NULL DEFAULT '',
+    trade_date DATE NOT NULL COMMENT '交易日',
+    analysis_profile VARCHAR(32) NOT NULL DEFAULT 'default' COMMENT 'default/enterprise_potential_v1 等',
+    bundle_json JSON NOT NULL COMMENT '拼好的宏观因子聚合包',
+    freshness_status VARCHAR(16) NOT NULL COMMENT 'fresh/partial/stale/empty',
+    source_status_json JSON NULL COMMENT '各 provider 状态',
+    data_gaps JSON NULL COMMENT '缺失因子与缺失来源',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_macro_factor_bundle_scope (
+        scope_type, market, code, analysis_profile, trade_date
+    ),
+    KEY idx_macro_factor_bundle_status (freshness_status),
+    KEY idx_macro_factor_bundle_trade_date (market, trade_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='宏观因子聚合包';
+```
+
+字段命名对齐点：
+
+- 参考 `market_intel_bundles` 的：
+  - `bundle_json`
+  - `freshness_status`
+  - `source_status_json`
+- 参考 `signal_analysis_cache` 的：
+  - `analysis_profile`
+  - `trade_date`
+
+#### 12.4.4 `macro_factor_provider_runs`
+
+用途：
+
+- 记录每次宏观因子 provider 的执行情况
+- 对齐现有 `market_intel_provider_runs`
+- 便于排查“为何命中不到因子值，是否 provider 拉取失败”
+
+建议表结构：
+
+```sql
+CREATE TABLE IF NOT EXISTS macro_factor_provider_runs (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    provider VARCHAR(64) NOT NULL,
+    scope_type VARCHAR(16) NOT NULL,
+    market VARCHAR(8) NOT NULL,
+    code VARCHAR(32) NOT NULL DEFAULT '',
+    status VARCHAR(16) NOT NULL COMMENT 'success/failed/timeout/skipped',
+    error_message TEXT NULL,
+    duration_ms INT NOT NULL DEFAULT 0,
+    item_count INT NOT NULL DEFAULT 0 COMMENT '本次写入的因子条数',
+    raw_json JSON NULL,
+    started_at DATETIME(6) NOT NULL,
+    finished_at DATETIME(6) NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (id),
+    KEY idx_macro_factor_runs_scope (provider, scope_type, market, code),
+    KEY idx_macro_factor_runs_status (status),
+    KEY idx_macro_factor_runs_started (started_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='宏观因子 provider 执行记录';
+```
+
+#### 12.4.5 可选的 `macro_factor_analysis_cache`
+
+如果后续宏观因子本身还要产出一层“分析结果缓存”，例如：
+
+- 宏观评分
+- 风险偏好标签
+- LLM 摘要
+
+则建议新增：
+
+- `macro_factor_analysis_cache`
+
+其命名应对齐：
+
+- `signal_analysis_cache`
+- `option_macro_analysis_cache`
+
+但这张表不是“宏观结构化因子持久化”的最小必需项，当前阶段可以只先设计，不一定立刻实现。
+
+### 12.5 持久化优先读取策略与 cacheKey 设计
+
+本节明确回答：
+
+> 如果表里面已经有数据，就不用再从数据源取；如果没有，才从数据源里面取。  
+> 在这种模式下，不同宏观因子的 cacheKey 怎么设计？
+
+#### 12.5.1 读取策略：先查库，缺失再回源
+
+建议规则如下：
+
+1. 先按 `analysis_profile + trade_date + market` 查询 `macro_factor_bundles`
+2. 若存在 bundle，且：
+   - `freshness_status in ('fresh', 'partial')`
+   - `bundle_json` 中包含规则要求的必要因子
+   - 组成该 bundle 的关键因子在 `macro_factor_values` 中未过期
+   则直接使用 bundle，不访问外部 provider
+3. 如果 bundle 不存在、为空、过期，或者关键因子缺失：
+   - 再按因子粒度查询 `macro_factor_values`
+4. 对仍然缺失或已过期的因子，才触发对应 provider 拉取
+5. 拉取成功后：
+   - `upsert macro_factor_values`
+   - 重建并 `upsert macro_factor_bundles`
+6. 同一轮执行中，优先复用已经构建好的 bundle，不重复访问数据源
+
+推荐执行顺序：
+
+```text
+load bundle from DB
+-> if usable: return
+-> else load factor values from DB
+-> detect missing / expired factors
+-> fetch only missing factors from provider
+-> upsert macro_factor_values
+-> rebuild macro_factor_bundles
+-> return bundle
+```
+
+#### 12.5.2 因子值层不建议单独增加 `cache_key` 字段
+
+对齐当前项目风格，建议：
+
+- `macro_factor_values` 不单独增加 `cache_key`
+- 使用：
+  - 自然唯一键
+  - `dedupe_key`
+
+做持久化身份
+
+原因：
+
+1. 当前仓库的明细数据表，例如 `market_intel_items`，本来就是这种设计
+2. 因子值是“事实明细”，更适合自然键去重，不必再人为塞一个长 `cache_key`
+3. `cache_key` 更适合分析结果缓存表，而不是底层事实表
+
+也就是说，对 `macro_factor_values` 来说，真正的持久化 cache identity 是：
+
+```text
+(scope_type, market, code, provider, factor_key, dedupe_key)
+```
+
+而不是一列单独的 `cache_key`
+
+#### 12.5.3 不同宏观因子的 `dedupe_key` 设计
+
+由于唯一键已经包含：
+
+- `scope_type`
+- `market`
+- `code`
+- `provider`
+- `factor_key`
+
+因此 `dedupe_key` 本身不需要重复把这些字段再拼进去。  
+`dedupe_key` 只需要表达“同一个因子在该 provider 下的具体一期数据身份”。
+
+建议按频率设计：
+
+##### 日频因子
+
+例如：
+
+- `policy_rate`
+- `dxy`
+- `vix`
+- `yield_curve_10y_2y`
+
+建议：
+
+```text
+day:2026-05-28
+```
+
+如果同一天同一 provider 可能多次发布修订版，则可以加发布时间：
+
+```text
+day:2026-05-28:2026-05-28T21:30:00
+```
+
+##### 月频因子
+
+例如：
+
+- `cpi_yoy`
+- `core_cpi_yoy`
+- `m2_yoy`
+- `unemployment_rate`
+- `manufacturing_pmi`
+
+建议：
+
+```text
+month:2026-05-01
+```
+
+如需区分同一期修订版：
+
+```text
+month:2026-05-01:2026-06-12T08:30:00
+```
+
+##### 季频因子
+
+例如：
+
+- `gdp_yoy`
+
+建议：
+
+```text
+quarter:2026Q1
+```
+
+或：
+
+```text
+quarter:2026-01-01:2026-03-31
+```
+
+##### 事件型因子
+
+例如：
+
+- `policy_stance`
+- `macro_risk_event`
+
+建议：
+
+```text
+event:2026-06-13T02:00:00:fomc
+```
+
+或：
+
+```text
+event:2026-06-policy-meeting
+```
+
+结论：
+
+- 不同宏观因子的“cache key”本质上不是统一一个模板强拼所有字段
+- 而是：
+  - 因子值层：自然唯一键 + 因子频率对应的 `dedupe_key`
+  - 聚合包层：自然唯一键
+  - 分析结果层：单独 `cache_key`
+
+#### 12.5.4 聚合包层的身份设计
+
+`macro_factor_bundles` 建议不单独增加 `cache_key` 列，对齐 `market_intel_bundles`。
+
+它的持久化身份建议直接用唯一键：
+
+```text
+(scope_type, market, code, analysis_profile, trade_date)
+```
+
+如果在 Python 内存缓存或后续 Redis 中需要构造字符串 key，可使用：
+
+```text
+macro_factor_bundle:{scope_type}:{market}:{code_or_empty}:{analysis_profile}:{trade_date}
+```
+
+例如：
+
+```text
+macro_factor_bundle:market:US::enterprise_potential_v1:2026-05-28
+```
+
+这里数据库和内存缓存可以分开：
+
+- 数据库：用自然唯一键
+- 内存缓存：用字符串 key
+
+#### 12.5.5 分析结果层的 `cache_key` 设计
+
+如果后续落地 `macro_factor_analysis_cache`，则建议显式使用 `cache_key`，并对齐现有：
+
+- `signal_analysis_cache.cache_key`
+- `option_macro_analysis_cache.cache_key`
+
+建议模板：
+
+```text
+{market}:{code_or_empty}:{trade_date}:{analysis_profile}:{rule_version}:{model}:{bundle_digest}
+```
+
+例如：
+
+```text
+US::2026-05-28:enterprise_potential_v1:v1:gpt-5.4:ab12cd34...
+```
+
+其中：
+
+- `market`：市场
+- `code_or_empty`：宏观通常为空字符串；若未来支持行业/股票级宏观分析，可填 code
+- `trade_date`：交易日
+- `analysis_profile`：例如 `enterprise_potential_v1`
+- `rule_version`：规则版本
+- `model`：模型名
+- `bundle_digest`：`bundle_json` 的摘要
+
+这样可以保证：
+
+- 同一天同市场
+- 但不同规则版本 / 不同模型 / 不同输入 bundle
+
+不会互相误命中
+
+#### 12.5.6 为什么这里要区分 `dedupe_key` 和 `cache_key`
+
+建议遵守以下语义边界：
+
+- `dedupe_key`
+  - 用于“事实明细”的唯一身份
+  - 主要服务于 `macro_factor_values`
+  - 对齐 `market_intel_items`
+- `cache_key`
+  - 用于“分析结果缓存”的命中身份
+  - 主要服务于 `*_analysis_cache`
+  - 对齐 `signal_analysis_cache` 和 `option_macro_analysis_cache`
+
+这样设计后，整套命名和职责边界会与当前项目保持一致，不会引入一套完全新的持久化语义。
+
 ---
 
 ## 13. 执行策略建议
@@ -767,7 +1227,8 @@ flowchart LR
 - 数据源选哪家
 - 各市场口径是否统一
 - 更新频率如何控制
-- 是否落库为独立 snapshot 表
+- `macro_factor_values` 与 `macro_factor_bundles` 的刷新策略如何按不同频率落地
+- `effective_at` 是否要在所有 provider 中强制补齐
 
 ---
 
@@ -903,17 +1364,18 @@ flowchart LR
 
 缺口：
 
-- 企业潜力分析专用 cache 设计尚未定
+- 企业潜力分析专用 analysis cache 是否独立落表尚未定
 
 可选方向：
 
 1. 复用现有 `signal_analysis_cache`
 2. 新增 `enterprise_potential_analysis_cache`
-3. 只写入 `screening_results.filter_details`
+3. 新增 `macro_factor_analysis_cache`
+4. 只写入 `screening_results.filter_details`
 
 待调研问题：
 
-- 是否需要按 `evidence_digest + rule_version + model` 缓存
+- 是否需要按 `bundle_digest + rule_version + model` 缓存
 - 是否需要保留完整模块评分 JSON
 - 缓存失效策略如何定义
 
