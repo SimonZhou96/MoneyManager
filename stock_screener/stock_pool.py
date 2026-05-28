@@ -66,7 +66,7 @@ MAJOR_INDEX_CODES_BY_MARKET = {
         "000016",  # 上证50
         "399006",  # 创业板指
     ],
-    "US": [],
+    "US": ["sp500", "nasdaq100", "dow30"],
 }
 
 A_CORE_INDEX_DEFINITIONS = (
