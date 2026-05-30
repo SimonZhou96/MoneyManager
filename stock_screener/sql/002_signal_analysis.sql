@@ -87,3 +87,28 @@ CREATE TABLE IF NOT EXISTS signal_analysis_cache (
     KEY idx_signal_analysis_cache_scope (market, code, timeframe, analysis_profile, trade_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 COMMENT='股票维度共享 signal analysis 缓存';
+
+CREATE TABLE IF NOT EXISTS signal_company_news_cache (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    cache_key VARCHAR(240) NOT NULL,
+    market VARCHAR(8) NOT NULL,
+    code VARCHAR(32) NOT NULL,
+    timeframe VARCHAR(16) NOT NULL,
+    analysis_profile VARCHAR(32) NOT NULL DEFAULT 'default',
+    trade_date DATE NOT NULL,
+    provider VARCHAR(64) NOT NULL COMMENT '联网搜索 provider',
+    name VARCHAR(255) NULL COMMENT '股票名称',
+    company_events JSON NULL COMMENT '公司事件',
+    company_hot_news JSON NULL COMMENT '公司热点新闻',
+    news_impact VARCHAR(64) NULL COMMENT '新闻影响判断',
+    news_sources JSON NULL COMMENT '新闻来源',
+    source_urls JSON NULL COMMENT '信息来源 URL',
+    model VARCHAR(128) NULL COMMENT '模型名',
+    raw_response JSON NULL COMMENT '模型原始结构化响应',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_signal_company_news_cache_key (cache_key),
+    KEY idx_signal_company_news_cache_scope (market, code, timeframe, analysis_profile, trade_date, provider)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+COMMENT='按搜索 provider 区分的公司时事缓存';

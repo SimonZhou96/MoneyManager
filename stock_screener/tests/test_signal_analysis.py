@@ -172,6 +172,22 @@ class CacheAwareRepository:
         return self.cached_rows.get((market, code, timeframe, analysis_profile, str(trade_date)))
 
 
+class CompanyNewsCacheRepository(CacheAwareRepository):
+    def __init__(self, cached_rows=None, company_news_rows=None):
+        super().__init__(cached_rows)
+        self.company_news_rows = company_news_rows or {}
+
+    def get_company_news_cache(self, market, code, timeframe, analysis_profile, trade_date, provider):
+        return self.company_news_rows.get((
+            market,
+            code,
+            timeframe,
+            analysis_profile,
+            str(trade_date),
+            provider,
+        ))
+
+
 class FakeMarketIntelService:
     def __init__(self):
         self.market_digest_calls = []
@@ -582,6 +598,21 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertEqual(provider.api_key, "bigmodel-key")
         self.assertEqual(provider.timeout_sec, 11)
 
+    def test_search_factory_uses_zhipu_api_key_alias_for_zhipu_fallback(self):
+        with patch.dict(
+            os.environ,
+            {
+                "SIGNAL_SEARCH_PROVIDER_ORDER": "zhipuai",
+                "ZHIPU_API_KEY": "zhipu-alias-key",
+            },
+            clear=True,
+        ):
+            provider = SearchProviderFactory.from_env(AnalysisSettings(timeout_sec=11))
+
+        self.assertIsInstance(provider, ZhipuWebSearchProvider)
+        self.assertEqual(provider.api_key, "zhipu-alias-key")
+        self.assertEqual(provider.timeout_sec, 11)
+
     def test_run_signal_analysis_uses_shared_cache_before_llm(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             csv_path = self.write_csv(tmp_dir)
@@ -629,6 +660,226 @@ class SignalAnalysisTest(unittest.TestCase):
             self.assertEqual(search.search_queries, [])
             self.assertEqual(search.company_batch_calls, [])
             self.assertEqual(result.results_by_code["HK.00001"].summary, "cached")
+
+    def test_run_signal_analysis_recomputes_when_cached_company_events_below_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            repo = CacheAwareRepository({
+                ("HK", "HK.00001", "1d", "default", "2026-05-19"): {
+                    "code": "HK.00001",
+                    "name": "Test HK",
+                    "analysis_status": "success",
+                    "summary": "cached without events",
+                    "reliability_score": 55,
+                    "confidence_score": 45,
+                    "signal_bias": "neutral",
+                    "company_events": [],
+                    "company_hot_news": ["缓存公司新闻"],
+                    "market_hot_news": ["缓存市场新闻"],
+                    "news_impact": "中性",
+                    "news_sources": ["https://example.com/cache"],
+                    "hot_sectors": ["机器人"],
+                    "hot_sector_mark": "观察",
+                    "matched_hot_sectors": [],
+                    "hot_sector_reason": "cache",
+                    "source_urls": ["https://example.com/cache"],
+                    "data_gaps": [],
+                    "evidence_links": [],
+                    "factor_citations": {},
+                    "model": "cache",
+                }
+            })
+            llm = RecordingLLMProvider("recompute", "recompute-model", reliability_score=92.0)
+            search = FakeSearchProvider()
+            with patch.dict(os.environ, {"SIGNAL_CACHE_MIN_COMPANY_EVENTS": "1"}):
+                result = run_signal_analysis_for_market(
+                    mysql_config=None,
+                    task_id="task-cache-threshold",
+                    market="HK",
+                    csv_path=csv_path,
+                    check_date=date(2026, 5, 19),
+                    timeframe="1d",
+                    enabled=True,
+                    repository_override=repo,
+                    search_provider_override=search,
+                    llm_provider_override=llm,
+                )
+
+            self.assertEqual(llm.calls, 1)
+            self.assertEqual(search.company_batch_calls, [["HK.00001"]])
+            self.assertEqual(result.results_by_code["HK.00001"].model, "recompute-model")
+            self.assertTrue(any("缓存重算触发" in warning for warning in result.warnings))
+
+    def test_run_signal_analysis_uses_provider_specific_company_news_cache(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            base_cache = {
+                ("HK", "HK.00001", "1d", "default", "2026-05-19"): {
+                    "code": "HK.00001",
+                    "name": "Test HK",
+                    "analysis_status": "success",
+                    "summary": "cached summary",
+                    "reliability_score": 88,
+                    "confidence_score": 75,
+                    "signal_bias": "bullish",
+                    "company_events": [],
+                    "company_hot_news": [],
+                    "market_hot_news": ["缓存市场新闻"],
+                    "news_impact": "信息不足",
+                    "news_sources": [],
+                    "hot_sectors": ["机器人"],
+                    "hot_sector_mark": "重点",
+                    "matched_hot_sectors": ["机器人"],
+                    "hot_sector_reason": "cache",
+                    "source_urls": [],
+                    "data_gaps": [],
+                    "evidence_links": [],
+                    "factor_citations": {},
+                    "model": "cache",
+                }
+            }
+            news_cache = {
+                ("HK", "HK.00001", "1d", "default", "2026-05-19", "fake"): {
+                    "company_news_provider": "fake",
+                    "company_events": ["独立缓存公司事件"],
+                    "company_hot_news": ["独立缓存公司新闻"],
+                    "news_impact": "利好",
+                    "news_sources": ["https://example.com/news"],
+                    "source_urls": ["https://example.com/news"],
+                }
+            }
+            repo = CompanyNewsCacheRepository(base_cache, news_cache)
+            llm = RecordingLLMProvider("unused", "unused-model")
+            search = FakeSearchProvider()
+
+            result = run_signal_analysis_for_market(
+                mysql_config=None,
+                task_id="task-company-news-cache",
+                market="HK",
+                csv_path=csv_path,
+                check_date=date(2026, 5, 19),
+                timeframe="1d",
+                enabled=True,
+                repository_override=repo,
+                search_provider_override=search,
+                llm_provider_override=llm,
+            )
+
+            self.assertEqual(llm.calls, 0)
+            self.assertEqual(search.company_batch_calls, [])
+            analysis = result.results_by_code["HK.00001"]
+            self.assertEqual(analysis.company_events, ["独立缓存公司事件"])
+            self.assertEqual(analysis.company_hot_news, ["独立缓存公司新闻"])
+            self.assertEqual(analysis.news_impact, "利好")
+
+    def test_run_signal_analysis_recomputes_when_company_news_cache_missing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            repo = CompanyNewsCacheRepository({
+                ("HK", "HK.00001", "1d", "default", "2026-05-19"): {
+                    "code": "HK.00001",
+                    "name": "Test HK",
+                    "analysis_status": "success",
+                    "summary": "old cache",
+                    "reliability_score": 55,
+                    "confidence_score": 45,
+                    "signal_bias": "neutral",
+                    "company_events": [],
+                    "company_hot_news": [],
+                    "market_hot_news": ["缓存市场新闻"],
+                    "news_impact": "信息不足",
+                    "news_sources": [],
+                    "hot_sectors": [],
+                    "hot_sector_mark": "未知",
+                    "matched_hot_sectors": [],
+                    "hot_sector_reason": "",
+                    "source_urls": [],
+                    "data_gaps": [],
+                    "evidence_links": [],
+                    "factor_citations": {},
+                    "model": "cache",
+                }
+            })
+            llm = RecordingLLMProvider("recompute", "recompute-model", reliability_score=92.0)
+            search = FakeSearchProvider()
+
+            result = run_signal_analysis_for_market(
+                mysql_config=None,
+                task_id="task-company-news-cache-miss",
+                market="HK",
+                csv_path=csv_path,
+                check_date=date(2026, 5, 19),
+                timeframe="1d",
+                enabled=True,
+                repository_override=repo,
+                search_provider_override=search,
+                llm_provider_override=llm,
+            )
+
+            self.assertEqual(llm.calls, 1)
+            self.assertEqual(search.company_batch_calls, [["HK.00001"]])
+            self.assertEqual(result.results_by_code["HK.00001"].model, "recompute-model")
+            self.assertTrue(any("公司时事缓存缺失" in warning for warning in result.warnings))
+
+    def test_company_news_cache_key_keeps_providers_separate(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = self.write_csv(tmp_dir)
+            base_cache = {
+                ("HK", "HK.00001", "1d", "default", "2026-05-19"): {
+                    "code": "HK.00001",
+                    "name": "Test HK",
+                    "analysis_status": "success",
+                    "summary": "cached summary",
+                    "reliability_score": 88,
+                    "confidence_score": 75,
+                    "signal_bias": "bullish",
+                    "company_events": [],
+                    "company_hot_news": [],
+                    "market_hot_news": ["缓存市场新闻"],
+                    "news_impact": "信息不足",
+                    "news_sources": [],
+                    "hot_sectors": [],
+                    "hot_sector_mark": "未知",
+                    "matched_hot_sectors": [],
+                    "hot_sector_reason": "",
+                    "source_urls": [],
+                    "data_gaps": [],
+                    "evidence_links": [],
+                    "factor_citations": {},
+                    "model": "cache",
+                }
+            }
+            news_cache = {
+                ("HK", "HK.00001", "1d", "default", "2026-05-19", "tavily"): {
+                    "company_news_provider": "tavily",
+                    "company_events": ["Tavily 公司事件"],
+                    "company_hot_news": [],
+                    "news_impact": "中性",
+                    "news_sources": [],
+                    "source_urls": [],
+                }
+            }
+            repo = CompanyNewsCacheRepository(base_cache, news_cache)
+            llm = RecordingLLMProvider("recompute", "recompute-model")
+            search = FakeSearchProvider()
+            search.name = "zhipuai"
+
+            result = run_signal_analysis_for_market(
+                mysql_config=None,
+                task_id="task-company-news-provider-separation",
+                market="HK",
+                csv_path=csv_path,
+                check_date=date(2026, 5, 19),
+                timeframe="1d",
+                enabled=True,
+                repository_override=repo,
+                search_provider_override=search,
+                llm_provider_override=llm,
+            )
+
+            self.assertEqual(llm.calls, 1)
+            self.assertEqual(result.results_by_code["HK.00001"].model, "recompute-model")
+            self.assertTrue(any("providers=zhipuai" in warning for warning in result.warnings))
 
     def test_expand_company_documents_adds_market_specific_authoritative_queries(self):
         provider = FakeSearchProvider()
@@ -906,11 +1157,13 @@ class SignalAnalysisTest(unittest.TestCase):
         tavily = Provider("tavily", should_fail=True)
         zhipu = Provider("zhipuai")
 
-        grouped = FallbackSearchProvider([tavily, zhipu]).search_companies_batch("HK", rows, 3)
+        provider = FallbackSearchProvider([tavily, zhipu])
+        grouped = provider.search_companies_batch("HK", rows, 3)
 
         self.assertEqual(tavily.batch_calls, 1)
         self.assertEqual(zhipu.batch_calls, 1)
         self.assertEqual(grouped["HK.01810"][0].title, "zhipuai HK.01810")
+        self.assertEqual(provider.last_success_provider, "zhipuai")
 
     def test_fallback_search_provider_returns_empty_when_all_providers_fail(self):
         class Provider:

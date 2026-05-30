@@ -60,6 +60,8 @@ class MySqlSignalAnalysisRepository:
             db.upsert_signal_analysis_results(rows)
             db.init_signal_analysis_cache_schema()
             db.upsert_signal_analysis_cache(rows)
+            db.init_company_news_cache_schema()
+            db.upsert_company_news_cache(rows)
         finally:
             db.close()
 
@@ -80,6 +82,29 @@ class MySqlSignalAnalysisRepository:
                 timeframe=timeframe,
                 analysis_profile=analysis_profile,
                 trade_date=trade_date,
+            )
+        finally:
+            db.close()
+
+    def get_company_news_cache(
+        self,
+        market: str,
+        code: str,
+        timeframe: str,
+        analysis_profile: str,
+        trade_date: date,
+        provider: str,
+    ) -> Optional[dict]:
+        db = MarketDatabase(self.mysql_config)
+        try:
+            db.init_company_news_cache_schema()
+            return db.get_company_news_cache(
+                market=market,
+                code=code,
+                timeframe=timeframe,
+                analysis_profile=analysis_profile,
+                trade_date=trade_date,
+                provider=provider,
             )
         finally:
             db.close()
@@ -240,6 +265,7 @@ def _prepare_analysis_providers(
     llm_provider, llm_warnings = _filter_llm_provider_by_preflight(llm_provider)
     warnings.extend(search_warnings)
     warnings.extend(llm_warnings)
+    warnings.append(_search_provider_startup_log(search_provider))
     return search_provider, llm_provider, warnings
 
 
@@ -326,6 +352,16 @@ def _analysis_network_preflight(search_provider, llm_provider) -> List[str]:
     """Backward-compatible warning-only preflight helper for tests and scripts."""
     _, _, warnings = _prepare_analysis_providers(search_provider, llm_provider)
     return warnings
+
+
+def _search_provider_startup_log(search_provider: SearchProvider) -> str:
+    if not getattr(search_provider, "is_available", False):
+        return "[AI分析] 联网检索启动: 未启用可用搜索 provider（当前将以不联网模式运行）"
+    if isinstance(search_provider, FallbackSearchProvider):
+        provider_names = ",".join(getattr(search_provider, "provider_names", []) or [])
+        return f"[AI分析] 联网检索启动: 启用 fallback 搜索链路 [{provider_names}]"
+    name = getattr(search_provider, "name", search_provider.__class__.__name__)
+    return f"[AI分析] 联网检索启动: 启用单搜索 provider [{name}]（未配置 fallback）"
 
 
 def _has_llm_preflight_failure(warnings: List[str]) -> bool:

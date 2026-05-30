@@ -11,7 +11,7 @@ import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
 from report_naming import analysis_report_path_for_csv, market_signal_report_stem
 
@@ -102,6 +102,7 @@ class SignalAnalysisContext:
     market_documents: List[SearchDocument] = field(default_factory=list)
     sector_documents: List[SearchDocument] = field(default_factory=list)
     company_documents: Dict[str, List[SearchDocument]] = field(default_factory=dict)
+    company_news_providers: Dict[str, str] = field(default_factory=dict)
     market_intel_service: Any = None
     market_intel_market_bundle: Dict[str, Any] = field(default_factory=dict)
     market_intel_stock_bundles: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -160,6 +161,8 @@ class LoadCachedResultsStep(AnalysisStep):
         getter = getattr(context.repository, "get_signal_analysis_cache", None)
         if not callable(getter):
             return
+        company_news_getter = getattr(context.repository, "get_company_news_cache", None)
+        provider_candidates = _company_news_provider_candidates(context.search_provider)
         pending_rows: List[ScreeningSignalRow] = []
         for row in context.rows:
             cached = getter(
@@ -170,6 +173,42 @@ class LoadCachedResultsStep(AnalysisStep):
                 context.check_date,
             )
             if cached:
+                if callable(company_news_getter) and provider_candidates:
+                    company_news_cache = _load_valid_company_news_cache(
+                        getter=company_news_getter,
+                        context=context,
+                        row=row,
+                        provider_candidates=provider_candidates,
+                    )
+                    if company_news_cache is None:
+                        context.warnings.append(
+                            "[AI分析] 公司时事缓存缺失，触发重算: "
+                            f"code={row.code} providers={','.join(provider_candidates)}"
+                        )
+                        pending_rows.append(row)
+                        continue
+                    cached = _merge_company_news_cache(cached, company_news_cache)
+                    provider = str(company_news_cache.get("company_news_provider") or "").strip()
+                    if provider:
+                        context.company_news_providers[row.code] = provider
+
+                cached_events = cached.get("company_events") or []
+                cached_hot_news = cached.get("company_hot_news") or []
+                min_company_events = _cache_min_company_events()
+                if len(cached_events) < min_company_events:
+                    context.warnings.append(
+                        "[AI分析] 缓存重算触发: "
+                        f"code={row.code} "
+                        f"company_events={len(cached_events)}<{min_company_events}"
+                    )
+                    pending_rows.append(row)
+                    continue
+                context.warnings.append(
+                    "[AI分析] 缓存命中: "
+                    f"code={row.code} "
+                    f"company_events={len(cached_events)} "
+                    f"company_hot_news={len(cached_hot_news)}"
+                )
                 context.results_by_code[row.code] = SignalAnalysisResult.from_llm_item(
                     cached,
                     model=str(cached.get("model") or "cache"),
@@ -222,6 +261,9 @@ class SearchContextStep(AnalysisStep):
                     context.settings.search_max_results,
                 ),
             ])
+            context.warnings.append(
+                f"[AI分析] 联网检索结果: 市场上下文 {len(context.market_documents)} 条"
+            )
         except Exception as exc:
             context.warnings.append(f"市场上下文搜索失败: {type(exc).__name__}: {exc}")
 
@@ -233,6 +275,9 @@ class SearchContextStep(AnalysisStep):
                     context.settings.search_max_results,
                 ),
             ])
+            context.warnings.append(
+                f"[AI分析] 联网检索结果: 热点板块 {len(context.sector_documents)} 条"
+            )
         except Exception as exc:
             context.warnings.append(f"热点板块搜索失败: {type(exc).__name__}: {exc}")
 
@@ -266,6 +311,16 @@ class SearchContextStep(AnalysisStep):
                 ])
                 if not documents:
                     missing_codes.append(row.code)
+                provider = _current_company_news_provider(context.search_provider)
+                if provider:
+                    context.company_news_providers[row.code] = provider
+            matched_count = sum(
+                1 for row in batch if context.company_documents.get(row.code)
+            )
+            total_docs = sum(len(context.company_documents.get(row.code) or []) for row in batch)
+            context.warnings.append(
+                f"[AI分析] 联网检索结果: 公司事件 batch={len(batch)} matched={matched_count} docs={total_docs}"
+            )
             if missing_codes:
                 context.warnings.append(
                     f"公司事件批量搜索未匹配到 {len(missing_codes)} 只股票: {','.join(missing_codes)}"
@@ -284,7 +339,13 @@ class SearchContextStep(AnalysisStep):
                     f"ETF主题批量搜索失败: {type(exc).__name__}: {exc}; codes={','.join(codes)}"
                 )
                 documents = []
+            context.warnings.append(
+                f"[AI分析] 联网检索结果: ETF主题 batch={len(batch)} docs={len(documents)}"
+            )
+            provider = _current_company_news_provider(context.search_provider)
             for row in batch:
+                if provider:
+                    context.company_news_providers[row.code] = provider
                 context.company_documents[row.code] = dedupe_documents([
                     *(context.company_documents.get(row.code) or []),
                     *documents,
@@ -581,8 +642,9 @@ class PersistAnalysisStep(AnalysisStep):
     def run(self, context: SignalAnalysisContext) -> None:
         if context.repository is None:
             return
-        rows = [
-            context.results_by_code[row.code].to_db_row(
+        rows = []
+        for row in (context.all_rows or context.rows):
+            item = context.results_by_code[row.code].to_db_row(
                 task_id=context.task_id,
                 market=context.market,
                 check_date=context.check_date,
@@ -590,8 +652,10 @@ class PersistAnalysisStep(AnalysisStep):
                 timeframe=context.timeframe,
                 analysis_profile=context.analysis_profile,
             )
-            for row in (context.all_rows or context.rows)
-        ]
+            provider = context.company_news_providers.get(row.code) or _current_company_news_provider(context.search_provider)
+            if provider:
+                item["company_news_provider"] = provider
+            rows.append(item)
         try:
             context.repository.save_results(rows)
         except Exception as exc:
@@ -662,6 +726,70 @@ def _drain_llm_provider_warnings(provider: LLMProvider) -> List[str]:
     return list(drain())
 
 
+def _company_news_provider_candidates(search_provider: SearchProvider) -> List[str]:
+    if not getattr(search_provider, "is_available", False):
+        return []
+    names = getattr(search_provider, "provider_names", None)
+    if names:
+        return _dedupe([str(name).strip() for name in names if str(name).strip()])
+    name = str(getattr(search_provider, "name", search_provider.__class__.__name__) or "").strip()
+    if not name or name == "null":
+        return []
+    return [name]
+
+
+def _current_company_news_provider(search_provider: SearchProvider) -> str:
+    provider = str(getattr(search_provider, "last_success_provider", "") or "").strip()
+    if provider:
+        return provider
+    candidates = _company_news_provider_candidates(search_provider)
+    return candidates[0] if len(candidates) == 1 else ""
+
+
+def _load_valid_company_news_cache(
+    *,
+    getter: Callable[..., Optional[dict]],
+    context: SignalAnalysisContext,
+    row: ScreeningSignalRow,
+    provider_candidates: List[str],
+) -> Optional[dict]:
+    min_company_events = _cache_min_company_events()
+    for provider in provider_candidates:
+        cached = getter(
+            context.market,
+            row.code,
+            context.timeframe,
+            context.analysis_profile,
+            context.check_date,
+            provider,
+        )
+        if not cached:
+            continue
+        events = cached.get("company_events") or []
+        if len(events) < min_company_events:
+            context.warnings.append(
+                "[AI分析] 公司时事缓存未达标: "
+                f"code={row.code} provider={provider} "
+                f"company_events={len(events)}<{min_company_events}"
+            )
+            continue
+        return cached
+    return None
+
+
+def _merge_company_news_cache(base: dict, company_news: dict) -> dict:
+    merged = dict(base)
+    for key in (
+        "company_events",
+        "company_hot_news",
+        "news_impact",
+        "news_sources",
+        "source_urls",
+    ):
+        merged[key] = company_news.get(key)
+    return merged
+
+
 def _has_search_preflight_failure(warnings: List[str]) -> bool:
     return any("联网检索预检失败" in warning for warning in warnings)
 
@@ -688,6 +816,14 @@ def _company_search_batch_size() -> int:
         return max(1, int(raw))
     except ValueError:
         return 10
+
+
+def _cache_min_company_events() -> int:
+    raw = os.getenv("SIGNAL_CACHE_MIN_COMPANY_EVENTS", "0").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
 
 
 def _env_int(name: str, default: int) -> int:

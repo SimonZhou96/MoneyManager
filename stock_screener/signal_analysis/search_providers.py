@@ -69,6 +69,7 @@ class FallbackSearchProvider(SearchProvider):
             if getattr(provider, "is_available", False)
         ]
         self.last_errors: List[str] = []
+        self.last_success_provider: str = ""
 
     @property
     def is_available(self) -> bool:
@@ -80,9 +81,12 @@ class FallbackSearchProvider(SearchProvider):
 
     def search(self, query: str, max_results: int) -> List[SearchDocument]:
         self.last_errors = []
+        self.last_success_provider = ""
         for provider in self.providers:
             try:
-                return provider.search(query, max_results)
+                result = provider.search(query, max_results)
+                self.last_success_provider = getattr(provider, "name", provider.__class__.__name__)
+                return result
             except Exception as exc:
                 self.last_errors.append(self._format_provider_error(provider, exc))
         return []
@@ -96,9 +100,11 @@ class FallbackSearchProvider(SearchProvider):
         if not rows:
             return {}
         self.last_errors = []
+        self.last_success_provider = ""
         for provider in self.providers:
             try:
                 result = provider.search_companies_batch(market, rows, max_results)
+                self.last_success_provider = getattr(provider, "name", provider.__class__.__name__)
                 return {row.code: list((result or {}).get(row.code, [])) for row in rows}
             except Exception as exc:
                 self.last_errors.append(self._format_provider_error(provider, exc))

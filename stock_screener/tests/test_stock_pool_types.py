@@ -1,4 +1,5 @@
 import unittest
+import time
 from unittest.mock import patch
 from pathlib import Path
 
@@ -10,6 +11,29 @@ from stock_pool import CANONICAL_POOL_TYPES, StockPoolFetcher
 
 
 STOCK_SCREENER_DIR = Path(__file__).resolve().parents[1]
+
+
+class FakeIndexConstituentDb:
+    def __init__(self, snapshot=None):
+        self.snapshot = snapshot or []
+        self.saved = []
+
+    def upsert_stock_index_constituents(self, market, rows, source="online"):
+        self.saved.append((market, rows, source))
+
+    def get_stock_index_constituents(self, market, index_codes=None):
+        return list(self.snapshot)
+
+
+class FakeUSIndexProvider:
+    def __init__(self, source, rows):
+        self.source = source
+        self.rows = rows
+        self.called = False
+
+    def fetch(self, definitions):
+        self.called = True
+        return list(self.rows)
 
 
 class StockPoolTypesTest(unittest.TestCase):
@@ -63,17 +87,99 @@ class StockPoolTypesTest(unittest.TestCase):
         self.assertEqual(by_code["SZ.000001"]["name"], "平安银行")
         self.assertEqual(by_code["SH.600519"]["index_name"], "沪深300")
 
-    def test_us_major_index_constituents_are_normalized_from_public_tables(self):
-        table = pd.DataFrame([
-            {"Symbol": "BRK.B", "Security": "Berkshire Hathaway"},
-            {"Symbol": "AAPL", "Security": "Apple"},
+    def test_a_share_major_index_constituents_fallback_to_db_snapshot_when_akshare_times_out(self):
+        def slow_cons(symbol):
+            time.sleep(0.2)
+            return pd.DataFrame()
+
+        db = FakeIndexConstituentDb(snapshot=[{
+            "code": "SH.600519",
+            "name": "贵州茅台",
+            "index_code": "000300",
+            "index_name": "沪深300",
+        }])
+        with patch.dict("os.environ", {"STOCK_POOL_A_INDEX_FETCH_TIMEOUT_SEC": "0.1"}), \
+                patch.object(ak, "index_stock_cons_csindex", side_effect=slow_cons), \
+                patch.object(ak, "index_stock_cons_sina", return_value=pd.DataFrame()), \
+                patch.object(ak, "index_stock_cons", return_value=pd.DataFrame()):
+            rows = StockPoolFetcher(db=db).fetch_major_index_constituents("A", index_codes=["000300"])
+
+        self.assertEqual(rows[0]["code"], "SH.600519")
+        self.assertEqual(rows[0]["index_name"], "沪深300")
+
+    def test_us_major_index_constituents_use_funda_provider_first(self):
+        funda = FakeUSIndexProvider("funda", [
+            {
+                "code": "US.BRK-B",
+                "name": "Berkshire Hathaway",
+                "index_code": "sp500",
+                "index_name": "标普500",
+                "extra_data": {"source": "funda"},
+            },
+            {
+                "code": "US.AAPL",
+                "name": "Apple",
+                "index_code": "sp500",
+                "index_name": "标普500",
+                "extra_data": {"source": "funda"},
+            },
         ])
-        with patch("stock_pool.pd.read_html", return_value=[table]):
-            rows = StockPoolFetcher().fetch_major_index_constituents("US", index_codes=[])
+        yfinance = FakeUSIndexProvider("yfinance", [
+            {"code": "US.MSFT", "name": "Microsoft", "index_code": "sp500", "index_name": "标普500"},
+        ])
+        with patch.object(StockPoolFetcher, "_us_major_index_providers", return_value=[funda, yfinance]):
+            rows = StockPoolFetcher().fetch_major_index_constituents("US", index_codes=["sp500"])
 
         by_code = {item["code"]: item for item in rows}
         self.assertEqual(by_code["US.BRK-B"]["name"], "Berkshire Hathaway")
         self.assertEqual(by_code["US.AAPL"]["index_name"], "标普500")
+        self.assertTrue(funda.called)
+        self.assertFalse(yfinance.called)
+
+    def test_us_major_index_constituents_save_provider_snapshot_to_db(self):
+        provider = FakeUSIndexProvider("funda", [
+            {
+                "code": "US.AAPL",
+                "name": "Apple",
+                "index_code": "sp500",
+                "index_name": "标普500",
+                "extra_data": {"source": "funda"},
+            },
+        ])
+        db = FakeIndexConstituentDb()
+        with patch.object(StockPoolFetcher, "_us_major_index_providers", return_value=[provider]):
+            rows = StockPoolFetcher(db=db).fetch_major_index_constituents("US", index_codes=[])
+
+        self.assertEqual(rows[0]["code"], "US.AAPL")
+        self.assertEqual(db.saved[0][0], "US")
+        self.assertEqual(db.saved[0][2], "funda")
+
+    def test_us_major_index_constituents_fallback_to_db_snapshot_when_online_fails(self):
+        db_provider = FakeUSIndexProvider("db_snapshot", [
+            {
+                "code": "US.MSFT",
+                "name": "Microsoft",
+                "index_code": "sp500",
+                "index_name": "标普500",
+                "extra_data": {"source": "db_snapshot"},
+            },
+        ])
+        with patch.object(StockPoolFetcher, "_us_major_index_providers", return_value=[
+            FakeUSIndexProvider("funda", []),
+            FakeUSIndexProvider("yfinance", []),
+            db_provider,
+        ]):
+            rows = StockPoolFetcher().fetch_major_index_constituents("US", index_codes=["sp500"])
+
+        self.assertEqual(rows, [
+            {
+                "code": "US.MSFT",
+                "name": "Microsoft",
+                "index_code": "sp500",
+                "index_name": "标普500",
+                "extra_data": {"source": "db_snapshot"},
+            },
+        ])
 
     def test_frontend_screening_form_exposes_pool_type_selection(self):
         source = (STOCK_SCREENER_DIR / "web_frontend" / "src" / "main.tsx").read_text(encoding="utf-8")

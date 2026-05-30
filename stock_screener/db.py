@@ -16,6 +16,7 @@ import hashlib
 import json
 import re
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -25,11 +26,24 @@ import pandas as pd
 from stock_pool import DEFAULT_POOL_TYPES_TEXT
 from strategy import TECHNICAL_PATTERN_DEFINITIONS
 
+_PYMYSQL_IMPORT_ERROR = None
+
 try:
     import pymysql
 except Exception as e:  # pragma: no cover
     pymysql = None
     _PYMYSQL_IMPORT_ERROR = e
+
+
+MYSQL_RETRYABLE_ERROR_CODES = {1205, 1213}
+
+
+def _is_mysql_retryable_error(exc: Exception) -> bool:
+    code = getattr(exc, "args", [None])[0]
+    try:
+        return int(code) in MYSQL_RETRYABLE_ERROR_CODES
+    except (TypeError, ValueError):
+        return False
 
 
 @dataclass(frozen=True)
@@ -416,6 +430,22 @@ class MarketDatabase:
             self.conn.close()
         except Exception:
             pass
+
+    def _execute_with_retry(self, operation, *, label: str, attempts: int = 3):
+        for attempt in range(1, attempts + 1):
+            try:
+                return operation()
+            except Exception as exc:
+                if not _is_mysql_retryable_error(exc) or attempt >= attempts:
+                    raise
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                delay = 0.2 * attempt
+                print(f"[DB重试] {label} 遇到锁冲突，{delay:.1f}s 后重试({attempt}/{attempts}): {exc}", flush=True)
+                time.sleep(delay)
+        return None
 
     # ------------------------------------------------------------------
     # Schema
@@ -1013,8 +1043,11 @@ class MarketDatabase:
                 pb_ratio=COALESCE(VALUES(pb_ratio), pb_ratio),
                 source=VALUES(source)
         """
-        with self.conn.cursor() as cursor:
-            cursor.executemany(sql, rows)
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, rows)
+
+        self._execute_with_retry(operation, label="upsert_stocks")
 
     def get_stocks(self, market: str, include_fundamentals: bool = False) -> List[dict]:
         with self.conn.cursor() as cursor:
@@ -1103,8 +1136,11 @@ class MarketDatabase:
                     sector=COALESCE(%s,sector), sector_code=COALESCE(%s,sector_code),
                     industry=COALESCE(%s,industry), industry_code=COALESCE(%s,industry_code)
                  WHERE market=%s AND code=%s"""
-        with self.conn.cursor() as cursor:
-            cursor.executemany(sql, rows)
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, rows)
+
+        self._execute_with_retry(operation, label="batch_update_stock_sectors")
 
     # ------------------------------------------------------------------
     # EMA 突破信号（按 timeframe 分表）
@@ -1246,8 +1282,11 @@ class MarketDatabase:
                 market_cap=VALUES(market_cap), pe_ratio=VALUES(pe_ratio),
                 close_price=VALUES(close_price)
         """
-        with self.conn.cursor() as cursor:
-            cursor.executemany(sql, rows)
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, rows)
+
+        self._execute_with_retry(operation, label="upsert_screening_results")
 
     def update_screening_result_sectors(self, task_id: str, market: str, rows: Iterable[dict]):
         """补写已生成筛选结果的 sector/industry 字段。"""
@@ -1271,8 +1310,11 @@ class MarketDatabase:
                 industry=COALESCE(%s, industry)
             WHERE task_id=%s AND market=%s AND code=%s
         """
-        with self.conn.cursor() as cursor:
-            cursor.executemany(sql, values)
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, values)
+
+        self._execute_with_retry(operation, label="update_screening_result_sectors")
 
     def update_screening_result_names(self, task_id: str, market: str, rows: Iterable[dict]):
         """补写已生成筛选结果的展示名称。"""
@@ -1290,8 +1332,11 @@ class MarketDatabase:
             SET name=%s
             WHERE task_id=%s AND market=%s AND code=%s
         """
-        with self.conn.cursor() as cursor:
-            cursor.executemany(sql, values)
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, values)
+
+        self._execute_with_retry(operation, label="update_screening_result_names")
 
     def update_screening_result_main_force_risks(self, task_id: str, market: str, rows: Iterable[dict]):
         """补写已生成筛选结果的主力流出风险摘要。"""
@@ -1322,8 +1367,11 @@ class MarketDatabase:
                 main_force_risk_updated_at=NOW(6)
             WHERE task_id=%s AND market=%s AND code=%s
         """
-        with self.conn.cursor() as cursor:
-            cursor.executemany(sql, values)
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, values)
+
+        self._execute_with_retry(operation, label="update_screening_result_main_force_risks")
 
     # ------------------------------------------------------------------
     # watchlist_cache
@@ -1379,9 +1427,12 @@ class MarketDatabase:
                 (task_id, market, timeframe, status, total_count, completed_count, params_json, check_date)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
         """
-        with self.conn.cursor() as cursor:
-            cursor.execute(sql, (task_id, market, timeframe, "running", total_count, 0, params_str, check_date))
-            return cursor.lastrowid
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.execute(sql, (task_id, market, timeframe, "running", total_count, 0, params_str, check_date))
+                return cursor.lastrowid
+
+        return self._execute_with_retry(operation, label="create_screening_task")
 
     def update_task_progress(
         self,
@@ -1396,14 +1447,20 @@ class MarketDatabase:
             SET completed_count=%s, current_stock_code=%s, current_stock_name=%s
             WHERE task_id=%s
         """
-        with self.conn.cursor() as cursor:
-            cursor.execute(sql, (completed_count, current_stock_code, current_stock_name, task_id))
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.execute(sql, (completed_count, current_stock_code, current_stock_name, task_id))
+
+        self._execute_with_retry(operation, label="update_task_progress")
 
     def update_task_status(self, task_id: str, status: str):
         """更新任务状态"""
         sql = "UPDATE screening_tasks SET status=%s WHERE task_id=%s"
-        with self.conn.cursor() as cursor:
-            cursor.execute(sql, (status, task_id))
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.execute(sql, (status, task_id))
+
+        self._execute_with_retry(operation, label="update_task_status")
 
     def get_task_by_id(self, task_id: str) -> Optional[dict]:
         """根据 task_id 获取任务"""
@@ -1559,17 +1616,20 @@ class MarketDatabase:
                 params_json=VALUES(params_json),
                 check_date=VALUES(check_date)
         """
-        with self.conn.cursor() as cursor:
-            cursor.execute(sql, values)
-            if item.get("job_id") and item.get("market"):
-                cursor.execute(
-                    """
-                    UPDATE screening_run_locks
-                    SET task_id=%s
-                    WHERE job_id=%s AND market=%s AND timeframe=%s
-                    """,
-                    (task_id, item.get("job_id"), item.get("market"), item.get("timeframe")),
-                )
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.execute(sql, values)
+                if item.get("job_id") and item.get("market"):
+                    cursor.execute(
+                        """
+                        UPDATE screening_run_locks
+                        SET task_id=%s
+                        WHERE job_id=%s AND market=%s AND timeframe=%s
+                        """,
+                        (task_id, item.get("job_id"), item.get("market"), item.get("timeframe")),
+                    )
+
+        self._execute_with_retry(operation, label="upsert_screening_task_summary")
 
     def count_screening_results_by_task(self, task_id: str, passed_only: Optional[bool] = None) -> int:
         conditions = ["task_id=%s"]
@@ -2453,8 +2513,11 @@ class MarketDatabase:
                 sync_run_id=VALUES(sync_run_id),
                 updated_at=CURRENT_TIMESTAMP(6)
         """
-        with self.conn.cursor() as cursor:
-            cursor.executemany(sql, values)
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, values)
+
+        self._execute_with_retry(operation, label="upsert_kline_cache")
         return len(values)
 
     def get_kline_cache(self, market: str, code: str, timeframe: str, max_count: int = 500) -> pd.DataFrame:
@@ -2703,8 +2766,11 @@ class MarketDatabase:
                 is_stale=VALUES(is_stale),
                 raw_json=VALUES(raw_json)
         """
-        with self.conn.cursor() as cursor:
-            cursor.executemany(sql, rows)
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, rows)
+
+        self._execute_with_retry(operation, label="upsert_market_intel_items")
 
     def list_market_intel_items(
         self,
@@ -4477,8 +4543,11 @@ class MarketDatabase:
                 sector_code=VALUES(sector_code),
                 as_of_date=VALUES(as_of_date)
         """
-        with self.conn.cursor() as cursor:
-            cursor.executemany(sql, values)
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, values)
+
+        self._execute_with_retry(operation, label="upsert_stock_sector_memberships")
 
     def get_sector_memberships_by_codes(self, market: str, codes: List[str]) -> Dict[str, List[dict]]:
         """按股票代码查询板块成分关系。"""
@@ -4634,6 +4703,37 @@ class MarketDatabase:
                 """
             )
 
+    def init_company_news_cache_schema(self):
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS signal_company_news_cache (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    cache_key VARCHAR(240) NOT NULL,
+                    market VARCHAR(8) NOT NULL,
+                    code VARCHAR(32) NOT NULL,
+                    timeframe VARCHAR(16) NOT NULL,
+                    analysis_profile VARCHAR(32) NOT NULL DEFAULT 'default',
+                    trade_date DATE NOT NULL,
+                    provider VARCHAR(64) NOT NULL,
+                    name VARCHAR(255) NULL,
+                    company_events JSON NULL,
+                    company_hot_news JSON NULL,
+                    news_impact VARCHAR(64) NULL,
+                    news_sources JSON NULL,
+                    source_urls JSON NULL,
+                    model VARCHAR(128) NULL,
+                    raw_response JSON NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_signal_company_news_cache_key (cache_key),
+                    KEY idx_signal_company_news_cache_scope (market, code, timeframe, analysis_profile, trade_date, provider)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='按搜索 provider 区分的公司时事缓存'
+                """
+            )
+
     def upsert_signal_analysis_results(self, results: Iterable[dict]):
         """写入或更新选股信号 AI 辅助分析结果。"""
         rows = []
@@ -4722,8 +4822,11 @@ class MarketDatabase:
                 raw_response=VALUES(raw_response),
                 error_message=VALUES(error_message)
         """
-        with self.conn.cursor() as cursor:
-            cursor.executemany(sql, rows)
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, rows)
+
+        self._execute_with_retry(operation, label="upsert_signal_analysis_results")
 
     def get_signal_analysis_results_by_task(self, task_id: str) -> List[dict]:
         sql = """
@@ -4867,8 +4970,11 @@ class MarketDatabase:
                 raw_response=VALUES(raw_response),
                 error_message=VALUES(error_message)
         """
-        with self.conn.cursor() as cursor:
-            cursor.executemany(sql, rows)
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, rows)
+
+        self._execute_with_retry(operation, label="upsert_signal_analysis_cache")
 
     def get_signal_analysis_cache(
         self,
@@ -4929,6 +5035,101 @@ class MarketDatabase:
             "model": row[29],
             "raw_response": _decode_json_field(row[30], None),
             "error_message": row[31],
+        }
+
+    def upsert_company_news_cache(self, rows: Iterable[dict]) -> None:
+        values = []
+        for item in rows:
+            market = str(item.get("market") or "").strip()
+            code = str(item.get("code") or "").strip()
+            timeframe = str(item.get("timeframe") or "1d").strip() or "1d"
+            analysis_profile = str(item.get("analysis_profile") or "default").strip() or "default"
+            trade_date = item.get("check_date")
+            provider = str(item.get("company_news_provider") or item.get("provider") or "").strip()
+            if not (market and code and trade_date and provider):
+                continue
+            cache_key = f"{market}:{code}:{timeframe}:{analysis_profile}:{trade_date}:{provider}"
+            values.append((
+                cache_key,
+                market,
+                code,
+                timeframe,
+                analysis_profile,
+                trade_date,
+                provider,
+                item.get("name"),
+                _json_or_none(item.get("company_events")),
+                _json_or_none(item.get("company_hot_news")),
+                item.get("news_impact"),
+                _json_or_none(item.get("news_sources")),
+                _json_or_none(item.get("source_urls")),
+                item.get("model"),
+                _json_or_none(item.get("raw_response")),
+            ))
+        if not values:
+            return
+        sql = """
+            INSERT INTO signal_company_news_cache
+                (cache_key, market, code, timeframe, analysis_profile, trade_date, provider, name,
+                 company_events, company_hot_news, news_impact, news_sources, source_urls, model, raw_response)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                name=VALUES(name),
+                company_events=VALUES(company_events),
+                company_hot_news=VALUES(company_hot_news),
+                news_impact=VALUES(news_impact),
+                news_sources=VALUES(news_sources),
+                source_urls=VALUES(source_urls),
+                model=VALUES(model),
+                raw_response=VALUES(raw_response)
+        """
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, values)
+
+        self._execute_with_retry(operation, label="upsert_company_news_cache")
+
+    def get_company_news_cache(
+        self,
+        market: str,
+        code: str,
+        timeframe: str,
+        analysis_profile: str,
+        trade_date: date,
+        provider: str,
+    ) -> Optional[dict]:
+        provider = str(provider or "").strip()
+        if not provider:
+            return None
+        cache_key = f"{market}:{code}:{timeframe}:{analysis_profile}:{trade_date}:{provider}"
+        sql = """
+            SELECT market, code, timeframe, analysis_profile, trade_date, provider, name,
+                   company_events, company_hot_news, news_impact, news_sources, source_urls,
+                   model, raw_response
+            FROM signal_company_news_cache
+            WHERE cache_key=%s
+            LIMIT 1
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (cache_key,))
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "market": row[0],
+            "code": row[1],
+            "timeframe": row[2],
+            "analysis_profile": row[3],
+            "check_date": str(row[4]) if row[4] else None,
+            "company_news_provider": row[5],
+            "name": row[6],
+            "company_events": _decode_json_field(row[7], []),
+            "company_hot_news": _decode_json_field(row[8], []),
+            "news_impact": row[9],
+            "news_sources": _decode_json_field(row[10], []),
+            "source_urls": _decode_json_field(row[11], []),
+            "model": row[12],
+            "raw_response": _decode_json_field(row[13], None),
         }
 
     # ------------------------------------------------------------------
@@ -5061,8 +5262,11 @@ class MarketDatabase:
                 metrics_json=VALUES(metrics_json),
                 error_message=VALUES(error_message)
         """
-        with self.conn.cursor() as cursor:
-            cursor.executemany(sql, rows)
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, rows)
+
+        self._execute_with_retry(operation, label="upsert_main_force_risk_results")
 
     def get_main_force_risk_results_by_task(self, task_id: str) -> List[dict]:
         sql = """
@@ -5185,6 +5389,31 @@ class MarketDatabase:
                 COMMENT='股票池更新记录'
                 """
             )
+            self.init_stock_index_constituents_schema()
+
+    def init_stock_index_constituents_schema(self):
+        """初始化核心指数成分股快照表。"""
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS stock_index_constituents (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    market VARCHAR(8) NOT NULL COMMENT '市场: HK/US/A',
+                    index_code VARCHAR(32) NOT NULL COMMENT '指数代码',
+                    index_name VARCHAR(255) NULL COMMENT '指数名称',
+                    code VARCHAR(32) NOT NULL COMMENT '股票代码',
+                    name VARCHAR(255) NULL COMMENT '股票名称',
+                    source VARCHAR(64) NOT NULL DEFAULT 'online' COMMENT 'online/db_fallback/manual_seed',
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_stock_index_constituent (market, index_code, code),
+                    KEY idx_stock_index_constituents_market (market),
+                    KEY idx_stock_index_constituents_code (code)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='核心指数成分股快照表'
+                """
+            )
 
     # ------------------------------------------------------------------
     # Stock Pool Operations
@@ -5253,8 +5482,79 @@ class MarketDatabase:
                 rank_in_industry=VALUES(rank_in_industry),
                 extra_data=VALUES(extra_data)
         """
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, rows)
+
+        self._execute_with_retry(operation, label="upsert_stock_pool")
+
+    def upsert_stock_index_constituents(self, market: str, stocks: List[dict], source: str = "online"):
+        """写入核心指数成分股快照，用于在线来源失败时兜底。"""
+        if not stocks:
+            return
+        rows = []
+        for item in stocks:
+            code = str(item.get("code") or "").strip()
+            index_code = str(item.get("index_code") or "unknown").strip() or "unknown"
+            if not code:
+                continue
+            rows.append((
+                market,
+                index_code,
+                item.get("index_name"),
+                code,
+                item.get("name"),
+                source,
+            ))
+        if not rows:
+            return
+        self.init_stock_index_constituents_schema()
+        sql = """
+            INSERT INTO stock_index_constituents
+                (market, index_code, index_name, code, name, source)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                index_name=VALUES(index_name),
+                name=VALUES(name),
+                source=VALUES(source)
+        """
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.executemany(sql, rows)
+
+        self._execute_with_retry(operation, label="upsert_stock_index_constituents")
+
+    def get_stock_index_constituents(self, market: str, index_codes: Optional[List[str]] = None) -> List[dict]:
+        """读取核心指数成分股快照。"""
+        self.init_stock_index_constituents_schema()
+        params: List[Any] = [market]
+        where = "WHERE market=%s"
+        if index_codes:
+            placeholders = ",".join(["%s"] * len(index_codes))
+            where += f" AND index_code IN ({placeholders})"
+            params.extend(index_codes)
+        sql = f"""
+            SELECT code, name, index_code, index_name, source, updated_at
+            FROM stock_index_constituents
+            {where}
+            ORDER BY index_code ASC, code ASC
+        """
         with self.conn.cursor() as cursor:
-            cursor.executemany(sql, rows)
+            cursor.execute(sql, tuple(params))
+            rows = cursor.fetchall() or []
+        return [
+            {
+                "code": row[0],
+                "name": row[1],
+                "index_code": row[2],
+                "index_name": row[3],
+                "extra_data": {
+                    "source": row[4],
+                    "snapshot_updated_at": str(row[5]) if row[5] else None,
+                },
+            }
+            for row in rows
+        ]
 
     def get_stock_pool(
         self, market: str, pool_type: str, limit: Optional[int] = None

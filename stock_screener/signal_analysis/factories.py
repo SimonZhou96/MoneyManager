@@ -74,7 +74,11 @@ class SearchProviderFactory:
 
     @staticmethod
     def _zhipu_from_env(settings: AnalysisSettings) -> SearchProvider:
-        api_key = os.getenv("ZHIPUAI_API_KEY", "").strip() or os.getenv("BIGMODEL_API_KEY", "").strip()
+        api_key = (
+            os.getenv("ZHIPUAI_API_KEY", "").strip()
+            or os.getenv("ZHIPU_API_KEY", "").strip()
+            or os.getenv("BIGMODEL_API_KEY", "").strip()
+        )
         if not api_key:
             return NullSearchProvider()
         endpoint = os.getenv(

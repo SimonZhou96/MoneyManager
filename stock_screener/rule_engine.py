@@ -423,6 +423,8 @@ class RuleExpressionEvaluator:
         self.metadata_by_key = metadata_by_key
 
     def evaluate(self, expression: dict, context: RuleExecutionContext) -> bool:
+        if isinstance(expression, str):
+            return context.execute(expression)
         if not isinstance(expression, dict) or not expression:
             return False
 
@@ -464,6 +466,8 @@ class RuleExpressionEvaluator:
         return False
 
     def collect_rule_keys(self, expression: dict) -> Set[str]:
+        if isinstance(expression, str):
+            return {expression}
         if not isinstance(expression, dict) or not expression:
             return set()
         if "ref" in expression:
