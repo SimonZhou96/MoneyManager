@@ -1,21 +1,21 @@
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Dict, Optional
 
 CONFIG_VERSION = 1
 _CONFIG_FILENAME = "interactive_screening_last.json"
 
 
-def _config_path() -> str:
+def config_path() -> str:
     runtime_home = os.environ.get("RUNTIME_HOME") or os.path.expanduser("~")
     return os.path.join(runtime_home, _CONFIG_FILENAME)
 
 
-def load_last_config() -> dict[str, Any] | None:
-    path = _config_path()
+def load_last_config(path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    target_path = path or config_path()
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(target_path, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
         if not isinstance(payload, dict):
             return None
@@ -25,13 +25,13 @@ def load_last_config() -> dict[str, Any] | None:
         if not isinstance(answers, dict):
             return None
         return answers
-    except Exception:
+    except (FileNotFoundError, ValueError, OSError):
         return None
 
 
-def save_last_config(answers: dict[str, Any]) -> bool:
-    path = _config_path()
-    directory = os.path.dirname(path)
+def save_last_config(answers: Dict[str, Any], path: Optional[str] = None) -> bool:
+    target_path = path or config_path()
+    directory = os.path.dirname(target_path)
     payload = {
         "version": CONFIG_VERSION,
         "saved_at": datetime.now(timezone.utc).isoformat(),
@@ -39,8 +39,8 @@ def save_last_config(answers: dict[str, Any]) -> bool:
     }
     try:
         os.makedirs(directory, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle)
+        with open(target_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
         return True
-    except Exception:
+    except OSError:
         return False
