@@ -9,10 +9,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from screening_config_store import load_last_config, save_last_config
+from screening_prompt_flow import FlowCancelled, PromptBack, PromptFlow, PromptQuit, Step
 from custom_list import CustomListCodeParser, CustomListScreeningRunner
 from db import MarketDatabase, MySqlConfig
 from fetch_stock_pools import get_db_config
@@ -151,6 +153,22 @@ def _query_chains_with_expressions(db: MarketDatabase) -> List[dict]:
     return result
 
 
+def resolve_chain_choice(raw, chains, default=None):
+    """解析规则链输入：空/0=默认链，编号=列表项，文本=chain_key。"""
+    value = str(raw or "").strip()
+    if value == "" or value == "0":
+        return default
+    keys = [str(c.get("chain_key") or "") for c in chains]
+    if value.isdigit():
+        idx = int(value)
+        if 1 <= idx <= len(chains):
+            return keys[idx - 1]
+        raise ValueError(f"编号超出范围: {value}")
+    if value in keys:
+        return value
+    raise ValueError(f"未知规则链: {value}")
+
+
 # ═══════════════════════════════════════════════════════════════════
 # InteractiveScreeningOptions
 # ═══════════════════════════════════════════════════════════════════
@@ -191,137 +209,271 @@ class ScreeningInteractiveApp:
     ):
         self.input = input_func
         self.print = print_func
+        self._help_shown: set = set()
 
     def run(self, default_mode: Optional[str] = None) -> int:
         _load_dotenv()
         self.print("")
         self.print("MoneyManager 股票筛选")
         self.print("=" * 40)
-        options = self.prompt_options(default_mode=default_mode)
+        try:
+            options = self.prompt_options(default_mode=default_mode)
+        except FlowCancelled:
+            self.print("")
+            self.print("已取消")
+            return 130
+        except KeyboardInterrupt:
+            self.print("")
+            self.print("已取消")
+            return 130
         if options.mode == "custom":
             return self.run_custom_code_screening(get_db_config(), options)
         return self.run_full_market_screening(get_db_config(), options)
 
-    def prompt_options(self, default_mode: Optional[str] = None) -> InteractiveScreeningOptions:
-        if default_mode:
-            mode = default_mode
+    @staticmethod
+    def _default_answers(last_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from screening_defaults import env_defaults
+
+        def _markets_list(raw) -> List[str]:
+            if isinstance(raw, list):
+                return [str(m) for m in raw]
+            return [m.strip() for m in str(raw or "").replace("，", ",").split(",") if m.strip()]
+
+        answers: Dict[str, Any] = {
+            "mode": "full",
+            "timeframe": os.getenv("TIMEFRAME", "1d"),
+            "enable_ai_analysis": env_flag("ENABLE_LLM_ANALYSIS", True),
+            "enable_main_force_external_data": env_flag("MAIN_FORCE_ENABLE_EXTERNAL_DATA", True),
+            "send_feishu": False,
+            "csv_path": os.getenv("CSV_PATH", "logs/screening_result.csv"),
+            "market": "HK",
+            "codes": [],
+            "markets": _markets_list(os.getenv("MARKETS", "HK,US,A")),
+            "pools": parse_pool_types(os.getenv("POOLS", "all")),
+            "fetch_pools": os.getenv("NO_FETCH", "").strip() != "1",
+            "require_fresh_pools": os.getenv("REQUIRE_FRESH_POOLS", "").strip() == "1",
+            "market_workers": int(os.getenv("MARKET_WORKERS", "3") or 3),
+            "futu_host": os.getenv("FUTU_HOST", "127.0.0.1"),
+            "futu_port": int(os.getenv("FUTU_PORT", "11111") or 11111),
+            "chain_by_market": {},
+            "_advanced": False,
+        }
+        env = env_defaults()
+        if "timeframe" in env:
+            answers["timeframe"] = env["timeframe"]
+        if "markets" in env:
+            answers["markets"] = _markets_list(env["markets"])
+        if "pools" in env:
+            answers["pools"] = parse_pool_types(env["pools"]) if isinstance(env["pools"], str) else env["pools"]
+        if "csv_path" in env:
+            answers["csv_path"] = env["csv_path"]
+        if "market_workers" in env:
+            answers["market_workers"] = env["market_workers"]
+        if "futu_host" in env:
+            answers["futu_host"] = env["futu_host"]
+        if "futu_port" in env:
+            answers["futu_port"] = env["futu_port"]
+        if "no_fetch" in env:
+            answers["fetch_pools"] = not env["no_fetch"]
+        if "no_feishu" in env:
+            answers["send_feishu"] = not env["no_feishu"]
+        if "require_fresh_pools" in env:
+            answers["require_fresh_pools"] = env["require_fresh_pools"]
+        if "enable_llm_analysis" in env:
+            answers["enable_ai_analysis"] = env["enable_llm_analysis"]
+        if "main_force_enable_external_data" in env:
+            answers["enable_main_force_external_data"] = env["main_force_enable_external_data"]
+        if last_config:
+            for key, value in last_config.items():
+                answers[key] = value
+        return answers
+
+    def _startup_reuse_choice(self, last_config: Optional[Dict[str, Any]]) -> str:
+        if not last_config:
+            return "reset"
+        markets = last_config.get("markets")
+        if isinstance(markets, list):
+            market_summary = ",".join(markets)
         else:
-            mode = self._prompt_choice(
+            market_summary = str(last_config.get("market") or markets or "")
+        summary = " | ".join(filter(None, [market_summary, str(last_config.get("timeframe", ""))]))
+        self.print("")
+        self.print(f"检测到上次配置（{summary}）")
+        self.print("  1. 沿用上次配置直接执行")
+        self.print("  2. 以上次配置为默认值，逐步确认/修改  默认")
+        self.print("  3. 全部用系统默认重新开始")
+        while True:
+            raw = self.input("请选择 [2]: ").strip() or "2"
+            if raw == "1":
+                return "reuse"
+            if raw == "2":
+                return "defaults"
+            if raw == "3":
+                return "reset"
+            self.print("选项无效，请重新输入")
+
+    def _build_steps(self, default_mode: Optional[str]) -> List[Step]:
+        def ask_mode(_answers, default):
+            if default_mode:
+                return default_mode
+            return self._prompt_choice(
                 "请选择运行模式",
                 choices={"1": "full", "2": "custom"},
                 labels={"1": "全市场筛选", "2": "个股筛选器"},
                 default="1",
             )
-        timeframe = self._prompt_timeframe("K 线周期", "1d")
-        enable_ai_analysis = self._prompt_bool(
-            "是否启用搜索+模型辅助分析",
-            env_flag("ENABLE_LLM_ANALYSIS", True),
-        )
-        enable_main_force_external_data = self._prompt_bool(
-            "是否启用主力资金外部数据（资金流向/盘口等）",
-            env_flag("MAIN_FORCE_ENABLE_EXTERNAL_DATA", True),
-        )
-        send_feishu = self._prompt_bool("是否发送飞书通知", False)
-        csv_path = self._prompt_text(
-            "CSV 输出路径",
-            "logs/screening_result.csv",
-            help_text="输入方式: 输入相对路径或绝对路径；直接回车写入默认 CSV。",
-        )
 
+        is_full = lambda a: a.get("mode") == "full"
+        is_custom = lambda a: a.get("mode") == "custom"
+        adv_on = lambda a: bool(a.get("_advanced"))
+
+        return [
+            Step("mode", "运行模式", ask=ask_mode,
+                 render_label=lambda v: "全市场筛选" if v == "full" else "个股筛选器"),
+            Step("timeframe", "K线周期",
+                 ask=lambda a, d: self._prompt_timeframe("K 线周期", d or "1d")),
+            Step("enable_ai_analysis", "搜索+模型分析",
+                 ask=lambda a, d: self._prompt_bool("是否启用搜索+模型辅助分析", bool(d)),
+                 render_label=lambda v: "已启用" if v else "已关闭"),
+            Step("enable_main_force_external_data", "主力资金外部数据",
+                 ask=lambda a, d: self._prompt_bool(
+                     "是否启用主力资金外部数据（资金流向/盘口等）", bool(d)),
+                 render_label=lambda v: "已启用" if v else "已关闭"),
+            Step("send_feishu", "飞书通知",
+                 ask=lambda a, d: self._prompt_bool("是否发送飞书通知", bool(d)),
+                 render_label=lambda v: "是" if v else "否"),
+            Step("market", "自选代码市场", visible=is_custom,
+                 ask=lambda a, d: self._prompt_market("自选代码所属市场", d or "HK")),
+            Step("codes", "股票代码", visible=is_custom,
+                 ask=lambda a, d: self._prompt_codes(a.get("market") or "HK"),
+                 render_label=lambda v: ",".join(v or [])),
+            Step("markets", "筛选市场", visible=is_full,
+                 ask=lambda a, d: self._prompt_markets(
+                     "筛选市场，逗号分隔",
+                     ",".join(d) if isinstance(d, list) else (d or "HK,US,A")),
+                 render_label=lambda v: ", ".join(v or [])),
+            Step("pools", "股票池", visible=is_full,
+                 ask=lambda a, d: self._prompt_pools(),
+                 render_label=lambda v: ", ".join(v or [])),
+            Step("fetch_pools", "刷新股票池", visible=is_full,
+                 ask=lambda a, d: self._prompt_bool("是否先刷新股票池", bool(d)),
+                 render_label=lambda v: "是" if v else "否"),
+            Step("require_fresh_pools", "刷新失败退出",
+                 visible=lambda a: is_full(a) and bool(a.get("fetch_pools")),
+                 ask=lambda a, d: self._prompt_bool("股票池刷新失败时是否直接退出", bool(d)),
+                 render_label=lambda v: "是" if v else "否"),
+            Step("market_workers", "市场并发", visible=is_full,
+                 ask=lambda a, d: self._prompt_int(
+                     "市场并发数", int(d or 3),
+                     minimum=1, maximum=max(1, len(a.get("markets") or [1])))),
+            Step("_advanced", "配置高级项", visible=is_full,
+                 ask=lambda a, d: self._prompt_bool("是否配置高级项（CSV/Futu）", bool(d)),
+                 render_label=lambda v: "是" if v else "否"),
+            Step("csv_path", "CSV 路径", advanced=True,
+                 visible=lambda a: is_full(a) and adv_on(a),
+                 ask=lambda a, d: self._prompt_text(
+                     "CSV 输出路径", d or "logs/screening_result.csv",
+                     help_text="输入相对/绝对路径；回车写默认 CSV。")),
+            Step("futu_host", "Futu host", advanced=True,
+                 visible=lambda a: is_full(a) and adv_on(a),
+                 ask=lambda a, d: self._prompt_text("Futu OpenD host", d or "127.0.0.1")),
+            Step("futu_port", "Futu port", advanced=True,
+                 visible=lambda a: is_full(a) and adv_on(a),
+                 ask=lambda a, d: self._prompt_int(
+                     "Futu OpenD port", int(d or 11111), minimum=1, maximum=65535)),
+            Step("chain_by_market", "各市场规则链",
+                 ask=lambda a, d: self._prompt_chain_for_markets(
+                     a.get("markets") if is_full(a) else [a.get("market") or "HK"]),
+                 render_label=lambda v: " / ".join(
+                     f"{k}→{val or '(默认)'}" for k, val in (v or {}).items())),
+        ]
+
+    def _options_from_answers(
+        self, answers: Dict[str, Any], default_mode: Optional[str],
+    ) -> InteractiveScreeningOptions:
+        mode = default_mode or answers.get("mode", "full")
+        common = dict(
+            timeframe=answers.get("timeframe", "1d"),
+            enable_ai_analysis=bool(answers.get("enable_ai_analysis", True)),
+            enable_main_force_external_data=bool(
+                answers.get("enable_main_force_external_data", True)),
+            send_feishu=bool(answers.get("send_feishu", False)),
+            csv_path=answers.get("csv_path", "logs/screening_result.csv"),
+            chain_by_market=answers.get("chain_by_market", {}) or {},
+        )
         if mode == "custom":
-            market = self._prompt_market("自选代码所属市场", "HK")
-            codes = self._prompt_codes(market)
-            chain_by_market = self._prompt_chain_for_markets([market])
             return InteractiveScreeningOptions(
                 mode="custom",
-                market=market,
-                codes=codes,
-                timeframe=timeframe,
-                enable_ai_analysis=enable_ai_analysis,
-                enable_main_force_external_data=enable_main_force_external_data,
-                send_feishu=send_feishu,
-                csv_path=csv_path,
-                chain_by_market=chain_by_market,
+                market=answers.get("market", "HK"),
+                codes=answers.get("codes", []),
+                **common,
             )
-
-        markets = self._prompt_markets("筛选市场，逗号分隔", "HK,US,A")
-        pools = self._prompt_pools()
-        fetch_pools = self._prompt_bool("是否先刷新股票池", True)
-        require_fresh_pools = False
-        if fetch_pools:
-            require_fresh_pools = self._prompt_bool("股票池刷新失败时是否直接退出", False)
-        market_workers = self._prompt_int("市场并发数", 3, minimum=1, maximum=max(1, len(markets)))
-        futu_host = self._prompt_text(
-            "Futu OpenD host",
-            os.getenv("FUTU_HOST", "127.0.0.1"),
-            help_text="输入方式: 输入 Futu OpenD 地址；本机运行通常直接回车。",
-        )
-        futu_port = self._prompt_int("Futu OpenD port", int(os.getenv("FUTU_PORT", "11111")), minimum=1, maximum=65535)
-
-        # 按市场分别选择规则链
-        chain_by_market = self._prompt_chain_for_markets(markets)
-
         return InteractiveScreeningOptions(
             mode="full",
-            markets=markets,
-            timeframe=timeframe,
-            pools=pools,
-            fetch_pools=fetch_pools,
-            require_fresh_pools=require_fresh_pools,
-            send_feishu=send_feishu,
-            enable_ai_analysis=enable_ai_analysis,
-            enable_main_force_external_data=enable_main_force_external_data,
-            csv_path=csv_path,
-            market_workers=market_workers,
-            chain_by_market=chain_by_market,
-            futu_host=futu_host,
-            futu_port=futu_port,
+            markets=answers.get("markets", ["HK", "US", "A"]),
+            pools=answers.get("pools", parse_pool_types("all")),
+            fetch_pools=bool(answers.get("fetch_pools", True)),
+            require_fresh_pools=bool(answers.get("require_fresh_pools", False)),
+            market_workers=int(answers.get("market_workers", 3)),
+            futu_host=answers.get("futu_host", "127.0.0.1"),
+            futu_port=int(answers.get("futu_port", 11111)),
+            **common,
         )
+
+    def prompt_options(self, default_mode: Optional[str] = None) -> InteractiveScreeningOptions:
+        last_config = load_last_config()
+        mode_choice = self._startup_reuse_choice(last_config) if not default_mode else "reset"
+        base = last_config if mode_choice in {"reuse", "defaults"} else None
+        defaults = self._default_answers(base)
+        if default_mode:
+            defaults["mode"] = default_mode
+
+        steps = self._build_steps(default_mode)
+        flow = PromptFlow(steps, defaults, self.input, self.print)
+
+        if mode_choice == "reuse" and last_config:
+            answers = flow.confirm(dict(last_config))
+        else:
+            answers = flow.run({} if mode_choice == "reset" else {})
+
+        save_last_config(answers)
+        return self._options_from_answers(answers, default_mode)
 
     # ── 规则链选择（多市场，每市场独立输入） ──────────────────────
 
     def _prompt_chain_for_markets(self, markets: List[str]) -> Dict[str, Optional[str]]:
-        """先展示所有可用规则链，再让用户分别为每个市场输入 chain_key"""
-        # 连接 DB 读取规则链列表
         try:
             db = MarketDatabase(get_db_config())
-            chains = _query_chains_with_expressions(db)
+            all_chains = _query_chains_with_expressions(db)
             db.close()
         except Exception as e:
             self.print(f"⚠ 无法连接数据库读取规则链列表: {e}")
-            chains = []
-
-        if chains:
-            # 按市场分组展示
-            market_groups: Dict[str, list] = {}
-            for c in chains:
-                mkt = c["market"] or "通用"
-                market_groups.setdefault(mkt, []).append(c)
-            for mkt in sorted(market_groups):
-                self.print("")
-                self.print(f"━━━ {mkt} 市场可用规则链 ━━━")
-                for c in market_groups[mkt]:
-                    status = "✅" if c["enabled"] else "⛔"
-                    self.print(f"  {status} chain_key: {c['chain_key']}")
-                    self.print(f"     名称: {c['chain_name']}")
-                    if c["expression_tree"]:
-                        self.print(f"     执行路径:")
-                        for line in c["expression_tree"]:
-                            self.print(f"       {line}")
-        else:
-            self.print("")
-            self.print("(未查到规则链配置，所有市场将使用默认链)")
+            all_chains = []
 
         result: Dict[str, Optional[str]] = {}
         for market in markets:
             label = MARKET_HELP.get(market, market)
+            chains = [
+                c for c in all_chains
+                if (c.get("market") or "") in (market, "", "*", "通用")
+            ]
             self.print("")
             self.print(f"━━━ {label} ({market}) 规则链选择 ━━━")
-            value = self._prompt_optional_text(
-                f"  {market} 规则链 key（留空=默认链 {market}_default_zuoyi_and_other）",
-                help_text="输入方式: 从上面列出的 chain_key 中选一个；直接回车使用默认链。",
-            )
-            result[market] = value
+            self.print(f"  0. (默认链 {market}_default_zuoyi_and_other)")
+            for i, c in enumerate(chains, 1):
+                status = "✅" if c.get("enabled") else "⛔"
+                self.print(f"  {i}. {status} {c.get('chain_key')}  {c.get('chain_name') or ''}")
+                for line in c.get("expression_tree") or []:
+                    self.print(f"       {line}")
+            while True:
+                raw = self._nav_input(
+                    f"  {market} 规则链 [0]（输入编号或 chain_key；回车=默认链）: "
+                )
+                try:
+                    result[market] = resolve_chain_choice(raw, chains, default=None)
+                    break
+                except ValueError as exc:
+                    self.print(f"  {exc}，请重新选择")
         return result
 
     # ── 全市场筛选 ────────────────────────────────────────────────
@@ -491,6 +643,18 @@ class ScreeningInteractiveApp:
 
     # ── Prompt helpers ────────────────────────────────────────────
 
+    _NAV_BACK = {"b", "back", "返回"}
+    _NAV_QUIT = {"q", "quit", "退出"}
+
+    def _nav_input(self, prompt: str) -> str:
+        raw = self.input(prompt)
+        token = raw.strip().lower()
+        if token in self._NAV_BACK:
+            raise PromptBack()
+        if token in self._NAV_QUIT:
+            raise PromptQuit()
+        return raw
+
     def _prompt_choice(self, title: str, choices: dict[str, str], labels: dict[str, str], default: str) -> str:
         self.print("")
         self.print(title)
@@ -498,7 +662,7 @@ class ScreeningInteractiveApp:
             suffix = " 默认" if key == default else ""
             self.print(f"  {key}. {labels[key]}{suffix}")
         while True:
-            value = self.input(f"请输入选项 [{default}]: ").strip() or default
+            value = self._nav_input(f"请输入选项 [{default}]: ").strip() or default
             if value in choices:
                 return choices[value]
             self.print("选项无效，请重新输入")
@@ -520,8 +684,9 @@ class ScreeningInteractiveApp:
                 )
 
     def _prompt_text(self, title: str, default: str, help_text: Optional[str] = None) -> str:
-        if help_text:
+        if help_text and title not in self._help_shown:
             self.print(help_text)
+            self._help_shown.add(title)
         value = self.input(f"{title} [{default}]: ").strip()
         return value or default
 
@@ -535,7 +700,7 @@ class ScreeningInteractiveApp:
         default_text = "Y/n" if default else "y/N"
         default_label = "是" if default else "否"
         while True:
-            value = self.input(
+            value = self._nav_input(
                 f"{title} [{default_text}]（输入 y/yes/是 或 n/no/否，回车默认{default_label}）: "
             ).strip().lower()
             if not value:
@@ -548,7 +713,9 @@ class ScreeningInteractiveApp:
 
     def _prompt_int(self, title: str, default: int, minimum: int, maximum: int) -> int:
         while True:
-            value = self.input(f"{title} [{default}]（请输入 {minimum}-{maximum} 的整数，回车使用默认值）: ").strip()
+            value = self._nav_input(
+                f"{title} [{default}]（请输入 {minimum}-{maximum} 的整数，回车使用默认值）: "
+            ).strip()
             if not value:
                 return default
             try:
@@ -574,13 +741,20 @@ class ScreeningInteractiveApp:
     def _prompt_markets(self, title: str, default: str) -> List[str]:
         self.print("")
         self.print(title)
-        self._print_market_help(single=False)
+        keys = list(MARKET_HELP.keys())
+        for i, key in enumerate(keys, 1):
+            self.print(f"  {i}. {key}: {MARKET_HELP[key]}")
+        self.print("输入方式: 市场代码或编号，逗号分隔，例如 HK,US 或 1,2；回车使用默认值。")
         while True:
-            values = self._split_csv_values(self._prompt_text(title, default))
+            raw = self._nav_input(f"{title} [{default}]: ").strip() or default
+            tokens = self._split_csv_values(raw)
             try:
                 markets = []
-                for item in values:
-                    market = normalize_market(item)
+                for tok in tokens:
+                    if tok.isdigit() and 1 <= int(tok) <= len(keys):
+                        market = keys[int(tok) - 1]
+                    else:
+                        market = normalize_market(tok)
                     if market not in markets:
                         markets.append(market)
                 if markets:
@@ -591,20 +765,28 @@ class ScreeningInteractiveApp:
     def _prompt_pools(self) -> List[str]:
         self.print("")
         self.print("股票池类型")
-        for key, label in POOL_HELP.items():
-            self.print(f"  {key}: {label}")
+        keys = list(POOL_HELP.keys())
+        for i, key in enumerate(keys, 1):
+            self.print(f"  {i}. {key}: {POOL_HELP[key]}")
         self.print(
-            "输入方式: 多个类型用英文逗号或中文逗号分隔，"
-            f"例如 best,major_index,all_etf；回车使用全部（{DEFAULT_POOL_TYPES_TEXT}）。"
+            "输入方式: 类型代码或编号，逗号分隔，例如 best,all_etf 或 1,5；"
+            f"回车使用全部（{DEFAULT_POOL_TYPES_TEXT}）。"
         )
         while True:
-            raw = self._prompt_text("股票池类型，逗号分隔", DEFAULT_POOL_TYPES_TEXT)
+            raw = self._nav_input(f"股票池类型，逗号分隔 [{DEFAULT_POOL_TYPES_TEXT}]: ").strip()
+            if not raw:
+                return parse_pool_types("all")
+            tokens = self._split_csv_values(raw)
+            mapped = []
+            for tok in tokens:
+                if tok.isdigit() and 1 <= int(tok) <= len(keys):
+                    mapped.append(keys[int(tok) - 1])
+                else:
+                    mapped.append(tok)
             try:
-                values = parse_pool_types(raw)
+                return parse_pool_types(",".join(mapped))
             except ValueError as exc:
                 self.print(str(exc))
-                continue
-            return values
 
     def _prompt_codes(self, market: str) -> List[str]:
         example = CODE_EXAMPLES.get(market, "00700")
@@ -612,9 +794,10 @@ class ScreeningInteractiveApp:
         self.print("股票代码")
         self.print(f"  当前市场: {market} - {MARKET_HELP.get(market, market)}")
         self.print(f"  输入示例: {example}")
-        self.print("输入方式: 只输入股票代码，多个代码用英文逗号或中文逗号分隔。")
+        self.print("输入方式: 只输入股票代码，多个用英文逗号或中文逗号分隔。")
         while True:
-            values = self._split_csv_values(self._prompt_text("股票代码，逗号分隔", example.split(",")[0]))
+            raw = self.input("股票代码，逗号分隔: ").strip()
+            values = self._split_csv_values(raw)
             if values:
                 return values
             self.print("至少输入一个股票代码")
@@ -640,7 +823,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="MoneyManager 股票筛选交互式 shell")
     parser.add_argument("--mode", choices=["full", "custom"], default=None, help="直接进入全市场筛选或个股筛选器")
     args = parser.parse_args()
-    return ScreeningInteractiveApp().run(default_mode=args.mode)
+    try:
+        return ScreeningInteractiveApp().run(default_mode=args.mode)
+    except KeyboardInterrupt:
+        print("\n已取消")
+        return 130
 
 
 if __name__ == "__main__":
