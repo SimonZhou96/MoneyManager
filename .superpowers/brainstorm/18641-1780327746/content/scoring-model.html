@@ -1,0 +1,93 @@
+<h2>当前评分模型：两套并行体系</h2>
+<p class="subtitle">MarketIntelMacroScore vs EnterprisePotentialAnalysis — 各自独立运行，结果并存但无协同</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">🅰️ MarketIntelMacroScoreStrategizer</div>
+    <div class="mockup-body" style="font-size:13px;line-height:1.7">
+      <strong>激活路径：</strong>rule_engine.requires_market_intel_macro_score()<br>
+      <strong>权重：</strong>0.6 技术面 + 0.4 宏观面<br>
+      <strong>评分方式：</strong>LLM 评分器（MacroScoreScorer）<br>
+      <strong>输入数据：</strong><br>
+      • MarketIntel Service → market_bundle<br>
+      • EvidencePackBuilder → 逐股证据包<br>
+      • MacroEvidencePreprocessor → 预处理<br>
+      <strong>子评分维度（6项）：</strong><br>
+      • company_event_strength (0.2)<br>
+      • sector_heat (0.2)<br>
+      • news_validation (0.2)<br>
+      • impact_direction (0.2)<br>
+      • source_credibility (0.1)<br>
+      • freshness (0.1)<br>
+      <strong>输出：</strong>macro_score + passed + sub_scores<br>
+      <strong>阈值：</strong>默认 60
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">🅱️ EnterprisePotentialAnalysisStrategizer</div>
+    <div class="mockup-body" style="font-size:13px;line-height:1.7">
+      <strong>激活路径：</strong>rule_engine.requires_enterprise_potential()<br>
+      <strong>权重：</strong>M30% + I25% + C25% + V10% + T10%<br>
+      <strong>评分方式：</strong>规则型（默认）/ LLM型（可选）<br>
+      <strong>输入数据：</strong><br>
+      • MacroSnapshot（宏观因子采集）<br>
+      • IndustrySnapshot（行业景气）<br>
+      • CompanySnapshot（企业财务+LLM事件增强）<br>
+      • ValuationSnapshot（估值指标）<br>
+      • TradingSnapshot（市场行为）<br>
+      <strong>五模块评分器：</strong><br>
+      • MacroScorer（利率/通胀/PMI/M2/VIX/DXY 阈值）<br>
+      • IndustryScorer（热点标签+周期+政策）<br>
+      • CompanyScorer（ROIC/毛利/增速/负债+LLM增强）<br>
+      • ValuationScorer（PE/PB/PEG/EV_EBITDA）<br>
+      • TradingScorer（涨跌/波动/趋势/均线）<br>
+      <strong>输出：</strong>total_score + decision(BUY/WATCH/SKIP) + holding_period<br>
+      <strong>阈值：</strong>默认 70
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>⚠️ 已识别的潜在问题</h3>
+</div>
+
+<table style="width:100%;border-collapse:collapse;font-size:14px">
+  <tr style="background:#fef2f2">
+    <td style="padding:10px;border:1px solid #ddd;width:25%"><strong>🔴 双重评分无协同</strong></td>
+    <td style="padding:10px;border:1px solid #ddd">两套评分独立计算、独立判断 pass/fail，结果各自写入 details，但没有统一汇总层。同一只股票可能 A 通过 B 不通过，最终规则链的通过逻辑不透明。</td>
+  </tr>
+  <tr style="background:#fefce8">
+    <td style="padding:10px;border:1px solid #ddd"><strong>🟡 权重体系不一致</strong></td>
+    <td style="padding:10px;border:1px solid #ddd">A 体系：技术0.6 + 宏观0.4（二因素）。B 体系：M30+I25+C25+V10+T10（五因素）。两套权重没有对应关系，无法直接比较或合并。</td>
+  </tr>
+  <tr style="background:#fefce8">
+    <td style="padding:10px;border:1px solid #ddd"><strong>🟡 技术面定位模糊</strong></td>
+    <td style="padding:10px;border:1px solid #ddd">A 体系中的"技术面"是 LLM 综合判断的技术信号质量。B 体系中的"Trading(10%)"是结构化指标（涨跌幅、波动率、趋势）。两者对"技术面"的定义完全不同。</td>
+  </tr>
+  <tr style="background:#fefce8">
+    <td style="padding:10px;border:1px solid #ddd"><strong>🟡 宏观因子重复采集</strong></td>
+    <td style="padding:10px;border:1px solid #ddd">MacroSnapshot 在 MacroFactorAnalysisStrategizer 和 EnterprisePotentialAnalysisStrategizer 中分别构建，虽有缓存但生命周期不一致。</td>
+  </tr>
+  <tr style="background:#f0fdf4">
+    <td style="padding:10px;border:1px solid #ddd"><strong>🟢 阈值缺乏差异化</strong></td>
+    <td style="padding:10px;border:1px solid #ddd">A 默认60分、B 默认70分，对所有市场（HK/US/A）使用相同阈值。不同市场的宏观环境、估值中枢差异大，统一阈值可能不合理。</td>
+  </tr>
+  <tr style="background:#f0fdf4">
+    <td style="padding:10px;border:1px solid #ddd"><strong>🟢 缺失模块50分补齐</strong></td>
+    <td style="padding:10px;border:1px solid #ddd">B 体系的 _rule_score 对缺失模块给 50.0 分（中性）。这可能导致数据不全的股票反而获得中等分数通过，掩盖了信息缺失风险。</td>
+  </tr>
+</table>
+
+<div class="section" style="margin-top:20px">
+  <h3>🔍 评分模块详细对比</h3>
+</div>
+
+<table style="width:100%;border-collapse:collapse;font-size:13px">
+  <tr style="background:#f0f4ff"><th style="padding:8px;border:1px solid #ddd">评分维度</th><th style="padding:8px;border:1px solid #ddd">A: MarketIntelMacro</th><th style="padding:8px;border:1px solid #ddd">B: EnterprisePotential</th><th style="padding:8px;border:1px solid #ddd">重叠/冲突？</th></tr>
+  <tr><td style="padding:8px;border:1px solid #ddd">宏观</td><td style="padding:8px;border:1px solid #ddd">LLM综合宏观判断（权重0.4）</td><td style="padding:8px;border:1px solid #ddd">结构化因子阈值打分（权重0.30）</td><td style="padding:8px;border:1px solid #ddd">⚠️ 重叠但方法不同</td></tr>
+  <tr><td style="padding:8px;border:1px solid #ddd">行业/板块</td><td style="padding:8px;border:1px solid #ddd">sector_heat子维度（权重0.2×0.4=0.08）</td><td style="padding:8px;border:1px solid #ddd">IndustryScorer标签+周期（权重0.25）</td><td style="padding:8px;border:1px solid #ddd">⚠️ 重叠</td></tr>
+  <tr><td style="padding:8px;border:1px solid #ddd">公司事件</td><td style="padding:8px;border:1px solid #ddd">company_event_strength（权重0.2×0.4=0.08）</td><td style="padding:8px;border:1px solid #ddd">CompanyScorer中LLM增强（event_impact±10, news_validation+5）</td><td style="padding:8px;border:1px solid #ddd">⚠️ 重叠</td></tr>
+  <tr><td style="padding:8px;border:1px solid #ddd">技术/交易</td><td style="padding:8px;border:1px solid #ddd">LLM综合技术信号质量（权重0.6）</td><td style="padding:8px;border:1px solid #ddd">TradingScorer结构化指标（权重0.10）</td><td style="padding:8px;border:1px solid #ddd">🟡 互补但无关联</td></tr>
+  <tr><td style="padding:8px;border:1px solid #ddd">估值</td><td style="padding:8px;border:1px solid #ddd">❌ 不包含</td><td style="padding:8px;border:1px solid #ddd">ValuationScorer PE/PB/PEG/EV_EBITDA（权重0.10）</td><td style="padding:8px;border:1px solid #ddd">✅ B 独有</td></tr>
+  <tr><td style="padding:8px;border:1px solid #ddd">企业质量</td><td style="padding:8px;border:1px solid #ddd">❌ 不包含</td><td style="padding:8px;border:1px solid #ddd">CompanyScorer ROIC/毛利/增速/负债（权重0.25）</td><td style="padding:8px;border:1px solid #ddd">✅ B 独有</td></tr>
+</table>

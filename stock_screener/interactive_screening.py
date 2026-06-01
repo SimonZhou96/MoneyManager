@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -52,6 +52,110 @@ CODE_EXAMPLES = {
 }
 
 
+# ═══════════════════════════════════════════════════════════════════
+# 规则链表达式渲染（将 JSON DSL 展开为可读的规则路径）
+# ═══════════════════════════════════════════════════════════════════
+
+_DSL_LABELS: Dict[str, str] = {
+    "and":            "全部满足 (AND)",
+    "any":            "任一满足 (OR)",
+    "all_enabled":    "全部启用 (AND)",
+    "any_enabled":    "任一启用 (OR)",
+    "ref":            "必须命中",
+}
+
+_RULE_NAME_MAP: Dict[str, str] = {
+    "market_cap_range": "市值范围",
+    "avg_daily_volume_range": "日均交易量",
+    "price_range": "价格范围",
+    "pe_range": "PE范围",
+    "profitability": "公司盈利",
+    "zuoyi_signal": "左一战法",
+    "ema_breakout": "EMA突破",
+    "rsi_oversold": "RSI超卖",
+    "rsi_overbought": "RSI超买",
+    "volume_spike_prior3": "放量超前三日",
+    "daily_drop_6_65": "当日跌6%~6.5%",
+    "daily_rise_4_45": "当日涨4%~4.5%",
+    "company_event_hot_sector_link": "公司时事×热点板块",
+    "company_event_hot_news_link": "公司时事×热点新闻",
+    "market_intel_macro_score_link": "市场情报宏观评分",
+    "macro_factor_analysis": "宏观因子采集",
+    "enterprise_potential_analysis": "企业潜力分析(五模块)",
+}
+
+
+def _render_expression(expr, metadata_by_key: dict, indent: int = 0) -> List[str]:
+    """将 JSON DSL 表达式渲染为缩进文本行"""
+    prefix = "  " * indent
+    lines = []
+
+    if isinstance(expr, str):
+        name = _RULE_NAME_MAP.get(expr, expr)
+        lines.append(f"{prefix}├─ {name}")
+        return lines
+
+    if not isinstance(expr, dict) or not expr:
+        return lines
+
+    if "ref" in expr:
+        key = str(expr["ref"])
+        name = _RULE_NAME_MAP.get(key, key)
+        lines.append(f"{prefix}├─ 必须命中: {name}")
+        return lines
+
+    for op in ("and", "any", "all_enabled", "any_enabled"):
+        if op in expr:
+            label = _DSL_LABELS.get(op, op)
+            lines.append(f"{prefix}├─ {label}:")
+            items = expr[op] if isinstance(expr[op], list) else []
+            for i, item in enumerate(items):
+                is_last = (i == len(items) - 1)
+                sub_lines = _render_expression(item, metadata_by_key, indent + 1)
+                for j, sl in enumerate(sub_lines):
+                    marker = "  " if j > 0 else ("└─ " if is_last else "├─ ")
+                    lines.append(f"{prefix}│ {marker}{sl[(indent+1)*2+2:]}")
+            return lines
+
+    return lines
+
+
+def _query_chains_with_expressions(db: MarketDatabase) -> List[dict]:
+    """查询所有市场的规则链及其展开后的表达式文本"""
+    all_rows = []
+    seen = set()
+    for market in ("HK", "US", "A"):
+        rows = db.list_screening_rule_chains(market=market, timeframe=None) or []
+        for row in rows:
+            key = (row.get("market", ""), row.get("chain_key", ""))
+            if key not in seen:
+                seen.add(key)
+                all_rows.append(row)
+    result = []
+    for row in all_rows:
+        expression = row.get("expression_json") or {}
+        if isinstance(expression, str):
+            import json
+            try: expression = json.loads(expression)
+            except Exception: expression = {}
+        tree = _render_expression(expression, {})
+        result.append({
+            "market": row.get("market", ""),
+            "chain_key": row.get("chain_key", ""),
+            "chain_name": row.get("chain_name", ""),
+            "enabled": bool(row.get("enabled")),
+            "expression_tree": tree,
+            "tree_text": "\n".join(tree),
+        })
+    result.sort(key=lambda r: (r["market"], r["chain_key"]))
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# InteractiveScreeningOptions
+# ═══════════════════════════════════════════════════════════════════
+
+
 @dataclass
 class InteractiveScreeningOptions:
     mode: str
@@ -67,9 +171,14 @@ class InteractiveScreeningOptions:
     enable_main_force_external_data: bool = True
     csv_path: str = "logs/screening_result.csv"
     market_workers: int = 3
-    chain_key: Optional[str] = None
+    chain_by_market: Dict[str, Optional[str]] = field(default_factory=dict)
     futu_host: str = "127.0.0.1"
     futu_port: int = 11111
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ScreeningInteractiveApp
+# ═══════════════════════════════════════════════════════════════════
 
 
 class ScreeningInteractiveApp:
@@ -118,14 +227,11 @@ class ScreeningInteractiveApp:
             "logs/screening_result.csv",
             help_text="输入方式: 输入相对路径或绝对路径；直接回车写入默认 CSV。",
         )
-        chain_key = self._prompt_optional_text(
-            "规则链 key（留空使用默认链）",
-            help_text="输入方式: 输入已配置的规则链 key；不确定就直接回车使用默认链。",
-        )
 
         if mode == "custom":
             market = self._prompt_market("自选代码所属市场", "HK")
             codes = self._prompt_codes(market)
+            chain_by_market = self._prompt_chain_for_markets([market])
             return InteractiveScreeningOptions(
                 mode="custom",
                 market=market,
@@ -135,7 +241,7 @@ class ScreeningInteractiveApp:
                 enable_main_force_external_data=enable_main_force_external_data,
                 send_feishu=send_feishu,
                 csv_path=csv_path,
-                chain_key=chain_key,
+                chain_by_market=chain_by_market,
             )
 
         markets = self._prompt_markets("筛选市场，逗号分隔", "HK,US,A")
@@ -151,6 +257,10 @@ class ScreeningInteractiveApp:
             help_text="输入方式: 输入 Futu OpenD 地址；本机运行通常直接回车。",
         )
         futu_port = self._prompt_int("Futu OpenD port", int(os.getenv("FUTU_PORT", "11111")), minimum=1, maximum=65535)
+
+        # 按市场分别选择规则链
+        chain_by_market = self._prompt_chain_for_markets(markets)
+
         return InteractiveScreeningOptions(
             mode="full",
             markets=markets,
@@ -163,10 +273,58 @@ class ScreeningInteractiveApp:
             enable_main_force_external_data=enable_main_force_external_data,
             csv_path=csv_path,
             market_workers=market_workers,
-            chain_key=chain_key,
+            chain_by_market=chain_by_market,
             futu_host=futu_host,
             futu_port=futu_port,
         )
+
+    # ── 规则链选择（多市场，每市场独立输入） ──────────────────────
+
+    def _prompt_chain_for_markets(self, markets: List[str]) -> Dict[str, Optional[str]]:
+        """先展示所有可用规则链，再让用户分别为每个市场输入 chain_key"""
+        # 连接 DB 读取规则链列表
+        try:
+            db = MarketDatabase(get_db_config())
+            chains = _query_chains_with_expressions(db)
+            db.close()
+        except Exception as e:
+            self.print(f"⚠ 无法连接数据库读取规则链列表: {e}")
+            chains = []
+
+        if chains:
+            # 按市场分组展示
+            market_groups: Dict[str, list] = {}
+            for c in chains:
+                mkt = c["market"] or "通用"
+                market_groups.setdefault(mkt, []).append(c)
+            for mkt in sorted(market_groups):
+                self.print("")
+                self.print(f"━━━ {mkt} 市场可用规则链 ━━━")
+                for c in market_groups[mkt]:
+                    status = "✅" if c["enabled"] else "⛔"
+                    self.print(f"  {status} chain_key: {c['chain_key']}")
+                    self.print(f"     名称: {c['chain_name']}")
+                    if c["expression_tree"]:
+                        self.print(f"     执行路径:")
+                        for line in c["expression_tree"]:
+                            self.print(f"       {line}")
+        else:
+            self.print("")
+            self.print("(未查到规则链配置，所有市场将使用默认链)")
+
+        result: Dict[str, Optional[str]] = {}
+        for market in markets:
+            label = MARKET_HELP.get(market, market)
+            self.print("")
+            self.print(f"━━━ {label} ({market}) 规则链选择 ━━━")
+            value = self._prompt_optional_text(
+                f"  {market} 规则链 key（留空=默认链 {market}_default_zuoyi_and_other）",
+                help_text="输入方式: 从上面列出的 chain_key 中选一个；直接回车使用默认链。",
+            )
+            result[market] = value
+        return result
+
+    # ── 全市场筛选 ────────────────────────────────────────────────
 
     def run_full_market_screening(self, mysql_config: MySqlConfig, options: InteractiveScreeningOptions) -> int:
         self._apply_main_force_external_data_env(options)
@@ -197,14 +355,16 @@ class ScreeningInteractiveApp:
         db.close()
 
         params = get_default_screening_params()
-        if options.chain_key:
-            params["chain_key"] = options.chain_key
         csv_base = self._csv_base(options.csv_path)
         today_str = date.today().strftime("%Y-%m-%d")
         self.print("")
         self.print(f"[{datetime.now()}] 开始全市场筛选 | 市场: {options.markets} | 周期: {options.timeframe}")
         self.print(f"搜索+模型辅助分析: {'已启用' if options.enable_ai_analysis else '已关闭'}")
         self.print(f"主力资金外部数据: {'已启用' if options.enable_main_force_external_data else '已关闭'}")
+        self.print("各市场规则链:")
+        for mkt in options.markets:
+            ck = options.chain_by_market.get(mkt) or "(默认)"
+            self.print(f"  {mkt} → {ck}")
 
         processed: List[str] = []
         skipped: List[str] = []
@@ -220,7 +380,7 @@ class ScreeningInteractiveApp:
                     today_str,
                     False,
                     options.enable_ai_analysis,
-                    options.chain_key,
+                    options.chain_by_market.get(market),
                     options.pools,
                 ): market
                 for market in options.markets
@@ -249,6 +409,8 @@ class ScreeningInteractiveApp:
             self.print("提示: 本次使用了数据库已有股票池数据")
         return 0 if processed else 1
 
+    # ── 个股筛选 ──────────────────────────────────────────────────
+
     def run_custom_code_screening(self, mysql_config: MySqlConfig, options: InteractiveScreeningOptions) -> int:
         self._apply_main_force_external_data_env(options)
         market = normalize_market(options.market or "HK")
@@ -261,15 +423,16 @@ class ScreeningInteractiveApp:
             self.print("没有可筛选的有效代码")
             return 1
 
+        chain_key = options.chain_by_market.get(market)
         job_id = f"interactive-{uuid.uuid4()}"
         job = {
             "job_id": job_id,
             "markets": [market],
             "timeframe": options.timeframe,
-            "chain_key": options.chain_key,
+            "chain_key": chain_key,
             "options": {
-                "chain_key": options.chain_key,
-                "chain_name": options.chain_key,
+                "chain_key": chain_key,
+                "chain_name": chain_key,
                 "watchlist_by_market": {
                     market: [{"code": code, "name": code} for code in parsed.valid_codes],
                 },
@@ -286,6 +449,8 @@ class ScreeningInteractiveApp:
         self._print_custom_results(mysql_config, result.task_id)
         self._send_feishu_if_needed(options, today_str, result)
         return 0
+
+    # ── Helpers ───────────────────────────────────────────────────
 
     @staticmethod
     def _apply_main_force_external_data_env(options: InteractiveScreeningOptions) -> None:
@@ -323,6 +488,8 @@ class ScreeningInteractiveApp:
         ok = send_screening_result(webhook_url, title, result.csv_paths)
         if not ok:
             self.print(f"{market_label(result.market)} 飞书发送不完整")
+
+    # ── Prompt helpers ────────────────────────────────────────────
 
     def _prompt_choice(self, title: str, choices: dict[str, str], labels: dict[str, str], default: str) -> str:
         self.print("")

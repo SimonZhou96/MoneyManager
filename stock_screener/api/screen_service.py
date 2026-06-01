@@ -459,7 +459,19 @@ def run_screening_task(
             macro_score_scorer = build_macro_score_scorer()
             context.set_cache("market_intel_service", market_intel_service)
             context.set_cache("macro_score_scorer", macro_score_scorer)
-        
+
+        if rule_engine is not None and rule_engine.requires_enterprise_potential():
+            from ..potential_analysis.service import EnterprisePotentialService
+            service = EnterprisePotentialService()
+            codes = [s.code for s in stock_infos]
+            if verbose:
+                print(f"📊 批量预取企业潜力数据: {len(codes)} 只股票 ({market})")
+            report = service.prefetch_batch(market, codes, context)
+            if verbose:
+                print(f"   完成: {report.ok_count} 成功, {report.fail_count} 失败, "
+                      f"{report.duration_ms}ms")
+            context.set_cache("enterprise_service", service)
+
         # 主循环：遍历每只股票，在同一个循环中完成以下步骤
         # 步骤1: 获取K线数据
         # 步骤2: 应用筛选器链（判断是否满足突破策略和筛选条件）

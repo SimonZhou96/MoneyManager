@@ -1,0 +1,111 @@
+<h2>当前规则链全链路架构（技术指标 + 时事分析 + 宏观五因素打分）</h2>
+<p class="subtitle">从输入股票池 → 筛选引擎 → 多维分析 → 最终报告的完整数据流</p>
+
+<div class="section">
+  <h3>📊 链路总览（5 大阶段）</h3>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">阶段一：输入 & 准备</div>
+  <div class="mockup-body" style="font-size:14px;line-height:1.8">
+    <strong>股票来源：</strong>DB stocks 表 / AKShare API / 自选股 watchlist<br>
+    <strong>基本面补全：</strong>市值、PE、PB、行业 → 转为 StockInfo 列表<br>
+    <strong>规则链加载：</strong>RuleRepository 从 DB 加载 screening_rule_metadata + screening_rule_chains（JSON DSL）<br>
+    <strong>K线预取判断：</strong>检查规则链是否引用 KLINE_IMPLEMENTATIONS，逐股拉取（Futu/YFinance/DB）
+  </div>
+</div>
+
+<div style="text-align:center;padding:12px;font-size:24px">⬇️</div>
+
+<div class="mockup">
+  <div class="mockup-header">阶段二：逐股规则评估（RuleEngine.evaluate_stock）</div>
+  <div class="mockup-body" style="font-size:14px;line-height:1.8">
+    <strong>JSON DSL 表达式求值：</strong>RuleExpressionEvaluator 解释 and/any/ref/all_enabled/any_enabled<br><br>
+    <strong>规则分四层并行评估：</strong><br>
+    <table style="width:100%;border-collapse:collapse;margin-top:8px">
+      <tr style="background:#f0f4ff"><td style="padding:6px;border:1px solid #ddd;width:18%"><strong>① 基础筛选</strong></td><td style="padding:6px;border:1px solid #ddd">MarketCapFilter, PriceFilter, PEFilter, AvgDailyVolumeFilter, ProfitabilityFilter</td></tr>
+      <tr style="background:#fff7ed"><td style="padding:6px;border:1px solid #ddd"><strong>② 技术指标</strong></td><td style="padding:6px;border:1px solid #ddd">ZuoYiStrategizer, EMABreakoutStrategizer, RSIOverbought/Oversold, VolumeSpike, DailyPctChangeBand, TechnicalPatternStrategizer（26种形态）</td></tr>
+      <tr style="background:#f0fff4"><td style="padding:6px;border:1px solid #ddd"><strong>③ 时事分析</strong></td><td style="padding:6px;border:1px solid #ddd">CompanyEventHotSectorStrategizer, CompanyEventHotNewsStrategizer → 触发 SignalAnalysis LLM 管线（搜索+多provider AI）</td></tr>
+      <tr style="background:#fefce8"><td style="padding:6px;border:1px solid #ddd"><strong>④ 宏观/潜力</strong></td><td style="padding:6px;border:1px solid #ddd">MarketIntelMacroScoreStrategizer, MacroFactorAnalysisStrategizer, EnterprisePotentialAnalysisStrategizer</td></tr>
+    </table>
+  </div>
+</div>
+
+<div style="text-align:center;padding:12px;font-size:24px">⬇️</div>
+
+<div class="mockup">
+  <div class="mockup-header">阶段三：结果聚合 & 评分</div>
+  <div class="mockup-body" style="font-size:14px;line-height:1.8">
+    <strong>每只股票产出：</strong>StockFilterResult（passed + filter_outputs 列表）<br>
+    <strong>评分聚合：</strong>aggregate_rule_scores() → technical_score + macro_score → final_score<br>
+    <strong>实时写入：</strong>每只股票处理完立即 upsert 到 screening_results 表
+  </div>
+</div>
+
+<div style="text-align:center;padding:12px;font-size:24px">⬇️</div>
+
+<div class="mockup">
+  <div class="mockup-header">阶段四：报告生成（AI 复核报告）</div>
+  <div class="mockup-body" style="font-size:14px;line-height:1.8">
+    <strong>输入：</strong>screening_results 表（通过筛选的股票 + filter_details）<br>
+    <strong>报告结构（5 部分）：</strong><br>
+    ① 核心结论（信号强度、热点匹配、公司催化、信息充分度、主力流出风险）<br>
+    ② 复核结果总览表（综合评分 | 方向判断 | 热点匹配 | 简明结论）<br>
+    ③ 主力流出风险观察（风险等级、信号、资金流向）<br>
+    ④ 热点板块分析<br>
+    ⑤ 个股详细分析
+  </div>
+</div>
+
+<div style="text-align:center;padding:12px;font-size:24px">⬇️</div>
+
+<div class="mockup">
+  <div class="mockup-header">阶段五：交付</div>
+  <div class="mockup-body" style="font-size:14px;line-height:1.8">
+    <strong>飞书通知：</strong>feishu_notifier.send_screening_result() → Webhook 摘要 + CSV/PDF 文件<br>
+    <strong>CSV 导出：</strong>筛选结果 + AI 分析列（30+ 列：信号可靠性、方向判断、利好/风险因素等）<br>
+    <strong>Markdown 报告：</strong>analysis_report_path_for_csv() → .md 文件
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px">
+  <h3>🔍 五因素评分模型详情（EnterprisePotentialAnalysis）</h3>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="macro">
+    <div class="letter">M</div>
+    <div class="content">
+      <h3>宏观环境 30%</h3>
+      <p>利率(LPR/国债)、通胀(CPI)、增长(PMI/GDP)、货币(M2)、风险(VIX/DXY)</p>
+    </div>
+  </div>
+  <div class="option" data-choice="industry">
+    <div class="letter">I</div>
+    <div class="content">
+      <h3>行业景气 25%</h3>
+      <p>板块归属、热点标签(LLM注入)、行业周期阶段、政策支持度</p>
+    </div>
+  </div>
+  <div class="option" data-choice="company">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>企业质量 25%</h3>
+      <p>ROIC/ROE、毛利率、净利率、收入增速、负债率 + LLM事件增强</p>
+    </div>
+  </div>
+  <div class="option" data-choice="valuation">
+    <div class="letter">V</div>
+    <div class="content">
+      <h3>估值 10%</h3>
+      <p>PE(TTM/Forward)、PB、PEG、EV/EBITDA</p>
+    </div>
+  </div>
+  <div class="option" data-choice="trading">
+    <div class="letter">T</div>
+    <div class="content">
+      <h3>市场行为 10%</h3>
+      <p>涨跌幅、Beta、趋势强度、vs均线、波动率</p>
+    </div>
+  </div>
+</div>

@@ -35,6 +35,10 @@ if __package__:
         CompanyEventHotSectorStrategizer,
         MarketIntelMacroScoreStrategizer,
     )
+    from .potential_analysis.strategizer import (
+        EnterprisePotentialAnalysisStrategizer,
+        MacroFactorAnalysisStrategizer,
+    )
     from .strategizers import (
         DailyPctChangeBandStrategizer,
         EMABreakoutStrategizer,
@@ -64,6 +68,10 @@ else:
         CompanyEventHotNewsStrategizer,
         CompanyEventHotSectorStrategizer,
         MarketIntelMacroScoreStrategizer,
+    )
+    from potential_analysis.strategizer import (
+        EnterprisePotentialAnalysisStrategizer,
+        MacroFactorAnalysisStrategizer,
     )
     from strategizers import (
         DailyPctChangeBandStrategizer,
@@ -335,6 +343,18 @@ class RuleRegistry:
                 macro_weight=params.get("macro_weight", 0.4),
             ),
         )
+        registry.register_strategy(
+            "MacroFactorAnalysisStrategizer",
+            lambda params: MacroFactorAnalysisStrategizer(
+                min_factors=int(params.get("min_factors", 5)),
+            ),
+        )
+        registry.register_strategy(
+            "EnterprisePotentialAnalysisStrategizer",
+            lambda params: EnterprisePotentialAnalysisStrategizer(
+                threshold=float(params.get("threshold", 70)),
+            ),
+        )
         return registry
 
 
@@ -518,6 +538,10 @@ class RuleEngine:
     MARKET_INTEL_MACRO_IMPLEMENTATIONS = {
         "MarketIntelMacroScoreStrategizer",
     }
+    ENTERPRISE_POTENTIAL_IMPLEMENTATIONS = {
+        "MacroFactorAnalysisStrategizer",
+        "EnterprisePotentialAnalysisStrategizer",
+    }
 
     def __init__(
         self,
@@ -541,8 +565,13 @@ class RuleEngine:
     def requires_market_intel_macro_score(self) -> bool:
         return self._references_enabled_implementations(self.MARKET_INTEL_MACRO_IMPLEMENTATIONS)
 
+    def requires_enterprise_potential(self) -> bool:
+        return self._references_enabled_implementations(self.ENTERPRISE_POTENTIAL_IMPLEMENTATIONS)
+
     def requires_macro_analysis(self) -> bool:
-        return self.requires_signal_analysis() or self.requires_market_intel_macro_score()
+        return (self.requires_signal_analysis()
+                or self.requires_market_intel_macro_score()
+                or self.requires_enterprise_potential())
 
     def _references_enabled_implementations(self, implementations: Set[str]) -> bool:
         for rule_key in self.referenced_rule_keys:
