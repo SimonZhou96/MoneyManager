@@ -31,14 +31,15 @@ def load_last_config(path: Optional[str] = None) -> Optional[Dict[str, Any]]:
 
 def save_last_config(answers: Dict[str, Any], path: Optional[str] = None) -> bool:
     target_path = path or config_path()
-    directory = os.path.dirname(target_path)
+    parent = os.path.dirname(target_path)
     payload = {
         "version": CONFIG_VERSION,
         "saved_at": datetime.now(timezone.utc).isoformat(),
         "answers": answers,
     }
     try:
-        os.makedirs(directory, exist_ok=True)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         with open(target_path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
         return True
