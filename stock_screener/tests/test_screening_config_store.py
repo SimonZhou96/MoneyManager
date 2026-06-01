@@ -21,6 +21,14 @@ class ScreeningConfigStoreTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"RUNTIME_HOME": runtime_home}, clear=False):
                 self.assertIsNone(load_last_config())
 
+    def test_round_trip_with_explicit_path(self) -> None:
+        answers = {"mode": "balanced", "window": "20d"}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            explicit_path = os.path.join(temp_dir, "custom_last.json")
+            self.assertTrue(save_last_config(answers, path=explicit_path))
+            loaded = load_last_config(path=explicit_path)
+        self.assertEqual(answers, loaded)
+
     def test_incompatible_version_returns_none(self) -> None:
         with tempfile.TemporaryDirectory() as runtime_home:
             config_path = os.path.join(runtime_home, "interactive_screening_last.json")
@@ -45,6 +53,11 @@ class ScreeningConfigStoreTests(unittest.TestCase):
                 handle.write("not a directory")
             with mock.patch.dict(os.environ, {"RUNTIME_HOME": occupied_path}, clear=False):
                 self.assertFalse(save_last_config({"foo": "bar"}))
+
+    def test_unserializable_answers_returns_false(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            explicit_path = os.path.join(temp_dir, "bad.json")
+            self.assertFalse(save_last_config({"bad": {1, 2, 3}}, path=explicit_path))
 
     def test_config_version_constant(self) -> None:
         self.assertEqual(1, CONFIG_VERSION)

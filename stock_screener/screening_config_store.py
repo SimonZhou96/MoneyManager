@@ -43,5 +43,5 @@ def save_last_config(answers: Dict[str, Any], path: Optional[str] = None) -> boo
         with open(target_path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
         return True
-    except OSError:
+    except (OSError, TypeError, ValueError):
         return False
