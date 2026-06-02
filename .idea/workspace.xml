@@ -5,26 +5,12 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="0bf7b9ee-c261-4d26-a715-0c09e20aab7a" name="更改" comment="">
-      <change afterPath="$PROJECT_DIR$/stock_screener/graphify-out/cache/ast/4cf4aaffae94c648d2ee13d99b8dd18276299486685cd666bf2aed510bac5ae2.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/MoneyManager.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/moneymanager.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/modules.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.claude/worktrees/bg-brainstorm-chain" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/worktrees/bg-brainstorm-chain" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/.env.example" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/db.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/db.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/graphify-out/.graphify_labels.json" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/graphify-out/.graphify_labels.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/graphify-out/GRAPH_REPORT.md" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/graphify-out/GRAPH_REPORT.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/graphify-out/cache/stat-index.json" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/graphify-out/cache/stat-index.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/graphify-out/graph.html" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/graphify-out/graph.json" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/graphify-out/graph.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/rule_engine.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/rule_engine.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/chain.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/chain.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/factories.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/factories.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/search_providers.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/search_providers.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/service.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/service.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/sql/002_signal_analysis.sql" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/sql/002_signal_analysis.sql" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/stock_pool.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/stock_pool.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/tests/test_signal_analysis.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/tests/test_signal_analysis.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/tests/test_stock_pool_types.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/tests/test_stock_pool_types.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/CLAUDE.md" beforeDir="false" afterPath="$PROJECT_DIR$/CLAUDE.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/interactive_screening.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/interactive_screening.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/potential_analysis/builders.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/potential_analysis/builders.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -105,6 +91,8 @@
       <workItem from="1778831866273" duration="4220000" />
       <workItem from="1779706857606" duration="11000" />
       <workItem from="1779964163234" duration="11973000" />
+      <workItem from="1780308089940" duration="13389000" />
+      <workItem from="1780411491520" duration="1339000" />
     </task>
     <servers />
   </component>

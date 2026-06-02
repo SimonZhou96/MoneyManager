@@ -422,7 +422,7 @@ class ScreeningInteractiveApp:
 
     def prompt_options(self, default_mode: Optional[str] = None) -> InteractiveScreeningOptions:
         last_config = load_last_config()
-        mode_choice = self._startup_reuse_choice(last_config) if not default_mode else "reset"
+        mode_choice = self._startup_reuse_choice(last_config)
         base = last_config if mode_choice in {"reuse", "defaults"} else None
         defaults = self._default_answers(base)
         if default_mode:

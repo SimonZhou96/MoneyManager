@@ -11,6 +11,10 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+# 全局抑制 yfinance / urllib3 的 HTTP 404 噪音
+# （yfinance 不覆盖的标的由 Futu 兜底，404 无需打屏）
+logging.getLogger("urllib3").setLevel(logging.ERROR)
+
 from .models import (
     CompanySnapshot,
     EnterprisePotentialEvidencePackage,
@@ -597,11 +601,20 @@ def build_enterprise_evidence(
     )
 
     # 1. 先拉取 yfinance 数据（用于多个模块）
+    import sys as _sys, io as _io
     info = None; tk_obj = None
     try:
         import yfinance as yf
         ticker_str = yf_ticker or CompanySnapshotBuilder()._resolve_ticker(market, code, None)
-        tk_obj = yf.Ticker(ticker_str)
+        # 抑制 yfinance 内部 404 print 噪音
+        _stderr_buf = _io.StringIO()
+        _old_stderr = _sys.stderr
+        _sys.stderr = _stderr_buf
+        try:
+            tk_obj = yf.Ticker(ticker_str)
+        finally:
+            _sys.stderr = _old_stderr
+            _stderr_buf.close()
         info = tk_obj.info or {}
     except Exception as e:
         logger.warning(f"yfinance 数据拉取失败: {e}")
