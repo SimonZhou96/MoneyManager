@@ -1,0 +1,98 @@
+<h2>评分模型优化：三种方案对比</h2>
+<p class="subtitle">核心矛盾：两套评分独立运行，宏观/行业/公司事件三维度均被重复评估</p>
+
+<div class="section">
+  <h3>📋 方案总览</h3>
+</div>
+
+<div class="options" data-multiselect>
+  <div class="option" data-choice="plan-a">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>保守合并 — 以 B 为主，A 降级为数据源</h3>
+      <p><strong>改动范围：</strong>中等（macro_strategies.py + screen_service.py）</p>
+      <p>废弃 MarketIntelMacroScoreStrategizer 的独立评分角色，其 LLM 评分能力转为 EnterprisePotential 的 Company/Industry 模块增强输入。统一使用五因素权重体系。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul>
+          <li>消除双重评分冲突，单一真相来源</li>
+          <li>保留 A 体系的 LLM 分析能力不浪费</li>
+          <li>报告中的评分来源统一、可解释</li>
+        </ul></div>
+        <div class="cons"><h4>缺点</h4><ul>
+          <li>MarketIntel 的 6 维子评分体系被废弃</li>
+          <li>aggregate_rule_scores 的 0.6/0.4 权重逻辑需重构</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="plan-b">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>分层分级 — A 做快速过滤，B 做深度评估</h3>
+      <p><strong>改动范围：</strong>小（rule_chain DSL + screen_service 参数）</p>
+      <p>保留两套体系但明确分工：A 作为快速宏观面过滤（低阈值50分），B 作为深度五因素评估。规则链 DSL 支持"阶段门控"：先过 A 再进 B，减少深度评估的股票数量。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul>
+          <li>改动最小，两套代码都不需要大改</li>
+          <li>快速过滤减少 LLM 调用量（省钱）</li>
+          <li>两阶段门控逻辑清晰：先粗筛后精评</li>
+        </ul></div>
+        <div class="cons"><h4>缺点</h4><ul>
+          <li>双重评分依然存在，报告可能有两套分数</li>
+          <li>两阶段阈值需独立调参，维护成本增加</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="plan-c">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>彻底统一 — 单引擎可配置评分</h3>
+      <p><strong>改动范围：</strong>大（新建 unified_scoring 模块，重构 potential_analysis 和 macro_strategies）</p>
+      <p>设计统一的 UnifiedScoringEngine，支持模块化评分器热插拔。五因素权重 + 子维度权重全可配置（DB 驱动）。LLM 评分和规则评分统一接口，可选择每模块的评分方式。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul>
+          <li>评分体系完全可配置、可扩展</li>
+          <li>支持市场差异化阈值（HK/US/A 各自调参）</li>
+          <li>新增评分维度无需改核心代码</li>
+        </ul></div>
+        <div class="cons"><h4>缺点</h4><ul>
+          <li>改动量大，需要重构两个模块</li>
+          <li>过度设计风险 — 当前 5 维度是否真需要热插拔？</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>🎯 推荐：方案 A（保守合并）</h3>
+  <p style="font-size:14px;line-height:1.7">
+    <strong>理由：</strong>两套评分体系的重叠度太高（宏观、行业、公司事件三维度完全重复评估），
+    继续维持双轨只会增加维护负担和结果不一致性。方案 A 以更成熟的 B 体系（五因素）
+    为主框架，把 A 体系的 LLM 分析能力保留为增强输入，既消除了冲突，
+    又不浪费已有的 LLM 管线投入。改动可控，风险低。
+  </p>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>📐 合并后的目标架构</h3>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">统一评分引擎（UnifiedEnterpriseScorer）</div>
+  <div class="mockup-body" style="font-size:13px;line-height:1.8">
+    <strong>五模块权重：</strong>M:30% | I:25% | C:25% | V:10% | T:10%（保持 B 体系权重）<br><br>
+    <table style="width:100%;border-collapse:collapse">
+      <tr style="background:#f0f4ff"><td style="padding:6px;border:1px solid #ddd;width:15%"><strong>Macro</strong></td><td style="padding:6px;border:1px solid #ddd">规则型 MacroScorer（阈值打分）+ 可选 LLM 增强（MarketIntel 数据作为补充证据）</td></tr>
+      <tr style="background:#fff7ed"><td style="padding:6px;border:1px solid #ddd"><strong>Industry</strong></td><td style="padding:6px;border:1px solid #ddd">IndustryScorer + SignalAnalysis LLM 热点标签注入（保持现有逻辑）</td></tr>
+      <tr style="background:#f0fff4"><td style="padding:6px;border:1px solid #ddd"><strong>Company</strong></td><td style="padding:6px;border:1px solid #ddd">CompanyScorer + SignalAnalysis LLM 事件/新闻增强 + MarketIntel 公司事件证据</td></tr>
+      <tr style="background:#fefce8"><td style="padding:6px;border:1px solid #ddd"><strong>Valuation</strong></td><td style="padding:6px;border:1px solid #ddd">ValuationScorer（PE/PB/PEG/EV_EBITDA）— 不变</td></tr>
+      <tr style="background:#f5f3ff"><td style="padding:6px;border:1px solid #ddd"><strong>Trading</strong></td><td style="padding:6px;border:1px solid #ddd">TradingScorer（涨跌/波动/趋势）+ 可选技术信号增强（来自规则链策略器结果）</td></tr>
+    </table>
+    <br>
+    <strong>MarketIntel 的新角色：</strong>不再独立输出 macro_score，而是作为 Macro/Industry/Company 模块的<span style="background:#fefce8;padding:2px 6px">可选 LLM 增强数据源</span>，当 MarketIntel Service 可用时提升评分质量，不可用时规则型评分正常工作（fail-open）。
+  </div>
+</div>

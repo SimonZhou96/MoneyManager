@@ -1,0 +1,72 @@
+<h2>CSV 列精简方案：51列 → 30列</h2>
+<p class="subtitle">原则：去常数、合同类、留摘要、删原始明细</p>
+
+<div class="section">
+  <h3>🔴 删除（16列）</h3>
+</div>
+
+<table style="width:100%;border-collapse:collapse;font-size:12px">
+  <tr style="background:#f0f4ff"><th style="padding:6px;border:1px solid #ddd">列名</th><th style="padding:6px;border:1px solid #ddd">原因</th></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd">信号可靠性评分<strong>口径</strong></td><td style="padding:6px;border:1px solid #ddd">每行相同常数文本 → 放文档/报告脚注</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd">模型置信度<strong>口径</strong></td><td style="padding:6px;border:1px solid #ddd">同上</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd">辅助方向判断<strong>口径</strong></td><td style="padding:6px;border:1px solid #ddd">同上</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd">热点板块标记<strong>口径</strong></td><td style="padding:6px;border:1px solid #ddd">同上</td></tr>
+  <tr style="background:#fefce8"><td style="padding:6px;border:1px solid #ddd">资金与盘面观察</td><td style="padding:6px;border:1px solid #ddd">长文本摘要 → Markdown 报告中展示</td></tr>
+  <tr style="background:#fefce8"><td style="padding:6px;border:1px solid #ddd">资金流向数据</td><td style="padding:6px;border:1px solid #ddd">原始明细数据 → DB 可查</td></tr>
+  <tr style="background:#fefce8"><td style="padding:6px;border:1px solid #ddd">盘口数据</td><td style="padding:6px;border:1px solid #ddd">原始明细 → DB 可查</td></tr>
+  <tr style="background:#fefce8"><td style="padding:6px;border:1px solid #ddd">龙虎榜数据</td><td style="padding:6px;border:1px solid #ddd">原始明细 → DB 可查</td></tr>
+  <tr style="background:#fefce8"><td style="padding:6px;border:1px solid #ddd">成交量分布数据</td><td style="padding:6px;border:1px solid #ddd">原始明细 → DB 可查</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd">左一中位线日期</td><td style="padding:6px;border:1px solid #ddd">可从支撑区间推算，非独立信息</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd">热点板块匹配理由</td><td style="padding:6px;border:1px solid #ddd">长文本 → Markdown 报告展示</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd">热点板块来源</td><td style="padding:6px;border:1px solid #ddd">已合并到「信息来源」</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd">热点板块关联度</td><td style="padding:6px;border:1px solid #ddd">语义包含在「热点板块标记」中</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd">引用来源</td><td style="padding:6px;border:1px solid #ddd">JSON blob → CSV 不可读，DB 可查</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd">因素引用</td><td style="padding:6px;border:1px solid #ddd">JSON blob → CSV 不可读，DB 可查</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd">新闻来源</td><td style="padding:6px;border:1px solid #ddd">已合并到「信息来源」</td></tr>
+</table>
+
+<div class="section" style="margin-top:16px">
+  <h3>🟡 合并（6列 → 2列）</h3>
+</div>
+
+<table style="width:100%;border-collapse:collapse;font-size:12px">
+  <tr style="background:#f0f4ff"><th style="padding:6px;border:1px solid #ddd">旧列</th><th style="padding:6px;border:1px solid #ddd">合并为</th></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd">市场热点新闻 + 公司热点新闻</td><td style="padding:6px;border:1px solid #ddd"><strong>相关新闻</strong>（"；"分隔，格式: [市场]xxx; [公司]yyy）</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd">AI识别热点板块 + 匹配热点板块</td><td style="padding:6px;border:1px solid #ddd"><strong>热点板块</strong>（"；"分隔，匹配成功的打★前缀）</td></tr>
+</table>
+
+<div class="section" style="margin-top:16px">
+  <h3>🟢 新增（5列 — 五因素评分）</h3>
+</div>
+
+<table style="width:100%;border-collapse:collapse;font-size:12px">
+  <tr style="background:#f0f4ff"><th style="padding:6px;border:1px solid #ddd">新列</th><th style="padding:6px;border:1px solid #ddd">内容</th><th style="padding:6px;border:1px solid #ddd">示例</th></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd"><strong>五因素总分</strong></td><td style="padding:6px;border:1px solid #ddd">total_score</td><td style="padding:6px;border:1px solid #ddd">72.5</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd"><strong>五因素明细</strong></td><td style="padding:6px;border:1px solid #ddd">M/I/C/V/T 简写</td><td style="padding:6px;border:1px solid #ddd">M68·I85·C72·V55·T60</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd"><strong>决策</strong></td><td style="padding:6px;border:1px solid #ddd">BUY/WATCH/SKIP</td><td style="padding:6px;border:1px solid #ddd">WATCH</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd"><strong>建议持有周期</strong></td><td style="padding:6px;border:1px solid #ddd">holding_period</td><td style="padding:6px;border:1px solid #ddd">3-9个月</td></tr>
+  <tr><td style="padding:6px;border:1px solid #ddd"><strong>评分置信度</strong></td><td style="padding:6px;border:1px solid #ddd">可用模块数/5 百分比</td><td style="padding:6px;border:1px solid #ddd">80% (4/5)</td></tr>
+</table>
+</div>
+
+<div class="section" style="margin-top:16px">
+  <h3>📊 最终列结构 — 30列（原51列）</h3>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">精简后完整列序</div>
+  <div class="mockup-body" style="font-size:12px;line-height:2">
+    <strong>【基础 8】</strong>股票代码 | 市场 | 名称 | 标的类型 | PE | 市值 | 所属板块 | 满足的条件<br>
+    <strong>【主力资金 4】</strong>主力流出风险 | 主力风险分 | 主力风险信号 | 主力风险说明<br>
+    <strong>【左一战法 7】</strong>左一方向 | 左一日期 | 左一顶 | 左一底 | 左一支撑区间 | 左一突破日期 | 左一突破用时<br>
+    <strong>【AI分析 6】</strong>AI分析状态 | 信号可靠性评分 | 模型置信度 | 辅助方向判断 | 关键利好因素 | 关键风险因素<br>
+    <strong>【时事 1】</strong>相关新闻（市场+公司合并）<br>
+    <strong>【热点 2】</strong>热点板块 | 热点板块标记<br>
+    <strong>【五因素 5】</strong>五因素总分 | 五因素明细 | 决策 | 建议持有周期 | 评分置信度<br>
+    <strong>【其他 4】</strong>宏观/政策因素 | 公司事件 | 新闻影响判断 | 信息来源 | 数据缺失原因<br>
+  </div>
+</div>
+
+<div style="margin-top:16px;padding:12px;background:#f0fdf4;border-radius:8px;font-size:13px">
+  <strong>总计：</strong>8 + 4 + 7 + 6 + 1 + 2 + 5 + 5 = <strong>38列</strong>（从51列减少25%），且每列信息密度大幅提升。
+</div>

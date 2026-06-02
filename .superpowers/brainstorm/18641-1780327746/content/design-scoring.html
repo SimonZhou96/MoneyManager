@@ -1,0 +1,87 @@
+<h2>方案 A 设计 · 第二节：评分模型细节</h2>
+<p class="subtitle">五模块权重保持、LLM 增强可选注入、缺失模块惩罚替代中性补齐、阈值支持市场差异化</p>
+
+<div class="section">
+  <h3>1️⃣ 权重体系（保持 B 体系）</h3>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">统一五因素权重</div>
+  <div class="mockup-body" style="font-size:13px;line-height:1.8">
+    <table style="width:100%;border-collapse:collapse">
+      <tr style="background:#f0f4ff"><th style="padding:8px;border:1px solid #ddd">模块</th><th style="padding:8px;border:1px solid #ddd">权重</th><th style="padding:8px;border:1px solid #ddd">评分方式</th><th style="padding:8px;border:1px solid #ddd">LLM 增强源</th></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd">M — 宏观</td><td style="padding:8px;border:1px solid #ddd">30%</td><td style="padding:8px;border:1px solid #ddd">规则型（LPR/CPI/PMI/M2/VIX/DXY 阈值）</td><td style="padding:8px;border:1px solid #ddd">MarketIntel LLM 宏观评分作为加分项（±10）</td></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd">I — 行业</td><td style="padding:8px;border:1px solid #ddd">25%</td><td style="padding:8px;border:1px solid #ddd">标签型（热点标签+周期+政策）</td><td style="padding:8px;border:1px solid #ddd">SignalAnalysis hot_sectors/matched_hot_sectors</td></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd">C — 企业</td><td style="padding:8px;border:1px solid #ddd">25%</td><td style="padding:8px;border:1px solid #ddd">阈值型（ROIC/毛利/增速/负债）</td><td style="padding:8px;border:1px solid #ddd">SignalAnalysis（event_impact±10, news_validation+5）<br>+ MarketIntel（company_event_strength ±5）</td></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd">V — 估值</td><td style="padding:8px;border:1px solid #ddd">10%</td><td style="padding:8px;border:1px solid #ddd">阈值型（PE/PB/PEG/EV_EBITDA）</td><td style="padding:8px;border:1px solid #ddd">无 LLM 增强</td></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd">T — 交易</td><td style="padding:8px;border:1px solid #ddd">10%</td><td style="padding:8px;border:1px solid #ddd">阈值型（涨跌/波动/趋势/均线）</td><td style="padding:8px;border:1px solid #ddd">规则链策略器 pass 信号（如左一/EMA突破）作为加分项</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>2️⃣ 缺失模块处理：从"50分中性"改为"置信度惩罚"</h3>
+</div>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header" style="background:#fee2e2">❌ 当前逻辑</div>
+    <div class="mockup-body" style="font-size:13px;line-height:1.7">
+      缺失模块直接给 <strong>50.0 分</strong>（中性），参与加权求和。<br><br>
+      <strong>问题：</strong><br>
+      • 5 模块全缺 = 总分 50，可能高于阈值 70？不会，但 3 模块缺失 + 2 模块表现好 → 可能通过<br>
+      • 50 分没有表达"我们不知道"的语义<br>
+      • 数据不全的股票和数据完整的股票无法区分
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header" style="background:#dcfce7">✅ 目标逻辑</div>
+    <div class="mockup-body" style="font-size:13px;line-height:1.7">
+      <strong>方案：缺失模块不参与加权，降低置信度</strong><br><br>
+      ① 缺失模块 <strong>不贡献分数也不贡献权重</strong><br>
+      ② 仅用可用模块计算加权总分<br>
+      ③ confidence_score = 可用模块数 / 5 × 100<br>
+      ④ 当 confidence_score &lt; 40（即 &lt;2 模块可用）时 → <code>result="skip"</code>，不管总分多少<br>
+      ⑤ 总分旁边展示 <code>基于 3/5 模块</code><br><br>
+      <strong>示例：</strong>Macro(70), Company(80), Valuation(缺), Industry(缺), Trading(60)<br>
+      → 总分 = (70×0.30 + 80×0.25 + 60×0.10) / (0.30+0.25+0.10) = 72.3<br>
+      → confidence = 3/5 = 60%<br>
+      → 展示: "总分 72.3（基于 3/5 模块）→ WATCH"
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>3️⃣ 阈值按市场差异化（可配置）</h3>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">建议默认阈值（可 DB 配置覆盖）</div>
+  <div class="mockup-body" style="font-size:13px;line-height:1.8">
+    <table style="width:100%;border-collapse:collapse">
+      <tr style="background:#f0f4ff"><th style="padding:6px;border:1px solid #ddd">市场</th><th style="padding:6px;border:1px solid #ddd">BUY 阈值</th><th style="padding:6px;border:1px solid #ddd">WATCH 阈值</th><th style="padding:6px;border:1px solid #ddd">理由</th></tr>
+      <tr><td style="padding:6px;border:1px solid #ddd">HK</td><td style="padding:6px;border:1px solid #ddd">≥ 75</td><td style="padding:6px;border:1px solid #ddd">≥ 65</td><td style="padding:6px;border:1px solid #ddd">港股波动大，宏观敏感性高，适当降低 WATCH 门槛</td></tr>
+      <tr><td style="padding:6px;border:1px solid #ddd">US</td><td style="padding:6px;border:1px solid #ddd">≥ 75</td><td style="padding:6px;border:1px solid #ddd">≥ 70</td><td style="padding:6px;border:1px solid #ddd">美股估值中枢高，企业质量分化大，维持标准阈值</td></tr>
+      <tr><td style="padding:6px;border:1px solid #ddd">A</td><td style="padding:6px;border:1px solid #ddd">≥ 75</td><td style="padding:6px;border:1px solid #ddd">≥ 70</td><td style="padding:6px;border:1px solid #ddd">A 股政策驱动强，维持标准阈值</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>4️⃣ aggregate_rule_scores 重构</h3>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">当前 vs 目标</div>
+  <div class="mockup-body" style="font-size:13px;line-height:1.8">
+    <strong>当前逻辑：</strong><br>
+    <code>aggregate_rule_scores()</code> 扫描 filter_details，将 strategy_category="macro" 的 macro_score 提取为 macro_score，其余 pass 策略 → technical_score=100，fail → 0。然后 0.6×technical + 0.4×macro → final_score<br><br>
+    <strong>目标逻辑：</strong><br>
+    <code>aggregate_rule_scores()</code> 直接读取 EnterprisePotential 输出的 <code>total_score</code> + <code>module_scores</code> 作为权威分数。技术策略器的 pass/fail 转为 Trading 模块的增强信号，不再独立算分。<br><br>
+    <strong>写入 DB 的字段保持兼容：</strong><br>
+    <code>technical_score</code> → Trading 模块分<br>
+    <code>macro_score</code> → Macro 模块分<br>
+    <code>final_score</code> → total_score<br>
+    <code>score_details</code> → 新增 module_scores + decision + holding_period + confidence
+  </div>
+</div>

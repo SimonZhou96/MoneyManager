@@ -1,0 +1,48 @@
+<h2>方案 A 设计 · 第四节（修订）：迁移路径 & 兼容性</h2>
+<p class="subtitle">两步迁移，第二步直接合并 MarketIntel 无需回滚模式</p>
+
+<div class="section">
+  <h3>🪜 两步迁移计划</h3>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="step1">
+    <div class="letter">1</div>
+    <div class="content">
+      <h3>Step 1：评分模型增强 + 合并 MarketIntel</h3>
+      <p><strong>范围：</strong>potential_analysis/ + macro_strategies.py + rule_engine.py + screen_service.py</p>
+      <p>• 缺失模块置信度惩罚、市场差异化阈值、LLM 增强参数<br>
+      • MarketIntelMacroScoreStrategizer 直接改为向 FilterContext 写入 LLM 证据包<br>
+      • 移除其独立 pass/fail 输出，结果仅作为 EnterprisePotential 的增强输入<br>
+      • aggregate_rule_scores 改为读取五因素分数<br>
+      • <strong>一次性合并且上线验证</strong></p>
+    </div>
+  </div>
+  <div class="option" data-choice="step2">
+    <div class="letter">2</div>
+    <div class="content">
+      <h3>Step 2：报告升级 + 废弃代码清理</h3>
+      <p><strong>范围：</strong>报告模板 + MarketIntel 独立评分代码删除</p>
+      <p>• 报告增加五因素明细节<br>
+      • CSV 导出追加五因素列<br>
+      • 移除 aggregate_rule_scores 的旧 0.6/0.4 加权逻辑<br>
+      • 移除 MarketIntelMacroScoreStrategizer 中已不再使用的独立评分分支<br>
+      • <strong>纯增量+清理，无逻辑变更</strong></p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>🔙 向后兼容（精简版）</h3>
+</div>
+
+<div class="mockup">
+  <div class="mockup-body" style="font-size:13px;line-height:1.8">
+    <table style="width:100%;border-collapse:collapse">
+      <tr style="background:#f0f4ff"><th style="padding:8px;border:1px solid #ddd;width:25%">兼容维度</th><th style="padding:8px;border:1px solid #ddd">策略</th></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd"><strong>DB 字段</strong></td><td style="padding:8px;border:1px solid #ddd">不变，score_details JSON 新增键</td></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd"><strong>不启用 B 体系的规则链</strong></td><td style="padding:8px;border:1px solid #ddd">aggregate_rule_scores 检测不到五因素分数时回退旧逻辑</td></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd"><strong>CSV 导出</strong></td><td style="padding:8px;border:1px solid #ddd">现有列不变，新列追加末尾</td></tr>
+    </table>
+  </div>
+</div>

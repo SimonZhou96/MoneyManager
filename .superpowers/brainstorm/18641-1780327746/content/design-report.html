@@ -1,0 +1,118 @@
+<h2>方案 A 设计 · 第三节：报告结构优化</h2>
+<p class="subtitle">将五因素评分融入现有的 AI 复核报告，增强信息密度和决策可解释性</p>
+
+<div class="section">
+  <h3>📋 当前报告结构 vs 目标结构</h3>
+</div>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header" style="background:#fefce8">当前报告（5 节）</div>
+    <div class="mockup-body" style="font-size:12px;line-height:1.8">
+      一、核心结论<br>
+      &nbsp;&nbsp;• 信号强度、热点匹配、公司催化、信息充分度<br>
+      二、复核结果总览表<br>
+      &nbsp;&nbsp;• 综合评分 | 方向判断 | 热点匹配 | 简明结论<br>
+      三、主力流出风险观察<br>
+      四、热点板块分析<br>
+      五、个股详细分析<br><br>
+      <strong style="color:#b45309">⚠️ 缺失：</strong><br>
+      • 无五因素模块分展示<br>
+      • "综合评分"来源不透明<br>
+      • 无可量化决策依据
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header" style="background:#dcfce7">目标报告（6 节）</div>
+    <div class="mockup-body" style="font-size:12px;line-height:1.8">
+      一、核心结论<br>
+      &nbsp;&nbsp;• <strong>新增：五因素总览</strong>（M/I/C/V/T 模块分雷达概要）<br>
+      二、复核结果总览表<br>
+      &nbsp;&nbsp;• 综合评分 | 五因素分解 | 决策 | 持有建议 | 热点匹配<br>
+      三、<strong>新增：五因素评分明细</strong><br>
+      &nbsp;&nbsp;• 各模块得分 + 关键驱动 + 数据缺口<br>
+      四、主力流出风险观察<br>
+      五、热点板块分析<br>
+      六、个股详细分析
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>📊 第二节「复核结果总览表」列结构变更</h3>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">总览表列：当前 5 列 → 目标 8 列</div>
+  <div class="mockup-body" style="font-size:13px;line-height:1.8;overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <tr style="background:#f0f4ff">
+        <th style="padding:6px;border:1px solid #ddd">股票代码</th><th style="padding:6px;border:1px solid #ddd">股票名称</th>
+        <th style="padding:6px;border:1px solid #ddd">综合评分</th><th style="padding:6px;border:1px solid #ddd">五因素</th>
+        <th style="padding:6px;border:1px solid #ddd">决策</th><th style="padding:6px;border:1px solid #ddd">持有建议</th>
+        <th style="padding:6px;border:1px solid #ddd">热点匹配</th><th style="padding:6px;border:1px solid #ddd">简明结论</th>
+      </tr>
+      <tr>
+        <td style="padding:6px;border:1px solid #ddd">HK.02575</td><td style="padding:6px;border:1px solid #ddd">轩竹生物-B</td>
+        <td style="padding:6px;border:1px solid #ddd">72.5</td>
+        <td style="padding:6px;border:1px solid #ddd;font-size:11px">M68·I85·C72·V55·T60</td>
+        <td style="padding:6px;border:1px solid #ddd">WATCH</td>
+        <td style="padding:6px;border:1px solid #ddd">3-9个月</td>
+        <td style="padding:6px;border:1px solid #ddd">重点</td>
+        <td style="padding:6px;border:1px solid #ddd;font-size:11px">行业景气主导(85)，估值偏高(55)限制上行空间；RSI超卖+左一看涨；创新药板块核心标的</td>
+      </tr>
+    </table>
+    <br>
+    <strong>新增 3 列：</strong>五因素（M·I·C·V·T 简写）、决策（BUY/WATCH/SKIP）、持有建议（如"3-9个月"）<br>
+    <strong>"综合评分"列改进：</strong>鼠标悬停或脚注标注 confidence_score（如"基于 4/5 模块, 置信度 80%"）
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>🆕 新增第三节：「五因素评分明细」</h3>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">仅展示 BUY/WATCH 决策股票的模块明细（SKIP 不展开）</div>
+  <div class="mockup-body" style="font-size:13px;line-height:1.8">
+<pre style="background:#1e293b;color:#e2e8f0;padding:16px;border-radius:8px;font-size:12px;overflow-x:auto">
+### HK.02575 轩竹生物-B — 五因素评分明细
+
+| 模块 | 得分 | 权重 | 贡献 | 状态 |
+|------|------|------|------|------|
+| 宏观环境 | 68 | 30% | 20.4 | ✅ 基于 7 因子 |
+| 行业景气 | 85 | 25% | 21.3 | ✅ 创新药热点 + 强政策 |
+| 企业质量 | 72 | 25% | 18.0 | ✅ 基于 4 指标 + LLM 事件 |
+| 估值     | 55 | 10% | 5.5  | ✅ PE(TTM)=32, PB=4.2 |
+| 交易行为 | 60 | 10% | 6.0  | ✅ RSI超卖+左一看涨 |
+
+**总分: 72.5** (阈值 65) → **WATCH** | 持有建议: 3-9个月（行业主导）
+**置信度: 100%** (5/5 模块可用)
+
+**关键驱动因素:**
+• 行业景气(85分): 属于创新药板块，AI识别为重点热点，政策支持强
+• 企业质量(72分): 拟实施H股全流通获证监会通知书，事件影响偏利好
+
+**主要风险:**
+• 估值偏高(55分): PE 32高于创新药板块均值，PEG不具吸引力
+</pre>
+
+    <strong>设计要点：</strong>
+    • 仅对 BUY/WATCH 展示明细，SKIP 股票不展开（控制报告长度）<br>
+    • 每个模块的"状态"列标记数据来源（因子数/指标数/LLM增强）<br>
+    • 关键驱动和风险从模块分中自动提炼（已在 scoring.py 的 _analyze_factors 中实现）
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>📝 第一节「核心结论」增强</h3>
+</div>
+
+<div style="font-size:14px;line-height:1.8;background:#f8fafc;padding:16px;border-radius:8px;border:1px solid #e2e8f0">
+  <strong>当前：</strong>本批股票更适合归类为：<strong>普通观察池</strong>。<br><br>
+  <strong>增强后增加五因素概要：</strong><br>
+  本批股票更适合归类为：<strong>普通观察池</strong>。<br>
+  <strong>五因素平均分：</strong>宏观 62 · 行业 58 · 企业 55 · 估值 60 · 交易 52。<br>
+  <strong>最弱维度：</strong>交易行为（平均52分），主要受RSI超买和波动率偏高拖累。<br>
+  <strong>数据覆盖：</strong>84个标的中，5/5模块齐全 42个，3-4/5模块 30个，≤2/5模块 12个（已跳过深度评估）。
+</div>

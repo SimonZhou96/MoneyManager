@@ -1,0 +1,104 @@
+<h2>方案 A 设计 · 第一节：数据流 & 架构变更</h2>
+<p class="subtitle">核心原则：五因素模型为唯一评分出口，MarketIntel 降级为 LLM 增强数据源</p>
+
+<div class="section">
+  <h3>🔄 当前 vs 目标 数据流对比</h3>
+</div>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header" style="background:#fee2e2">❌ 当前：双轨评分</div>
+    <div class="mockup-body" style="font-size:12px;line-height:1.7">
+      <strong>轨 A — MarketIntelMacroScore:</strong><br>
+      SignalAnalysis LLM → MarketIntel Service<br>
+      → EvidencePackBuilder（逐股构建证据）<br>
+      → MacroEvidencePreprocessor<br>
+      → LLM MacroScoreScorer（6维子评分）<br>
+      → <code>macro_score</code> + pass/fail<br>
+      <em>权重: 0.6技术 + 0.4宏观</em><br><br>
+      <strong>轨 B — EnterprisePotential:</strong><br>
+      MacroFactorAnalysisStrategizer<br>
+      → MacroSnapshot（宏观因子采集）<br>
+      + IndustrySnapshot + CompanySnapshot<br>
+      + ValuationSnapshot + TradingSnapshot<br>
+      → EnterprisePotentialScorer<br>
+      → <code>total_score</code> + BUY/WATCH/SKIP<br>
+      <em>权重: M30+I25+C25+V10+T10</em><br><br>
+      <strong style="color:#dc2626">⚠️ 两轨独立运行，结果各自写入 details，无统一汇总</strong>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header" style="background:#dcfce7">✅ 目标：统一评分</div>
+    <div class="mockup-body" style="font-size:12px;line-height:1.7">
+      <strong>数据采集层（不变）：</strong><br>
+      ① SignalAnalysis LLM → 时事/热点/新闻<br>
+      ② MarketIntel Service → 市场情报证据<br>
+      ③ MacroFactor Provider → 宏观因子快照<br>
+      ④ Financial Data → 企业财务+估值<br>
+      ⑤ K-line Data → 交易行为指标<br><br>
+      <strong>统一评分引擎：</strong><br>
+      EnterprisePotentialScorer（增强版）<br>
+      ├─ MacroScorer + MarketIntel LLM 增强<br>
+      ├─ IndustryScorer + SignalAnalysis 热点注入<br>
+      ├─ CompanyScorer + LLM 事件/新闻增强<br>
+      ├─ ValuationScorer（不变）<br>
+      └─ TradingScorer + 技术信号增强<br>
+      <strong>→ 唯一输出：</strong><code>total_score</code> + <code>module_scores</code> + <code>decision</code> + <code>holding_period</code><br>
+      <strong style="color:#16a34a">✅ 单一评分出口，所有数据源均为增强输入</strong>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>📁 涉及文件变更清单</h3>
+</div>
+
+<table style="width:100%;border-collapse:collapse;font-size:13px">
+  <tr style="background:#f0f4ff"><th style="padding:8px;border:1px solid #ddd;width:30%">文件</th><th style="padding:8px;border:1px solid #ddd;width:12%">变更类型</th><th style="padding:8px;border:1px solid #ddd">变更说明</th></tr>
+  <tr style="background:#fef2f2">
+    <td style="padding:6px;border:1px solid #ddd"><code>macro_strategies.py</code></td>
+    <td style="padding:6px;border:1px solid #ddd">重构</td>
+    <td style="padding:6px;border:1px solid #ddd">MarketIntelMacroScoreStrategizer 不再返回独立 pass/fail，改为将 LLM 评分结果注入 FilterContext 缓存供 EnterprisePotential 读取</td>
+  </tr>
+  <tr style="background:#fefce8">
+    <td style="padding:6px;border:1px solid #ddd"><code>potential_analysis/strategizer.py</code></td>
+    <td style="padding:6px;border:1px solid #ddd">增强</td>
+    <td style="padding:6px;border:1px solid #ddd">EnterprisePotentialAnalysisStrategizer._inject_signal_analysis() 扩展为 _inject_llm_enhancements()，同时读取 signal_analysis 和 market_intel 缓存</td>
+  </tr>
+  <tr style="background:#fefce8">
+    <td style="padding:6px;border:1px solid #ddd"><code>potential_analysis/scoring.py</code></td>
+    <td style="padding:6px;border:1px solid #ddd">增强</td>
+    <td style="padding:6px;border:1px solid #ddd">MacroScorer 增加可选的 LLM 增强参数；增加模块缺失时的置信度惩罚而非固定50分</td>
+  </tr>
+  <tr style="background:#f0fdf4">
+    <td style="padding:6px;border:1px solid #ddd"><code>rule_engine.py</code></td>
+    <td style="padding:6px;border:1px solid #ddd">小幅调整</td>
+    <td style="padding:6px;border:1px solid #ddd">移除独立的 requires_market_intel_macro_score() 判断逻辑，统一到 requires_enterprise_potential()</td>
+  </tr>
+  <tr style="background:#f0fdf4">
+    <td style="padding:6px;border:1px solid #ddd"><code>api/screen_service.py</code></td>
+    <td style="padding:6px;border:1px solid #ddd">简化</td>
+    <td style="padding:6px;border:1px solid #ddd">移除 MarketIntel Service 的独立注入逻辑，aggregate_rule_scores 改用五因素分数</td>
+  </tr>
+  <tr style="background:#f0fdf4">
+    <td style="padding:6px;border:1px solid #ddd"><code>market_intel/macro_scoring.py</code></td>
+    <td style="padding:6px;border:1px solid #ddd">保留不删</td>
+    <td style="padding:6px;border:1px solid #ddd">MacroEvidencePackage / MacroScoreScorer 保留作为 LLM 增强能力的提供方，不再独立暴露为 strategizer</td>
+  </tr>
+</table>
+
+<div class="section" style="margin-top:20px">
+  <h3>🔗 关键数据流变更：FilterContext 缓存键统一</h3>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">目标缓存键设计</div>
+  <div class="mockup-body" style="font-size:13px;line-height:1.8">
+    <table style="width:100%;border-collapse:collapse">
+      <tr style="background:#f0f4ff"><td style="padding:6px;border:1px solid #ddd;width:30%"><code>signal_analysis:{code}</code></td><td style="padding:6px;border:1px solid #ddd">SignalAnalysisResult — 时事分析 LLM 结果（热点/事件/新闻）<br><em>已有，不变</em></td></tr>
+      <tr><td style="padding:6px;border:1px solid #ddd"><code>macro_snapshot:{market}</code></td><td style="padding:6px;border:1px solid #ddd">MacroSnapshot — 宏观因子快照（LPR/CPI/PMI/VIX...）<br><em>已有，不变</em></td></tr>
+      <tr><td style="padding:6px;border:1px solid #ddd"><code>market_intel:{code}</code></td><td style="padding:6px;border:1px solid #ddd"><strong>新增</strong> — MacroEvidencePackage（LLM 评分后的宏观证据包）<br>由 MarketIntelMacroScoreStrategizer 写入（降级模式），EnterprisePotential 读取作为增强</td></tr>
+      <tr><td style="padding:6px;border:1px solid #ddd"><code>enterprise:evidence:{code}</code></td><td style="padding:6px;border:1px solid #ddd">EnterprisePotentialEvidencePackage — 五模块证据包<br><em>已有，读取时合并 market_intel 增强数据</em></td></tr>
+    </table>
+  </div>
+</div>

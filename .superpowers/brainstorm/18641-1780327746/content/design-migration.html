@@ -1,0 +1,74 @@
+<h2>方案 A 设计 · 第四节：迁移路径 & 兼容性</h2>
+<p class="subtitle">分三步渐进式迁移，每步可独立上线验证，确保不破坏现有筛选流程</p>
+
+<div class="section">
+  <h3>🪜 三步迁移计划</h3>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="step1">
+    <div class="letter">1</div>
+    <div class="content">
+      <h3>Step 1：评分模型增强（不改规则链）</h3>
+      <p><strong>范围：</strong>potential_analysis/scoring.py + strategizer.py</p>
+      <p>• 实现缺失模块置信度惩罚逻辑（替代50分中性补齐）<br>
+      • MacroScorer 增加可选 LLM 增强参数（先留接口，暂不接入）<br>
+      • 增加市场差异化阈值参数<br>
+      • <strong>不影响现有规则链，B 体系独立验证</strong></p>
+    </div>
+  </div>
+  <div class="option" data-choice="step2">
+    <div class="letter">2</div>
+    <div class="content">
+      <h3>Step 2：合并 MarketIntel（可回滚）</h3>
+      <p><strong>范围：</strong>macro_strategies.py + rule_engine.py + screen_service.py</p>
+      <p>• MarketIntelMacroScoreStrategizer 新增模式参数 <code>mode="enhance_only"</code><br>
+      &nbsp;&nbsp;— "standalone"（默认，保持旧行为）、"enhance_only"（降级为数据源）<br>
+      • screen_service 根据参数决定是否将 MarketIntel 结果注入 FilterContext<br>
+      • <strong>通过 DB 参数切换，可快速回滚</strong></p>
+    </div>
+  </div>
+  <div class="option" data-choice="step3">
+    <div class="letter">3</div>
+    <div class="content">
+      <h3>Step 3：报告升级 + 旧代码清理</h3>
+      <p><strong>范围：</strong>报告模板 + aggregate_rule_scores + 废弃代码移除</p>
+      <p>• aggregate_rule_scores 改为读取五因素分数<br>
+      • 报告模板增加五因素明细节<br>
+      • 确认 Step 2 的 enhance_only 模式稳定后，删除 standalone 模式<br>
+      • <strong>清理 MarketIntelMacroScoreStrategizer 的独立评分代码</strong></p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>🔙 向后兼容策略</h3>
+</div>
+
+<div class="mockup">
+  <div class="mockup-body" style="font-size:13px;line-height:1.8">
+    <table style="width:100%;border-collapse:collapse">
+      <tr style="background:#f0f4ff"><th style="padding:8px;border:1px solid #ddd;width:25%">兼容维度</th><th style="padding:8px;border:1px solid #ddd">策略</th></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd"><strong>DB 表结构</strong></td><td style="padding:8px;border:1px solid #ddd">screening_results 的 technical_score/macro_score/final_score 字段保持不变，score_details JSON 新增 module_scores/decision/holding_period/confidence 键，旧消费者不受影响</td></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd"><strong>规则链 DSL</strong></td><td style="padding:8px;border:1px solid #ddd">expression JSON 不变。MarketIntelMacroScoreStrategizer 的 rule_key 保留在 metadata 表中，由 mode 参数控制行为</td></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd"><strong>CSV 导出</strong></td><td style="padding:8px;border:1px solid #ddd">现有 30+ 列保持不变，新增"五因素总分""宏观分""行业分""企业分""估值分""交易分""决策""建议持有周期"列（追加在末尾）</td></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd"><strong>飞书通知</strong></td><td style="padding:8px;border:1px solid #ddd">摘要文本不变，文件发送逻辑不变。增强后的报告作为 .md 附件发送</td></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd"><strong>不启用 B 体系的规则链</strong></td><td style="padding:8px;border:1px solid #ddd">如果规则链不引用 EnterprisePotential 相关策略器，全部变更对其透明 — aggregate_rule_scores 检测不到五因素分数时回退到旧逻辑</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>⚠️ 风险 & 缓解</h3>
+</div>
+
+<div class="mockup">
+  <div class="mockup-body" style="font-size:13px;line-height:1.8">
+    <table style="width:100%;border-collapse:collapse">
+      <tr style="background:#fef2f2"><th style="padding:8px;border:1px solid #ddd;width:25%">风险</th><th style="padding:8px;border:1px solid #ddd;width:15%">概率</th><th style="padding:8px;border:1px solid #ddd">缓解措施</th></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd">MarketIntel LLM 证据包质量下降导致 Macro/Company 模块分波动</td><td style="padding:8px;border:1px solid #ddd">低</td><td style="padding:8px;border:1px solid #ddd">LLM 增强仅作为±5~10 的修正项，不会颠覆规则型评分。MarketIntel 不可用时规则型评分正常工作（fail-open）</td></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd">缺失模块惩罚导致通过率骤降</td><td style="padding:8px;border:1px solid #ddd">中</td><td style="padding:8px;border:1px solid #ddd">Step 1 先上线，观察通过率变化。可通过 confidence_score 阈值（默认40%）调节松紧。保留旧逻辑的参数开关</td></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd">不同市场差异化阈值导致结果不可比</td><td style="padding:8px;border:1px solid #ddd">低</td><td style="padding:8px;border:1px solid #ddd">阈值差异仅 5 分（65 vs 70），且仅影响 WATCH 决策。BUY 统一 75 不变。跨市场比较时用原始 total_score 而非 decision</td></tr>
+    </table>
+  </div>
+</div>
