@@ -121,12 +121,17 @@ class CompanySnapshotBuilder(SnapshotBuilder):
         m = market.upper()
         if m == "HK":
             # 01810 → 1810.HK
-            return f"{int(code)}.HK"
+            value = code[3:] if code.upper().startswith("HK.") else code
+            return f"{int(value):04d}.HK"
         elif m == "US":
-            return code
+            return code[3:] if code.upper().startswith("US.") else code
         elif m == "A":
+            # 已是 yahoo 格式 000001.SZ / 600000.SS，直接返回
+            if code.endswith((".SS", ".SZ")):
+                return code
             # 000001 → 000001.SZ (Shenzhen) or 600000.SS (Shanghai)
-            c = str(code).zfill(6)
+            c = code[3:] if code.upper().startswith(("SZ.", "SH.")) else code
+            c = str(c).zfill(6)
             return f"{c}.{'SS' if c.startswith('6') else 'SZ'}"
         return code
 

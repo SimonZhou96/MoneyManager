@@ -148,13 +148,14 @@ class YFinanceKlineFetcher(KlineFetcherBase):
                 code = code[3:]
             return f"{code.zfill(5)}.HK"
         if market == "A":
+            # 已是 yahoo 格式 000001.SZ / 600000.SS，直接返回（必须在 prefix 剥离之前判断）
+            if code.endswith((".SS", ".SZ")):
+                return code
             # Futu 格式 SH.601398 / SZ.000001 -> 601398.SS / 000001.SZ
             if code.upper().startswith("SH."):
                 return f"{code[3:]}.SS"
             if code.upper().startswith("SZ."):
                 return f"{code[3:]}.SZ"
-            if "." in code and code.endswith((".SS", ".SZ")):
-                return code  # 已是 600000.SS / 000001.SZ
             if code.isdigit() and len(code) == 6:
                 return f"{code}.SS" if code.startswith("6") else f"{code}.SZ"
             return code

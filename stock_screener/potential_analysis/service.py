@@ -111,11 +111,17 @@ class BatchCompanyFetcher(BatchFetcher):
         m = market.upper()
         if m == "HK":
             # 保持前导零: "00700" → "0700.HK"
-            return f"{int(code):04d}.HK"
+            value = code[3:] if code.upper().startswith("HK.") else code
+            return f"{int(value):04d}.HK"
         elif m == "US":
-            return code
+            return code[3:] if code.upper().startswith("US.") else code
         elif m == "A":
-            c = str(code).zfill(6)
+            # 已是 yahoo 格式 000001.SZ / 600000.SS，直接返回
+            if code.endswith((".SS", ".SZ")):
+                return code
+            # 去掉可能已带的前缀 "SZ." / "SH."，避免双后缀
+            c = code[3:] if code.upper().startswith(("SZ.", "SH.")) else code
+            c = str(c).zfill(6)
             return f"{c}.{'SS' if c.startswith('6') else 'SZ'}"
         return code
 
