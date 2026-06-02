@@ -461,7 +461,7 @@ def run_screening_task(
             context.set_cache("macro_score_scorer", macro_score_scorer)
 
         if rule_engine is not None and rule_engine.requires_enterprise_potential():
-            from ..potential_analysis.service import EnterprisePotentialService
+            from potential_analysis.service import EnterprisePotentialService
             service = EnterprisePotentialService()
             codes = [s.code for s in stock_infos]
             if verbose:
