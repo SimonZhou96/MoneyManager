@@ -844,23 +844,44 @@ class StockPoolFetcher:
         # 筛选最近上市的股票
         cutoff_date = datetime.now() - timedelta(days=days)
         result = []
+        skipped_spac = 0
 
         for _, row in basic_info.iterrows():
             listing_date_str = row.get("listing_date")
             if not listing_date_str or listing_date_str == "N/A":
                 continue
 
+            code = row["code"]
+            # US 市场：过滤 SPAC unit/right/warrant 等非标准标的
+            # Futu 对 SPAC unit 的代码格式不统一：有的带点(COPL.U)有的不带(COPAU)
+            if market == "US":
+                bare = code[3:] if code.upper().startswith("US.") else code
+                upper = bare.upper()
+                # 带点的: .U .UT .RT .WS（SPAC unit/right/warrant）
+                # 不带点但以 U 结尾: COPAU ALUBU EVACU 等（Futu 去掉了点的 SPAC unit）
+                if upper.endswith((".U", ".UT", ".RT", ".WS")) or "-" in upper:
+                    skipped_spac += 1
+                    continue
+                if upper.endswith("U") and not upper.endswith("UU"):
+                    # 5 位全大写以 U 结尾: 极大概率为 SPAC unit（如 COPAU）
+                    if len(bare) >= 4 and bare.isascii() and bare == upper:
+                        skipped_spac += 1
+                        continue
+
             try:
                 listing_date = datetime.strptime(listing_date_str, "%Y-%m-%d")
                 if listing_date >= cutoff_date:
                     result.append({
-                        "code": row["code"],
+                        "code": code,
                         "name": row["name"],
                         "listing_date": listing_date_str,
                         "days_since_listing": (datetime.now() - listing_date).days,
                     })
             except Exception:
                 continue
+
+        if skipped_spac:
+            print(f"  ℹ️  已跳过 {skipped_spac} 只 SPAC unit/right/warrant（yfinance 不覆盖）")
 
         return result
 

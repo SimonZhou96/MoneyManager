@@ -112,6 +112,8 @@ class BatchCompanyFetcher(BatchFetcher):
         if m == "HK":
             # 保持前导零: "00700" → "0700.HK"
             value = code[3:] if code.upper().startswith("HK.") else code
+            if not value.isdigit():
+                return code  # 非数字代码（如 AAM.UT），原样返回避免崩溃
             return f"{int(value):04d}.HK"
         elif m == "US":
             return code[3:] if code.upper().startswith("US.") else code
@@ -171,7 +173,7 @@ class BatchCompanyFetcher(BatchFetcher):
 
 
 class BatchValuationFetcher(BatchFetcher):
-    """批量估值拉取 — yfinance info"""
+    """批量估值拉取 — yfinance info（独立调用时使用）"""
 
     @property
     def module_name(self) -> str:
@@ -223,7 +225,7 @@ class BatchValuationFetcher(BatchFetcher):
 
 
 class BatchTradingFetcher(BatchFetcher):
-    """批量交易行为拉取 — yfinance history"""
+    """批量交易行为拉取 — yfinance history（需要独立调用，需要 .history()）"""
 
     @property
     def module_name(self) -> str:
@@ -357,31 +359,221 @@ class EnterprisePotentialService:
 
     def prefetch_batch(self, market: str, codes: List[str],
                        context: Any) -> PrefetchReport:
-        """批量预取五模块快照到 FilterContext._cache"""
+        """批量预取五模块快照到 FilterContext._cache。
+
+        company + valuation + industry 共用同一次 yf.Tickers()，
+        trading 需要 .history() 独立调用。从 4 次请求减到 2 次。
+        """
+        import logging as _logging, sys as _sys, io as _io
+        _logging.getLogger("urllib3").setLevel(_logging.ERROR)
+        _logging.getLogger("yfinance").setLevel(_logging.WARNING)
+
         started = time.monotonic()
         report = PrefetchReport(market=market, codes=list(codes))
 
         # 1. 宏观（市场级共享）
         self._prefetch_macro(market, context)
 
-        # 2. 企业/估值/交易/行业（批量 + cache）
-        for mod, fetcher in self._fetchers.items():
-            cache_key_prefix = f"{_CACHE_PREFIX}:{mod}"
-            missing = [c for c in codes if context.get_cache(f"{cache_key_prefix}:{c}") is None]
+        quote_ctx = context.get_cache("futu_quote_ctx")
+        verbose = getattr(context, "verbose", False)
+        _CHUNK = 50
 
-            if not missing:
-                continue
+        # ── 2. company + valuation + industry — 合并为一次 Tickers ──
+        merged_mods = ["company", "valuation", "industry"]
+        merged_missing: Dict[str, set] = {}
+        for mod in merged_mods:
+            ck = f"{_CACHE_PREFIX}:{mod}"
+            merged_missing[mod] = {c for c in codes if context.get_cache(f"{ck}:{c}") is None}
+
+        all_missing = sorted(set().union(*merged_missing.values()))
+
+        if all_missing:
+            company_fet = self._fetchers["company"]
+            val_fet = self._fetchers["valuation"]
+            ind_fet = self._fetchers["industry"]
+            total = len(all_missing)
+            ok_count = 0
+            rescued = 0
 
             try:
-                results = fetcher.fetch(market, missing)
-                for code, snap in results.items():
-                    context.set_cache(f"{cache_key_prefix}:{code}", snap)
-                report.success.extend(list(results.keys()))
-                report.details[mod] = f"{len(results)} ok"
+                for chunk_idx in range(0, total, _CHUNK):
+                    chunk = all_missing[chunk_idx:chunk_idx + _CHUNK]
+                    t0 = time.monotonic()
+                    ticker_map = {c: company_fet._to_yf(market, c) for c in chunk}
+
+                    _stderr_buf = _io.StringIO()
+                    _old_stderr = _sys.stderr
+                    _sys.stderr = _stderr_buf
+                    try:
+                        import yfinance as yf
+                        tickers = yf.Tickers(" ".join(ticker_map.values()))
+                    finally:
+                        _sys.stderr = _old_stderr
+                        _stderr_buf.close()
+
+                    chunk_ok = 0
+                    for code, yf_code in ticker_map.items():
+                        tk = tickers.tickers.get(yf_code)
+                        info = (tk.info or {}) if tk else {}
+                        now = datetime.now(timezone.utc).isoformat()
+
+                        # -- company --
+                        if code in merged_missing["company"]:
+                            try:
+                                if tk is not None:
+                                    snap_c = company_fet._build_from_ticker(tk, market, code)
+                                else:
+                                    snap_c = CompanySnapshot(market=market, code=code,
+                                        provider_status={"yfinance": "error: no data"})
+                            except Exception as e:
+                                snap_c = CompanySnapshot(market=market, code=code,
+                                    provider_status={"yfinance": f"error: {e}"})
+                            context.set_cache(f"{_CACHE_PREFIX}:company:{code}", snap_c)
+                            report.success.append(code)
+
+                        # -- valuation --
+                        if code in merged_missing["valuation"]:
+                            try:
+                                snap_v = ValuationSnapshot(market=market, code=code, as_of=now,
+                                    provider_status={"yfinance": "ok" if info else "error"})
+                                snap_v.pe_trailing = val_fet._num(info.get("trailingPE"))
+                                snap_v.pe_forward = val_fet._num(info.get("forwardPE"))
+                                snap_v.pb = val_fet._num(info.get("priceToBook"))
+                                snap_v.ps = val_fet._num(info.get("priceToSales"))
+                                snap_v.peg = val_fet._num(info.get("pegRatio"))
+                                snap_v.market_cap = info.get("marketCap")
+                                snap_v.enterprise_value = info.get("enterpriseValue")
+                                ev = info.get("enterpriseValue"); ebitda = info.get("ebitda")
+                                if ev and ebitda and ebitda != 0:
+                                    snap_v.ev_ebitda = round(ev / ebitda, 2)
+                            except Exception as e:
+                                snap_v = ValuationSnapshot(market=market, code=code,
+                                    provider_status={"yfinance": f"error: {e}"})
+                            context.set_cache(f"{_CACHE_PREFIX}:valuation:{code}", snap_v)
+                            report.success.append(code)
+
+                        # -- industry --
+                        if code in merged_missing["industry"]:
+                            try:
+                                snap_i = IndustrySnapshot(market=market, code=code, as_of=now,
+                                    provider_status={"yfinance": "ok" if info else "error"})
+                                snap_i.sector = str(info.get("sector") or "")
+                                snap_i.industry = str(info.get("industry") or "")
+                            except Exception as e:
+                                snap_i = IndustrySnapshot(market=market, code=code,
+                                    provider_status={"yfinance": f"error: {e}"})
+                            context.set_cache(f"{_CACHE_PREFIX}:industry:{code}", snap_i)
+                            report.success.append(code)
+
+                        if info:
+                            chunk_ok += 1
+                    ok_count += chunk_ok
+
+                    done = min(chunk_idx + _CHUNK, total)
+                    chunk_ms = int((time.monotonic() - t0) * 1000)
+                    print(f"  ⏳ [{market}] company/val/ind: {done}/{total} ({chunk_ok} ok, {chunk_ms}ms)")
+
+                    if chunk_idx + _CHUNK < total:
+                        time.sleep(min(1.5 + chunk_idx * 0.1, 5.0))
+
+                # Futu 兜底
+                if quote_ctx is not None:
+                    from .builders import fill_snapshots_from_futu, _snapshot_is_empty
+                    for mod in merged_mods:
+                        ck = f"{_CACHE_PREFIX}:{mod}"
+                        pairs = [(c, context.get_cache(f"{ck}:{c}"))
+                                 for c in merged_missing[mod]
+                                 if context.get_cache(f"{ck}:{c}") is not None
+                                 and _snapshot_is_empty(context.get_cache(f"{ck}:{c}"))]
+                        if pairs:
+                            rescued += fill_snapshots_from_futu(market, pairs, quote_ctx)
+                    if rescued > 0:
+                        print(f"    ↳ [{market}] Futu 兜底: {rescued} 只 company/val/ind")
+
+                _gaps = total - ok_count
+                mod_ms = int((time.monotonic() - started) * 1000)
+                parts = [f"{ok_count} ok"]
+                if _gaps > 0:
+                    parts.append(f"{_gaps} gaps")
+                if rescued > 0:
+                    parts.append(f"{rescued} futu兜底")
+                print(f"  ✅ [{market}] company/val/ind: ({', '.join(parts)}) {mod_ms}ms")
+                report.details["merged"] = f"company+valuation+industry: {ok_count} ok"
+
             except Exception as e:
-                logger.error(f"批量 {mod} 拉取失败: {e}")
-                report.failures.extend(missing)
-                report.details[mod] = f"error: {e}"
+                print(f"  ❌ [{market}] company/val/ind: {e}")
+                logger.error(f"合并批量拉取失败: {e}")
+                report.details["merged"] = f"error: {e}"
+        else:
+            if verbose:
+                print(f"  ℹ [{market}] company/val/ind: 全部缓存命中")
+
+        # ── 3. trading：独立调用（需要 .history() 取价格趋势/波动率）──
+        trading_missing = [c for c in codes
+                          if context.get_cache(f"{_CACHE_PREFIX}:trading:{c}") is None]
+        if trading_missing:
+            trading_fet = self._fetchers["trading"]
+            total = len(trading_missing)
+            ok_count = 0
+            rescued = 0
+
+            try:
+                for chunk_idx in range(0, total, _CHUNK):
+                    chunk = trading_missing[chunk_idx:chunk_idx + _CHUNK]
+                    t0 = time.monotonic()
+
+                    _stderr_buf = _io.StringIO()
+                    _old_stderr = _sys.stderr
+                    _sys.stderr = _stderr_buf
+                    try:
+                        results = trading_fet.fetch(market, chunk)
+                    finally:
+                        _sys.stderr = _old_stderr
+                        _stderr_buf.close()
+
+                    for code, snap in results.items():
+                        context.set_cache(f"{_CACHE_PREFIX}:trading:{code}", snap)
+                        report.success.append(code)
+
+                    chunk_ok = sum(1 for s in results.values()
+                                  if getattr(s, "provider_status", {}).get("yfinance", "").startswith("ok"))
+                    ok_count += chunk_ok
+                    done = min(chunk_idx + _CHUNK, total)
+                    chunk_ms = int((time.monotonic() - t0) * 1000)
+                    print(f"  ⏳ [{market}] trading: {done}/{total} ({chunk_ok} ok, {chunk_ms}ms)")
+
+                    if chunk_idx + _CHUNK < total:
+                        time.sleep(min(1.5 + chunk_idx * 0.1, 5.0))
+
+                if quote_ctx is not None:
+                    from .builders import fill_snapshots_from_futu, _snapshot_is_empty
+                    ck = f"{_CACHE_PREFIX}:trading"
+                    pairs = [(c, context.get_cache(f"{ck}:{c}"))
+                             for c in trading_missing
+                             if context.get_cache(f"{ck}:{c}") is not None
+                             and _snapshot_is_empty(context.get_cache(f"{ck}:{c}"))]
+                    if pairs:
+                        rescued = fill_snapshots_from_futu(market, pairs, quote_ctx)
+                        if rescued > 0:
+                            print(f"    ↳ [{market}] Futu 兜底: {rescued} 只 trading")
+
+                mod_ms = int((time.monotonic() - started) * 1000)
+                _gaps = total - ok_count
+                parts = [f"{ok_count} ok"]
+                if _gaps > 0:
+                    parts.append(f"{_gaps} gaps")
+                if rescued > 0:
+                    parts.append(f"{rescued} futu兜底")
+                print(f"  ✅ [{market}] trading: ({', '.join(parts)}) {mod_ms}ms")
+                report.details["trading"] = f"{ok_count} ok"
+
+            except Exception as e:
+                print(f"  ❌ [{market}] trading: {e}")
+                logger.error(f"trading 批量拉取失败: {e}")
+                report.details["trading"] = f"error: {e}"
+        else:
+            if verbose:
+                print(f"  ℹ [{market}] trading: 全部缓存命中")
 
         report.duration_ms = int((time.monotonic() - started) * 1000)
         return report

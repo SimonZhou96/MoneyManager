@@ -200,12 +200,30 @@ def get_merged_pool_stocks(
     返回格式兼容 screen_service 的 watchlist。
     """
     pool_types = normalize_pool_types(pool_types or CANONICAL_POOL_TYPES)
+
+    # 市场代码格式校验：过滤掉不属于该市场的异常代码（如 US 的 SPAC unit 混入 HK）
+    def _code_ok_for_market(code: str, mkt: str) -> bool:
+        if mkt == "HK":
+            # Futu 格式: HK.00001 ~ HK.99999
+            return bool(code.startswith("HK.") and code[3:].isdigit())
+        if mkt == "US":
+            # Futu 格式: US.TICKER
+            return bool(code.upper().startswith("US.") and len(code) > 3)
+        if mkt == "A":
+            # Futu 格式: SH.600000 / SZ.000001
+            return bool(code.upper().startswith(("SH.", "SZ.")) and len(code) > 3 and code[3:].isdigit())
+        return True
+
     merged = {}
+    skipped_invalid = 0
     for pool_type in pool_types:
         stocks = db.get_stock_pool(market, pool_type, limit=None)
         for s in stocks:
             code = (s.get("code") or "").strip()
             if not code:
+                continue
+            if not _code_ok_for_market(code, market):
+                skipped_invalid += 1
                 continue
             current = merged.setdefault(code, {"code": code})
             current["name"] = current.get("name") or s.get("name") or code
@@ -224,6 +242,8 @@ def get_merged_pool_stocks(
     resolver = SectorResolver.default(db=db, include_external=False)
     sector_map = resolver.resolve(market, list(merged.keys()))
     _apply_sector_info_to_records(list(merged.values()), sector_map)
+    if skipped_invalid:
+        print(f"⚠️  {market_label(market)} 跳过 {skipped_invalid} 个代码格式不符的标的")
     return list(merged.values())
 
 
@@ -593,9 +613,17 @@ ZUOYI_CSV_COLUMNS = [
     ("左一顶", "zuoyi_left_one_high"),
     ("左一底", "zuoyi_left_one_low"),
     ("左一支撑区间", "zuoyi_support_zone"),
-    ("左一中位线日期", "zuoyi_median_date"),
     ("左一突破日期", "zuoyi_breakout_date"),
     ("左一突破用时", "zuoyi_bars_to_breakout"),
+]
+
+
+FIVE_FACTOR_CSV_COLUMNS = [
+    ("五因素总分", "five_factor_total"),
+    ("五因素明细", "five_factor_detail"),
+    ("决策", "five_factor_decision"),
+    ("建议持有周期", "five_factor_holding"),
+    ("评分置信度", "five_factor_confidence"),
 ]
 
 
@@ -604,11 +632,6 @@ MAIN_FORCE_CSV_COLUMNS = [
     ("主力风险分", "main_force_risk_score_text"),
     ("主力风险信号", "main_force_risk_signals_text"),
     ("主力风险说明", "main_force_risk_summary"),
-    ("资金与盘面观察", "main_force_market_data_observation_text"),
-    ("资金流向数据", "main_force_fund_flow_data_text"),
-    ("盘口数据", "main_force_order_book_data_text"),
-    ("龙虎榜数据", "main_force_lhb_data_text"),
-    ("成交量分布数据", "main_force_chip_data_text"),
 ]
 
 
@@ -663,7 +686,6 @@ def _extract_zuoyi_csv_fields(filter_detail: dict) -> dict:
             "left_one_high": left_high,
             "left_one_low": left_low,
             "support_zone": f"{left_low}~{left_high}" if left_low and left_high else "",
-            "median_date": str(signal.get("median_date") or ""),
             "breakout_date": str(signal.get("breakout_date") or ""),
             "bars_to_breakout": str(signal.get("bars_to_breakout") or ""),
         })
@@ -678,7 +700,6 @@ def _extract_zuoyi_csv_fields(filter_detail: dict) -> dict:
         "zuoyi_left_one_high": "；".join(item["left_one_high"] for item in extracted if item["left_one_high"]),
         "zuoyi_left_one_low": "；".join(item["left_one_low"] for item in extracted if item["left_one_low"]),
         "zuoyi_support_zone": "；".join(item["support_zone"] for item in extracted if item["support_zone"]),
-        "zuoyi_median_date": "；".join(item["median_date"] for item in extracted if item["median_date"]),
         "zuoyi_breakout_date": "；".join(item["breakout_date"] for item in extracted if item["breakout_date"]),
         "zuoyi_bars_to_breakout": "；".join(item["bars_to_breakout"] for item in extracted if item["bars_to_breakout"]),
     }
@@ -704,6 +725,9 @@ def write_screening_csv(records: List[dict], csv_path: str) -> None:
     columns.extend(MAIN_FORCE_CSV_COLUMNS)
     if any(r.get("zuoyi_support_zone") for r in records):
         columns.extend(ZUOYI_CSV_COLUMNS)
+    # 追加五因素列（如果 records 中存在相关数据）
+    if any(r.get("five_factor_total") for r in records):
+        columns.extend(FIVE_FACTOR_CSV_COLUMNS)
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
         w.writerow([c[0] for c in columns])

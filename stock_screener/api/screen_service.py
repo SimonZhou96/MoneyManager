@@ -454,24 +454,25 @@ def run_screening_task(
         )
         # 注入 timeframe 供 AvgDailyVolumeFilter 使用
         context.timeframe = timeframe
-        if rule_engine is not None and rule_engine.requires_market_intel_macro_score():
+        if rule_engine is not None and rule_engine.requires_enterprise_potential():
+            # MarketIntel service + scorer 注入（供 EnterprisePotential 策略使用）
             market_intel_service = build_market_intel_service(mysql_config, enabled=True)
             macro_score_scorer = build_macro_score_scorer()
             context.set_cache("market_intel_service", market_intel_service)
             context.set_cache("macro_score_scorer", macro_score_scorer)
+            # 注入 Futu 连接，供 EnterprisePotential yfinance 失败后兜底
+            context.set_cache("futu_quote_ctx", quote_ctx)
 
-        if rule_engine is not None and rule_engine.requires_enterprise_potential():
+            # EnterprisePotential 批量预取
             from potential_analysis.service import EnterprisePotentialService
             service = EnterprisePotentialService()
             codes = [s.code for s in stock_infos]
-            if verbose:
-                print(f"📊 批量预取企业潜力数据: {len(codes)} 只股票 ({market})")
+            print(f"📊 批量预取企业潜力数据: {len(codes)} 只股票 ({market})")
             report = service.prefetch_batch(market, codes, context)
-            if verbose:
-                print(f"   完成: {report.ok_count} 成功, {report.fail_count} 失败, "
-                      f"{report.duration_ms}ms")
+            print(f"  ✅ 预取完成: {report.ok_count} 成功, {report.fail_count} 失败, "
+                  f"{report.duration_ms}ms")
             context.set_cache("enterprise_service", service)
-
+        
         # 主循环：遍历每只股票，在同一个循环中完成以下步骤
         # 步骤1: 获取K线数据
         # 步骤2: 应用筛选器链（判断是否满足突破策略和筛选条件）

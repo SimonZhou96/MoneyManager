@@ -23,6 +23,208 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════
+# Futu 兜底数据映射
+# ═══════════════════════════════════════════════════════════════════
+
+# Futu get_market_snapshot 返回的列名常量
+_FUTU_COL_CODE = "code"
+_FUTU_COL_NAME = "name"
+_FUTU_COL_LAST_PRICE = "last_price"
+_FUTU_COL_OPEN_PRICE = "open_price"
+_FUTU_COL_HIGH_PRICE = "high_price"
+_FUTU_COL_LOW_PRICE = "low_price"
+_FUTU_COL_PREV_CLOSE = "prev_close_price"
+_FUTU_COL_VOLUME = "volume"
+_FUTU_COL_TURNOVER = "turnover"
+_FUTU_COL_TURNOVER_RATE = "turnover_rate"
+_FUTU_COL_AMPLITUDE = "amplitude"
+_FUTU_COL_PE = "pe_ratio"
+_FUTU_COL_PE_TTM = "pe_ttm_ratio"
+_FUTU_COL_PB = "pb_ratio"
+_FUTU_COL_MARKET_VAL = "total_market_val"
+_FUTU_COL_CIRC_MARKET_VAL = "circular_market_val"
+_FUTU_COL_ISSUED_SHARES = "issued_shares"
+_FUTU_COL_NET_ASSET = "net_asset"
+_FUTU_COL_NET_PROFIT = "net_profit"
+_FUTU_COL_EPS = "earning_per_share"
+_FUTU_COL_EY_RATIO = "ey_ratio"
+_FUTU_COL_DIVIDEND_TTM = "dividend_ttm"
+_FUTU_COL_DIVIDEND_RATIO_TTM = "dividend_ratio_ttm"
+_FUTU_COL_CHANGE_RATE = "change_rate"
+_FUTU_COL_SUSPENSION = "suspension"
+
+
+def _futu_snapshot_map(codes: List[str], quote_ctx) -> Dict[str, Any]:
+    """对一批代码调用 Futu get_market_snapshot，返回 {futu_code: row_dict}"""
+    if not quote_ctx or not codes:
+        return {}
+    try:
+        import futu as ft
+        ret, data = quote_ctx.get_market_snapshot(list(codes))
+        if ret != ft.RET_OK or data is None or data.empty:
+            return {}
+        result = {}
+        for _, row in data.iterrows():
+            result[str(row.get(_FUTU_COL_CODE, ""))] = row
+        return result
+    except Exception:
+        return {}
+
+
+def _float_or_none(val) -> Optional[float]:
+    """安全转为 float，非数字返回 None"""
+    import math
+    try:
+        v = float(val)
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return round(v, 4)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fill_company_snapshot_from_futu(snap: CompanySnapshot, row) -> CompanySnapshot:
+    """用 Futu get_market_snapshot 数据填充 CompanySnapshot（跳过零值废股）"""
+    mc = _float_or_none(row.get(_FUTU_COL_MARKET_VAL))
+    if mc and mc > 0:
+        snap.market_cap = mc
+    if snap.market_cap is not None:
+        prev_status = snap.provider_status.get("futu", "")
+        snap.provider_status["futu"] = "partial" if not prev_status else prev_status
+    return snap
+
+
+def _fill_valuation_snapshot_from_futu(snap: ValuationSnapshot, row) -> ValuationSnapshot:
+    """用 Futu get_market_snapshot 数据填充 ValuationSnapshot（跳过零值）"""
+    mc = _float_or_none(row.get(_FUTU_COL_MARKET_VAL))
+    if mc and mc > 0:
+        snap.market_cap = mc
+    pe = _float_or_none(row.get(_FUTU_COL_PE_TTM)) or _float_or_none(row.get(_FUTU_COL_PE))
+    if pe and pe > 0:
+        snap.pe_trailing = pe
+    pb = _float_or_none(row.get(_FUTU_COL_PB))
+    if pb and pb > 0:
+        snap.pb = pb
+
+    if snap.pe_trailing is not None or snap.pb is not None or snap.market_cap is not None:
+        prev_status = snap.provider_status.get("futu", "")
+        snap.provider_status["futu"] = "partial" if not prev_status else prev_status
+    return snap
+
+
+def _fill_trading_snapshot_from_futu(snap: TradingSnapshot, row) -> TradingSnapshot:
+    """用 Futu get_market_snapshot 数据填充 TradingSnapshot（跳过零价格废股）"""
+    price = _float_or_none(row.get(_FUTU_COL_LAST_PRICE))
+    if price and price > 0:
+        snap.current_price = price
+    if snap.current_price is not None and snap.pct_change is None:
+        prev_close = _float_or_none(row.get(_FUTU_COL_PREV_CLOSE))
+        if prev_close and prev_close > 0:
+            snap.pct_change = round((snap.current_price - prev_close) / prev_close * 100, 2)
+
+    if snap.current_price is not None:
+        prev_status = snap.provider_status.get("futu", "")
+        snap.provider_status["futu"] = "partial" if not prev_status else prev_status
+    return snap
+
+
+def _snapshot_is_empty(snap: Any) -> bool:
+    """判断 snapshot 是否因为 yfinance 失败而为空（需要 Futu 兜底）"""
+    status = getattr(snap, "provider_status", {})
+    yf_status = status.get("yfinance", "")
+    if not yf_status or yf_status == "ok":
+        return False
+    return "error" in str(yf_status).lower() or isinstance(yf_status, str) and yf_status.startswith("error")
+
+
+def _to_futu_code(code: str, market: str) -> str:
+    """将各种格式的股票代码统一转为 Futu API 格式。
+
+    yfinance 格式 → Futu 格式:
+      HK: 0700.HK → HK.00700
+      US: AAPL    → US.AAPL
+      A:  000001.SZ → SZ.000001; 600000.SS → SH.600000
+
+    已为 Futu 格式则原样返回: HK.00700 / US.AAPL / SZ.000001 / SH.600000
+    """
+    mkt = market.upper()
+    code = str(code).strip()
+
+    # 已是 Futu 格式（带 HK./US./SH./SZ. 前缀）
+    if code.upper().startswith(("HK.", "US.", "SH.", "SZ.")):
+        return code
+
+    if mkt == "HK":
+        if code.endswith(".HK"):
+            digits = code[:-3]
+            return f"HK.{digits.zfill(5)}"
+        if code.isdigit():
+            return f"HK.{code.zfill(5)}"
+        return f"HK.{code}"
+
+    if mkt == "US":
+        return f"US.{code}"
+
+    if mkt == "A":
+        if code.endswith(".SS"):
+            return f"SH.{code[:-3]}"
+        if code.endswith(".SZ"):
+            return f"SZ.{code[:-3]}"
+        if code.isdigit() and len(code) == 6:
+            return f"SH.{code}" if code.startswith("6") else f"SZ.{code}"
+        return code
+
+    return code
+
+
+def fill_snapshots_from_futu(
+    market: str,
+    code_snap_pairs: List[tuple],
+    quote_ctx,
+) -> int:
+    """
+    对 yfinance 失败的空 snapshot 尝试 Futu 兜底。
+    返回成功兜底的股票数量。
+    """
+    if not quote_ctx:
+        return 0
+
+    # 找出需要兜底的
+    empty_pairs = [(c, s) for c, s in code_snap_pairs if _snapshot_is_empty(s)]
+    if not empty_pairs:
+        return 0
+
+    # 用 _to_futu_code 统一转换，确保格式正确（yfinance 格式 → Futu 格式）
+    futu_codes = [_to_futu_code(code, market) for code, _ in empty_pairs]
+    futu_codes = list(set(futu_codes))  # 去重
+
+    # 批量拉取 Futu 数据
+    futu_map = _futu_snapshot_map(futu_codes, quote_ctx)
+    if not futu_map:
+        return 0
+
+    succeeded = 0
+    for code, snap in empty_pairs:
+        futu_code = _to_futu_code(code, market)
+        row = futu_map.get(futu_code)
+        if row is None:
+            continue
+
+        try:
+            if isinstance(snap, CompanySnapshot):
+                _fill_company_snapshot_from_futu(snap, row)
+            elif isinstance(snap, ValuationSnapshot):
+                _fill_valuation_snapshot_from_futu(snap, row)
+            elif isinstance(snap, TradingSnapshot):
+                _fill_trading_snapshot_from_futu(snap, row)
+            succeeded += 1
+        except Exception:
+            continue
+
+    return succeeded
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 抽象基类
 # ═══════════════════════════════════════════════════════════════════
 
@@ -122,6 +324,8 @@ class CompanySnapshotBuilder(SnapshotBuilder):
         if m == "HK":
             # 01810 → 1810.HK
             value = code[3:] if code.upper().startswith("HK.") else code
+            if not value.isdigit():
+                return code  # 非数字代码（如 AAM.UT），原样返回避免崩溃
             return f"{int(value):04d}.HK"
         elif m == "US":
             return code[3:] if code.upper().startswith("US.") else code
