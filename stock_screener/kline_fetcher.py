@@ -148,7 +148,7 @@ class YFinanceKlineFetcher(KlineFetcherBase):
                 code = code[3:]
             if not code.isdigit():
                 return code  # 非数字代码（如 AAM.UT），原样返回避免崩溃
-            return f"{code.zfill(5)}.HK"
+            return f"{str(int(code)).zfill(4)}.HK"
         if market == "A":
             # 已是 yahoo 格式 000001.SZ / 600000.SS，直接返回（必须在 prefix 剥离之前判断）
             if code.endswith((".SS", ".SZ")):

@@ -19,7 +19,7 @@ def eastmoney_secu_code(market: str, code: str) -> str:
         suffix = ".SH" if code_text.startswith(("600", "601", "603", "605", "688", "689")) else ".SZ"
         return f"{code_text}{suffix}"
     if market_text == "HK":
-        return f"{code_text.removesuffix('.HK').zfill(5)}.HK"
+        return f"{str(int(code_text.removesuffix('.HK'))).zfill(4)}.HK"
     if market_text == "US":
         return code_text.removesuffix(".US")
     return code_text

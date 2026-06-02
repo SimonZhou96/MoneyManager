@@ -58,4 +58,19 @@ Detailed context lives in the memory directory. Read the relevant files before w
 
 10. **Market label on every log line** (`prefetch_batch`, `screen_service`): All progress lines now include `[HK]`/`[US]`/`[A]` prefix so interleaved concurrent-market output remains readable.
 
+### 2026-06-02 (evening) — YFinance HK Code Zero-Padding Bug & Main Force Risk Fix
+
+**Files changed**:
+- `stock_screener/kline_fetcher.py` — `_to_yf_code()` for HK market
+- `stock_screener/market_intel/providers/eastmoney.py` — HK code conversion
+- `CLAUDE.md` — this entry
+
+**Root cause**: Yahoo Finance requires Hong Kong stock codes in **exactly 4-digit** format (e.g., `2097.HK`, `0805.HK`, `0002.HK`). The `_to_yf_code()` method was using `zfill(5)` which produced 5-digit codes (`02097.HK`, `00805.HK`, `00002.HK`) — all of which return HTTP 404 from Yahoo's history/download endpoints. (The `.info` endpoint accepts padded codes, masking the bug during snapshot fetching.)
+
+**Cascading impact**: This single bug caused:
+1. **YFinanceKlineFetcher** → returned empty for ALL HK stocks → `_analyze_kline` returned `status=insufficient` → `_level()` returned `"unknown"` → **all 30 stocks showed "数据不足" for main force risk**
+2. **prefetch_batch K-line dependent data** → failed silently → **PE/market cap data missing from CSV**
+
+**Fix**: Changed `code.zfill(5)` → `str(int(code)).zfill(4)` in both files. `int()` strips leading zeros, then `zfill(4)` pads to Yahoo's required 4-digit format. Verified: all 6 tested HK codes now return 180 K-line rows and main force risk analysis produces valid results (risk_level=low, scores 0-6).
+
 **Key architectural note**: `CompanySnapshotBuilder` docstring claims FutuOpenD `get_stock_filter` is a data source (priority 2 after yfinance), but this was **never implemented**. The Futu fallback added in this session (`fill_snapshots_from_futu()`) provides partial coverage via `get_market_snapshot` (price, market cap, PE, PB) — a different Futu endpoint than the one originally planned.
