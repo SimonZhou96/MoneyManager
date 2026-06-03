@@ -15,6 +15,7 @@
 import os
 import json
 import queue
+import time
 import threading
 import urllib.parse
 import urllib.request
@@ -59,6 +60,9 @@ POOL_RESULT_KEY_BY_TYPE = {
 }
 
 DEFAULT_A_INDEX_FETCH_TIMEOUT_SEC = 8.0
+DEFAULT_PLATE_STOCK_RATE_LIMIT_WINDOW_SEC = 30.0
+DEFAULT_PLATE_STOCK_RATE_LIMIT_CALLS = 8
+DEFAULT_PLATE_STOCK_RETRY_SEC = 31.0
 
 DEFAULT_POOL_TYPES_TEXT = ",".join(CANONICAL_POOL_TYPES)
 
@@ -129,6 +133,27 @@ def _call_akshare_index_cons_with_timeout(func, index_code: str):
     if status == "error":
         raise payload
     return payload
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _futu_rate_limit_message(value: Any) -> bool:
+    text = str(value or "").lower()
+    return "too frequent" in text or "no more than" in text or "太频繁" in text or "频繁" in text
 
 
 def normalize_pool_types(values: Iterable[str]) -> List[str]:
@@ -452,6 +477,55 @@ class StockPoolFetcher:
         """
         self.quote_ctx = quote_ctx
         self.db = db
+        self._plate_stock_call_times: List[float] = []
+        self._plate_stock_window_sec = max(
+            1.0,
+            _env_float(
+                "STOCK_POOL_PLATE_STOCK_RATE_LIMIT_WINDOW_SEC",
+                DEFAULT_PLATE_STOCK_RATE_LIMIT_WINDOW_SEC,
+            ),
+        )
+        self._plate_stock_max_calls = max(
+            1,
+            _env_int(
+                "STOCK_POOL_PLATE_STOCK_RATE_LIMIT_CALLS",
+                DEFAULT_PLATE_STOCK_RATE_LIMIT_CALLS,
+            ),
+        )
+        self._plate_stock_retry_sec = max(
+            0.0,
+            _env_float("STOCK_POOL_PLATE_STOCK_RETRY_SEC", DEFAULT_PLATE_STOCK_RETRY_SEC),
+        )
+
+    def _wait_for_plate_stock_slot(self) -> None:
+        now = time.monotonic()
+        window_start = now - self._plate_stock_window_sec
+        self._plate_stock_call_times = [
+            ts for ts in self._plate_stock_call_times if ts > window_start
+        ]
+        if len(self._plate_stock_call_times) < self._plate_stock_max_calls:
+            return
+        wait_sec = self._plate_stock_window_sec - (now - self._plate_stock_call_times[0]) + 0.2
+        if wait_sec > 0:
+            print(f"Futu 板块成分接口频控，等待 {wait_sec:.1f}s 后继续...")
+            time.sleep(wait_sec)
+        now = time.monotonic()
+        window_start = now - self._plate_stock_window_sec
+        self._plate_stock_call_times = [
+            ts for ts in self._plate_stock_call_times if ts > window_start
+        ]
+
+    def _get_plate_stock_with_retry(self, plate_code: str, retries: int = 1):
+        self._wait_for_plate_stock_slot()
+        ret, data = self.quote_ctx.get_plate_stock(plate_code)
+        self._plate_stock_call_times.append(time.monotonic())
+        if ret != 0 and retries > 0 and _futu_rate_limit_message(data):
+            print(f"Futu 板块成分接口触发频控，等待 {self._plate_stock_retry_sec:.1f}s 后重试 {plate_code}")
+            if self._plate_stock_retry_sec > 0:
+                time.sleep(self._plate_stock_retry_sec)
+            self._plate_stock_call_times = []
+            return self._get_plate_stock_with_retry(plate_code, retries=retries - 1)
+        return ret, data
 
     def fetch_best_stocks(
         self, market: str, criteria: StockPoolCriteria
@@ -729,14 +803,16 @@ class StockPoolFetcher:
             industry_name = industry_row["plate_name"]
 
             # 获取该行业的所有股票
-            ret, stocks = self.quote_ctx.get_plate_stock(industry_code)
+            ret, stocks = self._get_plate_stock_with_retry(industry_code)
             if ret != ft.RET_OK:
+                print(f"{market} 行业板块 {industry_code} {industry_name} 成分获取失败: {stocks}")
                 continue
 
             # 获取这些股票的市场快照
             codes = stocks["code"].tolist()[:100]  # 限制数量
             ret, snapshot = self.quote_ctx.get_market_snapshot(codes)
             if ret != ft.RET_OK:
+                print(f"{market} 行业板块 {industry_code} {industry_name} 快照获取失败: {snapshot}")
                 continue
 
             # 按市值排序，取前N名
@@ -787,8 +863,9 @@ class StockPoolFetcher:
             if not industry_code or not industry_name:
                 continue
 
-            ret, stocks = self.quote_ctx.get_plate_stock(industry_code)
+            ret, stocks = self._get_plate_stock_with_retry(industry_code)
             if ret != ft.RET_OK:
+                print(f"{market} 行业板块 {industry_code} {industry_name} 成分获取失败: {stocks}")
                 continue
 
             for _, stock_row in stocks.iterrows():

@@ -454,8 +454,18 @@ def run_screening_task(
         )
         # 注入 timeframe 供 AvgDailyVolumeFilter 使用
         context.timeframe = timeframe
-        if rule_engine is not None and rule_engine.requires_enterprise_potential():
-            # MarketIntel service + scorer 注入（供 EnterprisePotential 策略使用）
+        requires_market_intel_macro_score = (
+            rule_engine is not None
+            and hasattr(rule_engine, "requires_market_intel_macro_score")
+            and rule_engine.requires_market_intel_macro_score()
+        )
+        requires_enterprise_potential = (
+            rule_engine is not None
+            and hasattr(rule_engine, "requires_enterprise_potential")
+            and rule_engine.requires_enterprise_potential()
+        )
+        if requires_market_intel_macro_score or requires_enterprise_potential:
+            # MarketIntel service + scorer 注入（供宏观评分和 EnterprisePotential 策略使用）
             market_intel_service = build_market_intel_service(mysql_config, enabled=True)
             macro_score_scorer = build_macro_score_scorer()
             context.set_cache("market_intel_service", market_intel_service)
@@ -463,6 +473,7 @@ def run_screening_task(
             # 注入 Futu 连接，供 EnterprisePotential yfinance 失败后兜底
             context.set_cache("futu_quote_ctx", quote_ctx)
 
+        if requires_enterprise_potential:
             # EnterprisePotential 批量预取
             from potential_analysis.service import EnterprisePotentialService
             service = EnterprisePotentialService()
@@ -475,13 +486,23 @@ def run_screening_task(
 
             # 将 YFinance PE/市值写回 StockInfo，确保 CSV 中包含基本面数据
             pe_merged = 0
+            market_cap_merged = 0
             for stock in stock_infos:
-                snap = context.get_cache("enterprise:company:" + stock.code)
-                if snap and snap.pe_trailing:
-                    stock.pe_ratio = snap.pe_trailing
+                company_snap = context.get_cache("enterprise:company:" + stock.code)
+                valuation_snap = context.get_cache("enterprise:valuation:" + stock.code)
+                pe_trailing = getattr(valuation_snap, "pe_trailing", None)
+                market_cap = (
+                    getattr(valuation_snap, "market_cap", None)
+                    or getattr(company_snap, "market_cap", None)
+                )
+                if pe_trailing is not None:
+                    stock.pe_ratio = pe_trailing
                     pe_merged += 1
-                if snap and snap.market_cap:
-                    stock.market_cap = snap.market_cap
+                if market_cap is not None:
+                    stock.market_cap = market_cap
+                    market_cap_merged += 1
+            if verbose:
+                print(f"✓ 已回填企业潜力基本面: PE {pe_merged} 只, 市值 {market_cap_merged} 只")
         
         # 主循环：遍历每只股票，在同一个循环中完成以下步骤
         # 步骤1: 获取K线数据
@@ -490,6 +511,7 @@ def run_screening_task(
         # 步骤4: 写入数据库
         results = []
         passed_stocks = []  # 记录满足条件的股票
+        failed_stocks = []  # 记录未通过的股票及原因
         macro_analysis_cache: Dict[str, object] = {}
         macro_warning_cache: Dict[str, list[str]] = {}
         
@@ -577,7 +599,50 @@ def run_screening_task(
                 result.passed = result.passed and strategy_gate_passed
             results.append(result)
 
-            # 步骤3: 详细日志输出（所有股票都打印，不论是否满足条件）
+            # 步骤3: 收集结果摘要；详细日志只在 verbose 下展开。
+            if result.passed:
+                satisfied_strategies = []
+                for output in result.filter_outputs:
+                    if output.result.value == "pass":
+                        satisfied_strategies.extend(
+                            get_strategy_condition_labels(output.filter_name, output.details)
+                        )
+                passed_stocks.append({
+                    "code": si.code,
+                    "name": si.name or si.code,
+                    "satisfied_strategies": satisfied_strategies,
+                })
+            else:
+                blocking_outputs = [
+                    output for output in result.filter_outputs
+                    if output.result in (FilterResult.FAIL, FilterResult.ERROR)
+                ]
+                if not blocking_outputs:
+                    blocking_outputs = [
+                        output for output in result.filter_outputs
+                        if output.result == FilterResult.SKIP
+                    ]
+                fail_names = [output.filter_name for output in blocking_outputs]
+                fail_reasons = [
+                    f"{output.filter_name}: {output.reason}"
+                    for output in blocking_outputs
+                    if output.reason
+                ]
+                failed_stocks.append({
+                    "code": si.code,
+                    "name": si.name or si.code,
+                    "failed_filters": fail_names,
+                    "reasons": fail_reasons,
+                    "summary": result.get_summary(),
+                })
+
+            if progress_log and not verbose:
+                status = "✅" if result.passed else "❌"
+                reason_tail = result.get_summary()
+                if not result.passed and failed_stocks and failed_stocks[-1].get("reasons"):
+                    reason_tail = f"{reason_tail} | {failed_stocks[-1]['reasons'][0]}"
+                print(f"[{i}/{total_count}] {status} {si.code} {si.name or ''} | {reason_tail}")
+
             if verbose:
                 status = "✅" if result.passed else "❌"
                 print(f"\n{'='*80}")
@@ -623,35 +688,15 @@ def run_screening_task(
                 
                 if result.passed:
                     print(f"🎉 满足所有条件！")
-
-                    # 提取满足的策略
-                    satisfied_strategies = []
-                    for output in result.filter_outputs:
-                        if output.result.value == "pass":
-                            satisfied_strategies.extend(
-                                get_strategy_condition_labels(output.filter_name, output.details)
-                            )
-
-                    passed_stocks.append({
-                        "code": si.code,
-                        "name": si.name or si.code,
-                        "satisfied_strategies": satisfied_strategies
-                    })
                 else:
-                    failed_filters = result.get_failed_filters()
-                    skipped_filters = [o for o in result.filter_outputs if o.result.value == "skip"]
-                    
-                    if failed_filters:
-                        print(f"❌ 未通过的筛选器 ({len(failed_filters)}): {', '.join([f.filter_name for f in failed_filters])}")
-                    if skipped_filters:
-                        print(f"⊝  跳过的筛选器 ({len(skipped_filters)}): {', '.join([f.filter_name for f in skipped_filters])}")
-                    
-                    # 打印关键失败原因
-                    if failed_filters:
+                    failed = [
+                        output for output in result.filter_outputs
+                        if output.result in (FilterResult.FAIL, FilterResult.ERROR)
+                    ]
+                    if failed:
                         print(f"\n关键失败原因:")
-                        for f in failed_filters:
+                        for f in failed:
                             print(f"  • {f.filter_name}: {f.reason}")
-                
                 print(f"{'='*80}\n")
             
             # 步骤4: 立即写入筛选结果到数据库（每只股票处理后立即写入）
@@ -712,20 +757,40 @@ def run_screening_task(
         
         # 获取通过筛选的股票数量
         passed_count = sum(1 for r in results if r.passed)
-        
-        if verbose:
-            print(f"\n{'='*60}")
-            print(f"筛选完成：{passed_count}/{total_count} 只股票通过")
-            print(f"{'='*60}\n")
+        failed_count = total_count - passed_count
+
+        # Always print summary
+        print(f"\n{'='*60}")
+        print(f"筛选完成：{passed_count}/{total_count} 只通过, {failed_count} 只未通过")
+        print(f"{'='*60}")
+
+        # Always print failed stock details
+        if failed_stocks:
+            print(f"\n❌ 未通过股票详情 ({len(failed_stocks)} 只):")
+            # Group by top failure reason
+            from collections import Counter
+            reason_counter = Counter()
+            for fs in failed_stocks:
+                for r in fs.get("reasons", [])[:1]:  # first (most important) failure
+                    reason_counter[r] += 1
+            print(f"\n失败原因分布:")
+            for reason, count in reason_counter.most_common(10):
+                print(f"  {count}只: {reason}")
+            detail_limit = 50
+            print(f"\n明细样例（前 {min(detail_limit, len(failed_stocks))} 只）:")
+            for fs in failed_stocks[:detail_limit]:
+                print(f"  {fs['code']} {fs['name']} | {fs['summary']} | {'; '.join(fs.get('reasons', [])[:2])}")
+            if len(failed_stocks) > detail_limit:
+                print(f"  ... 其余 {len(failed_stocks) - detail_limit} 只略")
+            print()
         
         # 更新任务状态为完成
         db.update_task_status(task_id, "completed")
     
     except Exception as e:
-        if verbose:
-            print(f"筛选任务失败: {str(e)}")
-            import traceback
-            traceback.print_exc()
+        print(f"筛选任务失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
         if db:
             try:
                 db.update_task_status(task_id, "failed")

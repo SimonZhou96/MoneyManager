@@ -36,6 +36,33 @@ class FakeUSIndexProvider:
         return list(self.rows)
 
 
+class FakeIndustryQuoteCtx:
+    def __init__(self):
+        self.plate_stock_calls = 0
+
+    def get_plate_list(self, market, plate):
+        return 0, pd.DataFrame([{
+            "code": "US.LIST20077",
+            "plate_name": "Semiconductors",
+            "plate_id": "LIST20077",
+        }])
+
+    def get_plate_stock(self, plate_code):
+        self.plate_stock_calls += 1
+        if self.plate_stock_calls == 1:
+            return -1, "Get Stock List within a Sector is too frequent，request failed, no more than 10 times every 30 seconds."
+        return 0, pd.DataFrame([
+            {"code": "US.NVDA", "stock_name": "NVIDIA"},
+            {"code": "US.AMD", "stock_name": "AMD"},
+        ])
+
+    def get_market_snapshot(self, codes):
+        return 0, pd.DataFrame([
+            {"code": "US.AMD", "name": "AMD", "total_market_val": 200.0, "last_price": 10.0},
+            {"code": "US.NVDA", "name": "NVIDIA", "total_market_val": 500.0, "last_price": 20.0},
+        ])
+
+
 class StockPoolTypesTest(unittest.TestCase):
     def test_canonical_pool_types_replace_legacy_pool_names(self):
         self.assertEqual(
@@ -180,6 +207,24 @@ class StockPoolTypesTest(unittest.TestCase):
                 "extra_data": {"source": "db_snapshot"},
             },
         ])
+
+    def test_industry_leaders_retry_futu_plate_stock_rate_limit(self):
+        quote_ctx = FakeIndustryQuoteCtx()
+        with patch.dict("os.environ", {"STOCK_POOL_PLATE_STOCK_RETRY_SEC": "0"}), \
+                patch("time.sleep") as sleep_mock:
+            rows = StockPoolFetcher(quote_ctx=quote_ctx).fetch_industry_leaders("US", top_n=1)
+
+        self.assertEqual(quote_ctx.plate_stock_calls, 2)
+        sleep_mock.assert_not_called()
+        self.assertEqual(rows, [{
+            "code": "US.NVDA",
+            "name": "NVIDIA",
+            "industry_code": "US.LIST20077",
+            "industry_name": "Semiconductors",
+            "rank": 1,
+            "market_cap": 500.0,
+            "price": 20.0,
+        }])
 
     def test_frontend_screening_form_exposes_pool_type_selection(self):
         source = (STOCK_SCREENER_DIR / "web_frontend" / "src" / "main.tsx").read_text(encoding="utf-8")
