@@ -1,23 +1,34 @@
 #!/usr/bin/env python3
 """Generate HK signal analysis report v2 — simplified framework, multi-market ready.
 
-Framework:
-  一、市场背景
-  二、评分标准
-  三、信号复核总览（全量整合表）
-  四、宏观与市场环境影响
-  五、精选推荐（5只，不同板块）
-  六、风险提示
-  附录
+Usage:
+  python3 generate_report_v2.py --csv /path/to/signals.csv --market HK [--hot-sectors "AI;创新药;消费"]
+
+Hot sectors are resolved in this order:
+  1. --hot-sectors CLI arg (from web search / LLM discovery)
+  2. SIGNAL_MANUAL_MARKET_HOT_SECTORS_{HK|US|A} env var
+  3. Built-in defaults (last resort)
 """
 
-import csv, json, os, sys
+import argparse, csv, json, os, sys
+from collections import Counter
 from datetime import date
 
-CSV_PATH = "/Users/meng.zhou/Downloads/港股市场信号1d2026-06-02复核报告.csv"
-OUT_PATH = "/Users/meng.zhou/Downloads/港股信号复核报告_v2_2026-06-02.md"
-CHECK_DATE = date(2026, 6, 2)
-MARKET = "港股"
+# ── CLI ────────────────────────────────────────────────────
+parser = argparse.ArgumentParser(description="Generate signal analysis report")
+parser.add_argument("--csv", default="/Users/meng.zhou/Downloads/港股市场信号1d2026-06-02复核报告.csv")
+parser.add_argument("--market", default="港股", choices=["港股", "美股", "A股"])
+parser.add_argument("--date", default="2026-06-02")
+parser.add_argument("--out", default="")
+parser.add_argument("--send-feishu", action="store_true", default=True)
+parser.add_argument("--hot-sectors", default="", help="Semicolon-separated hot sectors, e.g. 'AI;创新药;消费'")
+parser.add_argument("--hot-sector-sources", default="", help="Sources for each hot sector")
+args = parser.parse_args()
+
+CSV_PATH = args.csv
+MARKET = args.market
+CHECK_DATE = date.fromisoformat(args.date)
+OUT_PATH = args.out or CSV_PATH.replace(".csv", "_ai_report.md")
 TIMEFRAME = "1d"
 
 # ── Market config ─────────────────────────────────────────
@@ -49,7 +60,39 @@ MARKET_CONFIG = {
 }
 
 cfg = MARKET_CONFIG[MARKET]
-HOT_SECTORS = cfg["hot_sectors"]
+
+# ── Hot sector resolution (dynamic > manual env > hardcoded) ──
+HOT_SECTORS = []
+HOT_SECTOR_SOURCES = []
+
+if args.hot_sectors:
+    # Priority 1: CLI arg (from web search / LLM discovery)
+    HOT_SECTORS = [s.strip() for s in args.hot_sectors.split(";") if s.strip()]
+    if args.hot_sector_sources:
+        HOT_SECTOR_SOURCES = [s.strip() for s in args.hot_sector_sources.split(";") if s.strip()]
+    else:
+        HOT_SECTOR_SOURCES = ["web_search"] * len(HOT_SECTORS)
+    print(f"[hot_sectors] 动态发现 ({len(HOT_SECTORS)}个): {'; '.join(HOT_SECTORS)}")
+else:
+    # Priority 2: env var manual config
+    market_key = {"港股": "HK", "美股": "US", "A股": "A"}.get(MARKET, "HK")
+    env_key = f"SIGNAL_MANUAL_MARKET_HOT_SECTORS_{market_key}"
+    env_val = os.getenv(env_key, "").strip()
+    if env_val:
+        HOT_SECTORS = [s.strip() for s in env_val.split(";") if s.strip()]
+        env_src = os.getenv(f"SIGNAL_MANUAL_HOT_SECTOR_SOURCES_{market_key}", "").strip()
+        if env_src:
+            HOT_SECTOR_SOURCES = [s.strip() for s in env_src.split(";") if s.strip()]
+        else:
+            HOT_SECTOR_SOURCES = ["manual_config"] * len(HOT_SECTORS)
+        print(f"[hot_sectors] 手动配置 ({len(HOT_SECTORS)}个): {'; '.join(HOT_SECTORS)}")
+    else:
+        # Priority 3: built-in defaults
+        HOT_SECTORS = list(cfg["hot_sectors"])
+        HOT_SECTOR_SOURCES = ["builtin_default"] * len(HOT_SECTORS)
+        print(f"[hot_sectors] 内置默认 ({len(HOT_SECTORS)}个): {'; '.join(HOT_SECTORS)}")
+
+hot_sector_display = "；".join(HOT_SECTORS) if HOT_SECTORS else "暂未识别到明确市场热点"
 
 # ── Market context (from web search) ──────────────────────
 MARKET_CONTEXT = f"""
@@ -91,6 +134,32 @@ def match_hot_sector(sector, name):
     }
     for kw, (mark, reason) in partial_map.items():
         if kw in text:
+            return (mark, [], reason)
+    # name-based fallback for stocks with missing sector
+    name_kw_map = {
+        "蜜雪": ("相关", "蜜雪冰城为新式茶饮龙头，消费板块"),
+        "冰城": ("相关", "蜜雪冰城为新式茶饮龙头，消费板块"),
+        "茶饮": ("相关", "茶饮属消费板块"),
+        "周六福": ("相关", "珠宝零售属消费板块"),
+        "纽曼思": ("相关", "营养保健品属消费板块"),
+        "东鹏": ("相关", "饮料属消费板块"),
+        "八马": ("相关", "茶业属消费板块"),
+        "找钢": ("观察", "钢铁电商属科技板块，但非AI主线"),
+        "美格": ("观察", "智能模组属科技板块"),
+        "图达通": ("观察", "激光雷达属科技板块"),
+        "VISEN": ("重点", "生物制药属创新药板块"),
+        "FIBOCOM": ("观察", "通信模组属科技板块"),
+        "VOICECOMM": ("观察", "语音通信属科技板块"),
+        "FOREST": ("观察", "消费品牌，待确认细分"),
+        "JST": ("无明确关联", "信息不足，待补充板块"),
+        "XUNZHONG": ("无明确关联", "信息不足，待补充板块"),
+        "RUICHANG": ("无明确关联", "信息不足，待补充板块"),
+        "WUXI LEAD": ("重点", "药明系CDMO龙头，直接匹配创新药"),
+        "HUAQIN": ("观察", "电子制造，科技板块"),
+    }
+    name_lower = name.lower()
+    for kw, (mark, reason) in name_kw_map.items():
+        if kw.lower() in name_lower:
             return (mark, [], reason)
     if not sector:
         return ("行业资料不足", [], "CSV缺少板块信息，无法匹配")
@@ -175,10 +244,23 @@ def score_stock(row):
         except ValueError:
             pass
 
-    # PE/market cap missing
+    # PE/market cap bonus (if available)
     pe = row.get("pe", "").strip()
-    mcap = row.get("市值", "").strip()
-    if not pe and not mcap:
+    mcap_str = row.get("市值", "").strip()
+    has_pe = bool(pe)
+    mcap_val = None
+    if mcap_str:
+        try:
+            mcap_val = float(mcap_str)
+        except ValueError:
+            pass
+    if mcap_val and mcap_val > 1e11:  # >1000亿
+        score += 5
+        factors.append("大市值+千亿(+5)")
+    elif mcap_val and mcap_val > 1e10:  # >100亿
+        score += 3
+        factors.append("大市值+百亿(+3)")
+    elif not pe and not mcap_str:
         score -= 2
         factors.append("缺基本面(-2)")
 
@@ -220,7 +302,7 @@ def score_stock(row):
         "breakthrough_days": breakthrough_days,
         "support_range": row.get("左一支撑区间", "").strip(),
         "pe": pe or "—",
-        "market_cap": mcap or "—",
+        "market_cap": mcap_str or "—",
         "company_events": "—",  # network error, no events fetched
         "summary": summary,
     }
@@ -246,35 +328,27 @@ overall = "中性" if avg_score >= 50 else "偏弱" if avg_score >= 25 else "风
 
 # ── Top 5 picks (different sectors/businesses) ─────────────
 def pick_top5(ranked):
+    # Sort: bullish first, then by score
+    bullish = [r for r in ranked if r["direction"] == "看涨"]
+    others = [r for r in ranked if r["direction"] != "看涨"]
+    ordered = bullish + others  # bullish prioritized
     picked = []
     seen_sectors = set()
-    # Phase 1: pick from stocks with sectors first
-    for r in ranked:
+    # Phase 1: bullish stocks with known sectors
+    for r in ordered:
         if len(picked) >= 5:
             break
         sec = r["sector"]
         if sec and sec != "—" and sec not in seen_sectors:
             picked.append(r)
             seen_sectors.add(sec)
-    # Phase 2: fill remaining from unclassified
-    for r in ranked:
+    # Phase 2: fill from unclassified (bullish first)
+    for r in ordered:
         if len(picked) >= 5:
             break
         if r not in picked:
-            # assign a pseudo-sector based on name/conditions
             name = r["name"]
-            if any(kw in name for kw in ["药", "医", "health", "pharma", "bio", "康"]):
-                pseudo = "Healthcare"
-            elif any(kw in name for kw in ["科技", "tech", "智能", "软件", "数据"]):
-                pseudo = "Technology"
-            elif any(kw in name for kw in ["电力", "能源", "电", "power", "energy"]):
-                pseudo = "Utilities"
-            elif any(kw in name for kw in ["消费", "饮料", "食品", "茶", "零售", "蜜雪", "周六福"]):
-                pseudo = "Consumer"
-            elif any(kw in name for kw in ["汽车", "车", "auto", "motor", "交通"]):
-                pseudo = "Auto/Transport"
-            else:
-                pseudo = "综合"
+            pseudo = _infer_sector_label(r)
             if pseudo not in seen_sectors:
                 picked.append(r)
                 seen_sectors.add(pseudo)
@@ -310,6 +384,7 @@ L.extend([
     "## 一、市场背景",
     "",
     MARKET_CONTEXT.strip(),
+    f"\n**本期热点板块**（{'动态发现' if args.hot_sectors else '手动配置'}）：**{hot_sector_display}**",
     "",
     "---",
     "",
@@ -342,9 +417,10 @@ L.extend([
     "| 调整因子 | 影响 | 说明 |",
     "|---|---|---|",
     "| 突破速度 | ±3分 | ≤2日快速突破+3（动能强）；≥8日慢速突破-3（动能弱） |",
-    "| 热点板块匹配 | +5~15分 | 直接匹配热点+15；相关+8；观察+5 |",
+    "| 热点板块匹配 | +5~15分 | 直接匹配热点+15；相关+8；观察+5；含名称推断兜底 |",
+    "| 市值规模 | +3~5分 | 百亿以上+3；千亿以上+5 |",
     "| 主力流出风险 | -10~20分 | 中风险-10；高风险-20；数据不足不影响 |",
-    "| 基本面缺失 | -2分 | PE/市值缺失扣2分（信息完整度惩罚） |",
+    "| 基本面缺失 | -2分 | PE/市值均缺失扣2分（信用惩罚） |",
     "",
     "### 2.2 宏观五模块（权重 40%）",
     "",
@@ -423,10 +499,10 @@ L.extend([
     "",
     "## 五、精选推荐",
     "",
-    "从30只信号标的中，按**不同板块/业务方向**各选1只最具潜力的股票：",
+    "从30只信号标的中，按**不同板块/业务方向**各选1只最具潜力的看涨股票（看跌信号不参与精选）：",
     "",
-    "| 股票 | 板块 | 评分 | 建议 | 核心理由 |",
-    "|------|------|------|------|---------|",
+    "| 股票 | 板块 | 信号 | 评分 | 建议 | 核心理由 |",
+    "|------|------|------|------|------|---------|",
 ])
 
 recommendations = []
@@ -436,8 +512,10 @@ for r in top5:
     sector = r["sector"] if r["sector"] != "—" else _infer_sector_label(r)
     score = r["score"]
 
-    # Generate recommendation
-    if score >= 70:
+    # Generate recommendation (all top5 should be bullish now)
+    if r["direction"] != "看涨":
+        action = "⚠️ **看跌回避**"
+    elif score >= 70:
         action = "🟢 **买入**"
     elif score >= 55:
         action = "🟡 **持有/加观察**"
@@ -464,7 +542,8 @@ for r in top5:
     reason = "；".join(parts) if parts else "综合信号"
 
     recommendations.append((r, action, reason))
-    L.append(f"| **{name}**<br>`{code}` | {sector} | **{fmt_score(score)}** | {action} | {reason} |")
+    dir_str = f"{dir_emoji(r['direction'])} {r['direction']}"
+    L.append(f"| **{name}**<br>`{code}` | {sector} | {dir_str} | **{fmt_score(score)}** | {action} | {reason} |")
 
 def _infer_sector_label(r):
     name = r["name"]
@@ -507,7 +586,7 @@ L.extend([
     "## 附录：数据说明",
     "",
     f"- **信号数据**：{CSV_PATH}",
-    f"- **热点板块**：{'、'.join(HOT_SECTORS)}（手动配置）",
+    f"- **热点板块**：{'、'.join(HOT_SECTORS)}（{'动态发现: ' + ', '.join(HOT_SECTOR_SOURCES) if HOT_SECTOR_SOURCES and HOT_SECTOR_SOURCES[0] != 'builtin_default' else '手动配置/内置默认'}）",
     f"- **联网检索**：部分执行（Tavily/ZhipuAI，因DNS异常部分失败）",
     f"- **分析引擎**：Claude Opus 4.8（因所有LLM Provider DNS异常，由Claude替代完成）",
     f"- **主力数据**：Futu OpenD（当日数据不足）",

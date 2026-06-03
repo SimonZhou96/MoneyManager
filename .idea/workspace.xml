@@ -7,10 +7,11 @@
     <list default="true" id="0bf7b9ee-c261-4d26-a715-0c09e20aab7a" name="更改" comment="">
       <change beforePath="$PROJECT_DIR$/.claude/worktrees/bg-brainstorm-chain" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/worktrees/bg-brainstorm-chain" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/CLAUDE.md" beforeDir="false" afterPath="$PROJECT_DIR$/CLAUDE.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/interactive_screening.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/interactive_screening.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/potential_analysis/builders.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/potential_analysis/builders.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/api/screen_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/api/screen_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/feishu_notifier.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/feishu_notifier.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/scripts/generate_signal_report.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/scripts/generate_signal_report.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/chain.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/chain.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/hot_sectors.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/hot_sectors.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -92,7 +93,7 @@
       <workItem from="1779706857606" duration="11000" />
       <workItem from="1779964163234" duration="11973000" />
       <workItem from="1780308089940" duration="13389000" />
-      <workItem from="1780411491520" duration="1339000" />
+      <workItem from="1780411491520" duration="4435000" />
     </task>
     <servers />
   </component>

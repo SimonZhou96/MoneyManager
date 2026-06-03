@@ -472,6 +472,16 @@ def run_screening_task(
             print(f"  ✅ 预取完成: {report.ok_count} 成功, {report.fail_count} 失败, "
                   f"{report.duration_ms}ms")
             context.set_cache("enterprise_service", service)
+
+            # 将 YFinance PE/市值写回 StockInfo，确保 CSV 中包含基本面数据
+            pe_merged = 0
+            for stock in stock_infos:
+                snap = context.get_cache("enterprise:company:" + stock.code)
+                if snap and snap.pe_trailing:
+                    stock.pe_ratio = snap.pe_trailing
+                    pe_merged += 1
+                if snap and snap.market_cap:
+                    stock.market_cap = snap.market_cap
         
         # 主循环：遍历每只股票，在同一个循环中完成以下步骤
         # 步骤1: 获取K线数据

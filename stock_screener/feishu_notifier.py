@@ -138,9 +138,9 @@ def _normalize_csv_paths(csv_paths: Union[str, Sequence[str]]) -> List[str]:
 
 def send_screening_result(webhook_url: str, summary: str, csv_paths: Union[str, Sequence[str]]) -> bool:
     """
-    发送筛选结果到飞书：先发摘要，再以文件形式发送 CSV。
+    发送筛选结果到飞书：先发摘要，再以文件形式发送 CSV 和 Markdown 报告。
 
-    Webhook 不能直接发送文件，所以 CSV 只走飞书应用 API。
+    Webhook 不能直接发送文件，所以文件走飞书应用 API。
     每个文件都会在标准输出打印上传成功/失败，便于定时任务日志排查。
     """
     ok = send_feishu_text(webhook_url, summary)
@@ -149,8 +149,13 @@ def send_screening_result(webhook_url: str, summary: str, csv_paths: Union[str, 
 
     paths = _normalize_csv_paths(csv_paths)
     if not paths:
-        print("[Feishu] 未提供 CSV 文件路径")
+        print("[Feishu] 未提供文件路径")
         return ok
+
+    # 分离 CSV 和 Markdown 报告
+    csv_files = [p for p in paths if p.endswith('.csv')]
+    md_files = [p for p in paths if p.endswith('.md')]
+    all_files = csv_files + md_files  # CSV 先发，Markdown 后发
 
     preflight_errors = _feishu_resolution_failures(
         "[Feishu] 文件发送预检失败",
@@ -165,16 +170,16 @@ def send_screening_result(webhook_url: str, summary: str, csv_paths: Union[str, 
         from feishu_app_client import send_file_to_chat
     except Exception as e:
         print(f"[Feishu] 文件发送模块加载失败: {e}")
-        send_feishu_text(webhook_url, f"CSV 文件发送失败: 文件发送模块加载失败。")
+        send_feishu_text(webhook_url, f"文件发送失败: 文件发送模块加载失败。")
         return ok
 
     all_ok = ok
-    for csv_path in paths:
-        abs_path = os.path.abspath(csv_path)
+    for file_path in all_files:
+        abs_path = os.path.abspath(file_path)
         if not os.path.exists(abs_path):
             all_ok = False
             print(f"[Feishu] 文件上传失败: {abs_path} | 文件不存在")
-            send_feishu_text(webhook_url, f"CSV 文件不存在: {abs_path}")
+            send_feishu_text(webhook_url, f"文件不存在: {abs_path}")
             continue
 
         file_ok = False
@@ -196,6 +201,6 @@ def send_screening_result(webhook_url: str, summary: str, csv_paths: Union[str, 
         else:
             all_ok = False
             print(f"[Feishu] 文件上传失败: {abs_path}")
-            send_feishu_text(webhook_url, f"CSV 文件发送失败: {abs_path}")
+            send_feishu_text(webhook_url, f"文件发送失败: {abs_path}")
 
     return all_ok

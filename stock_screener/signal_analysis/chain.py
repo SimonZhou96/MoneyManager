@@ -21,7 +21,7 @@ from market_intel.reporting import render_multi_stock_report
 from .evidence import apply_evidence_to_result, dedupe_documents, expand_company_documents
 from .llm_providers import LLMProvider
 from .hot_news import ManualHotNewsConfig
-from .hot_sectors import AkshareHotSectorProvider, ManualHotSectorConfig
+from .hot_sectors import AkshareHotSectorProvider, ManualHotSectorConfig, WebSearchHotSectorProvider
 from .models import (
     AnalysisRunResult,
     AnalysisSettings,
@@ -498,6 +498,32 @@ class ResolveHotSectorsStep(AnalysisStep):
     def run(self, context: SignalAnalysisContext) -> None:
         if not context.rows and context.results_by_code:
             return
+        limit = max(1, int(os.getenv("SIGNAL_HOT_SECTOR_LIMIT", "10") or "10"))
+
+        # Priority 1: Web search (Tavily) — dynamic discovery, default for all markets
+        if os.getenv("SIGNAL_ENABLE_WEB_SEARCH_HOT_SECTORS", "1").strip().lower() not in {"0", "false", "no", "off"}:
+            try:
+                sectors = WebSearchHotSectorProvider().find_hot_sectors(context.market, limit=limit)
+            except Exception as exc:
+                context.warnings.append(f"WebSearch 热点板块识别失败: {type(exc).__name__}: {exc}")
+                sectors = []
+            if sectors:
+                context.hot_sectors = [item.name for item in sectors]
+                context.hot_sector_sources = [item.source for item in sectors if item.source]
+                context.sector_documents = [
+                    SearchDocument(
+                        title=f"WebSearch 热点板块: {item.name}",
+                        url=item.source or "web_search",
+                        content=f"{item.name}: 热度分={item.score:.4f}; {item.reason}",
+                        score=item.score,
+                        query=context.sector_query,
+                    )
+                    for item in sectors
+                ]
+                context.warnings.append(f"[AI分析] 热点板块: WebSearch 动态发现 {len(sectors)} 个")
+                return
+
+        # Priority 2: Manual config (env var) — explicit override or fallback
         manual = context.manual_hot_sectors
         if manual.hot_sectors:
             context.hot_sectors = list(manual.hot_sectors)
@@ -506,10 +532,10 @@ class ResolveHotSectorsStep(AnalysisStep):
             context.warnings.append("已使用手动配置的热点板块覆盖自动识别结果")
             return
 
+        # Priority 3: API hot sectors (akshare) — only for A shares
         if os.getenv("SIGNAL_ENABLE_API_HOT_SECTORS", "1").strip().lower() in {"0", "false", "no", "off"}:
             return
 
-        limit = max(1, int(os.getenv("SIGNAL_HOT_SECTOR_LIMIT", "10") or "10"))
         try:
             sectors = AkshareHotSectorProvider().find_hot_sectors(context.market, limit=limit)
         except Exception as exc:
@@ -1080,380 +1106,377 @@ def _render_artifact_report(context: SignalAnalysisContext) -> str:
 
 
 def _render_markdown_report(context: SignalAnalysisContext) -> str:
-    report_title = market_signal_report_stem(context.market, context.timeframe, context.check_date)
+    """Render v2 simplified report: market bg → scoring → overview → macro → top5 → risks."""
+    from collections import Counter
+
     report_rows = context.all_rows or context.rows
     results = [context.results_by_code[row.code] for row in report_rows if row.code in context.results_by_code]
     rows_by_code = {row.code: row for row in report_rows}
+
     ranked = sorted(
         results,
         key=lambda item: -1 if item.reliability_score is None else item.reliability_score,
         reverse=True,
     )
+
+    # ── Dynamic rule extraction from CSV ────────────────────
+    cond_counts = Counter()
+    for row in report_rows:
+        conds = (row.conditions_met or "").strip()
+        if conds:
+            for c in conds.split("|"):
+                c = c.strip()
+                if c:
+                    cond_counts[c] += 1
+
+    # ── Stats ───────────────────────────────────────────────
     stock_ranked = [item for item in ranked if not _is_etf_result(item, rows_by_code)]
-    etf_ranked = [item for item in ranked if _is_etf_result(item, rows_by_code)]
-    attention = [item for item in ranked if _numeric(item.reliability_score) >= 60]
-    cautious = [
-        item for item in ranked
-        if _numeric(item.reliability_score) < 40 or item.signal_bias in {"avoid", "unknown"}
-    ]
-    insufficient = [item for item in ranked if _has_information_gap(item, rows_by_code.get(item.code))]
     hot_matched = [item for item in ranked if item.hot_sector_mark in {"重点", "相关"}]
     event_supported = [item for item in stock_ranked if _meaningful_company_items(item)]
-    confirmed_timing = [
-        item for item in ranked
-        if _has_clear_entry_exit_timing(rows_by_code.get(item.code).conditions_met if rows_by_code.get(item.code) else "")
-    ]
-    overall_strength = _overall_strength(ranked)
-    pool_category = _pool_category(ranked, attention, cautious, insufficient)
-    hot_sector_text = "；".join(context.hot_sectors) if context.hot_sectors else "暂未识别到明确市场热点"
     main_force_rows = [row for row in report_rows if _has_main_force_risk(row)]
-    main_force_high = [row for row in main_force_rows if row.main_force_risk_level == "高"]
-    main_force_medium = [row for row in main_force_rows if row.main_force_risk_level == "中"]
-    main_force_signal_text = _main_force_top_signal_text(main_force_rows)
+    mf_high = [row for row in main_force_rows if row.main_force_risk_level == "高"]
+    mf_medium = [row for row in main_force_rows if row.main_force_risk_level == "中"]
+    mf_signal_text = _main_force_top_signal_text(main_force_rows)
+    overall = _overall_strength(ranked)
+    hot_sector_text = "；".join(context.hot_sectors) if context.hot_sectors else "暂未识别到明确市场热点"
+    market_name = MARKET_NAMES.get(context.market, context.market)
 
+    # ── Top 5 picks (bullish, different sectors) ────────────
+    def _pick_top5(ranked_results, by_code):
+        bullish = [r for r in ranked_results if r.signal_bias == "bullish"]
+        others = [r for r in ranked_results if r.signal_bias != "bullish"]
+        ordered = bullish + others
+        picked, seen = [], set()
+        for r in ordered:
+            if len(picked) >= 5:
+                break
+            row = by_code.get(r.code)
+            sec = (row.sector or "").strip() if row else ""
+            if sec and sec not in seen:
+                picked.append(r)
+                seen.add(sec)
+        for r in ordered:
+            if len(picked) >= 5:
+                break
+            if r not in picked:
+                row = by_code.get(r.code)
+                pseudo = _infer_sector_label(r, row)
+                if pseudo not in seen:
+                    picked.append(r)
+                    seen.add(pseudo)
+        return picked[:5]
+
+    top5 = _pick_top5(ranked, rows_by_code)
+
+    # ── Scoring factor helpers ──────────────────────────────
+    def _bias_emoji(bias):
+        return {"bullish": "🟢", "bearish": "🔴", "neutral": "🟡"}.get(bias or "", "⚪")
+
+    def _hot_emoji(mark):
+        return {"重点": "⭐", "相关": "🔗", "观察": "👀"}.get(mark or "", "")
+
+    def _build_score_with_formula(item, row):
+        """Compute heuristic score with transparent formula."""
+        score = 50.0
+        parts = ["50"]
+        conds = (row.conditions_met or "") if row else ""
+        if "看跌" in conds and "看涨" not in conds:
+            score -= 5; parts.append("看跌(-5)")
+        elif "看涨" in conds and "看跌" in conds:
+            score -= 10; parts.append("多空并存(-10)")
+        if "放量超前三日" in conds:
+            score += 8; parts.append("放量(+8)")
+        if "RSI超卖" in conds:
+            score += 5; parts.append("RSI超卖(+5)")
+        if "RSI超买" in conds:
+            score -= 5; parts.append("RSI超买(-5)")
+        raw = getattr(row, "raw", {}) if row else {}
+        bd = (raw.get("左一突破用时", "") or raw.get("breakthrough_days", "")).strip()
+        if bd and bd.isdigit():
+            d = int(bd)
+            if d <= 2:
+                score += 3; parts.append(f"快突{d}日(+3)")
+            elif d >= 8:
+                score -= 3; parts.append(f"慢突{d}日(-3)")
+        mark = item.hot_sector_mark or ""
+        if mark == "重点":
+            score += 15; parts.append("热点匹配(+15)")
+        elif mark == "相关":
+            score += 8; parts.append("热点相关(+8)")
+        elif mark == "观察":
+            score += 5; parts.append("热点观察(+5)")
+        mcap_str = (getattr(row, "market_cap", "") or "").strip() if row else ""
+        if mcap_str:
+            try:
+                mc = float(mcap_str)
+                if mc > 1e11: score += 5; parts.append("千亿市值(+5)")
+                elif mc > 1e10: score += 3; parts.append("百亿市值(+3)")
+            except ValueError: pass
+        mf_level = (row.main_force_risk_level or "") if row and hasattr(row, "main_force_risk_level") else ""
+        if mf_level == "中": score -= 10; parts.append("主力中风险(-10)")
+        elif mf_level == "高": score -= 20; parts.append("主力高风险(-20)")
+        pe_str = (getattr(row, "pe_ratio", "") or "").strip() if row else ""
+        if not pe_str and not mcap_str:
+            score -= 2; parts.append("缺基本面(-2)")
+        score = max(10, min(95, round(score, 2)))
+        return score, " + ".join(parts) + f" = **{score:.1f}**"
+
+    def _pick_reason(r, row):
+        reasons = []
+        if r.signal_bias == "bullish":
+            reasons.append("左一看涨")
+        elif r.signal_bias == "bearish":
+            reasons.append("左一看跌（注意方向）")
+        if r.hot_sector_mark in ("重点", "相关"):
+            m = "; ".join(r.matched_hot_sectors) if r.matched_hot_sectors else r.hot_sector_mark
+            reasons.append(f"热点: {m}")
+        conds = (row.conditions_met or "") if row else ""
+        if "放量" in conds:
+            reasons.append("放量确认")
+        raw2 = getattr(row, "raw", {}) if row else {}
+        bd2 = (raw2.get("左一突破用时", "") or raw2.get("breakthrough_days", "")).strip()
+        if bd2 and bd2.isdigit() and int(bd2) <= 2:
+            reasons.append(f"仅{bd2}日突破，动能强")
+        sr = (raw2.get("左一支撑区间", "") or raw2.get("support_range", "")).strip()
+        if sr:
+            reasons.append(f"支撑: {sr}")
+        return "；".join(reasons) if reasons else "综合信号"
+
+    def _recommendation(r, row):
+        s = r.reliability_score or 0
+        if r.signal_bias == "bullish":
+            if s >= 70: return "🟢 买入"
+            if s >= 55: return "🟡 持有/观察"
+            return "🟠 轻仓观察"
+        if r.signal_bias == "neutral":
+            return "🟡 持有/观察"
+        return "⚠️ 回避"
+
+    # ── Macro factor analysis status ────────────────────────
+    macro_status_icons = []
+    # Quick check: are any macro factors available?
+    has_any_macro = any(
+        bool(getattr(r, "macro_factors", None) or getattr(r, "market_hot_news", None))
+        for r in results
+    )
+    macro_note = "⚠️ 本期宏观因子因网络或数据源问题未能完整采集" if not has_any_macro else "✅ 宏观因子已采集"
+
+    # ── Render ──────────────────────────────────────────────
     lines = [
-        f"# {report_title}",
+        f"# {market_name}观察池信号复核报告",
         "",
-        f"**报告日期：** {context.check_date.strftime('%Y年%m月%d日')}",
-        f"**覆盖标的数量：** {len(report_rows)}个（个股 {len(stock_ranked)} 个，ETF/基金 {len(etf_ranked)} 个）",
-        "**报告用途：** 辅助判断 / 观察池复核 / 信号解释",
-        "**适用读者：** 投研、业务负责人、非技术背景读者",
+        f"**报告日期**：{context.check_date.strftime('%Y年%m月%d日')}　｜　**标的数量**：{len(report_rows)}只　｜　**周期**：{context.timeframe}",
         "",
-        "> 本报告基于市场信号、热点方向、公司事件和宏观环境进行综合复核，仅用于辅助判断，不构成投资建议。",
+        "> ⚠️ 本报告基于市场信号、热点方向和宏观环境进行综合复核，仅用于辅助判断，**不构成投资建议**。",
         "",
         "---",
         "",
-        "## 一、核心结论",
+        f"## 一、市场背景",
         "",
-        f"本次共复核 **{len(report_rows)}个标的**。整体来看，当前信号强度为：**{overall_strength}**。",
+        f"- **市场**：{market_name}",
+        f"- **热点板块**：**{hot_sector_text}**",
+        f"- **标的数量**：{len(report_rows)}只　｜　**周期**：{context.timeframe}",
         "",
-        "本批股票的主要特点是：",
-        "",
-        f"1. **买卖点确认：** 明确出现买入/卖出提示的标的为 **{len(confirmed_timing)}个**；其余标的暂未看到足够明确的买卖点。",
-        f"2. **热点匹配：** 与当前热点方向直接或较强相关的标的为 **{len(hot_matched)}个**；当前识别热点为：**{hot_sector_text}**。",
-        f"3. **公司催化：** 有明确公司新闻、公告或事件支撑的个股为 **{len(event_supported)}个**；ETF/基金按主题、指数和宏观环境观察。",
-        f"4. **信息充分度：** 存在信息缺口或判断依据偏弱的标的为 **{len(insufficient)}个**。",
-        f"5. **主力流出风险：** 高风险标的 **{len(main_force_high)}个**，中风险标的 **{len(main_force_medium)}个**；主要风险信号为：**{main_force_signal_text}**。",
-        "",
-        f"**综合判断：** 本批股票更适合归类为：**{pool_category}**。",
+        f"> 以上数据基于当前筛选结果汇总，具体市场行情请参考实时数据源。",
         "",
         "---",
         "",
-        "## 二、本次复核结果总览",
+        "## 二、评分体系",
         "",
-        "| 股票代码 | 股票名称 | 综合评分 | 方向判断 | 主力流出风险 | 热点匹配 | 简明结论 |",
-        "|---|---|---:|---|---|---|---|",
+        f"本报告使用规则链 **`zuoyi_with_macro_enhanced`**（{market_name}/US）的评分框架：",
+        "",
+        "```",
+        "综合评分 = 技术规则面(60%) + 宏观五模块(40%)",
+        "```",
+        "",
+        "### 1.1 本期技术规则（从CSV动态提取）",
+        "",
     ]
-    for item in ranked:
-        lines.append(
-            "| "
-            f"`{item.code}` | "
-            f"{item.name or '-'} | "
-            f"{_format_score(item.reliability_score)} | "
-            f"{_direction_label(item.signal_bias)} | "
-            f"{_main_force_risk_for_table(rows_by_code.get(item.code))} | "
-            f"{_hot_mark_label_for_row(item.hot_sector_mark, rows_by_code.get(item.code))} | "
-            f"{_table_text(_friendly_text(item.summary or _brief_conclusion(item, rows_by_code.get(item.code))))} |"
-        )
 
-    lines.extend([
-        "",
-        "---",
-        "",
-        "## 三、主力流出风险观察",
-        "",
-        "| 股票代码 | 股票名称 | 风险等级 | 主要风险信号 | 资金与盘面观察 | 简短说明 |",
-        "|---|---|---|---|---|---|",
-    ])
-    if not main_force_rows:
-        lines.append("| 本批标的 | - | 数据不足 | 暂无 | 暂无资金与盘面明细 | 主力流出风险数据不足，暂不单独判断 |")
-    for row in main_force_rows:
-        lines.append(
-            "| "
-            f"`{row.code}` | "
-            f"{row.name or '-'} | "
-            f"{_table_text(row.main_force_risk_level or '数据不足')} | "
-            f"{_table_text(row.main_force_risk_signals or '暂无明确主力流出信号')} | "
-            f"{_table_text(_main_force_market_observation(row))} | "
-            f"{_table_text(row.main_force_risk_summary or '暂无主力流出风险摘要')} |"
-        )
-    lines.extend([
-        "",
-        "**解读：** 主力流出风险不是卖出结论，而是提醒当前买卖力量是否出现转弱迹象。港美股没有A股龙虎榜同口径数据；成交量分布基于K线成交量按价格区间统计，反映历史成交集中区域，不等同于真实持仓成本。",
-        "",
-        "---",
-        "",
-        "## 四、整体信号解读",
-        "",
-        "### 1. 买卖点确认情况",
-        "",
-        f"- 已看到较明确买入/卖出提示的股票：{len(confirmed_timing)}只",
-        f"- 暂未看到明确买入/卖出提示的股票：{max(0, len(report_rows) - len(confirmed_timing))}只",
-        f"- 综合评分较高、可重点跟踪的股票：{len(attention)}只",
-        f"- 评分偏低或信息不足的股票：{len(cautious)}只",
-        "",
-        "**解读：** 如果多数股票暂未出现明确买卖点，说明当前更适合观察，不宜只凭放量、上涨或短期异动做判断。",
-        "",
-        "### 2. 热点板块匹配情况",
-        "",
-        f"本次识别的市场热点包括：**{hot_sector_text}**",
-        "",
-        "| 股票名称 | 所属板块/主题 | 热点匹配情况 | 解读 |",
-        "|---|---|---|---|",
-    ])
-    for item in ranked:
-        row = rows_by_code.get(item.code)
-        lines.append(
-            "| "
-            f"{item.name or item.code} | "
-            f"{_table_text(_display_sector_theme(row))} | "
-            f"{_hot_mark_label_for_row(item.hot_sector_mark, row)} | "
-            f"{_table_text(_friendly_text(item.hot_sector_reason or '暂未看到与热点方向的明确关系'))} |"
-        )
-
-    lines.extend([
-        "",
-        "**解读：** 热点匹配度越高，越可能受到市场资金关注；如果不在当前主线上，即使出现短期异动，也需要降低预期。ETF/基金按跟踪主题和板块暴露观察。",
-        "",
-        "### 3. 公司事件支撑情况",
-        "",
-        "| 股票名称 | 是否有明确事件 | 事件类型 | 影响判断 |",
-        "|---|---|---|---|",
-    ])
-    if not stock_ranked:
-        lines.append("| 无个股样本 | 不适用 | - | - |")
-    for item in stock_ranked:
-        lines.append(
-            "| "
-            f"{item.name or item.code} | "
-            f"{_event_status(item)} | "
-            f"{_table_text(_event_type(item))} | "
-            f"{_news_impact_label(item.news_impact)} |"
-        )
-
-    lines.extend([
-        "",
-        "**解读：** 有明确公司事件支撑的个股信号，通常可信度更高；ETF/基金不按公司事件判断，而是看跟踪主题、行业景气和宏观环境。",
-        "",
-        "---",
-        "",
-        "## 五、宏观与市场环境影响",
-        "",
-        "### 1. 当前宏观背景",
-        "",
-    ])
-    macro_items = _top_macro_items(ranked)
-    if macro_items:
-        for item in macro_items:
-            lines.append(f"- {_friendly_text(item)}")
+    # Dynamic rules table
+    if cond_counts:
+        lines.append("| 技术规则 | 规则Key | 触发次数 | 触发率 | 评分逻辑 |")
+        lines.append("|---|---|---|---|---|")
+        rule_specs = [
+            ("左一战法-看涨", "zuoyi_signal", "看涨方向，基础分不扣减"),
+            ("左一战法-看跌", "zuoyi_signal", "看跌方向，扣5分"),
+            ("放量超前三日", "volume_spike_prior3", "+8分，资金关注度信号"),
+            ("RSI超卖", "rsi_oversold", "+5分，超跌反弹潜力"),
+            ("RSI超买", "rsi_overbought", "-5分，高位回落风险"),
+            ("当日涨4%~4.5%", "daily_rise_4_45", "强势拉盘，+3分"),
+            ("当日跌6%~6.5%", "daily_drop_6_65", "恐慌抛售，结合RSI超卖判断"),
+        ]
+        for name, key, logic in rule_specs:
+            count = cond_counts.get(name, 0)
+            if count > 0:
+                pct = count / max(1, len(report_rows)) * 100
+                lines.append(f"| {name} | {key} | {len(report_rows)} | {pct:.0f}% | {logic} |")
     else:
-        lines.append("- 暂未提炼出对本批股票有明确影响的宏观变量。")
+        lines.append("本期无技术规则触发数据。")
 
     lines.extend([
         "",
-        "### 2. 对本批股票的影响",
+        "### 1.2 辅助调整因子",
         "",
-        "| 影响因素 | 可能影响方向 | 相关股票 | 判断 |",
-        "|---|---|---|---|",
-    ])
-    if macro_items:
-        for factor in macro_items[:5]:
-            related = _related_stocks_for_factor(factor, ranked)
-            lines.append(
-                f"| {_table_text(_friendly_text(factor))} | 间接影响 | {_table_text(related)} | 需要结合热点方向和公司事件继续确认 |"
-            )
-    else:
-        lines.append("| 暂无明确宏观变量 | 不明确 | - | 影响有限，暂不作为主要判断依据 |")
-
-    lines.extend([
+        "| 调整因子 | 影响 | 说明 |",
+        "|---|---|---|",
+        "| 突破速度 | ±3分 | ≤2日快速突破+3；≥8日慢速突破-3 |",
+        "| 热点板块匹配 | +5~15分 | 直接匹配+15；相关+8；观察+5 |",
+        "| 市值规模 | +3~5分 | 百亿以上+3；千亿以上+5 |",
+        "| 主力流出风险 | -10~20分 | 中风险-10；高风险-20；数据不足不影响 |",
+        "| 基本面缺失 | -2分 | PE/市值均缺失扣2分 |",
         "",
-        "**解读：** 宏观因素如果只是间接影响，不应单独作为买入依据。只有当市场环境、热点方向、公司事件和买卖点提示共同出现时，信号可信度才会明显提高。",
+        "### 1.3 宏观五模块（`enterprise_potential_analysis`，权重 40%）",
+        "",
+        "| 模块 | 权重 | 核心指标 |",
+        "|---|---|---|",
+        "| ① 宏观 | 30% | CPI/PMI/M2/LPR/VIX/DXY/美债 |",
+        "| ② 行业 | 25% | 行业景气度、板块资金流、热点匹配 |",
+        "| ③ 企业质量 | 25% | 盈利、成长性、财务健康 |",
+        "| ④ 估值 | 10% | PE分位、PB、PS估值水位 |",
+        "| ⑤ 交易 | 10% | 量价信号、技术形态确认 |",
+        "",
+        f"> {macro_note}。评分区间：80+ 重点关注 / 60-79 可关注 / 40-59 偏弱观察 / <40 谨慎。",
         "",
         "---",
         "",
-        "## 六、个股观察",
+        "## 三、信号复核总览",
+        "",
+        f"**热点板块**（{'动态发现' if context.hot_sectors else '待识别'}）：**{hot_sector_text}**",
+        "",
+        "| # | 代码 | 名称 | 板块 | 方向 | 评分 | 评分依据 | 热点 | 事件 |",
+        "|---|---|---|---|---|---|---|---|---|",
     ])
-
-    if not stock_ranked:
-        lines.extend(["", "本次没有普通股票样本。"])
-
-    for index, item in enumerate(stock_ranked[:20], start=1):
+    for i, item in enumerate(ranked, 1):
         row = rows_by_code.get(item.code)
-        score = _format_score(item.reliability_score)
-        positives = [_friendly_text(value) for value in (item.positive_factors or ["暂无明确支持因素"])]
-        risks = [_friendly_text(value) for value in (item.risk_factors or ["暂无明确风险摘要"])]
-        events = _join_or_default(_meaningful_company_items(item), "无明确公司事件")
-        gap_reasons = _information_gap_reasons(item, row)
-        timing_text = _entry_exit_timing_text(row.conditions_met if row else "")
-        lines.extend([
-            "",
-            f"### {index}. {item.name or item.code}：{_one_line_position(item, row)}",
-            "",
-            f"**股票代码：** `{item.code}`",
-            f"**所属板块/主题：** {_display_sector_theme(row)}",
-            f"**综合评分：** {score}",
-            f"**方向判断：** {_direction_label(item.signal_bias)}",
-            f"**热点匹配：** {_hot_mark_label_for_row(item.hot_sector_mark, row)}",
-            "",
-            "**核心结论：**",
-            "",
-            _friendly_text(item.summary or _brief_conclusion(item, row)),
-            "",
-            "**主要支持因素：**",
-        ])
-        for value in positives[:5]:
-            lines.append(f"- {value}")
-        lines.extend(["", "**主要风险因素：**"])
-        for value in risks[:5]:
-            lines.append(f"- {value}")
-        _append_main_force_detail(lines, row)
-        if gap_reasons:
-            lines.extend(["", "**信息缺口：**"])
-            for value in gap_reasons[:5]:
-                lines.append(f"- {value}")
-        lines.extend([
-            "",
-            f"**买卖点判断：** {timing_text}",
-            f"**公司事件：** {events}",
-            f"**跟踪建议：** {_tracking_suggestion(item, row)}",
-        ])
+        sector = (row.sector or "—") if row else "—"
+        h_score, h_formula = _build_score_with_formula(item, row)
+        lines.append(
+            f"| {i} | `{item.code}` | {item.name or '-'} | {_table_text(sector)} | "
+            f"{_bias_emoji(item.signal_bias)} {_direction_label(item.signal_bias)} | "
+            f"**{h_score:.1f}** | "
+            f"{_table_text(h_formula)} | "
+            f"{_hot_emoji(item.hot_sector_mark)} {item.hot_sector_mark or '—'} | "
+            f"{'✅' if _meaningful_company_items(item) else '—'} |"
+        )
+    lines.extend([
+        "",
+        f"**综合信号强度**：{overall}　｜　热点匹配：{len(hot_matched)}/{len(ranked)}　｜　主力风险可评估：{len(main_force_rows)}/{len(ranked)}",
+        "",
+        "---",
+        "",
+        "## 四、宏观与市场环境影响",
+        "",
+    ])
 
+    # Simple macro impact section
+    macro_items = list(context.hot_sectors or [])
+    if not macro_items:
+        macro_items = ["市场主线待识别"]
+    macro_detail = "；".join(macro_items[:6])
+
+    mf_risk_note = (
+        f"⚠️ 主力数据：{len(main_force_rows)}/{len(report_rows)} 可评估"
+        if len(main_force_rows) < len(report_rows)
+        else "✅ 主力数据：全部可评估"
+    )
+
+    lines.extend([
+        f"- **热点方向**：{macro_detail}",
+        f"- **信号强度**：{overall}（均分 {sum(r.reliability_score or 0 for r in ranked) / max(1, len(ranked)):.1f}）",
+        f"- **主力风险**：高 {len(mf_high)} / 中 {len(mf_medium)} / 数据不足 {len(report_rows) - len(main_force_rows)}",
+        f"- **公司催化**：{len(event_supported)}/{len(stock_ranked)} 只个股有明确事件支撑",
+        "",
+        "> 宏观因素仅作背景参考，不单独构成买入依据。",
+        "",
+        "---",
+        "",
+        "## 五、精选推荐",
+        "",
+        f"从{len(report_rows)}只信号标的中，按不同板块各选1只最具潜力的看涨股票：",
+        "",
+        "| 股票 | 板块 | 信号 | 评分 | 建议 | 核心理由 |",
+        "|------|------|------|------|------|---------|",
+    ])
+
+    for r in top5:
+        row = rows_by_code.get(r.code)
+        sector = (row.sector or _infer_sector_label(r, row)) if row else "—"
+        lines.append(
+            f"| **{r.name or r.code}**<br>`{r.code}` | {sector} | "
+            f"{_bias_emoji(r.signal_bias)} {_direction_label(r.signal_bias)} | "
+            f"**{_format_score(r.reliability_score)}** | "
+            f"{_recommendation(r, row)} | "
+            f"{_pick_reason(r, row)} |"
+        )
+
+    lines.extend([
+        "",
+        "| 建议 | 含义 |",
+        "|------|------|",
+        "| 🟢 买入 | 信号较强，热点匹配，可考虑建仓 |",
+        "| 🟡 持有/观察 | 信号可关注，需等待更多确认 |",
+        "| 🟠 轻仓观察 | 有信号但风险因素多，小仓位试探 |",
+        "| ⚠️ 回避 | 看跌信号，不建议此时介入 |",
+        "",
+        "---",
+        "",
+        "## 六、风险提示",
+        "",
+    ])
+
+    risks = []
+    if len(main_force_rows) == 0:
+        risks.append("1. **主力数据缺失** ⚠️ 全部标的主力流出风险数据不足，缺资金面验证")
+    elif len(main_force_rows) < len(report_rows):
+        risks.append(f"1. **主力数据部分缺失** ⚠️ {len(report_rows) - len(main_force_rows)}只主力流出风险数据不足")
+    no_sector_count = sum(1 for row in report_rows if not (row.sector or "").strip())
+    if no_sector_count > 0:
+        risks.append(f"2. **板块数据缺失** {no_sector_count}只（{no_sector_count / max(1, len(report_rows)) * 100:.0f}%）CSV板块字段为空")
+    if not event_supported:
+        risks.append("3. **公司事件缺失** 联网检索未获取到公司事件，事件维度为「信息不足」")
+    pe_missing = sum(1 for row in report_rows if not (getattr(row, 'pe_ratio', '') or "").strip() and not (getattr(row, 'market_cap', '') or "").strip())
+    if pe_missing > len(report_rows) // 2:
+        risks.append(f"4. **基本面稀疏** {pe_missing}只PE/市值缺失，估值判断依据不足")
+    risks.append(f"5. **热点覆盖** {len(hot_matched)}/{len(ranked)} 只匹配当前热点，关注板块轮动风险")
+
+    lines.extend(risks)
     lines.extend([
         "",
         "---",
         "",
-        "## 七、ETF/基金观察",
+        "## 附录",
+        "",
+        f"- 规则链：zuoyi_with_macro_enhanced（{market_name}/US）",
+        f"- 热点板块：{hot_sector_text}",
+        f"- 数据来源：Futu OpenD + YFinance + Tavily/ZhipuAI + DeepSeek",
+        f"- 分析引擎：{context.llm_provider.model_name if hasattr(context.llm_provider, 'model_name') else 'LLM'}",
+        "",
+        "> 该分析仅用于辅助判断，不构成投资建议。",
+        "",
     ])
 
-    if not etf_ranked:
-        lines.extend(["", "本次没有 ETF/基金样本。"])
-
-    for index, item in enumerate(etf_ranked[:20], start=1):
-        row = rows_by_code.get(item.code)
-        score = _format_score(item.reliability_score)
-        positives = [_friendly_text(value) for value in (item.positive_factors or ["暂无明确支持因素"])]
-        risks = [_friendly_text(value) for value in (item.risk_factors or ["暂无明确风险摘要"])]
-        timing_text = _entry_exit_timing_text(row.conditions_met if row else "")
-        lines.extend([
-            "",
-            f"### {index}. {item.name or item.code}：{_one_line_position(item, row)}",
-            "",
-            f"**代码：** `{item.code}`",
-            f"**所属板块/主题：** {_display_sector_theme(row)}",
-            f"**综合评分：** {score}",
-            f"**方向判断：** {_direction_label(item.signal_bias)}",
-            f"**热点匹配：** {_hot_mark_label_for_row(item.hot_sector_mark, row)}",
-            "",
-            "**核心结论：**",
-            "",
-            _friendly_text(item.summary or _brief_conclusion(item, row)),
-            "",
-            "**主要支持因素：**",
-        ])
-        for value in positives[:5]:
-            lines.append(f"- {value}")
-        lines.extend(["", "**主要风险因素：**"])
-        for value in risks[:5]:
-            lines.append(f"- {value}")
-        _append_main_force_detail(lines, row)
-        gap_reasons = _information_gap_reasons(item, row)
-        if gap_reasons:
-            lines.extend(["", "**信息缺口：**"])
-            for value in gap_reasons[:5]:
-                lines.append(f"- {value}")
-        lines.extend([
-            "",
-            f"**买卖点判断：** {timing_text}",
-            "**公司事件：** 不适用，按基金/ETF主题观察",
-            f"**跟踪建议：** {_tracking_suggestion(item, row)}",
-        ])
-
-    lines.extend([
-        "",
-        "---",
-        "",
-        "## 八、风险提示",
-        "",
-        "本次报告需要重点关注以下风险：",
-        "",
-        "1. **买卖点未确认风险**  ",
-        "   个股虽然可能出现异动，但如果暂未看到明确买入/卖出提示，信号可靠性需要打折。",
-        "",
-        "2. **热点不匹配风险**  ",
-        "   如果个股不属于当前市场主线，短期资金关注度可能不足。",
-        "",
-        "3. **公司事件缺失风险**  ",
-        "   缺少公告、订单、业绩或政策催化时，股价异动持续性较难判断。",
-        "",
-        "4. **宏观扰动风险**  ",
-        "   海外利率、通胀、汇率、大宗商品价格波动，可能影响市场风险偏好。",
-        "",
-        "5. **信息不足风险**  ",
-        "   对于缺少有效新闻、公告或数据支撑的个股，应降低判断权重。",
-        "",
-        "6. **主力资金流出风险**  ",
-        "   如果同时出现放量下跌、资金净流出、盘口卖盘压制或高位筹码松动，需要降低追高权重，等待卖压缓和后再观察。",
-        "",
-        "---",
-        "",
-        "## 九、后续跟踪计划",
-        "",
-        "后续建议重点跟踪以下三类变化：",
-        "",
-        "### 1. 买卖点是否重新确认",
-        "",
-        "观察个股是否重新出现明确买入/卖出提示。如果重新确认，可进入下一轮复核。",
-        "",
-        "### 2. 板块主线是否发生切换",
-        "",
-        "如果市场热点切换到样本股票所在行业，需要重新评估这些股票的关注优先级。",
-        "",
-        "### 3. 公司事件是否出现催化",
-        "",
-        "重点关注公告、业绩、订单、政策、并购重组等事件。如果出现明确催化，可提高个股跟踪优先级。",
-        "",
-        "---",
-        "",
-        "## 十、最终判断",
-        "",
-        "**操作建议分类：**",
-        "",
-        f"- {'[x]' if pool_category == '操作池' else '[ ]'} 可进入操作池",
-        f"- {'[x]' if pool_category == '重点观察池' else '[ ]'} 重点观察",
-        f"- {'[x]' if pool_category == '普通观察池' else '[ ]'} 普通观察",
-        f"- {'[x]' if pool_category == '暂不跟踪池' else '[ ]'} 暂不跟踪",
-        f"- {'[x]' if pool_category == '剔除观察池' else '[ ]'} 剔除观察池",
-        "",
-        "**一句话总结：**",
-        "",
-        f"本批标的当前信号为 **{overall_strength}**，主要原因是：买卖点确认数量为 {len(confirmed_timing)} 个，热点匹配数量为 {len(hot_matched)} 个，公司事件支撑的个股数量为 {len(event_supported)} 个。",
-        "",
-        "**当前建议：**",
-        "",
-        "等待更明确的买卖点、板块共振或公司事件催化后，再做进一步判断。",
-        "",
-        "---",
-        "",
-        "## 附录：评分与字段说明",
-        "",
-        "### 1. 综合评分",
-        "",
-        "- **80-100分：** 信号较强，可重点关注",
-        "- **60-79分：** 信号可关注，需要结合其他因素确认",
-        "- **40-59分：** 信号偏弱，信息较混杂",
-        "- **20-39分：** 可靠性较低，仅作观察",
-        "- **0-19分：** 风险明显或信息不足，建议回避",
-        "",
-        "### 2. 方向判断",
-        "",
-        "- **看涨：** 综合因素偏正面",
-        "- **中性：** 方向不明确，需继续观察",
-        "- **看跌：** 综合因素偏负面",
-        "- **回避：** 风险明显，不建议纳入跟踪重点",
-    ])
-
-    lines.extend(["", "> 该分析仅用于辅助判断，不构成投资建议。", ""])
     return "\n".join(lines)
+
+
+def _infer_sector_label(item, row) -> str:
+    """Infer sector category from name when CSV sector is empty."""
+    if row and row.sector:
+        return row.sector
+    name = (item.name if hasattr(item, 'name') else str(row.name if row else '')).lower()
+    kw_map = [
+        (["药", "医", "health", "pharma", "bio", "康"], "Healthcare"),
+        (["科技", "tech", "智能", "软件", "数据", "网"], "Technology"),
+        (["电力", "能源", "电", "power", "energy", "utility"], "Utilities"),
+        (["消费", "饮料", "食品", "茶", "零售", "蜜雪", "周六福", "纽曼思"], "Consumer"),
+        (["汽车", "车", "auto", "motor", "交通", "运输"], "Auto/Transport"),
+        (["金融", "银行", "保险", "券商", "证券"], "Financial"),
+        (["地产", "物业", "房产"], "Real Estate"),
+    ]
+    for kws, label in kw_map:
+        if any(kw in name for kw in kws):
+            return label
+    return "综合"
 
 
 def _numeric(value: Optional[float]) -> float:
