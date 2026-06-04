@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import secrets
 import time
@@ -80,7 +81,29 @@ def _json_or_none(value: Any):
         return None
     if isinstance(value, str):
         return value
-    return json.dumps(value, ensure_ascii=False)
+    return json.dumps(_mysql_safe_value(value), ensure_ascii=False)
+
+
+def _mysql_safe_float(value: Any):
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return value
+    return number if math.isfinite(number) else None
+
+
+def _mysql_safe_value(value: Any):
+    if isinstance(value, dict):
+        return {str(k): _mysql_safe_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_mysql_safe_value(v) for v in value]
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return value
 
 
 def _option_payload(item: Any) -> dict:
@@ -1247,7 +1270,7 @@ class MarketDatabase:
         rows = []
         for item in results:
             fd = item.get("filter_details")
-            fd_str = json.dumps(fd, ensure_ascii=False) if isinstance(fd, (dict, list)) else fd
+            fd_str = json.dumps(_mysql_safe_value(fd), ensure_ascii=False) if isinstance(fd, (dict, list)) else fd
             score_details = _json_or_none(item.get("score_details") or {})
             task_id = item.get("task_id")
             rows.append((
@@ -1255,10 +1278,15 @@ class MarketDatabase:
                 item.get("market"), str(item.get("code") or "").strip(), item.get("name"),
                 check_date, 1 if item.get("is_passed") else 0,
                 item.get("filter_summary"),
-                item.get("technical_score"), item.get("macro_score"), item.get("final_score"), score_details,
+                _mysql_safe_float(item.get("technical_score")),
+                _mysql_safe_float(item.get("macro_score")),
+                _mysql_safe_float(item.get("final_score")),
+                score_details,
                 fd_str,
                 item.get("sector"), item.get("industry"),
-                item.get("market_cap"), item.get("pe_ratio"), item.get("close_price"),
+                _mysql_safe_float(item.get("market_cap")),
+                _mysql_safe_float(item.get("pe_ratio")),
+                _mysql_safe_float(item.get("close_price")),
             ))
         rows = [r for r in rows if r[2]]  # code at index 2
         if not rows:
@@ -1347,7 +1375,7 @@ class MarketDatabase:
                 continue
             values.append((
                 item.get("risk_level"),
-                item.get("risk_score"),
+                _mysql_safe_float(item.get("risk_score")),
                 item.get("risk_summary"),
                 _json_or_none(item.get("triggered_signals")),
                 _json_or_none(item.get("provider_status")),
@@ -2486,12 +2514,12 @@ class MarketDatabase:
                 code,
                 timeframe,
                 bar_time,
-                item.get("open"),
-                item.get("high"),
-                item.get("low"),
-                item.get("close"),
-                item.get("volume"),
-                item.get("turnover"),
+                _mysql_safe_float(item.get("open")),
+                _mysql_safe_float(item.get("high")),
+                _mysql_safe_float(item.get("low")),
+                _mysql_safe_float(item.get("close")),
+                _mysql_safe_float(item.get("volume")),
+                _mysql_safe_float(item.get("turnover")),
                 item.get("source") or "opend_cache",
                 item.get("sync_run_id"),
             ))
@@ -4751,8 +4779,8 @@ class MarketDatabase:
                 item.get("check_date"),
                 item.get("csv_path"),
                 item.get("analysis_status") or "success",
-                item.get("reliability_score"),
-                item.get("confidence_score"),
+                _mysql_safe_float(item.get("reliability_score")),
+                _mysql_safe_float(item.get("confidence_score")),
                 item.get("signal_bias"),
                 item.get("summary"),
                 _json_or_none(item.get("positive_factors")),
@@ -4766,7 +4794,7 @@ class MarketDatabase:
                 _json_or_none(item.get("hot_sectors")),
                 item.get("hot_sector_mark"),
                 _json_or_none(item.get("matched_hot_sectors")),
-                item.get("hot_sector_relevance"),
+                _mysql_safe_float(item.get("hot_sector_relevance")),
                 item.get("hot_sector_reason"),
                 _json_or_none(item.get("hot_sector_sources")),
                 _json_or_none(item.get("source_urls")),
@@ -4903,8 +4931,8 @@ class MarketDatabase:
                 trade_date,
                 item.get("name"),
                 item.get("analysis_status") or "success",
-                item.get("reliability_score"),
-                item.get("confidence_score"),
+                _mysql_safe_float(item.get("reliability_score")),
+                _mysql_safe_float(item.get("confidence_score")),
                 item.get("signal_bias"),
                 item.get("summary"),
                 _json_or_none(item.get("positive_factors")),
@@ -4918,7 +4946,7 @@ class MarketDatabase:
                 _json_or_none(item.get("hot_sectors")),
                 item.get("hot_sector_mark"),
                 _json_or_none(item.get("matched_hot_sectors")),
-                item.get("hot_sector_relevance"),
+                _mysql_safe_float(item.get("hot_sector_relevance")),
                 item.get("hot_sector_reason"),
                 _json_or_none(item.get("hot_sector_sources")),
                 _json_or_none(item.get("source_urls")),
@@ -5232,7 +5260,7 @@ class MarketDatabase:
                 item.get("csv_path"),
                 item.get("analysis_status") or "success",
                 item.get("risk_level") or "unknown",
-                item.get("risk_score"),
+                _mysql_safe_float(item.get("risk_score")),
                 item.get("risk_summary"),
                 _json_or_none(item.get("triggered_signals")),
                 _json_or_none(item.get("missing_data")),
@@ -5439,19 +5467,19 @@ class MarketDatabase:
                     pool_type,
                     str(item.get("code") or "").strip(),
                     item.get("name"),
-                    item.get("market_cap"),
-                    item.get("price"),
-                    item.get("pe_ratio"),
-                    item.get("turnover"),
-                    item.get("volume"),
+                    _mysql_safe_float(item.get("market_cap")),
+                    _mysql_safe_float(item.get("price")),
+                    _mysql_safe_float(item.get("pe_ratio")),
+                    _mysql_safe_float(item.get("turnover")),
+                    _mysql_safe_float(item.get("volume")),
                     item.get("listing_date"),
-                    item.get("days_since_listing"),
+                    _mysql_safe_float(item.get("days_since_listing")),
                     item.get("index_code"),
                     item.get("index_name"),
                     item.get("industry_code"),
                     item.get("industry_name"),
-                    item.get("rank") or item.get("rank_in_industry"),
-                    json.dumps(item.get("extra_data")) if item.get("extra_data") else None,
+                    _mysql_safe_float(item.get("rank") or item.get("rank_in_industry")),
+                    _json_or_none(item.get("extra_data")),
                 )
             )
 

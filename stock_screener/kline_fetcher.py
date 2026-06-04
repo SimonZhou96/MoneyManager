@@ -131,13 +131,6 @@ class YFinanceKlineFetcher(KlineFetcherBase):
         """抑制 yfinance 的警告信息"""
         warnings.filterwarnings('ignore', category=FutureWarning)
         warnings.filterwarnings('ignore', message='.*possibly delisted.*')
-        # 重定向 stderr 到 devnull
-        class DevNull:
-            def write(self, msg):
-                pass
-            def flush(self):
-                pass
-        return DevNull()
 
     @staticmethod
     def _to_yf_code(stock_code: str, market: str) -> str:
@@ -180,19 +173,14 @@ class YFinanceKlineFetcher(KlineFetcherBase):
             # 抑制 yfinance 的警告信息
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                old_stderr = sys.stderr
-                sys.stderr = self._suppress_yfinance_warnings()
-                
-                try:
-                    data = self.yf.download(
-                        yf_code,
-                        period=period,
-                        interval=timeframe,
-                        auto_adjust=True,
-                        progress=False,
-                    )
-                finally:
-                    sys.stderr = old_stderr
+                self._suppress_yfinance_warnings()
+                data = self.yf.download(
+                    yf_code,
+                    period=period,
+                    interval=timeframe,
+                    auto_adjust=True,
+                    progress=False,
+                )
             
             if data is None or data.empty:
                 return None

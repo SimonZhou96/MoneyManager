@@ -1,6 +1,7 @@
 import json
+import math
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 import sys
 
@@ -183,6 +184,134 @@ class MarketIntelRepositoryTests(unittest.TestCase):
         sql, values = conn.cursor_obj.executemany_calls[-1]
         self.assertIn("event_time", sql)
         self.assertEqual(values[0][9], datetime(2026, 5, 26, 9, 0, 0))
+
+    def test_upsert_screening_results_sanitizes_non_finite_values(self):
+        conn = FakeConnection()
+        db = MarketDatabase.__new__(MarketDatabase)
+        db.conn = conn
+
+        db.upsert_screening_results(date(2026, 6, 3), [{
+            "task_id": "task-1",
+            "market": "HK",
+            "code": "HK.00001",
+            "name": "Test",
+            "is_passed": True,
+            "technical_score": float("inf"),
+            "macro_score": float("-inf"),
+            "final_score": math.nan,
+            "score_details": {"raw": {"ratio": float("inf")}},
+            "filter_details": [{"details": {"pe_ratio": float("inf"), "drawdown": math.nan}}],
+            "market_cap": float("inf"),
+            "pe_ratio": math.nan,
+            "close_price": 12.3,
+        }])
+
+        _, values = conn.cursor_obj.executemany_calls[-1]
+        row = values[0]
+        self.assertIsNone(row[7])
+        self.assertIsNone(row[8])
+        self.assertIsNone(row[9])
+        self.assertEqual(json.loads(row[10]), {"raw": {"ratio": None}})
+        self.assertEqual(json.loads(row[11]), [{"details": {"pe_ratio": None, "drawdown": None}}])
+        self.assertIsNone(row[14])
+        self.assertIsNone(row[15])
+        self.assertEqual(row[16], 12.3)
+
+    def test_stock_pool_and_kline_cache_sanitize_non_finite_values(self):
+        conn = FakeConnection()
+        db = MarketDatabase.__new__(MarketDatabase)
+        db.conn = conn
+
+        db.upsert_stock_pool("US", "industry_top5", [{
+            "code": "US.TEST",
+            "name": "Test",
+            "market_cap": float("inf"),
+            "price": math.nan,
+            "pe_ratio": float("-inf"),
+            "turnover": 100.0,
+            "volume": float("inf"),
+            "days_since_listing": math.nan,
+            "rank": 1,
+            "extra_data": {"raw": float("inf")},
+        }])
+        _, pool_values = conn.cursor_obj.executemany_calls[-1]
+        pool_row = pool_values[0]
+        self.assertIsNone(pool_row[4])
+        self.assertIsNone(pool_row[5])
+        self.assertIsNone(pool_row[6])
+        self.assertEqual(pool_row[7], 100.0)
+        self.assertIsNone(pool_row[8])
+        self.assertIsNone(pool_row[10])
+        self.assertEqual(pool_row[15], 1.0)
+        self.assertEqual(json.loads(pool_row[16]), {"raw": None})
+
+        db.upsert_kline_cache([{
+            "market": "A",
+            "code": "SH.600000",
+            "timeframe": "1d",
+            "bar_time": datetime(2026, 6, 3),
+            "open": float("inf"),
+            "high": 12.0,
+            "low": math.nan,
+            "close": float("-inf"),
+            "volume": 1000,
+            "turnover": math.nan,
+        }])
+        _, kline_values = conn.cursor_obj.executemany_calls[-1]
+        kline_row = kline_values[0]
+        self.assertIsNone(kline_row[4])
+        self.assertEqual(kline_row[5], 12.0)
+        self.assertIsNone(kline_row[6])
+        self.assertIsNone(kline_row[7])
+        self.assertEqual(kline_row[8], 1000.0)
+        self.assertIsNone(kline_row[9])
+
+    def test_analysis_and_main_force_scores_sanitize_non_finite_values(self):
+        conn = FakeConnection()
+        db = MarketDatabase.__new__(MarketDatabase)
+        db.conn = conn
+
+        row = {
+            "task_id": "task-1",
+            "market": "US",
+            "code": "US.TEST",
+            "check_date": date(2026, 6, 3),
+            "reliability_score": float("inf"),
+            "confidence_score": math.nan,
+            "hot_sector_relevance": float("-inf"),
+            "raw_response": {"score": float("inf")},
+        }
+        db.upsert_signal_analysis_results([row])
+        _, values = conn.cursor_obj.executemany_calls[-1]
+        signal_row = values[0]
+        self.assertIsNone(signal_row[7])
+        self.assertIsNone(signal_row[8])
+        self.assertIsNone(signal_row[22])
+        self.assertEqual(json.loads(signal_row[30]), {"score": None})
+
+        cache_row = dict(row)
+        cache_row["timeframe"] = "1d"
+        cache_row["analysis_profile"] = "default"
+        db.upsert_signal_analysis_cache([cache_row])
+        _, values = conn.cursor_obj.executemany_calls[-1]
+        cache_values = values[0]
+        self.assertIsNone(cache_values[8])
+        self.assertIsNone(cache_values[9])
+        self.assertIsNone(cache_values[23])
+        self.assertEqual(json.loads(cache_values[31]), {"score": None})
+
+        db.upsert_main_force_risk_results([{
+            "task_id": "task-1",
+            "market": "A",
+            "code": "SH.600000",
+            "check_date": date(2026, 6, 3),
+            "risk_score": float("inf"),
+            "metrics_json": {"net_inflow": math.nan},
+        }])
+        _, values = conn.cursor_obj.executemany_calls[-1]
+        risk_row = values[0]
+        self.assertIsNone(risk_row[8])
+        self.assertEqual(json.loads(risk_row[13]), {"net_inflow": None})
 
     def test_list_market_intel_items_returns_and_orders_by_event_time(self):
         conn = FakeConnection()

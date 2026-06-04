@@ -7,8 +7,15 @@
     <list default="true" id="0bf7b9ee-c261-4d26-a715-0c09e20aab7a" name="更改" comment="">
       <change beforePath="$PROJECT_DIR$/.claude/worktrees/bg-brainstorm-chain" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/worktrees/bg-brainstorm-chain" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/CLAUDE.md" beforeDir="false" afterPath="$PROJECT_DIR$/CLAUDE.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/api/screen_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/api/screen_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/db.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/db.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/kline_fetcher.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/kline_fetcher.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/potential_analysis/builders.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/potential_analysis/builders.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/potential_analysis/service.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/potential_analysis/service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/sector_resolver.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/sector_resolver.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/tests/test_market_intel_repository.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/tests/test_market_intel_repository.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/uv.lock" beforeDir="false" afterPath="$PROJECT_DIR$/uv.lock" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -90,7 +97,7 @@
       <workItem from="1779706857606" duration="11000" />
       <workItem from="1779964163234" duration="11973000" />
       <workItem from="1780308089940" duration="13389000" />
-      <workItem from="1780411491520" duration="6979000" />
+      <workItem from="1780411491520" duration="14870000" />
     </task>
     <servers />
   </component>

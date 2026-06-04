@@ -13,8 +13,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import contextlib
-import io
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -360,8 +358,7 @@ class YahooFinanceSectorProvider(SectorProvider):
             if not symbol:
                 continue
             try:
-                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                    info = yf.Ticker(symbol).info or {}
+                info = yf.Ticker(symbol).info or {}
             except Exception:
                 continue
             sector = _clean(info.get("sector"))

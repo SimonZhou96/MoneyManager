@@ -601,20 +601,11 @@ def build_enterprise_evidence(
     )
 
     # 1. 先拉取 yfinance 数据（用于多个模块）
-    import sys as _sys, io as _io
     info = None; tk_obj = None
     try:
         import yfinance as yf
         ticker_str = yf_ticker or CompanySnapshotBuilder()._resolve_ticker(market, code, None)
-        # 抑制 yfinance 内部 404 print 噪音
-        _stderr_buf = _io.StringIO()
-        _old_stderr = _sys.stderr
-        _sys.stderr = _stderr_buf
-        try:
-            tk_obj = yf.Ticker(ticker_str)
-        finally:
-            _sys.stderr = _old_stderr
-            _stderr_buf.close()
+        tk_obj = yf.Ticker(ticker_str)
         info = tk_obj.info or {}
     except Exception as e:
         logger.warning(f"yfinance 数据拉取失败: {e}")

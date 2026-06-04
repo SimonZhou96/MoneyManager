@@ -7,6 +7,7 @@
 import time
 import uuid
 import os
+import math
 from datetime import date
 from typing import Callable, Dict, Optional
 
@@ -97,7 +98,9 @@ def _json_safe_value(value):
         return None
     if hasattr(value, "isoformat"):
         return value.isoformat()
-    if isinstance(value, (str, int, float, bool)):
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (str, int, bool)):
         return value
     if isinstance(value, dict):
         return {str(k): _json_safe_value(v) for k, v in value.items()}

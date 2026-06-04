@@ -364,7 +364,7 @@ class EnterprisePotentialService:
         company + valuation + industry 共用同一次 yf.Tickers()，
         trading 需要 .history() 独立调用。从 4 次请求减到 2 次。
         """
-        import logging as _logging, sys as _sys, io as _io
+        import logging as _logging
         _logging.getLogger("urllib3").setLevel(_logging.ERROR)
         _logging.getLogger("yfinance").setLevel(_logging.WARNING)
 
@@ -401,15 +401,8 @@ class EnterprisePotentialService:
                     t0 = time.monotonic()
                     ticker_map = {c: company_fet._to_yf(market, c) for c in chunk}
 
-                    _stderr_buf = _io.StringIO()
-                    _old_stderr = _sys.stderr
-                    _sys.stderr = _stderr_buf
-                    try:
-                        import yfinance as yf
-                        tickers = yf.Tickers(" ".join(ticker_map.values()))
-                    finally:
-                        _sys.stderr = _old_stderr
-                        _stderr_buf.close()
+                    import yfinance as yf
+                    tickers = yf.Tickers(" ".join(ticker_map.values()))
 
                     chunk_ok = 0
                     for code, yf_code in ticker_map.items():
@@ -522,14 +515,7 @@ class EnterprisePotentialService:
                     chunk = trading_missing[chunk_idx:chunk_idx + _CHUNK]
                     t0 = time.monotonic()
 
-                    _stderr_buf = _io.StringIO()
-                    _old_stderr = _sys.stderr
-                    _sys.stderr = _stderr_buf
-                    try:
-                        results = trading_fet.fetch(market, chunk)
-                    finally:
-                        _sys.stderr = _old_stderr
-                        _stderr_buf.close()
+                    results = trading_fet.fetch(market, chunk)
 
                     for code, snap in results.items():
                         context.set_cache(f"{_CACHE_PREFIX}:trading:{code}", snap)
