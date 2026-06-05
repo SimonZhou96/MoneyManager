@@ -20,6 +20,7 @@ from signal_analysis.chain import (
     SignalAnalysisChain,
     SignalAnalysisContext,
     WriteArtifactsStep,
+    _render_markdown_report,
     write_analysis_columns_to_csv,
 )
 from signal_analysis.evidence import expand_company_documents
@@ -1980,6 +1981,71 @@ class SignalAnalysisTest(unittest.TestCase):
             self.assertIn("卖一量2.82万股", report)
             self.assertNotIn("外部数据状态", report)
             self.assertNotIn("数据覆盖", report)
+
+    def test_markdown_report_shows_per_stock_matched_rules_for_unified_and_legacy_conditions(self):
+        rows = [
+            ScreeningSignalRow(
+                index=0,
+                code="HK.00001",
+                market="HK",
+                market_label="港股",
+                name="Unified",
+                pe_ratio="",
+                market_cap="",
+                sector="Finance",
+                conditions_met="左一看涨:左一战法-看涨|准备反弹:RSI超卖回升|看涨:放量突破",
+            ),
+            ScreeningSignalRow(
+                index=1,
+                code="HK.00002",
+                market="HK",
+                market_label="港股",
+                name="Legacy",
+                pe_ratio="",
+                market_cap="",
+                sector="Technology",
+                conditions_met="左一战法-看涨|EMA突破",
+            ),
+        ]
+        context = SignalAnalysisContext(
+            task_id="task-HK",
+            market="HK",
+            csv_path="unused.csv",
+            check_date=date(2026, 6, 5),
+            settings=AnalysisSettings(),
+            search_provider=NullSearchProvider(),
+            llm_provider=NullLLMProvider(),
+            rows=rows,
+            all_rows=list(rows),
+            hot_sectors=["AI"],
+        )
+        context.results_by_code = {
+            "HK.00001": SignalAnalysisResult(
+                code="HK.00001",
+                name="Unified",
+                reliability_score=80,
+                signal_bias="bullish",
+                hot_sector_mark="重点",
+                matched_hot_sectors=["AI"],
+            ),
+            "HK.00002": SignalAnalysisResult(
+                code="HK.00002",
+                name="Legacy",
+                reliability_score=60,
+                signal_bias="bullish",
+                hot_sector_mark="观察",
+            ),
+        }
+
+        report = _render_markdown_report(context)
+
+        self.assertIn("本报告使用规则链 **`unified_bullish_top20`**", report)
+        self.assertIn("| # | 代码 | 名称 | 板块 | 方向 | 评分 | 命中规则 | 评分依据 | 热点 | 事件 |", report)
+        self.assertIn("左一看涨:左一战法-看涨<br>准备反弹:RSI超卖回升<br>看涨:放量突破", report)
+        self.assertIn("左一战法-看涨<br>EMA突破", report)
+        self.assertIn("| 准备反弹:RSI超卖回升 | rsi_bullish_rebound | 1 | 50% |", report)
+        self.assertIn("左一看涨: 左一战法-看涨；准备反弹: RSI超卖回升；看涨: 放量突破", report)
+        self.assertIn("左一战法-看涨；EMA突破", report)
 
     def test_chain_batches_company_search_without_per_stock_search_calls(self):
         rows = []

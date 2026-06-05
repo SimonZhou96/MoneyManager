@@ -49,12 +49,12 @@ VALUES
     ('HK', 'pe_range', 'PE 范围', 'filter', '', 'PEFilter', '{"min_pe": null, "max_pe": null, "allow_negative": false}', 1, 40, '按 PE 上下限筛选'),
     ('HK', 'profitability', '公司盈利', 'filter', '', 'ProfitabilityFilter', '{"require_profitable": true}', 1, 50, '要求 PE 为正'),
     ('HK', 'zuoyi_signal', '左一战法', 'strategy', 'technical', 'ZuoYiStrategizer', '{"signal_window": 15, "include_bullish": true, "include_bearish": true}', 1, 110, '当前周期15根K线内左一战法看涨/看跌信号'),
-    ('HK', 'ema_breakout', 'EMA 突破', 'strategy', 'technical', 'EMABreakoutStrategizer', '{"ema_short": 10, "ema_long": 150}', 1, 120, 'EMA 短线向上突破长线'),
-    ('HK', 'rsi_oversold', 'RSI 超卖', 'strategy', 'technical', 'RSIOversoldStrategizer', '{"period": 14, "threshold": 30.0}', 1, 130, 'RSI 低于等于阈值'),
+    ('HK', 'ema_breakout', 'EMA 突破', 'strategy', 'technical', 'EMABreakoutStrategizer', '{"ema_short": 10, "ema_long": 150, "direction": "bullish"}', 1, 120, 'EMA 短线向上突破长线'),
+    ('HK', 'rsi_oversold', 'RSI 超卖', 'strategy', 'technical', 'RSIOversoldStrategizer', '{"period": 14, "threshold": 30.0, "direction": "bullish"}', 1, 130, 'RSI 低于等于阈值'),
     ('HK', 'rsi_overbought', 'RSI 超买', 'strategy', 'technical', 'RSIOverboughtStrategizer', '{"period": 14, "threshold": 70.0}', 1, 140, 'RSI 高于等于阈值'),
-    ('HK', 'volume_spike_prior3', '放量超前三日', 'strategy', 'technical', 'TodayVolumeExceedsPrior3MaxStrategizer', '{}', 1, 150, '当日成交量大于前三日最大值'),
+    ('HK', 'volume_spike_prior3', '放量超前三日', 'strategy', 'technical', 'TodayVolumeExceedsPrior3MaxStrategizer', '{"direction": "bullish"}', 1, 150, '当日成交量大于前三日最大值'),
     ('HK', 'daily_drop_6_65', '当日跌 6%~6.5%', 'strategy', 'technical', 'DailyDrop6To65Strategizer', '{"pct_min": -6.5, "pct_max": -6.0}', 1, 160, '当日跌幅在指定区间'),
-    ('HK', 'daily_rise_4_45', '当日涨 4%~4.5%', 'strategy', 'technical', 'DailyRise4To45Strategizer', '{"pct_min": 4.0, "pct_max": 4.5}', 1, 170, '当日涨幅在指定区间'),
+    ('HK', 'daily_rise_4_45', '当日涨 4%~4.5%', 'strategy', 'technical', 'DailyRise4To45Strategizer', '{"pct_min": 4.0, "pct_max": 4.5, "direction": "bullish"}', 1, 170, '当日涨幅在指定区间'),
     ('HK', 'company_event_hot_sector_link', '公司时事与热点板块关联', 'strategy', 'macro', 'CompanyEventHotSectorStrategizer', '{}', 1, 210, '复用 AI 分析结果，判断公司时事是否与热点板块形成共振'),
     ('HK', 'company_event_hot_news_link', '公司时事与热点新闻关联', 'strategy', 'macro', 'CompanyEventHotNewsStrategizer', '{}', 1, 220, '复用 AI 分析结果，判断公司时事是否被热点新闻验证'),
     ('HK', 'market_intel_macro_score_link', '市场情报宏观评分', 'strategy', 'macro', 'MarketIntelMacroScoreStrategizer', '{"threshold": 60, "refresh_policy": "cache_or_refresh", "technical_weight": 0.6, "macro_weight": 0.4}', 1, 230, '基于公司事件、热点板块与新闻证据生成时间感知宏观评分'),
@@ -65,12 +65,12 @@ VALUES
     ('US', 'pe_range', 'PE 范围', 'filter', '', 'PEFilter', '{"min_pe": 5, "max_pe": null, "allow_negative": false, "min_exclusive": true}', 1, 40, '按 PE 上下限筛选'),
     ('US', 'profitability', '公司盈利', 'filter', '', 'ProfitabilityFilter', '{"require_profitable": true}', 1, 50, '要求 PE 为正'),
     ('US', 'zuoyi_signal', '左一战法', 'strategy', 'technical', 'ZuoYiStrategizer', '{"signal_window": 15, "include_bullish": true, "include_bearish": true}', 1, 110, '当前周期15根K线内左一战法看涨/看跌信号'),
-    ('US', 'ema_breakout', 'EMA 突破', 'strategy', 'technical', 'EMABreakoutStrategizer', '{"ema_short": 10, "ema_long": 150}', 1, 120, 'EMA 短线向上突破长线'),
-    ('US', 'rsi_oversold', 'RSI 超卖', 'strategy', 'technical', 'RSIOversoldStrategizer', '{"period": 14, "threshold": 30.0}', 1, 130, 'RSI 低于等于阈值'),
+    ('US', 'ema_breakout', 'EMA 突破', 'strategy', 'technical', 'EMABreakoutStrategizer', '{"ema_short": 10, "ema_long": 150, "direction": "bullish"}', 1, 120, 'EMA 短线向上突破长线'),
+    ('US', 'rsi_oversold', 'RSI 超卖', 'strategy', 'technical', 'RSIOversoldStrategizer', '{"period": 14, "threshold": 30.0, "direction": "bullish"}', 1, 130, 'RSI 低于等于阈值'),
     ('US', 'rsi_overbought', 'RSI 超买', 'strategy', 'technical', 'RSIOverboughtStrategizer', '{"period": 14, "threshold": 70.0}', 1, 140, 'RSI 高于等于阈值'),
-    ('US', 'volume_spike_prior3', '放量超前三日', 'strategy', 'technical', 'TodayVolumeExceedsPrior3MaxStrategizer', '{}', 1, 150, '当日成交量大于前三日最大值'),
+    ('US', 'volume_spike_prior3', '放量超前三日', 'strategy', 'technical', 'TodayVolumeExceedsPrior3MaxStrategizer', '{"direction": "bullish"}', 1, 150, '当日成交量大于前三日最大值'),
     ('US', 'daily_drop_6_65', '当日跌 6%~6.5%', 'strategy', 'technical', 'DailyDrop6To65Strategizer', '{"pct_min": -6.5, "pct_max": -6.0}', 1, 160, '当日跌幅在指定区间'),
-    ('US', 'daily_rise_4_45', '当日涨 4%~4.5%', 'strategy', 'technical', 'DailyRise4To45Strategizer', '{"pct_min": 4.0, "pct_max": 4.5}', 1, 170, '当日涨幅在指定区间'),
+    ('US', 'daily_rise_4_45', '当日涨 4%~4.5%', 'strategy', 'technical', 'DailyRise4To45Strategizer', '{"pct_min": 4.0, "pct_max": 4.5, "direction": "bullish"}', 1, 170, '当日涨幅在指定区间'),
     ('US', 'company_event_hot_sector_link', '公司时事与热点板块关联', 'strategy', 'macro', 'CompanyEventHotSectorStrategizer', '{}', 1, 210, '复用 AI 分析结果，判断公司时事是否与热点板块形成共振'),
     ('US', 'company_event_hot_news_link', '公司时事与热点新闻关联', 'strategy', 'macro', 'CompanyEventHotNewsStrategizer', '{}', 1, 220, '复用 AI 分析结果，判断公司时事是否被热点新闻验证'),
     ('US', 'market_intel_macro_score_link', '市场情报宏观评分', 'strategy', 'macro', 'MarketIntelMacroScoreStrategizer', '{"threshold": 60, "refresh_policy": "cache_or_refresh", "technical_weight": 0.6, "macro_weight": 0.4}', 1, 230, '基于公司事件、热点板块与新闻证据生成时间感知宏观评分'),
@@ -81,15 +81,24 @@ VALUES
     ('A', 'pe_range', 'PE 范围', 'filter', '', 'PEFilter', '{"min_pe": null, "max_pe": null, "allow_negative": false}', 1, 40, '按 PE 上下限筛选'),
     ('A', 'profitability', '公司盈利', 'filter', '', 'ProfitabilityFilter', '{"require_profitable": true}', 1, 50, '要求 PE 为正'),
     ('A', 'zuoyi_signal', '左一战法', 'strategy', 'technical', 'ZuoYiStrategizer', '{"signal_window": 15, "include_bullish": true, "include_bearish": true}', 1, 110, '当前周期15根K线内左一战法看涨/看跌信号'),
-    ('A', 'ema_breakout', 'EMA 突破', 'strategy', 'technical', 'EMABreakoutStrategizer', '{"ema_short": 10, "ema_long": 150}', 1, 120, 'EMA 短线向上突破长线'),
-    ('A', 'rsi_oversold', 'RSI 超卖', 'strategy', 'technical', 'RSIOversoldStrategizer', '{"period": 14, "threshold": 30.0}', 1, 130, 'RSI 低于等于阈值'),
+    ('A', 'ema_breakout', 'EMA 突破', 'strategy', 'technical', 'EMABreakoutStrategizer', '{"ema_short": 10, "ema_long": 150, "direction": "bullish"}', 1, 120, 'EMA 短线向上突破长线'),
+    ('A', 'rsi_oversold', 'RSI 超卖', 'strategy', 'technical', 'RSIOversoldStrategizer', '{"period": 14, "threshold": 30.0, "direction": "bullish"}', 1, 130, 'RSI 低于等于阈值'),
     ('A', 'rsi_overbought', 'RSI 超买', 'strategy', 'technical', 'RSIOverboughtStrategizer', '{"period": 14, "threshold": 70.0}', 1, 140, 'RSI 高于等于阈值'),
-    ('A', 'volume_spike_prior3', '放量超前三日', 'strategy', 'technical', 'TodayVolumeExceedsPrior3MaxStrategizer', '{}', 1, 150, '当日成交量大于前三日最大值'),
+    ('A', 'volume_spike_prior3', '放量超前三日', 'strategy', 'technical', 'TodayVolumeExceedsPrior3MaxStrategizer', '{"direction": "bullish"}', 1, 150, '当日成交量大于前三日最大值'),
     ('A', 'daily_drop_6_65', '当日跌 6%~6.5%', 'strategy', 'technical', 'DailyDrop6To65Strategizer', '{"pct_min": -6.5, "pct_max": -6.0}', 1, 160, '当日跌幅在指定区间'),
-    ('A', 'daily_rise_4_45', '当日涨 4%~4.5%', 'strategy', 'technical', 'DailyRise4To45Strategizer', '{"pct_min": 4.0, "pct_max": 4.5}', 1, 170, '当日涨幅在指定区间'),
+    ('A', 'daily_rise_4_45', '当日涨 4%~4.5%', 'strategy', 'technical', 'DailyRise4To45Strategizer', '{"pct_min": 4.0, "pct_max": 4.5, "direction": "bullish"}', 1, 170, '当日涨幅在指定区间'),
     ('A', 'company_event_hot_sector_link', '公司时事与热点板块关联', 'strategy', 'macro', 'CompanyEventHotSectorStrategizer', '{}', 1, 210, '复用 AI 分析结果，判断公司时事是否与热点板块形成共振'),
     ('A', 'company_event_hot_news_link', '公司时事与热点新闻关联', 'strategy', 'macro', 'CompanyEventHotNewsStrategizer', '{}', 1, 220, '复用 AI 分析结果，判断公司时事是否被热点新闻验证'),
     ('A', 'market_intel_macro_score_link', '市场情报宏观评分', 'strategy', 'macro', 'MarketIntelMacroScoreStrategizer', '{"threshold": 60, "refresh_policy": "cache_or_refresh", "technical_weight": 0.6, "macro_weight": 0.4}', 1, 230, '基于公司事件、热点板块与新闻证据生成时间感知宏观评分');
+
+INSERT IGNORE INTO screening_rule_metadata
+    (market, rule_key, rule_name, rule_type, strategy_category, implementation, params_json, enabled, display_order, description)
+SELECT markets.market, 'zuoyi_bullish_signal', '左一战法-看涨', 'strategy', 'technical', 'ZuoYiStrategizer',
+       '{"signal_window":15,"include_bullish":true,"include_bearish":false,"direction":"bullish","signal_group":"zuoyi_bullish"}',
+       1, 115, '当前周期15根K线内左一战法看涨信号'
+FROM (
+    SELECT 'HK' AS market UNION ALL SELECT 'US' UNION ALL SELECT 'A'
+) AS markets;
 
 INSERT IGNORE INTO screening_rule_metadata
     (market, rule_key, rule_name, rule_type, strategy_category, implementation, params_json, enabled, display_order, description)
@@ -132,6 +141,49 @@ CROSS JOIN (
     SELECT 'volume_price_breakdown', '放量跌破', '{"pattern_key":"volume_price_breakdown","pattern_label":"放量跌破","direction":"bearish","display_group":"看跌规则"}', 600, '看跌规则：放量跌破'
 ) AS rules;
 
+INSERT IGNORE INTO screening_rule_metadata
+    (market, rule_key, rule_name, rule_type, strategy_category, implementation, params_json, enabled, display_order, description)
+SELECT markets.market, 'kdj_low_bullish_cross', '低位KDJ金叉', 'strategy', 'technical', 'TechnicalPatternStrategizer',
+       '{"pattern_key":"kdj_low_bullish_cross","pattern_label":"低位KDJ金叉","direction":"bullish","display_group":"看涨规则","signal_group":"rebound","low_threshold":30.0}',
+       1, 555, '准备反弹规则：低位KDJ金叉'
+FROM (
+    SELECT 'HK' AS market UNION ALL SELECT 'US' UNION ALL SELECT 'A'
+) AS markets;
+
+UPDATE screening_rule_metadata
+SET strategy_category = 'technical',
+    params_json = JSON_SET(COALESCE(params_json, JSON_OBJECT()), '$.direction', 'bullish', '$.signal_group', 'bullish')
+WHERE rule_key IN (
+    'ema_breakout', 'volume_spike_prior3', 'daily_rise_4_45',
+    'bullish_engulfing', 'three_white_soldiers', 'bullish_marubozu',
+    'sma_golden_cross', 'ema_golden_cross', 'macd_bullish_cross',
+    'vwap_bullish_reclaim', 'atr_up_breakout', 'kdj_bullish_cross',
+    'volume_price_breakout'
+)
+  AND rule_type = 'strategy';
+
+UPDATE screening_rule_metadata
+SET strategy_category = 'technical',
+    params_json = JSON_SET(COALESCE(params_json, JSON_OBJECT()), '$.direction', 'bullish', '$.signal_group', 'rebound')
+WHERE rule_key IN (
+    'rsi_oversold', 'rsi_bullish_rebound', 'bollinger_lower_rebound',
+    'hammer_reversal', 'morning_star', 'piercing_line', 'kdj_low_bullish_cross'
+)
+  AND rule_type = 'strategy';
+
+UPDATE screening_rule_metadata
+SET strategy_category = 'technical',
+    params_json = JSON_SET(
+        COALESCE(params_json, JSON_OBJECT()),
+        '$.signal_window', 15,
+        '$.include_bullish', TRUE,
+        '$.include_bearish', FALSE,
+        '$.direction', 'bullish',
+        '$.signal_group', 'zuoyi_bullish'
+    )
+WHERE rule_key = 'zuoyi_bullish_signal'
+  AND rule_type = 'strategy';
+
 INSERT IGNORE INTO screening_rule_chains
     (market, timeframe, chain_key, chain_name, expression_json, enabled, priority, description)
 VALUES
@@ -141,15 +193,24 @@ VALUES
     ('HK', '*', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
      '{"and":[{"all_enabled":["market_cap_range","avg_daily_volume_range","price_range","pe_range","profitability"]},{"ref":"zuoyi_signal"},{"any_enabled":["ema_breakout","volume_spike_prior3","daily_rise_4_45"]}]}',
      0, 300, '默认关闭的试跑链：基于现有上涨趋势/放量规则做观察，主力资金与热点板块原子规则接入后可扩展'),
+    ('HK', '*', 'unified_bullish_top20', '统一看涨技术规则Top20',
+     '{"ref":"ema_breakout"}',
+     0, 400, '遍历所有启用看涨、准备反弹、左一看涨技术规则，按总命中数选Top20后进入AI复核'),
     ('US', '*', 'default_zuoyi_and_other', '左一战法与其他策略默认链',
      '{"and":[{"all_enabled":["market_cap_range","avg_daily_volume_range","price_range","pe_range","profitability"]},{"ref":"zuoyi_signal"},{"any_enabled":["ema_breakout","rsi_oversold","rsi_overbought","volume_spike_prior3","daily_drop_6_65","daily_rise_4_45"]}]}',
      1, 100, '启用硬筛选全部通过 && 左一战法命中 && 至少一个其他策略命中'),
     ('US', '*', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
      '{"and":[{"all_enabled":["market_cap_range","avg_daily_volume_range","price_range","pe_range","profitability"]},{"ref":"zuoyi_signal"},{"any_enabled":["ema_breakout","volume_spike_prior3","daily_rise_4_45"]}]}',
      0, 300, '默认关闭的试跑链：基于现有上涨趋势/放量规则做观察，主力资金与热点板块原子规则接入后可扩展'),
+    ('US', '*', 'unified_bullish_top20', '统一看涨技术规则Top20',
+     '{"ref":"ema_breakout"}',
+     0, 400, '遍历所有启用看涨、准备反弹、左一看涨技术规则，按总命中数选Top20后进入AI复核'),
     ('A', '*', 'default_zuoyi_and_other', '左一战法与其他策略默认链',
      '{"and":[{"all_enabled":["market_cap_range","avg_daily_volume_range","price_range","pe_range","profitability"]},{"ref":"zuoyi_signal"},{"any_enabled":["ema_breakout","rsi_oversold","rsi_overbought","volume_spike_prior3","daily_drop_6_65","daily_rise_4_45"]}]}',
      1, 100, '启用硬筛选全部通过 && 左一战法命中 && 至少一个其他策略命中'),
     ('A', '*', 'trend_capital_accumulation_watch', '趋势主力缩量观察链',
      '{"and":[{"all_enabled":["market_cap_range","avg_daily_volume_range","price_range","pe_range","profitability"]},{"ref":"zuoyi_signal"},{"any_enabled":["ema_breakout","volume_spike_prior3","daily_rise_4_45"]}]}',
-     0, 300, '默认关闭的试跑链：基于现有上涨趋势/放量规则做观察，主力资金与热点板块原子规则接入后可扩展');
+     0, 300, '默认关闭的试跑链：基于现有上涨趋势/放量规则做观察，主力资金与热点板块原子规则接入后可扩展'),
+    ('A', '*', 'unified_bullish_top20', '统一看涨技术规则Top20',
+     '{"ref":"ema_breakout"}',
+     0, 400, '遍历所有启用看涨、准备反弹、左一看涨技术规则，按总命中数选Top20后进入AI复核');

@@ -88,6 +88,14 @@ else:
 
 RULE_TYPE_FILTER = "filter"
 RULE_TYPE_STRATEGY = "strategy"
+SIGNAL_GROUP_BULLISH = "bullish"
+SIGNAL_GROUP_REBOUND = "rebound"
+SIGNAL_GROUP_ZUOYI_BULLISH = "zuoyi_bullish"
+SIGNAL_GROUP_LABELS = {
+    SIGNAL_GROUP_BULLISH: "看涨",
+    SIGNAL_GROUP_REBOUND: "准备反弹",
+    SIGNAL_GROUP_ZUOYI_BULLISH: "左一看涨",
+}
 
 
 @dataclass(frozen=True)
@@ -322,7 +330,7 @@ class RuleRegistry:
                 **{
                     key: value
                     for key, value in params.items()
-                    if key not in {"pattern_key", "direction", "pattern_label", "display_group"}
+                    if key not in {"pattern_key", "direction", "pattern_label", "display_group", "signal_group"}
                 },
             ),
         )
@@ -410,6 +418,8 @@ class RuleExecutionContext:
             )
             truth = False
 
+        output.details = dict(output.details or {})
+        output.details.setdefault("rule_key", rule_key)
         self.outputs_by_key[rule_key] = output
         self.truth_by_key[rule_key] = truth
         self.ordered_outputs.append(output)
@@ -591,6 +601,111 @@ class RuleEngine:
             if metadata and metadata.enabled and metadata.implementation in self.KLINE_IMPLEMENTATIONS:
                 return True
         return False
+
+    def bullish_technical_rule_keys(self) -> List[str]:
+        """Return enabled technical rule keys explicitly marked as bullish."""
+        keys = []
+        for metadata in self.metadata:
+            if not metadata.enabled:
+                continue
+            if metadata.rule_type != RULE_TYPE_STRATEGY:
+                continue
+            if metadata.strategy_category != "technical":
+                continue
+            direction = str((metadata.params or {}).get("direction") or "").lower()
+            if direction == "bullish":
+                keys.append(metadata.rule_key)
+        return keys
+
+    def evaluate_bullish_technical_rules(
+        self,
+        stock: StockInfo,
+        filter_context: FilterContext,
+    ) -> StockFilterResult:
+        """Evaluate every enabled bullish technical rule without chain short-circuiting."""
+        execution = RuleExecutionContext(
+            stock=stock,
+            filter_context=filter_context,
+            metadata_by_key=self.metadata_by_key,
+            registry=self.registry,
+        )
+        bullish_rule_keys = self.bullish_technical_rule_keys()
+        for rule_key in bullish_rule_keys:
+            execution.execute(rule_key)
+
+        matched_labels = []
+        categorized_matches = []
+        group_counts = {
+            SIGNAL_GROUP_BULLISH: 0,
+            SIGNAL_GROUP_REBOUND: 0,
+            SIGNAL_GROUP_ZUOYI_BULLISH: 0,
+        }
+        for rule_key in bullish_rule_keys:
+            output = execution.outputs_by_key.get(rule_key)
+            if output is None:
+                continue
+            if output.result != FilterResult.PASS:
+                continue
+            details = output.details if isinstance(output.details, dict) else {}
+            metadata = self.metadata_by_key.get(rule_key)
+            signal_group = self._signal_group_for_metadata(metadata)
+            label = self._condition_label_for_match(output, metadata)
+            if not label:
+                continue
+            group_label = SIGNAL_GROUP_LABELS.get(signal_group, SIGNAL_GROUP_LABELS[SIGNAL_GROUP_BULLISH])
+            prefixed_label = f"{group_label}:{label}"
+            if prefixed_label not in matched_labels:
+                matched_labels.append(prefixed_label)
+                group_counts[signal_group] = group_counts.get(signal_group, 0) + 1
+                categorized_matches.append({
+                    "rule_key": rule_key,
+                    "rule_name": metadata.rule_name if metadata else rule_key,
+                    "label": label,
+                    "display_label": prefixed_label,
+                    "signal_group": signal_group,
+                    "signal_group_label": group_label,
+                    "filter_name": output.filter_name,
+                    "reason": output.reason or "",
+                    "details": dict(details),
+                })
+            details["signal_group"] = signal_group
+            details["signal_group_label"] = group_label
+
+        result = StockFilterResult(
+            stock=stock,
+            passed=bool(matched_labels),
+            filter_outputs=execution.ordered_outputs,
+        )
+        result.bullish_match_count = group_counts.get(SIGNAL_GROUP_BULLISH, 0)
+        result.rebound_match_count = group_counts.get(SIGNAL_GROUP_REBOUND, 0)
+        result.zuoyi_bullish_match_count = group_counts.get(SIGNAL_GROUP_ZUOYI_BULLISH, 0)
+        result.total_match_count = len(matched_labels)
+        result.bullish_condition_labels = matched_labels
+        result.categorized_condition_matches = categorized_matches
+        return result
+
+    @staticmethod
+    def _signal_group_for_metadata(metadata: Optional[RuleMetadata]) -> str:
+        if metadata is None:
+            return SIGNAL_GROUP_BULLISH
+        signal_group = str((metadata.params or {}).get("signal_group") or SIGNAL_GROUP_BULLISH).strip().lower()
+        if signal_group in SIGNAL_GROUP_LABELS:
+            return signal_group
+        return SIGNAL_GROUP_BULLISH
+
+    @staticmethod
+    def _condition_label_for_match(output: FilterOutput, metadata: Optional[RuleMetadata]) -> str:
+        details = output.details if isinstance(output.details, dict) else {}
+        label = str(details.get("pattern_label") or "").strip()
+        if not label and output.filter_name == "ZuoYiStrategizer":
+            direction = str(details.get("direction") or "")
+            if "bullish" in direction.split("|"):
+                label = "左一战法-看涨"
+        if not label and metadata is not None:
+            label = str((metadata.params or {}).get("pattern_label") or metadata.rule_name or "").strip()
+        if not label:
+            label = str(details.get("label") or output.filter_name or "").strip()
+        return label
 
     def evaluate_stock(
         self,

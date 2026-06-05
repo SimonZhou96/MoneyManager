@@ -80,6 +80,7 @@ class MarketIntelReportingTest(unittest.TestCase):
                 "summary": "信号较强，可重点跟踪。",
                 "positive_factors": ["盈利质量较稳"],
                 "risk_factors": ["估值不低"],
+                "conditions_met": "准备反弹:RSI超卖回升|看涨:EMA金叉|左一看涨:左一战法-看涨",
             },
             {
                 "code": "000858",
@@ -99,7 +100,8 @@ class MarketIntelReportingTest(unittest.TestCase):
         self.assertIn("饼图：股票评级分布", report)
         self.assertIn("| 评级 | 股票数量 | 占比 |", report)
         self.assertIn("柱状图：综合评分 Top 10", report)
-        self.assertIn("| 排名 | 股票代码 | 股票名称 | 综合评分 |", report)
+        self.assertIn("| 排名 | 股票代码 | 股票名称 | 综合评分 | 命中规则 |", report)
+        self.assertIn("准备反弹:RSI超卖回升<br>看涨:EMA金叉<br>左一看涨:左一战法-看涨", report)
         self.assertIn("## 6. 重点关注股票", report)
         self.assertIn("## 10. 数据缺失与来源说明", report)
         self.assertIn("贵州茅台", report)

@@ -327,6 +327,20 @@ avg_score = sum(r["score"] for r in ranked) / max(1, len(ranked))
 overall = "中性" if avg_score >= 50 else "偏弱" if avg_score >= 25 else "风险较高"
 
 # ── Top 5 picks (different sectors/businesses) ─────────────
+def _infer_sector_label(r):
+    name = r["name"]
+    if any(kw in name for kw in ["药", "医", "health", "pharma", "bio", "康"]):
+        return "Healthcare"
+    if any(kw in name for kw in ["科技", "tech", "智能", "软件", "数据"]):
+        return "Technology"
+    if any(kw in name for kw in ["电力", "能源", "电", "power", "energy"]):
+        return "Utilities"
+    if any(kw in name for kw in ["消费", "饮料", "食品", "茶", "零售", "蜜雪", "周六福"]):
+        return "Consumer"
+    if any(kw in name for kw in ["汽车", "车", "auto", "motor", "交通", "运输"]):
+        return "Auto/Transport"
+    return "综合"
+
 def pick_top5(ranked):
     # Sort: bullish first, then by score
     bullish = [r for r in ranked if r["direction"] == "看涨"]
@@ -369,6 +383,63 @@ def dir_emoji(d):
 def hot_emoji(m):
     return {"重点": "⭐", "相关": "🔗", "观察": "👀", "无明确关联": "➖", "行业资料不足": "❓"}.get(m, "❓")
 
+def split_conditions(text):
+    return [part.strip() for part in (text or "").split("|") if part.strip()]
+
+def rule_text(text, limit=6):
+    items = split_conditions(text)
+    if not items:
+        return "—"
+    visible = items[:limit]
+    suffix = f"<br>+{len(items) - limit}条" if len(items) > limit else ""
+    return "<br>".join(tbl(item) for item in visible) + suffix
+
+def infer_report_chain_key(rows):
+    for row in rows:
+        text = row.get("满足的条件", "")
+        if any(marker in text for marker in ("看涨:", "准备反弹:", "左一看涨:")):
+            return "unified_bullish_top20"
+    return "CSV信号规则链"
+
+def rule_key_guess(condition):
+    if ":" in condition:
+        condition = condition.split(":", 1)[1].strip()
+    mapping = {
+        "左一战法-看涨": "zuoyi_bullish_signal",
+        "左一战法-看跌": "zuoyi_signal",
+        "EMA突破": "ema_breakout",
+        "EMA金叉": "ema_golden_cross",
+        "均线金叉": "sma_golden_cross",
+        "MACD金叉": "macd_bullish_cross",
+        "KDJ金叉": "kdj_bullish_cross",
+        "低位KDJ金叉": "kdj_low_bullish_cross",
+        "RSI超卖": "rsi_oversold",
+        "RSI超卖回升": "rsi_bullish_rebound",
+        "布林下轨反弹": "bollinger_lower_rebound",
+        "放量超前三日": "volume_spike_prior3",
+        "放量突破": "volume_price_breakout",
+        "当日涨4%~4.5%": "daily_rise_4_45",
+        "当日跌6%~6.5%": "daily_drop_6_65",
+    }
+    return mapping.get(condition, "dynamic_rule")
+
+def scoring_logic(condition):
+    if condition.startswith("准备反弹:"):
+        return "准备反弹类信号，纳入技术规则命中"
+    if condition.startswith("左一看涨:"):
+        return "左一看涨信号，纳入技术规则命中"
+    if condition.startswith("看涨:"):
+        return "看涨类信号，纳入技术规则命中"
+    if "放量" in condition:
+        return "资金关注度信号"
+    if "RSI超卖" in condition:
+        return "超跌反弹潜力"
+    if "看跌" in condition or "超买" in condition:
+        return "风险或回落信号"
+    return "动态技术规则命中"
+
+REPORT_CHAIN_KEY = infer_report_chain_key(rows)
+
 L = []
 
 # ── Title ──────────────────────────────────────────────────
@@ -390,7 +461,7 @@ L.extend([
     "",
     "## 二、评分体系",
     "",
-    f"本报告使用规则链 **`zuoyi_with_macro_enhanced`**（{MARKET}/US）的评分框架：",
+    f"本报告使用规则链 **`{REPORT_CHAIN_KEY}`**（{MARKET}）的评分框架：",
     "",
     "```",
     "综合评分 = 技术规则面(60%) + 宏观五模块(40%)",
@@ -398,17 +469,22 @@ L.extend([
     "",
     "### 2.1 本期技术规则（权重 60%）",
     "",
-    "从 CSV 中动态提取，以下为本次 30 只股票实际触发的技术规则：",
+    f"从 CSV 中动态提取，以下为本次 {len(rows)} 只股票实际触发的技术规则：",
     "",
     "| 技术规则 | 规则Key | 触发次数 | 触发率 | 评分逻辑 |",
     "|---|---|---|---|---|",
-    f"| 左一战法-看涨 | zuoyi_signal | {cond_counts.get('左一战法-看涨', 0)} | {cond_counts.get('左一战法-看涨', 0)/len(rows)*100:.0f}% | 看涨方向，基础分不扣减 |",
-    f"| 左一战法-看跌 | zuoyi_signal | {cond_counts.get('左一战法-看跌', 0)} | {cond_counts.get('左一战法-看跌', 0)/len(rows)*100:.0f}% | 看跌方向，扣5分 |",
-    f"| 放量超前三日 | volume_spike_prior3 | {cond_counts.get('放量超前三日', 0)} | {cond_counts.get('放量超前三日', 0)/len(rows)*100:.0f}% | +8分，资金关注度信号 |",
-    f"| RSI超卖 | rsi_oversold | {cond_counts.get('RSI超卖', 0)} | {cond_counts.get('RSI超卖', 0)/len(rows)*100:.0f}% | +5分，超跌反弹潜力 |",
-    f"| RSI超买 | rsi_overbought | {cond_counts.get('RSI超买', 0)} | {cond_counts.get('RSI超买', 0)/len(rows)*100:.0f}% | -5分，高位回落风险 |",
-    f"| 当日涨4%~4.5% | daily_rise_4_45 | {cond_counts.get('当日涨4%~4.5%', 0)} | {cond_counts.get('当日涨4%~4.5%', 0)/len(rows)*100:.0f}% | 强势拉盘，+3分 |",
-    f"| 当日跌6%~6.5% | daily_drop_6_65 | {cond_counts.get('当日跌6%~6.5%', 0)} | {cond_counts.get('当日跌6%~6.5%', 0)/len(rows)*100:.0f}% | 恐慌抛售，结合RSI超卖判断 |",
+])
+
+if cond_counts:
+    for condition, count in cond_counts.most_common():
+        pct = count / max(1, len(rows)) * 100
+        L.append(
+            f"| {tbl(condition)} | {rule_key_guess(condition)} | {count} | {pct:.0f}% | {scoring_logic(condition)} |"
+        )
+else:
+    L.append("| — | — | 0 | 0% | 本期无技术规则触发数据 |")
+
+L.extend([
     "",
     "### 2.2 辅助调整因子",
     "",
@@ -455,8 +531,8 @@ L.extend([
     "",
     "## 三、信号复核总览",
     "",
-    "| # | 代码 | 名称 | 板块 | 方向 | 评分 | 评分依据 | 热点匹配 | 公司事件 |",
-    "|---|---|---|---|---|---|---|---|---|",
+    "| # | 代码 | 名称 | 板块 | 方向 | 评分 | 命中规则 | 评分依据 | 热点匹配 | 公司事件 |",
+    "|---|---|---|---|---|---|---|---|---|---|",
 ])
 
 for i, r in enumerate(ranked, 1):
@@ -464,6 +540,7 @@ for i, r in enumerate(ranked, 1):
         f"| {i} | `{r['code']}` | {r['name']} | {tbl(r['sector'])} | "
         f"{dir_emoji(r['direction'])} {r['direction']} | "
         f"**{fmt_score(r['score'])}** | "
+        f"{rule_text(r['conditions'])} | "
         f"{tbl(r['score_factors'])} | "
         f"{hot_emoji(r['hot_mark'])} {r['hot_mark']}<br><small>{tbl(r['hot_matched'])}</small> | "
         f"{tbl(r['company_events'])} |"
@@ -524,10 +601,22 @@ for r in top5:
 
     # Build reason
     parts = []
-    if "看涨" in r["direction"]:
-        parts.append("左一看涨信号")
-    if "看跌" in r["direction"]:
-        parts.append("左一看跌信号（注意方向）")
+    condition_items = split_conditions(r["conditions"])
+    if condition_items:
+        grouped = []
+        for prefix in ("左一看涨", "准备反弹", "看涨"):
+            names = [
+                item.split(":", 1)[1].strip()
+                for item in condition_items
+                if item.startswith(prefix + ":") and ":" in item
+            ]
+            if names:
+                grouped.append(f"{prefix}: {'、'.join(names[:2])}")
+        parts.extend(grouped or condition_items[:3])
+    elif "看涨" in r["direction"]:
+        parts.append("看涨信号")
+    elif "看跌" in r["direction"]:
+        parts.append("看跌信号（注意方向）")
     if r["hot_mark"] in ("重点", "相关"):
         parts.append(f"热点匹配: {r['hot_matched'] or r['hot_mark']}" if r['hot_matched'] else f"与热点{r['hot_mark']}")
     if r["breakthrough_days"] and r["breakthrough_days"].isdigit():
@@ -544,20 +633,6 @@ for r in top5:
     recommendations.append((r, action, reason))
     dir_str = f"{dir_emoji(r['direction'])} {r['direction']}"
     L.append(f"| **{name}**<br>`{code}` | {sector} | {dir_str} | **{fmt_score(score)}** | {action} | {reason} |")
-
-def _infer_sector_label(r):
-    name = r["name"]
-    if any(kw in name for kw in ["药", "医", "health", "pharma", "bio", "康"]):
-        return "Healthcare"
-    if any(kw in name for kw in ["科技", "tech", "智能", "软件", "数据"]):
-        return "Technology"
-    if any(kw in name for kw in ["电力", "能源", "电", "power", "energy"]):
-        return "Utilities"
-    if any(kw in name for kw in ["消费", "饮料", "食品", "茶", "零售", "蜜雪", "周六福"]):
-        return "Consumer"
-    if any(kw in name for kw in ["汽车", "车", "auto", "motor", "交通", "运输"]):
-        return "Auto/Transport"
-    return "综合"
 
 L.extend([
     "",

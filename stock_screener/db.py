@@ -269,6 +269,23 @@ def session_hash(token: str) -> str:
 
 DEFAULT_RULE_MARKETS = ("HK", "US", "A")
 DEFAULT_RULE_CHAIN_KEY = "default_zuoyi_and_other"
+REBOUND_RULE_KEYS = {
+    "rsi_oversold",
+    "rsi_bullish_rebound",
+    "bollinger_lower_rebound",
+    "hammer_reversal",
+    "morning_star",
+    "piercing_line",
+    "kdj_low_bullish_cross",
+}
+
+
+def _signal_group_for_rule(rule_key: str, direction: str) -> str | None:
+    if direction != "bullish":
+        return None
+    if rule_key in REBOUND_RULE_KEYS:
+        return "rebound"
+    return "bullish"
 
 
 def _technical_pattern_rule_rows() -> tuple:
@@ -279,18 +296,24 @@ def _technical_pattern_rule_rows() -> tuple:
         label = str(definition.get("label") or pattern_key)
         direction = str(definition.get("direction") or "neutral")
         group = {"bullish": "看涨规则", "bearish": "看跌规则", "neutral": "中性规则"}.get(direction, "其他规则")
+        signal_group = _signal_group_for_rule(pattern_key, direction)
+        params = {
+            "pattern_key": pattern_key,
+            "pattern_label": label,
+            "direction": direction,
+            "display_group": group,
+        }
+        if signal_group:
+            params["signal_group"] = signal_group
+        if pattern_key == "kdj_low_bullish_cross":
+            params["low_threshold"] = 30.0
         rows.append((
             pattern_key,
             label,
             "strategy",
             "technical",
             "TechnicalPatternStrategizer",
-            {
-                "pattern_key": pattern_key,
-                "pattern_label": label,
-                "direction": direction,
-                "display_group": group,
-            },
+            params,
             True,
             display_order,
             f"{group}：{label}",
@@ -313,18 +336,26 @@ DEFAULT_RULE_METADATA = (
     ("zuoyi_signal", "左一战法", "strategy", "technical", "ZuoYiStrategizer",
      {"signal_window": 15, "include_bullish": True, "include_bearish": True}, True, 110,
      "当前周期15根K线内左一战法看涨/看跌信号"),
+    ("zuoyi_bullish_signal", "左一战法-看涨", "strategy", "technical", "ZuoYiStrategizer",
+     {
+         "signal_window": 15,
+         "include_bullish": True,
+         "include_bearish": False,
+         "direction": "bullish",
+         "signal_group": "zuoyi_bullish",
+     }, True, 115, "当前周期15根K线内左一战法看涨信号"),
     ("ema_breakout", "EMA 突破", "strategy", "technical", "EMABreakoutStrategizer",
-     {"ema_short": 10, "ema_long": 150}, True, 120, "EMA 短线向上突破长线"),
+     {"ema_short": 10, "ema_long": 150, "direction": "bullish", "signal_group": "bullish"}, True, 120, "EMA 短线向上突破长线"),
     ("rsi_oversold", "RSI 超卖", "strategy", "technical", "RSIOversoldStrategizer",
-     {"period": 14, "threshold": 30.0}, True, 130, "RSI 低于等于阈值"),
+     {"period": 14, "threshold": 30.0, "direction": "bullish", "signal_group": "rebound"}, True, 130, "RSI 低于等于阈值"),
     ("rsi_overbought", "RSI 超买", "strategy", "technical", "RSIOverboughtStrategizer",
      {"period": 14, "threshold": 70.0}, True, 140, "RSI 高于等于阈值"),
     ("volume_spike_prior3", "放量超前三日", "strategy", "technical", "TodayVolumeExceedsPrior3MaxStrategizer",
-     {}, True, 150, "当日成交量大于前三日最大值"),
+     {"direction": "bullish", "signal_group": "bullish"}, True, 150, "当日成交量大于前三日最大值"),
     ("daily_drop_6_65", "当日跌 6%~6.5%", "strategy", "technical", "DailyDrop6To65Strategizer",
      {"pct_min": -6.5, "pct_max": -6.0}, True, 160, "当日跌幅在指定区间"),
     ("daily_rise_4_45", "当日涨 4%~4.5%", "strategy", "technical", "DailyRise4To45Strategizer",
-     {"pct_min": 4.0, "pct_max": 4.5}, True, 170, "当日涨幅在指定区间"),
+     {"pct_min": 4.0, "pct_max": 4.5, "direction": "bullish", "signal_group": "bullish"}, True, 170, "当日涨幅在指定区间"),
     ("company_event_hot_sector_link", "公司时事与热点板块关联", "strategy", "macro", "CompanyEventHotSectorStrategizer",
      {}, True, 210, "复用 AI 分析结果，判断公司时事是否与热点板块形成共振"),
     ("company_event_hot_news_link", "公司时事与热点新闻关联", "strategy", "macro", "CompanyEventHotNewsStrategizer",
@@ -404,6 +435,9 @@ TREND_CAPITAL_ACCUMULATION_WATCH_EXPRESSION = {
         },
     ]
 }
+
+
+UNIFIED_BULLISH_TOP20_EXPRESSION = {"ref": "ema_breakout"}
 
 
 def _default_rule_params_for_market(market: str, rule_key: str, params: dict) -> dict:
@@ -4317,6 +4351,16 @@ class MarketDatabase:
                 0,
                 300,
                 "默认关闭的试跑链：基于现有上涨趋势/放量规则做观察，主力资金与热点板块原子规则接入后可扩展",
+            ))
+            chain_rows.append((
+                market,
+                "*",
+                "unified_bullish_top20",
+                "统一看涨技术规则Top20",
+                json.dumps(UNIFIED_BULLISH_TOP20_EXPRESSION, ensure_ascii=False),
+                0,
+                400,
+                "遍历所有启用看涨、准备反弹、左一看涨技术规则，按总命中数选Top20后进入AI复核",
             ))
 
         with self.conn.cursor() as cursor:

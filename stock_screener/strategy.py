@@ -241,6 +241,7 @@ TECHNICAL_PATTERN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "atr_up_breakout": {"label": "ATR向上突破", "direction": "bullish", "min_rows": 16},
     "atr_down_breakdown": {"label": "ATR向下跌破", "direction": "bearish", "min_rows": 16},
     "kdj_bullish_cross": {"label": "KDJ金叉", "direction": "bullish", "min_rows": 12},
+    "kdj_low_bullish_cross": {"label": "低位KDJ金叉", "direction": "bullish", "min_rows": 12},
     "kdj_bearish_cross": {"label": "KDJ死叉", "direction": "bearish", "min_rows": 12},
     "rsi_bullish_rebound": {"label": "RSI超卖回升", "direction": "bullish", "min_rows": 16},
     "rsi_bearish_pullback": {"label": "RSI超买回落", "direction": "bearish", "min_rows": 16},
@@ -625,16 +626,25 @@ def _analyze_indicator_pattern(pattern_key: str, work: pd.DataFrame, params: Dic
         ok = curr_close < lookback_low and (prev_close - curr_close) >= current_atr * multiplier
         return ok, "收盘价放大波幅跌破前低" if ok else "未形成ATR向下跌破", details
 
-    if pattern_key in ("kdj_bullish_cross", "kdj_bearish_cross"):
+    if pattern_key in ("kdj_bullish_cross", "kdj_low_bullish_cross", "kdj_bearish_cross"):
         period = int(params.get("period", 9))
+        low_threshold = float(params.get("low_threshold", 30.0))
         k, d, j = calculate_kdj(work, period=period)
         prev_k, curr_k = _latest_value(k, 2), _latest_value(k, 1)
         prev_d, curr_d = _latest_value(d, 2), _latest_value(d, 1)
-        details.update({"k": _format_price(curr_k), "d": _format_price(curr_d), "j": _format_price(_latest_value(j, 1))})
+        details.update({
+            "k": _format_price(curr_k),
+            "d": _format_price(curr_d),
+            "j": _format_price(_latest_value(j, 1)),
+            "low_threshold": low_threshold if pattern_key == "kdj_low_bullish_cross" else None,
+        })
         if None in (prev_k, curr_k, prev_d, curr_d):
             return False, "KDJ数据不足", details
-        if pattern_key == "kdj_bullish_cross":
+        if pattern_key in ("kdj_bullish_cross", "kdj_low_bullish_cross"):
             ok = _crossed_up(prev_k, prev_d, curr_k, curr_d)
+            if ok and pattern_key == "kdj_low_bullish_cross":
+                ok = min(prev_k, prev_d, curr_k, curr_d) <= low_threshold
+                return ok, "低位K线向上穿越D线" if ok else "KDJ金叉不在低位区间", details
             return ok, "K线向上穿越D线" if ok else "未形成KDJ金叉", details
         ok = _crossed_down(prev_k, prev_d, curr_k, curr_d)
         return ok, "K线向下穿越D线" if ok else "未形成KDJ死叉", details

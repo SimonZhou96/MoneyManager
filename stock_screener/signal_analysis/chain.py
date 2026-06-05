@@ -1089,8 +1089,11 @@ def _render_artifact_report(context: SignalAnalysisContext) -> str:
             for row in report_rows
             if row.code in context.evidence_packs
         ]
-        results = [
-            context.results_by_code[row.code].to_db_row(
+        results = []
+        for row in report_rows:
+            if row.code not in context.results_by_code:
+                continue
+            result_row = context.results_by_code[row.code].to_db_row(
                 task_id=context.task_id,
                 market=context.market,
                 check_date=context.check_date,
@@ -1098,9 +1101,8 @@ def _render_artifact_report(context: SignalAnalysisContext) -> str:
                 timeframe=context.timeframe,
                 analysis_profile=context.analysis_profile,
             )
-            for row in report_rows
-            if row.code in context.results_by_code
-        ]
+            result_row["conditions_met"] = row.conditions_met
+            results.append(result_row)
         return render_multi_stock_report(packs, results, report_date=context.check_date)
     return _render_markdown_report(context)
 
@@ -1128,6 +1130,13 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
                 c = c.strip()
                 if c:
                     cond_counts[c] += 1
+    condition_values = [str(row.conditions_met or "") for row in report_rows]
+    uses_unified_bullish_chain = any(
+        marker in value
+        for value in condition_values
+        for marker in ("看涨:", "准备反弹:", "左一看涨:")
+    )
+    report_chain_key = "unified_bullish_top20" if uses_unified_bullish_chain else "CSV信号规则链"
 
     # ── Stats ───────────────────────────────────────────────
     stock_ranked = [item for item in ranked if not _is_etf_result(item, rows_by_code)]
@@ -1221,9 +1230,68 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         score = max(10, min(95, round(score, 2)))
         return score, " + ".join(parts) + f" = **{score:.1f}**"
 
+    def _rule_text(row, *, limit=6):
+        conds = (row.conditions_met or "") if row else ""
+        items = [part.strip() for part in conds.split("|") if part.strip()]
+        if not items:
+            return "—"
+        visible = items[:limit]
+        suffix = f"<br>+{len(items) - limit}条" if len(items) > limit else ""
+        return "<br>".join(_table_text(item) for item in visible) + suffix
+
+    def _rule_key_guess(condition: str) -> str:
+        label = condition.split(":", 1)[1].strip() if ":" in condition else condition.strip()
+        mapping = {
+            "左一战法-看涨": "zuoyi_bullish_signal",
+            "左一战法-看跌": "zuoyi_signal",
+            "EMA突破": "ema_breakout",
+            "EMA金叉": "ema_golden_cross",
+            "均线金叉": "sma_golden_cross",
+            "MACD金叉": "macd_bullish_cross",
+            "KDJ金叉": "kdj_bullish_cross",
+            "低位KDJ金叉": "kdj_low_bullish_cross",
+            "RSI超卖": "rsi_oversold",
+            "RSI超卖回升": "rsi_bullish_rebound",
+            "布林下轨反弹": "bollinger_lower_rebound",
+            "放量超前三日": "volume_spike_prior3",
+            "放量突破": "volume_price_breakout",
+            "当日涨4%~4.5%": "daily_rise_4_45",
+            "当日跌6%~6.5%": "daily_drop_6_65",
+        }
+        return mapping.get(label, "dynamic_rule")
+
+    def _rule_logic(condition: str) -> str:
+        if condition.startswith("准备反弹:"):
+            return "准备反弹类信号，纳入技术规则命中"
+        if condition.startswith("左一看涨:"):
+            return "左一看涨信号，纳入技术规则命中"
+        if condition.startswith("看涨:"):
+            return "看涨类信号，纳入技术规则命中"
+        if "放量" in condition:
+            return "资金关注度信号"
+        if "RSI超卖" in condition:
+            return "超跌反弹潜力"
+        if "看跌" in condition or "超买" in condition:
+            return "风险或回落信号"
+        return "动态技术规则命中"
+
     def _pick_reason(r, row):
         reasons = []
-        if r.signal_bias == "bullish":
+        conds = (row.conditions_met or "") if row else ""
+        if conds:
+            fallback_rules = []
+            for group in ("左一看涨", "准备反弹", "看涨"):
+                matches = [
+                    part.split(":", 1)[1].strip()
+                    for part in conds.split("|")
+                    if part.strip().startswith(f"{group}:") and ":" in part
+                ]
+                if matches:
+                    reasons.append(f"{group}: {'、'.join(matches[:2])}")
+            if not reasons:
+                fallback_rules = [part.strip() for part in conds.split("|") if part.strip()]
+                reasons.extend(fallback_rules[:3])
+        elif r.signal_bias == "bullish":
             reasons.append("左一看涨")
         elif r.signal_bias == "bearish":
             reasons.append("左一看跌（注意方向）")
@@ -1283,7 +1351,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         "## 二、评分体系",
         "",
-        f"本报告使用规则链 **`zuoyi_with_macro_enhanced`**（{market_name}/US）的评分框架：",
+        f"本报告使用规则链 **`{report_chain_key}`**（{market_name}）的评分框架：",
         "",
         "```",
         "综合评分 = 技术规则面(60%) + 宏观五模块(40%)",
@@ -1297,20 +1365,11 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
     if cond_counts:
         lines.append("| 技术规则 | 规则Key | 触发次数 | 触发率 | 评分逻辑 |")
         lines.append("|---|---|---|---|---|")
-        rule_specs = [
-            ("左一战法-看涨", "zuoyi_signal", "看涨方向，基础分不扣减"),
-            ("左一战法-看跌", "zuoyi_signal", "看跌方向，扣5分"),
-            ("放量超前三日", "volume_spike_prior3", "+8分，资金关注度信号"),
-            ("RSI超卖", "rsi_oversold", "+5分，超跌反弹潜力"),
-            ("RSI超买", "rsi_overbought", "-5分，高位回落风险"),
-            ("当日涨4%~4.5%", "daily_rise_4_45", "强势拉盘，+3分"),
-            ("当日跌6%~6.5%", "daily_drop_6_65", "恐慌抛售，结合RSI超卖判断"),
-        ]
-        for name, key, logic in rule_specs:
-            count = cond_counts.get(name, 0)
-            if count > 0:
-                pct = count / max(1, len(report_rows)) * 100
-                lines.append(f"| {name} | {key} | {len(report_rows)} | {pct:.0f}% | {logic} |")
+        for name, count in cond_counts.most_common():
+            pct = count / max(1, len(report_rows)) * 100
+            lines.append(
+                f"| {_table_text(name)} | {_rule_key_guess(name)} | {count} | {pct:.0f}% | {_rule_logic(name)} |"
+            )
     else:
         lines.append("本期无技术规则触发数据。")
 
@@ -1344,8 +1403,8 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         f"**热点板块**（{'动态发现' if context.hot_sectors else '待识别'}）：**{hot_sector_text}**",
         "",
-        "| # | 代码 | 名称 | 板块 | 方向 | 评分 | 评分依据 | 热点 | 事件 |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| # | 代码 | 名称 | 板块 | 方向 | 评分 | 命中规则 | 评分依据 | 热点 | 事件 |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ])
     for i, item in enumerate(ranked, 1):
         row = rows_by_code.get(item.code)
@@ -1355,6 +1414,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
             f"| {i} | `{item.code}` | {item.name or '-'} | {_table_text(sector)} | "
             f"{_bias_emoji(item.signal_bias)} {_direction_label(item.signal_bias)} | "
             f"**{h_score:.1f}** | "
+            f"{_rule_text(row)} | "
             f"{_table_text(h_formula)} | "
             f"{_hot_emoji(item.hot_sector_mark)} {item.hot_sector_mark or '—'} | "
             f"{'✅' if _meaningful_company_items(item) else '—'} |"
@@ -1447,7 +1507,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         "## 附录",
         "",
-        f"- 规则链：zuoyi_with_macro_enhanced（{market_name}/US）",
+        f"- 规则链：{report_chain_key}（{market_name}）",
         f"- 热点板块：{hot_sector_text}",
         f"- 数据来源：Futu OpenD + YFinance + Tavily/ZhipuAI + DeepSeek",
         f"- 分析引擎：{context.llm_provider.model_name if hasattr(context.llm_provider, 'model_name') else 'LLM'}",

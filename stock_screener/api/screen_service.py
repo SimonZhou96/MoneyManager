@@ -46,6 +46,10 @@ from universe import fetch_stock_list_akshare
 from universe_filter import UniverseFilterFactory
 
 
+UNIFIED_BULLISH_TOP20_CHAIN_KEY = "unified_bullish_top20"
+UNIFIED_BULLISH_TOP_N = 20
+
+
 STRATEGY_NAME_MAP = {
     "EMABreakoutStrategizer": "EMA突破",
     "RSIOversoldStrategizer": "RSI超卖",
@@ -54,6 +58,19 @@ STRATEGY_NAME_MAP = {
     "DailyDrop6To65Strategizer": "当日跌6%~6.5%",
     "DailyRise4To45Strategizer": "当日涨4%~4.5%",
 }
+
+
+def select_unified_bullish_top_candidates(candidates: list[dict], top_n: int = UNIFIED_BULLISH_TOP_N) -> list[dict]:
+    """Pick the strongest bullish technical candidates with deterministic tie-breaking."""
+    eligible = [
+        item for item in candidates
+        if int(item.get("total_match_count") or item.get("bullish_match_count") or 0) > 0
+    ]
+    ranked = sorted(
+        eligible,
+        key=lambda item: (-int(item.get("total_match_count") or item.get("bullish_match_count") or 0), str(item.get("code") or "")),
+    )
+    return ranked[:max(0, int(top_n))]
 
 
 def _zuoyi_direction_label(direction: str) -> str:
@@ -264,6 +281,11 @@ def _rule_metadata_for_output(rule_engine: Optional[RuleEngine], output: FilterO
     if rule_engine is None:
         return None
     details = output.details if isinstance(output.details, dict) else {}
+    rule_key = str(details.get("rule_key") or "")
+    if rule_key:
+        metadata = getattr(rule_engine, "metadata_by_key", {}).get(rule_key)
+        if metadata:
+            return metadata
     pattern_key = str(details.get("pattern_key") or "")
     if output.filter_name == "TechnicalPatternStrategizer" and pattern_key:
         metadata = getattr(rule_engine, "metadata_by_key", {}).get(pattern_key)
@@ -407,10 +429,14 @@ def run_screening_task(
                     print("警告：数据库规则链未引用任何规则")
                 db.update_task_status(task_id, "completed")
                 return
+            is_unified_bullish_top20 = rule_engine.chain_config.chain_key == UNIFIED_BULLISH_TOP20_CHAIN_KEY
             needs_kline = rule_engine.requires_kline()
+            if is_unified_bullish_top20:
+                needs_kline = True
             if verbose:
                 print(f"✓ 已加载数据库规则链: {rule_engine.chain_config.chain_key} ({rule_engine.chain_config.timeframe})")
         else:
+            is_unified_bullish_top20 = False
             filter_chain = create_filter_chain_from_params(params)
             strategy_chain = create_strategizer_chain_from_params(params)
 
@@ -515,6 +541,8 @@ def run_screening_task(
         results = []
         passed_stocks = []  # 记录满足条件的股票
         failed_stocks = []  # 记录未通过的股票及原因
+        pending_screening_records = []
+        unified_candidates = []
         macro_analysis_cache: Dict[str, object] = {}
         macro_warning_cache: Dict[str, list[str]] = {}
         
@@ -559,7 +587,7 @@ def run_screening_task(
             # 步骤2: 应用规则。默认由 DB 规则引擎计算；兼容模式保留旧链路。
             if rule_engine is not None:
                 signal_analysis_loader = None
-                if rule_engine.requires_signal_analysis():
+                if not is_unified_bullish_top20 and rule_engine.requires_signal_analysis():
                     def load_signal_analysis(current_stock: StockInfo):
                         cached = macro_analysis_cache.get(current_stock.code)
                         if cached is not None:
@@ -579,11 +607,14 @@ def run_screening_task(
                             print(f"[{i}/{total_count}] ℹ️  {current_stock.code} - 宏观分析告警: {' | '.join(warnings)}")
                         return analysis
                     signal_analysis_loader = load_signal_analysis
-                result = rule_engine.evaluate_stock(
-                    si,
-                    context,
-                    signal_analysis_loader=signal_analysis_loader,
-                )
+                if is_unified_bullish_top20:
+                    result = rule_engine.evaluate_bullish_technical_rules(si, context)
+                else:
+                    result = rule_engine.evaluate_stock(
+                        si,
+                        context,
+                        signal_analysis_loader=signal_analysis_loader,
+                    )
             else:
                 # 策略通过条件：左一战法 && 任一其他策略（关闭左一时退回任一策略命中）
                 result = filter_chain.apply(si, context)
@@ -605,16 +636,27 @@ def run_screening_task(
             # 步骤3: 收集结果摘要；详细日志只在 verbose 下展开。
             if result.passed:
                 satisfied_strategies = []
-                for output in result.filter_outputs:
-                    if output.result.value == "pass":
-                        satisfied_strategies.extend(
-                            get_strategy_condition_labels(output.filter_name, output.details)
-                        )
+                if is_unified_bullish_top20:
+                    satisfied_strategies.extend(getattr(result, "bullish_condition_labels", []) or [])
+                else:
+                    for output in result.filter_outputs:
+                        if output.result.value == "pass":
+                            satisfied_strategies.extend(
+                                get_strategy_condition_labels(output.filter_name, output.details)
+                            )
                 passed_stocks.append({
                     "code": si.code,
                     "name": si.name or si.code,
                     "satisfied_strategies": satisfied_strategies,
                 })
+                if is_unified_bullish_top20:
+                    unified_candidates.append({
+                        "code": si.code,
+                        "bullish_match_count": getattr(result, "bullish_match_count", 0),
+                        "rebound_match_count": getattr(result, "rebound_match_count", 0),
+                        "zuoyi_bullish_match_count": getattr(result, "zuoyi_bullish_match_count", 0),
+                        "total_match_count": getattr(result, "total_match_count", 0),
+                    })
             else:
                 blocking_outputs = [
                     output for output in result.filter_outputs
@@ -751,15 +793,58 @@ def run_screening_task(
                 "close_price": close_price,
             }
             
-            # 立即写入数据库
-            db.upsert_screening_results(check_date=context.check_date, results=[db_record])
+            if is_unified_bullish_top20:
+                db_record["bullish_match_count"] = getattr(result, "bullish_match_count", 0)
+                db_record["rebound_match_count"] = getattr(result, "rebound_match_count", 0)
+                db_record["zuoyi_bullish_match_count"] = getattr(result, "zuoyi_bullish_match_count", 0)
+                db_record["total_match_count"] = getattr(result, "total_match_count", 0)
+                db_record["bullish_condition_labels"] = list(getattr(result, "bullish_condition_labels", []) or [])
+                db_record["categorized_condition_matches"] = list(getattr(result, "categorized_condition_matches", []) or [])
+                pending_screening_records.append(db_record)
+            else:
+                # 立即写入数据库
+                db.upsert_screening_results(check_date=context.check_date, results=[db_record])
+
+        if is_unified_bullish_top20:
+            selected = select_unified_bullish_top_candidates(unified_candidates, top_n=UNIFIED_BULLISH_TOP_N)
+            selected_codes = {item["code"] for item in selected}
+            passed_stocks = []
+            for record in pending_screening_records:
+                is_selected = record["code"] in selected_codes
+                record["is_passed"] = is_selected
+                if not is_selected:
+                    match_count = int(record.get("total_match_count") or record.get("bullish_match_count") or 0)
+                    if match_count > 0:
+                        record["filter_summary"] = (
+                            f"命中 {match_count} 条规则"
+                            f"（看涨 {int(record.get('bullish_match_count') or 0)} / "
+                            f"准备反弹 {int(record.get('rebound_match_count') or 0)} / "
+                            f"左一看涨 {int(record.get('zuoyi_bullish_match_count') or 0)}），"
+                            f"但未进入Top{UNIFIED_BULLISH_TOP_N}"
+                        )
+                    else:
+                        record["filter_summary"] = "未命中启用的看涨/准备反弹/左一看涨技术规则"
+                else:
+                    labels = list(record.get("bullish_condition_labels") or [])
+                    record["filter_summary"] = (
+                        f"统一看涨Top{UNIFIED_BULLISH_TOP_N}: 命中 {int(record.get('total_match_count') or len(labels))} 条规则"
+                        f"（看涨 {int(record.get('bullish_match_count') or 0)} / "
+                        f"准备反弹 {int(record.get('rebound_match_count') or 0)} / "
+                        f"左一看涨 {int(record.get('zuoyi_bullish_match_count') or 0)}）"
+                    )
+                    passed_stocks.append({
+                        "code": record["code"],
+                        "name": record.get("name") or record["code"],
+                        "satisfied_strategies": labels,
+                    })
+            db.upsert_screening_results(check_date=context.check_date, results=pending_screening_records)
         
         # 所有股票处理完成后的总结
         if verbose:
             print(f"✓ 筛选结果已实时写入 screening_results 表")
         
         # 获取通过筛选的股票数量
-        passed_count = sum(1 for r in results if r.passed)
+        passed_count = len(passed_stocks) if is_unified_bullish_top20 else sum(1 for r in results if r.passed)
         failed_count = total_count - passed_count
 
         # Always print summary

@@ -41,3 +41,32 @@ CROSS JOIN (
     SELECT 'volume_price_breakout', '放量突破', '{"pattern_key":"volume_price_breakout","pattern_label":"放量突破","direction":"bullish","display_group":"看涨规则"}', 590, '看涨规则：放量突破' UNION ALL
     SELECT 'volume_price_breakdown', '放量跌破', '{"pattern_key":"volume_price_breakdown","pattern_label":"放量跌破","direction":"bearish","display_group":"看跌规则"}', 600, '看跌规则：放量跌破'
 ) AS rules;
+
+INSERT IGNORE INTO screening_rule_metadata
+    (market, rule_key, rule_name, rule_type, strategy_category, implementation, params_json, enabled, display_order, description)
+SELECT markets.market, 'kdj_low_bullish_cross', '低位KDJ金叉', 'strategy', 'technical', 'TechnicalPatternStrategizer',
+       '{"pattern_key":"kdj_low_bullish_cross","pattern_label":"低位KDJ金叉","direction":"bullish","display_group":"看涨规则","signal_group":"rebound","low_threshold":30.0}',
+       1, 555, '准备反弹规则：低位KDJ金叉'
+FROM (
+    SELECT 'HK' AS market UNION ALL SELECT 'US' UNION ALL SELECT 'A'
+) AS markets;
+
+UPDATE screening_rule_metadata
+SET params_json = JSON_SET(COALESCE(params_json, JSON_OBJECT()), '$.signal_group', 'bullish')
+WHERE rule_key IN (
+    'bullish_engulfing', 'three_white_soldiers', 'bullish_marubozu',
+    'sma_golden_cross', 'ema_golden_cross', 'macd_bullish_cross',
+    'vwap_bullish_reclaim', 'atr_up_breakout', 'kdj_bullish_cross',
+    'volume_price_breakout'
+)
+  AND rule_type = 'strategy'
+  AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.direction')) = 'bullish';
+
+UPDATE screening_rule_metadata
+SET params_json = JSON_SET(COALESCE(params_json, JSON_OBJECT()), '$.signal_group', 'rebound')
+WHERE rule_key IN (
+    'rsi_bullish_rebound', 'bollinger_lower_rebound', 'hammer_reversal',
+    'morning_star', 'piercing_line', 'kdj_low_bullish_cross'
+)
+  AND rule_type = 'strategy'
+  AND JSON_UNQUOTE(JSON_EXTRACT(params_json, '$.direction')) = 'bullish';

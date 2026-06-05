@@ -834,6 +834,7 @@ class RuleEngineTest(unittest.TestCase):
             self.assertIn(f"('{market}', 'zuoyi_signal'", content)
             self.assertIn(f"('{market}', '*', 'default_zuoyi_and_other'", content)
             self.assertIn(f"('{market}', '*', 'trend_capital_accumulation_watch'", content)
+            self.assertIn(f"('{market}', '*', 'unified_bullish_top20'", content)
             self.assertIn(
                 f"('{market}', 'market_cap_range', '市值范围', 'filter', '', 'MarketCapFilter', "
                 """'{"min_cap": null, "max_cap": null}', 1,""",
@@ -841,6 +842,11 @@ class RuleEngineTest(unittest.TestCase):
             )
         self.assertIn("('US', 'zuoyi_signal'", content)
         self.assertIn("('US', '*', 'default_zuoyi_and_other'", content)
+        self.assertIn("('US', '*', 'unified_bullish_top20'", content)
+        self.assertIn("zuoyi_bullish_signal", content)
+        self.assertIn("kdj_low_bullish_cross", content)
+        self.assertIn("signal_group", content)
+        self.assertIn("'遍历所有启用看涨、准备反弹、左一看涨技术规则，按总命中数选Top20后进入AI复核'", content)
         self.assertIn(
             "('US', 'market_cap_range', '市值范围', 'filter', '', 'MarketCapFilter', "
             """'{"min_cap": 5000000000, "max_cap": null, "min_exclusive": true}', 1,""",
@@ -892,6 +898,81 @@ class RuleEngineTest(unittest.TestCase):
         ).apply(stock, context)
 
         self.assertEqual(output.result, FilterResult.FAIL)
+
+    def test_evaluate_bullish_technical_rules_only_runs_enabled_bullish_technical_metadata(self):
+        metadata_items = [
+            metadata(
+                "bullish_one",
+                "strategy",
+                "StaticStrategizer",
+                params={"satisfied": True, "name": "BullishOne", "direction": "bullish", "signal_group": "bullish", "pattern_label": "看涨一"},
+                order=10,
+                strategy_category="technical",
+            ),
+            metadata(
+                "bullish_two",
+                "strategy",
+                "StaticStrategizer",
+                params={"satisfied": True, "name": "BullishTwo", "direction": "bullish", "signal_group": "rebound", "pattern_label": "看涨二"},
+                order=20,
+                strategy_category="technical",
+            ),
+            metadata(
+                "zuoyi_bullish_signal",
+                "strategy",
+                "StaticStrategizer",
+                params={"satisfied": True, "name": "ZuoYiStrategizer", "direction": "bullish", "signal_group": "zuoyi_bullish", "pattern_label": "左一战法-看涨"},
+                order=25,
+                strategy_category="technical",
+            ),
+            metadata(
+                "bearish_one",
+                "strategy",
+                "StaticStrategizer",
+                params={"satisfied": True, "name": "BearishOne", "direction": "bearish", "pattern_label": "看跌一"},
+                order=30,
+                strategy_category="technical",
+            ),
+            metadata(
+                "neutral_one",
+                "strategy",
+                "StaticStrategizer",
+                params={"satisfied": True, "name": "NeutralOne", "direction": "neutral", "pattern_label": "中性一"},
+                order=40,
+                strategy_category="technical",
+            ),
+            metadata(
+                "disabled_bullish",
+                "strategy",
+                "StaticStrategizer",
+                enabled=False,
+                params={"satisfied": True, "name": "DisabledBullish", "direction": "bullish", "pattern_label": "禁用看涨"},
+                order=50,
+                strategy_category="technical",
+            ),
+            metadata(
+                "macro_bullish",
+                "strategy",
+                "StaticStrategizer",
+                params={"satisfied": True, "name": "MacroBullish", "direction": "bullish", "pattern_label": "宏观看涨"},
+                order=60,
+                strategy_category="macro",
+            ),
+        ]
+        engine = RuleEngine(metadata_items, chain({"ref": "bullish_one"}), registry=registry())
+
+        result = engine.evaluate_bullish_technical_rules(
+            StockInfo(market="HK", code="HK.00001", name="Test"),
+            FilterContext(check_date=date(2026, 1, 1), market="HK"),
+        )
+
+        self.assertTrue(result.passed)
+        self.assertEqual(result.bullish_match_count, 1)
+        self.assertEqual(result.rebound_match_count, 1)
+        self.assertEqual(result.zuoyi_bullish_match_count, 1)
+        self.assertEqual(result.total_match_count, 3)
+        self.assertEqual(result.bullish_condition_labels, ["看涨:看涨一", "准备反弹:看涨二", "左一看涨:左一战法-看涨"])
+        self.assertEqual([output.filter_name for output in result.filter_outputs], ["BullishOne", "BullishTwo", "ZuoYiStrategizer"])
 
 
 if __name__ == "__main__":

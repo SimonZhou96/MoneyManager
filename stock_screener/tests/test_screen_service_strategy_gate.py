@@ -86,6 +86,30 @@ class ScreenServiceStrategyGateTest(unittest.TestCase):
 
         self.assertTrue(evaluate_strategy_gate(result, require_zuoyi_strategy=False))
 
+    def test_select_unified_bullish_top20_orders_by_total_match_count_then_code(self):
+        counts = [1, 4, 2, 4, 0, 3, 2, 5, 1, 5, 4, 2, 1, 3, 5, 4, 2, 1, 3, 5, 4, 2]
+        candidates = [
+            {
+                "code": f"HK.{index:05d}",
+                "bullish_match_count": count // 2,
+                "rebound_match_count": count - (count // 2),
+                "zuoyi_bullish_match_count": 0,
+                "total_match_count": count,
+            }
+            for index, count in enumerate(counts, start=1)
+        ]
+
+        selected_codes = [
+            item["code"]
+            for item in screen_service.select_unified_bullish_top_candidates(candidates, top_n=20)
+        ]
+
+        self.assertEqual(len(selected_codes), 20)
+        self.assertNotIn("HK.00005", selected_codes)
+        self.assertNotIn("HK.00018", selected_codes)
+        self.assertEqual(selected_codes[:4], ["HK.00008", "HK.00010", "HK.00015", "HK.00020"])
+        self.assertLess(selected_codes.index("HK.00002"), selected_codes.index("HK.00006"))
+
     def test_run_screening_task_keeps_strategy_details_when_zuoyi_gate_fails(self):
         class FakeDB:
             instances = []

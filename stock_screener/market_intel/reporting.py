@@ -127,10 +127,10 @@ def render_multi_stock_report(
         "",
         "### 柱状图：综合评分 Top 10",
         "",
-        "| 排名 | 股票代码 | 股票名称 | 综合评分 |",
-        "|---:|---|---|---:|",
+        "| 排名 | 股票代码 | 股票名称 | 综合评分 | 命中规则 |",
+        "|---:|---|---|---:|---|",
     ])
-    lines.extend(_table_rows(top_rows, ["排名", "股票代码", "股票名称", "综合评分"]))
+    lines.extend(_table_rows(top_rows, ["排名", "股票代码", "股票名称", "综合评分", "命中规则"]))
     lines.extend([
         "",
         "## 4. 方向判断分布",
@@ -222,6 +222,7 @@ def _top_score_rows(results: List[dict]) -> List[dict]:
             "股票代码": _text(item.get("code") or "-"),
             "股票名称": _text(item.get("name") or item.get("code") or "-"),
             "综合评分": _format_score(_score(item.get("reliability_score"))),
+            "命中规则": _conditions_text(item),
         }
         for index, item in enumerate(results, start=1)
     ]
@@ -262,12 +263,13 @@ def _result_table(results: List[dict], fallback: str) -> str:
             "股票名称": _text(item.get("name") or item.get("code") or "-"),
             "综合评分": _format_score(_score(item.get("reliability_score"))),
             "方向": _direction_label(item.get("signal_bias")),
+            "命中规则": _conditions_text(item),
             "简明结论": _conclusion(item),
         })
     return "\n".join([
-        "| 股票代码 | 股票名称 | 综合评分 | 方向 | 简明结论 |",
-        "|---|---|---:|---|---|",
-        *_table_rows(rows, ["股票代码", "股票名称", "综合评分", "方向", "简明结论"]),
+        "| 股票代码 | 股票名称 | 综合评分 | 方向 | 命中规则 | 简明结论 |",
+        "|---|---|---:|---|---|---|",
+        *_table_rows(rows, ["股票代码", "股票名称", "综合评分", "方向", "命中规则", "简明结论"]),
     ])
 
 
@@ -336,6 +338,14 @@ def _pack_items(pack: dict) -> List[dict]:
 
 def _table_rows(rows: List[dict], columns: List[str]) -> List[str]:
     return ["| " + " | ".join(_table_text(row.get(column)) for column in columns) + " |" for row in rows]
+
+
+def _conditions_text(item: dict) -> str:
+    text = _text(item.get("conditions_met") or item.get("满足的条件"))
+    if not text:
+        return "-"
+    parts = [part.strip() for part in text.replace("；", "|").split("|") if part.strip()]
+    return "\n".join(parts) if parts else text
 
 
 def _bullet_list(value: Any, fallback: str) -> str:
