@@ -32,11 +32,25 @@ from .models import (
     SearchDocument,
     SIGNAL_BIAS_CRITERIA,
     SignalAnalysisResult,
+    compute_unified_score,
 )
 from .search_providers import SearchProvider
 
 
 AI_CSV_COLUMNS = [
+    "最终统一评分",
+    "最终评分公式",
+    "技术规则分",
+    "宏观五模块分",
+    "事件热点分",
+    "资金风险分",
+    "LLM复核分",
+    "评分缺失项",
+    "宏观分",
+    "行业分",
+    "企业质量分",
+    "估值分",
+    "交易分",
     "AI分析状态",
     "信号可靠性评分",
     "信号可靠性评分口径",
@@ -90,6 +104,8 @@ class SignalAnalysisContext:
     search_provider: SearchProvider
     llm_provider: LLMProvider
     timeframe: str = "1d"
+    chain_key: str = ""
+    chain_name: str = ""
     repository: Optional[SignalAnalysisRepository] = None
     manual_hot_news: ManualHotNewsConfig = field(default_factory=ManualHotNewsConfig)
     manual_hot_sectors: ManualHotSectorConfig = field(default_factory=ManualHotSectorConfig)
@@ -1070,7 +1086,9 @@ def write_analysis_columns_to_csv(
                 code = (row.get("股票代码") or row.get("code") or "").strip()
                 result = results_by_code.get(code)
                 if result is not None:
-                    output.update(result.to_csv_columns())
+                    market = (row.get("market") or row.get("市场") or "").strip()
+                    signal_row = ScreeningSignalRow.from_csv_row(row, index=0, default_market=market)
+                    output.update(result.to_csv_columns(signal_row))
                 writer.writerow(output)
         os.replace(temp_path, csv_path)
     finally:
@@ -1102,6 +1120,7 @@ def _render_artifact_report(context: SignalAnalysisContext) -> str:
                 analysis_profile=context.analysis_profile,
             )
             result_row["conditions_met"] = row.conditions_met
+            result_row.update(compute_unified_score(context.results_by_code[row.code], row).to_csv_columns())
             results.append(result_row)
         return render_multi_stock_report(packs, results, report_date=context.check_date)
     return _render_markdown_report(context)
@@ -1114,10 +1133,14 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
     report_rows = context.all_rows or context.rows
     results = [context.results_by_code[row.code] for row in report_rows if row.code in context.results_by_code]
     rows_by_code = {row.code: row for row in report_rows}
+    unified_by_code = {
+        result.code: compute_unified_score(result, rows_by_code.get(result.code))
+        for result in results
+    }
 
     ranked = sorted(
         results,
-        key=lambda item: -1 if item.reliability_score is None else item.reliability_score,
+        key=lambda item: unified_by_code[item.code].final_score,
         reverse=True,
     )
 
@@ -1136,7 +1159,10 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         for value in condition_values
         for marker in ("看涨:", "准备反弹:", "左一看涨:")
     )
-    report_chain_key = "unified_bullish_top20" if uses_unified_bullish_chain else "CSV信号规则链"
+    report_chain_key = (
+        (context.chain_key or "").strip()
+        or ("unified_bullish_top20" if uses_unified_bullish_chain else "CSV信号规则链")
+    )
 
     # ── Stats ───────────────────────────────────────────────
     stock_ranked = [item for item in ranked if not _is_etf_result(item, rows_by_code)]
@@ -1146,9 +1172,95 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
     mf_high = [row for row in main_force_rows if row.main_force_risk_level == "高"]
     mf_medium = [row for row in main_force_rows if row.main_force_risk_level == "中"]
     mf_signal_text = _main_force_top_signal_text(main_force_rows)
-    overall = _overall_strength(ranked)
+    overall = _overall_strength_from_scores([unified_by_code[item.code].final_score for item in ranked])
     hot_sector_text = "；".join(context.hot_sectors) if context.hot_sectors else "暂未识别到明确市场热点"
     market_name = MARKET_NAMES.get(context.market, context.market)
+
+    def _short_items(items, *, limit=3, max_len=72):
+        values = []
+        for item in items or []:
+            text = _table_text(str(item or "")).strip()
+            if not text or text in {"-", "—"}:
+                continue
+            if len(text) > max_len:
+                text = text[:max_len].rstrip() + "..."
+            if text not in values:
+                values.append(text)
+            if len(values) >= limit:
+                break
+        return values
+
+    def _market_bundle_items(bundle):
+        if not isinstance(bundle, dict):
+            return []
+        values = []
+
+        def walk(value):
+            if isinstance(value, dict):
+                title = value.get("title") or value.get("name") or value.get("指标") or value.get("source")
+                content = (
+                    value.get("summary")
+                    or value.get("content")
+                    or value.get("description")
+                    or value.get("value")
+                    or value.get("text")
+                )
+                if title and content:
+                    values.append(f"{title}: {content}")
+                elif content:
+                    values.append(str(content))
+                for child in value.values():
+                    walk(child)
+            elif isinstance(value, list):
+                for child in value:
+                    walk(child)
+
+        walk(bundle)
+        return values
+
+    def _market_background_items():
+        items = []
+        items.extend(_market_bundle_items(context.market_intel_market_bundle))
+        items.extend(doc.content or doc.title for doc in context.market_documents)
+        for result in ranked:
+            items.extend(result.market_hot_news)
+            items.extend(result.macro_factors)
+        return _short_items(items, limit=5, max_len=96)
+
+    market_background_items = _market_background_items()
+
+    def _event_news_cell(item: SignalAnalysisResult) -> str:
+        company_events = _short_items(item.company_events, limit=2)
+        company_hot_news = _short_items(item.company_hot_news, limit=2)
+        related_hot = _short_items(
+            [
+                *(item.matched_hot_sectors or []),
+                item.hot_sector_reason,
+                *(item.market_hot_news or []),
+            ],
+            limit=2,
+        )
+        parts = []
+        if company_events:
+            parts.append("公司事件：" + "；".join(company_events))
+        if company_hot_news:
+            parts.append("公司热点：" + "；".join(company_hot_news))
+        if related_hot:
+            parts.append("关联热点：" + "；".join(related_hot))
+        return "<br>".join(parts) if parts else "暂无明确事件/热点新闻"
+
+    def _hot_cell(item: SignalAnalysisResult) -> str:
+        mark = item.hot_sector_mark or "—"
+        lines = [f"{_hot_emoji(mark)} {mark}".strip()]
+        matched = _short_items(item.matched_hot_sectors, limit=3, max_len=48)
+        if matched:
+            lines.append("匹配：" + "；".join(matched))
+        reason = _short_items([item.hot_sector_reason], limit=1, max_len=72)
+        if reason:
+            lines.append(f"<small>{reason[0]}</small>")
+        elif not matched and mark not in {"—", "无明确关联", "未知"}:
+            lines.append("<small>暂无明确匹配说明</small>")
+        return "<br>".join(lines)
 
     # ── Top 5 picks (bullish, different sectors) ────────────
     def _pick_top5(ranked_results, by_code):
@@ -1311,7 +1423,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         return "；".join(reasons) if reasons else "综合信号"
 
     def _recommendation(r, row):
-        s = r.reliability_score or 0
+        s = unified_by_code.get(r.code).final_score if r.code in unified_by_code else 0
         if r.signal_bias == "bullish":
             if s >= 70: return "🟢 买入"
             if s >= 55: return "🟡 持有/观察"
@@ -1345,7 +1457,9 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         f"- **热点板块**：**{hot_sector_text}**",
         f"- **标的数量**：{len(report_rows)}只　｜　**周期**：{context.timeframe}",
         "",
-        f"> 以上数据基于当前筛选结果汇总，具体市场行情请参考实时数据源。",
+        "### 当前市场信息",
+        "",
+        *([f"- {item}" for item in market_background_items] or ["- 市场实时摘要暂未获取，可检查 SIGNAL_ENABLE_MARKET_INTEL 或搜索数据源。"]),
         "",
         "---",
         "",
@@ -1354,10 +1468,10 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         f"本报告使用规则链 **`{report_chain_key}`**（{market_name}）的评分框架：",
         "",
         "```",
-        "综合评分 = 技术规则面(60%) + 宏观五模块(40%)",
+        "最终统一评分 = 技术规则分(30%) + 宏观五模块分(30%) + 事件热点分(20%) + 资金风险分(10%) + LLM复核分(10%)",
         "```",
         "",
-        "### 1.1 本期技术规则（从CSV动态提取）",
+        "### 1.1 本期技术规则（用于入围与技术分）",
         "",
     ]
 
@@ -1375,25 +1489,25 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
 
     lines.extend([
         "",
-        "### 1.2 辅助调整因子",
+        "### 1.2 最终统一评分因子",
         "",
-        "| 调整因子 | 影响 | 说明 |",
+        "| 分项 | 权重 | 说明 |",
         "|---|---|---|",
-        "| 突破速度 | ±3分 | ≤2日快速突破+3；≥8日慢速突破-3 |",
-        "| 热点板块匹配 | +5~15分 | 直接匹配+15；相关+8；观察+5 |",
-        "| 市值规模 | +3~5分 | 百亿以上+3；千亿以上+5 |",
-        "| 主力流出风险 | -10~20分 | 中风险-10；高风险-20；数据不足不影响 |",
-        "| 基本面缺失 | -2分 | PE/市值均缺失扣2分 |",
+        "| 技术规则分 | 30% | 看涨、准备反弹、左一看涨命中数与放量/RSI等质量信号 |",
+        "| 宏观五模块分 | 30% | 宏观、行业、企业质量、估值、交易；缺失模块按50中性补齐 |",
+        "| 事件热点分 | 20% | 公司事件、公司热点新闻、市场热点新闻、热点板块匹配 |",
+        "| 资金风险分 | 10% | 主力风险分或主力风险等级；缺失按50中性补齐 |",
+        "| LLM复核分 | 10% | 信号可靠性、模型置信度、利好/风险因素和方向判断 |",
         "",
-        "### 1.3 宏观五模块（`enterprise_potential_analysis`，权重 40%）",
+        "### 1.3 宏观五模块（`enterprise_potential_analysis`，纳入最终统一评分30%）",
         "",
         "| 模块 | 权重 | 核心指标 |",
         "|---|---|---|",
-        "| ① 宏观 | 30% | CPI/PMI/M2/LPR/VIX/DXY/美债 |",
-        "| ② 行业 | 25% | 行业景气度、板块资金流、热点匹配 |",
+        "| ① 宏观 | 20% | CPI/PMI/M2/LPR/VIX/DXY/美债 |",
+        "| ② 行业 | 20% | 行业景气度、板块资金流、热点匹配 |",
         "| ③ 企业质量 | 25% | 盈利、成长性、财务健康 |",
-        "| ④ 估值 | 10% | PE分位、PB、PS估值水位 |",
-        "| ⑤ 交易 | 10% | 量价信号、技术形态确认 |",
+        "| ④ 估值 | 15% | PE分位、PB、PS估值水位 |",
+        "| ⑤ 交易 | 20% | 量价信号、技术形态确认 |",
         "",
         f"> {macro_note}。评分区间：80+ 重点关注 / 60-79 可关注 / 40-59 偏弱观察 / <40 谨慎。",
         "",
@@ -1403,21 +1517,25 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         f"**热点板块**（{'动态发现' if context.hot_sectors else '待识别'}）：**{hot_sector_text}**",
         "",
-        "| # | 代码 | 名称 | 板块 | 方向 | 评分 | 命中规则 | 评分依据 | 热点 | 事件 |",
+        "| # | 代码 | 名称 | 板块 | 方向 | 最终评分 | 命中规则 | 最终评分依据 | 热点 | 事件 |",
         "|---|---|---|---|---|---|---|---|---|---|",
     ])
     for i, item in enumerate(ranked, 1):
         row = rows_by_code.get(item.code)
         sector = (row.sector or "—") if row else "—"
-        h_score, h_formula = _build_score_with_formula(item, row)
+        unified = unified_by_code[item.code]
+        missing_note = (
+            "<br><small>缺失：" + _table_text("；".join(unified.missing_items[:3])) + "</small>"
+            if unified.missing_items else ""
+        )
         lines.append(
             f"| {i} | `{item.code}` | {item.name or '-'} | {_table_text(sector)} | "
             f"{_bias_emoji(item.signal_bias)} {_direction_label(item.signal_bias)} | "
-            f"**{h_score:.1f}** | "
+            f"**{unified.final_score:.1f}** | "
             f"{_rule_text(row)} | "
-            f"{_table_text(h_formula)} | "
-            f"{_hot_emoji(item.hot_sector_mark)} {item.hot_sector_mark or '—'} | "
-            f"{'✅' if _meaningful_company_items(item) else '—'} |"
+            f"{_table_text(unified.formula)}{missing_note} | "
+            f"{_hot_cell(item)} | "
+            f"{_event_news_cell(item)} |"
         )
     lines.extend([
         "",
@@ -1443,7 +1561,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
 
     lines.extend([
         f"- **热点方向**：{macro_detail}",
-        f"- **信号强度**：{overall}（均分 {sum(r.reliability_score or 0 for r in ranked) / max(1, len(ranked)):.1f}）",
+        f"- **信号强度**：{overall}（最终均分 {sum(unified_by_code[r.code].final_score for r in ranked) / max(1, len(ranked)):.1f}）",
         f"- **主力风险**：高 {len(mf_high)} / 中 {len(mf_medium)} / 数据不足 {len(report_rows) - len(main_force_rows)}",
         f"- **公司催化**：{len(event_supported)}/{len(stock_ranked)} 只个股有明确事件支撑",
         "",
@@ -1455,7 +1573,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         f"从{len(report_rows)}只信号标的中，按不同板块各选1只最具潜力的看涨股票：",
         "",
-        "| 股票 | 板块 | 信号 | 评分 | 建议 | 核心理由 |",
+        "| 股票 | 板块 | 信号 | 最终评分 | 建议 | 核心理由 |",
         "|------|------|------|------|------|---------|",
     ])
 
@@ -1465,7 +1583,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         lines.append(
             f"| **{r.name or r.code}**<br>`{r.code}` | {sector} | "
             f"{_bias_emoji(r.signal_bias)} {_direction_label(r.signal_bias)} | "
-            f"**{_format_score(r.reliability_score)}** | "
+            f"**{unified_by_code[r.code].final_score:.1f}** | "
             f"{_recommendation(r, row)} | "
             f"{_pick_reason(r, row)} |"
         )
@@ -1551,6 +1669,10 @@ def _overall_strength(results: List[SignalAnalysisResult]) -> str:
     if not results:
         return "信息不足"
     scores = [_numeric(item.reliability_score) for item in results if item.reliability_score is not None]
+    return _overall_strength_from_scores(scores)
+
+
+def _overall_strength_from_scores(scores: List[float]) -> str:
     if not scores:
         return "信息不足"
     average = sum(scores) / len(scores)

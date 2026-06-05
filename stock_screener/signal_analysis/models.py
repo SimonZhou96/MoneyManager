@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _string(value: Any) -> str:
@@ -94,6 +94,221 @@ HOT_SECTOR_MARK_CRITERIA = (
     "重点=与热点板块直接匹配；相关=存在产业链/政策/概念关联；"
     "观察=暂无明确匹配但可跟踪轮动；无明确关联=当前信息看不出关联；未知=信息不足"
 )
+
+UNIFIED_SCORE_WEIGHTS = {
+    "technical": 0.30,
+    "enterprise": 0.30,
+    "event_hot": 0.20,
+    "fund_risk": 0.10,
+    "llm": 0.10,
+}
+
+
+def _clamp_score(value: float) -> float:
+    return max(0.0, min(100.0, round(float(value), 1)))
+
+
+def _split_conditions(text: str) -> List[str]:
+    return [part.strip() for part in (text or "").split("|") if part.strip()]
+
+
+def _float_from_row(raw: Dict[str, str], *keys: str) -> Optional[float]:
+    for key in keys:
+        value = raw.get(key)
+        if value not in (None, ""):
+            parsed = _optional_float(value)
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _technical_unified_score(row: Optional["ScreeningSignalRow"]) -> Tuple[float, List[str]]:
+    if row is None:
+        return 50.0, ["技术规则分缺失，按50中性补齐"]
+
+    conditions = _split_conditions(row.conditions_met)
+    if not conditions:
+        return 50.0, ["技术规则未命中，按50中性补齐"]
+
+    bullish = sum(1 for item in conditions if item.startswith("看涨:"))
+    rebound = sum(1 for item in conditions if item.startswith("准备反弹:"))
+    zuoyi = sum(1 for item in conditions if item.startswith("左一看涨:"))
+    generic = len(conditions) - bullish - rebound - zuoyi
+    score = 50.0 + bullish * 5.0 + rebound * 6.0 + zuoyi * 8.0 + generic * 4.0
+    if any("放量" in item for item in conditions):
+        score += 4.0
+    if any("RSI超卖" in item or "RSI超卖回升" in item for item in conditions):
+        score += 3.0
+    if any("看跌" in item or "超买" in item for item in conditions):
+        score -= 8.0
+    return _clamp_score(score), []
+
+
+def _enterprise_unified_score(raw: Dict[str, str]) -> Tuple[float, List[str], Dict[str, Optional[float]]]:
+    module_scores = {
+        "macro": _float_from_row(raw, "宏观分", "macro_score", "enterprise_macro_score"),
+        "industry": _float_from_row(raw, "行业分", "industry_score", "enterprise_industry_score"),
+        "company": _float_from_row(raw, "企业质量分", "company_score", "enterprise_company_score"),
+        "valuation": _float_from_row(raw, "估值分", "valuation_score", "enterprise_valuation_score"),
+        "trading": _float_from_row(raw, "交易分", "trading_score", "enterprise_trading_score"),
+    }
+    total = _float_from_row(raw, "宏观五模块分", "五模块总分", "enterprise_total_score", "enterprise_potential_score")
+    missing = [name for name, value in module_scores.items() if value is None]
+    if total is None:
+        filled = {name: (value if value is not None else 50.0) for name, value in module_scores.items()}
+        weights = {"macro": 0.20, "industry": 0.20, "company": 0.25, "valuation": 0.15, "trading": 0.20}
+        total = sum(filled[name] * weights[name] for name in weights)
+    labels = {
+        "macro": "宏观",
+        "industry": "行业",
+        "company": "企业质量",
+        "valuation": "估值",
+        "trading": "交易",
+    }
+    missing_notes = [f"五模块{labels.get(name, name)}缺失按50补齐" for name in missing]
+    return _clamp_score(total), missing_notes, module_scores
+
+
+def _event_hot_unified_score(result: "SignalAnalysisResult") -> Tuple[float, List[str]]:
+    score = 50.0
+    missing = []
+    if result.company_events:
+        score += min(10.0, len(result.company_events) * 4.0)
+    else:
+        missing.append("公司事件缺失按50基线处理")
+    if result.company_hot_news:
+        score += min(8.0, len(result.company_hot_news) * 4.0)
+    if result.market_hot_news:
+        score += min(6.0, len(result.market_hot_news) * 2.0)
+
+    mark = result.hot_sector_mark or ""
+    if mark == "重点":
+        score += 15.0
+    elif mark == "相关":
+        score += 10.0
+    elif mark == "观察":
+        score += 5.0
+    elif not mark:
+        missing.append("热点匹配缺失按50基线处理")
+
+    impact = (result.news_impact or "").lower()
+    if any(word in impact for word in ("负面", "利空", "negative", "bearish")):
+        score -= 12.0
+    elif any(word in impact for word in ("正面", "利好", "positive", "bullish")):
+        score += 6.0
+    return _clamp_score(score), missing
+
+
+def _fund_risk_unified_score(row: Optional["ScreeningSignalRow"]) -> Tuple[float, List[str]]:
+    if row is None:
+        return 50.0, ["资金风险数据缺失按50中性补齐"]
+    score_value = _optional_float(row.main_force_risk_score)
+    if score_value is not None:
+        return _clamp_score(100.0 - score_value), []
+    level = (row.main_force_risk_level or "").strip()
+    if level == "高":
+        return 35.0, []
+    if level == "中":
+        return 55.0, []
+    if level in {"低", "无", "无明显风险"}:
+        return 80.0, []
+    return 50.0, ["主力资金风险缺失按50中性补齐"]
+
+
+def _llm_unified_score(result: "SignalAnalysisResult") -> Tuple[float, List[str]]:
+    missing = []
+    reliability = result.reliability_score
+    confidence = result.confidence_score
+    if reliability is None:
+        reliability = 50.0
+        missing.append("LLM复核分缺失按50中性补齐")
+    if confidence is None:
+        score = float(reliability)
+    else:
+        score = float(reliability) * 0.8 + float(confidence) * 0.2
+    score += min(6.0, len(result.positive_factors) * 2.0)
+    score -= min(8.0, len(result.risk_factors) * 2.0)
+    if result.signal_bias in {"bearish", "avoid"}:
+        score -= 10.0
+    elif result.signal_bias == "bullish":
+        score += 4.0
+    return _clamp_score(score), missing
+
+
+@dataclass(frozen=True)
+class UnifiedScoreBreakdown:
+    final_score: float
+    formula: str
+    technical_score: float
+    enterprise_score: float
+    event_hot_score: float
+    fund_risk_score: float
+    llm_score: float
+    missing_items: List[str] = field(default_factory=list)
+    enterprise_module_scores: Dict[str, Optional[float]] = field(default_factory=dict)
+
+    def to_csv_columns(self) -> Dict[str, str]:
+        module = self.enterprise_module_scores
+        return {
+            "最终统一评分": f"{self.final_score:.1f}",
+            "最终评分公式": self.formula,
+            "技术规则分": f"{self.technical_score:.1f}",
+            "宏观五模块分": f"{self.enterprise_score:.1f}",
+            "事件热点分": f"{self.event_hot_score:.1f}",
+            "资金风险分": f"{self.fund_risk_score:.1f}",
+            "LLM复核分": f"{self.llm_score:.1f}",
+            "评分缺失项": "；".join(self.missing_items),
+            "宏观分": "" if module.get("macro") is None else f"{module['macro']:.1f}",
+            "行业分": "" if module.get("industry") is None else f"{module['industry']:.1f}",
+            "企业质量分": "" if module.get("company") is None else f"{module['company']:.1f}",
+            "估值分": "" if module.get("valuation") is None else f"{module['valuation']:.1f}",
+            "交易分": "" if module.get("trading") is None else f"{module['trading']:.1f}",
+        }
+
+
+def compute_unified_score(
+    result: "SignalAnalysisResult",
+    row: Optional["ScreeningSignalRow"] = None,
+) -> UnifiedScoreBreakdown:
+    raw = row.raw if row is not None else {}
+    technical_score, technical_missing = _technical_unified_score(row)
+    enterprise_score, enterprise_missing, module_scores = _enterprise_unified_score(raw)
+    event_hot_score, event_hot_missing = _event_hot_unified_score(result)
+    fund_risk_score, fund_missing = _fund_risk_unified_score(row)
+    llm_score, llm_missing = _llm_unified_score(result)
+
+    final = (
+        technical_score * UNIFIED_SCORE_WEIGHTS["technical"]
+        + enterprise_score * UNIFIED_SCORE_WEIGHTS["enterprise"]
+        + event_hot_score * UNIFIED_SCORE_WEIGHTS["event_hot"]
+        + fund_risk_score * UNIFIED_SCORE_WEIGHTS["fund_risk"]
+        + llm_score * UNIFIED_SCORE_WEIGHTS["llm"]
+    )
+    final = _clamp_score(final)
+    formula = (
+        f"技术 {technical_score:.1f}*30% + "
+        f"五模块 {enterprise_score:.1f}*30% + "
+        f"事件热点 {event_hot_score:.1f}*20% + "
+        f"资金风险 {fund_risk_score:.1f}*10% + "
+        f"LLM复核 {llm_score:.1f}*10% = {final:.1f}"
+    )
+    return UnifiedScoreBreakdown(
+        final_score=final,
+        formula=formula,
+        technical_score=technical_score,
+        enterprise_score=enterprise_score,
+        event_hot_score=event_hot_score,
+        fund_risk_score=fund_risk_score,
+        llm_score=llm_score,
+        missing_items=[
+            *technical_missing,
+            *enterprise_missing,
+            *event_hot_missing,
+            *fund_missing,
+            *llm_missing,
+        ],
+        enterprise_module_scores=module_scores,
+    )
 
 
 @dataclass(frozen=True)
@@ -278,8 +493,9 @@ class SignalAnalysisResult:
             error_message=message,
         )
 
-    def to_csv_columns(self) -> Dict[str, str]:
-        return {
+    def to_csv_columns(self, row: Optional[ScreeningSignalRow] = None) -> Dict[str, str]:
+        unified = compute_unified_score(self, row)
+        columns = {
             "AI分析状态": self.analysis_status,
             "信号可靠性评分": "" if self.reliability_score is None else f"{self.reliability_score:.2f}",
             "信号可靠性评分口径": RELIABILITY_SCORE_CRITERIA,
@@ -307,6 +523,8 @@ class SignalAnalysisResult:
             "引用来源": _json_string(self.evidence_links),
             "因素引用": _json_string(self.factor_citations),
         }
+        columns.update(unified.to_csv_columns())
+        return columns
 
     def to_db_row(
         self,

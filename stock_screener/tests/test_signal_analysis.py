@@ -43,6 +43,7 @@ from signal_analysis.models import (
     ScreeningSignalRow,
     SearchDocument,
     SignalAnalysisResult,
+    compute_unified_score,
 )
 from signal_analysis.search_providers import (
     FallbackSearchProvider,
@@ -2015,9 +2016,17 @@ class SignalAnalysisTest(unittest.TestCase):
             settings=AnalysisSettings(),
             search_provider=NullSearchProvider(),
             llm_provider=NullLLMProvider(),
+            chain_key="unified_bullish_top20",
             rows=rows,
             all_rows=list(rows),
             hot_sectors=["AI"],
+            market_documents=[
+                SearchDocument(
+                    title="港股市场摘要",
+                    url="https://example.com/market",
+                    content="恒指震荡走强，科技股和消费股活跃",
+                )
+            ],
         )
         context.results_by_code = {
             "HK.00001": SignalAnalysisResult(
@@ -2027,6 +2036,10 @@ class SignalAnalysisTest(unittest.TestCase):
                 signal_bias="bullish",
                 hot_sector_mark="重点",
                 matched_hot_sectors=["AI"],
+                company_events=["腾讯发布AI业务更新"],
+                company_hot_news=["腾讯云大模型服务热度上升"],
+                market_hot_news=["港股科技板块走强"],
+                hot_sector_reason="与AI应用和港股科技热点相关",
             ),
             "HK.00002": SignalAnalysisResult(
                 code="HK.00002",
@@ -2040,8 +2053,12 @@ class SignalAnalysisTest(unittest.TestCase):
         report = _render_markdown_report(context)
 
         self.assertIn("本报告使用规则链 **`unified_bullish_top20`**", report)
-        self.assertIn("| # | 代码 | 名称 | 板块 | 方向 | 评分 | 命中规则 | 评分依据 | 热点 | 事件 |", report)
+        self.assertIn("- 恒指震荡走强，科技股和消费股活跃", report)
+        self.assertIn("| # | 代码 | 名称 | 板块 | 方向 | 最终评分 | 命中规则 | 最终评分依据 | 热点 | 事件 |", report)
+        self.assertIn("最终统一评分 = 技术规则分(30%) + 宏观五模块分(30%) + 事件热点分(20%) + 资金风险分(10%) + LLM复核分(10%)", report)
         self.assertIn("左一看涨:左一战法-看涨<br>准备反弹:RSI超卖回升<br>看涨:放量突破", report)
+        self.assertIn("⭐ 重点<br>匹配：AI<br><small>与AI应用和港股科技热点相关</small>", report)
+        self.assertIn("公司事件：腾讯发布AI业务更新<br>公司热点：腾讯云大模型服务热度上升<br>关联热点：AI；与AI应用和港股科技热点相关", report)
         self.assertIn("左一战法-看涨<br>EMA突破", report)
         self.assertIn("| 准备反弹:RSI超卖回升 | rsi_bullish_rebound | 1 | 50% |", report)
         self.assertIn("左一看涨: 左一战法-看涨；准备反弹: RSI超卖回升；看涨: 放量突破", report)
@@ -2368,6 +2385,56 @@ class SignalAnalysisTest(unittest.TestCase):
             self.assertEqual(rows[0]["热点板块关联度"], "100")
             self.assertEqual(rows[0]["热点板块匹配理由"], "新理由")
             self.assertEqual(rows[0]["热点板块来源"], "new_source")
+            self.assertIn("最终统一评分", rows[0])
+            self.assertIn("最终评分公式", rows[0])
+            self.assertIn("技术", rows[0]["最终评分公式"])
+            self.assertIn("五模块", rows[0]["最终评分公式"])
+            self.assertIn("事件热点", rows[0]["最终评分公式"])
+            self.assertIn("资金风险", rows[0]["最终评分公式"])
+            self.assertIn("LLM复核", rows[0]["最终评分公式"])
+            self.assertIn("五模块宏观缺失按50补齐", rows[0]["评分缺失项"])
+
+    def test_compute_unified_score_combines_all_score_components(self):
+        row = ScreeningSignalRow.from_csv_row(
+            {
+                "股票代码": "HK.00001",
+                "市场": "HK",
+                "名称": "Test HK",
+                "满足的条件": "左一看涨:左一战法-看涨|准备反弹:RSI超卖回升|看涨:放量突破",
+                "主力风险分": "20",
+                "宏观分": "62",
+                "行业分": "70",
+                "企业质量分": "55",
+                "估值分": "48",
+                "交易分": "66",
+            },
+            index=0,
+            default_market="HK",
+        )
+        result = SignalAnalysisResult(
+            code="HK.00001",
+            reliability_score=68,
+            confidence_score=80,
+            signal_bias="bullish",
+            positive_factors=["公司事件利好"],
+            risk_factors=["估值需观察"],
+            company_events=["发布新产品"],
+            company_hot_news=["公司新闻"],
+            market_hot_news=["市场热点"],
+            hot_sector_mark="相关",
+            matched_hot_sectors=["AI"],
+            news_impact="利好",
+        )
+
+        unified = compute_unified_score(result, row)
+
+        self.assertGreater(unified.final_score, 60)
+        self.assertIn("技术", unified.formula)
+        self.assertIn("五模块", unified.formula)
+        self.assertIn("事件热点", unified.formula)
+        self.assertIn("资金风险", unified.formula)
+        self.assertIn("LLM复核", unified.formula)
+        self.assertEqual(unified.missing_items, [])
 
     def test_write_analysis_columns_includes_evidence_gap_and_factor_citation_fields(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

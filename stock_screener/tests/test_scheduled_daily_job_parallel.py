@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from datetime import date
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
@@ -51,6 +52,44 @@ class ScheduledDailyJobParallelTest(unittest.TestCase):
         FakeMarketDatabase.etfs_by_market = {}
         FakeMarketDatabase.pools_by_type = {}
         FakeMarketDatabase.instances = []
+
+    def test_unified_bullish_top20_defaults_to_ai_analysis_unless_explicitly_disabled(self):
+        with patch.object(job, "env_flag", return_value=False):
+            self.assertTrue(job.resolve_ai_analysis_enabled(None, "unified_bullish_top20"))
+            self.assertFalse(job.resolve_ai_analysis_enabled(False, "unified_bullish_top20"))
+            self.assertTrue(job.resolve_ai_analysis_enabled(True, "unified_bullish_top20"))
+            self.assertFalse(job.resolve_ai_analysis_enabled(None, "default_zuoyi_and_other"))
+
+    def test_screening_post_processor_passes_chain_metadata_to_ai_analysis(self):
+        processor = job.ScreeningPostProcessor(
+            mysql_config=object(),
+            csv_base="unused",
+            today_str="2026-05-08",
+            enable_ai_analysis=True,
+            chain_key="unified_bullish_top20",
+            chain_name="统一看涨技术规则Top20",
+        )
+        with patch.object(
+            job,
+            "run_signal_analysis_for_market",
+            return_value=SimpleNamespace(
+                warnings=[],
+                artifact_paths=[],
+                results_by_code={},
+                skipped_reason="",
+            ),
+        ) as analyze:
+            processor._run_ai_analysis(
+                market="HK",
+                timeframe="1d",
+                task_id="task-HK",
+                csv_path="/tmp/report.csv",
+                check_date=date(2026, 5, 8),
+                csv_paths=[],
+            )
+
+        self.assertEqual(analyze.call_args.kwargs["chain_key"], "unified_bullish_top20")
+        self.assertEqual(analyze.call_args.kwargs["chain_name"], "统一看涨技术规则Top20")
 
     def run_main(self, tmp_dir, markets="HK,A,US", workers=3):
         argv = [

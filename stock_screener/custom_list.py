@@ -581,6 +581,8 @@ class CustomListScreeningRunner:
             csv_base=f"{csv_base}_custom_{str(job.get('job_id') or task_id)[:8]}",
             today_str=today_str,
             enable_ai_analysis=enable_ai_analysis,
+            chain_key=chain_key,
+            chain_name=options.get("chain_name") or chain_key,
         )
         csv_paths = processor.process(
             market=market,

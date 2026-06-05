@@ -101,6 +101,17 @@ from stock_pool import (
 )
 from timeframe import parse_timeframe
 
+UNIFIED_BULLISH_TOP20_CHAIN_KEY = "unified_bullish_top20"
+
+
+def resolve_ai_analysis_enabled(cli_value: Optional[bool], chain_key: Optional[str]) -> bool:
+    """Resolve AI analysis default; unified bullish chain is a full AI review chain."""
+    if cli_value is not None:
+        return bool(cli_value)
+    if (chain_key or "").strip() == UNIFIED_BULLISH_TOP20_CHAIN_KEY:
+        return True
+    return env_flag("ENABLE_LLM_ANALYSIS", True)
+
 
 # ------------------------------------------------------------------
 # 1. 股票池捞取
@@ -787,11 +798,15 @@ class ScreeningPostProcessor:
         csv_base: str,
         today_str: str,
         enable_ai_analysis: bool = False,
+        chain_key: Optional[str] = None,
+        chain_name: Optional[str] = None,
     ):
         self.mysql_config = mysql_config
         self.csv_base = csv_base
         self.today_str = today_str
         self.enable_ai_analysis = bool(enable_ai_analysis)
+        self.chain_key = chain_key or ""
+        self.chain_name = chain_name or self.chain_key
 
     def process(
         self,
@@ -845,6 +860,8 @@ class ScreeningPostProcessor:
                 csv_path=csv_path,
                 check_date=check_date,
                 timeframe=timeframe,
+                chain_key=self.chain_key,
+                chain_name=self.chain_name,
                 enabled=True,
             )
             for warning in analysis_result.warnings:
@@ -918,6 +935,8 @@ def run_market_screening_worker(
             csv_base=csv_base,
             today_str=today_str,
             enable_ai_analysis=enable_ai_analysis,
+            chain_key=chain_key,
+            chain_name=chain_key,
         ).process(
             market=market,
             timeframe=timeframe,
@@ -1019,11 +1038,7 @@ def main():
     processed_markets: List[str] = []
     skipped_markets: List[str] = []
     market_workers = max(1, args.market_workers)
-    enable_ai_analysis = (
-        env_flag("ENABLE_LLM_ANALYSIS", True)
-        if args.enable_ai_analysis is None
-        else bool(args.enable_ai_analysis)
-    )
+    enable_ai_analysis = resolve_ai_analysis_enabled(args.enable_ai_analysis, args.chain_key)
     if enable_ai_analysis:
         print("搜索+模型辅助分析: 已启用（失败不会影响原始 CSV/飞书发送）")
     else:

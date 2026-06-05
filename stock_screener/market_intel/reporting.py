@@ -19,7 +19,7 @@ def render_single_stock_report(pack: dict, result: dict, report_date: date | Non
     report_date = report_date or date.today()
     code = _text(result.get("code") or pack.get("code") or "-")
     name = _text(result.get("name") or pack.get("name") or code)
-    score = _score(result.get("reliability_score"))
+    score = _final_score(result)
     confidence = _score(result.get("confidence_score"))
     conclusion = _conclusion(result)
     score_rows = _single_score_rows(score, confidence, result, pack)
@@ -41,7 +41,8 @@ def render_single_stock_report(pack: dict, result: dict, report_date: date | Non
         "",
         "| 指标 | 数值 | 普通话解释 |",
         "|---|---:|---|",
-        f"| 综合评分 | {_format_score(score)} | {_score_label(score)} |",
+        f"| 最终统一评分 | {_format_score(score)} | {_score_label(score)} |",
+        f"| 最终评分公式 | {_text(result.get('最终评分公式') or result.get('final_score_formula') or '-')} | 五类因子加权后的唯一主评分 |",
         f"| 模型置信度 | {_format_score(confidence)} | {_confidence_label(confidence)} |",
         f"| 方向判断 | {_direction_label(result.get('signal_bias'))} | 只表示复核方向，不等同于买卖指令 |",
         "",
@@ -93,12 +94,12 @@ def render_multi_stock_report(
     results = [dict(item or {}) for item in (results or [])]
     report_date = report_date or date.today()
     pack_by_code = {_text(pack.get("code")): pack for pack in packs if _text(pack.get("code"))}
-    ranked = sorted(results, key=lambda item: _score(item.get("reliability_score")) or -1, reverse=True)
+    ranked = sorted(results, key=lambda item: _final_score(item) or -1, reverse=True)
     rating_rows = _rating_distribution_rows(ranked)
     top_rows = _top_score_rows(ranked[:10])
-    focus = [item for item in ranked if (_score(item.get("reliability_score")) or 0) >= 70][:10]
-    watch = [item for item in ranked if 50 <= (_score(item.get("reliability_score")) or 0) < 70][:10]
-    risk = [item for item in ranked if (_score(item.get("reliability_score")) or 0) < 50][:10]
+    focus = [item for item in ranked if (_final_score(item) or 0) >= 70][:10]
+    watch = [item for item in ranked if 50 <= (_final_score(item) or 0) < 70][:10]
+    risk = [item for item in ranked if (_final_score(item) or 0) < 50][:10]
 
     lines = [
         "# 多股票市场情报与AI复核报告",
@@ -123,14 +124,14 @@ def render_multi_stock_report(
     lines.extend(_table_rows(rating_rows, ["评级", "股票数量", "占比"]))
     lines.extend([
         "",
-        "## 3. 综合评分排名",
+        "## 3. 最终统一评分排名",
         "",
-        "### 柱状图：综合评分 Top 10",
+        "### 柱状图：最终统一评分 Top 10",
         "",
-        "| 排名 | 股票代码 | 股票名称 | 综合评分 | 命中规则 |",
+        "| 排名 | 股票代码 | 股票名称 | 最终统一评分 | 命中规则 |",
         "|---:|---|---|---:|---|",
     ])
-    lines.extend(_table_rows(top_rows, ["排名", "股票代码", "股票名称", "综合评分", "命中规则"]))
+    lines.extend(_table_rows(top_rows, ["排名", "股票代码", "股票名称", "最终统一评分", "命中规则"]))
     lines.extend([
         "",
         "## 4. 方向判断分布",
@@ -168,11 +169,23 @@ def render_multi_stock_report(
 
 
 def _single_score_rows(score: Optional[float], confidence: Optional[float], result: dict, pack: dict) -> List[dict]:
+    unified_parts = [
+        ("技术规则分", "技术规则分", "30%"),
+        ("宏观五模块分", "宏观五模块分", "30%"),
+        ("事件热点分", "事件热点分", "20%"),
+        ("资金风险分", "资金风险分", "10%"),
+        ("LLM复核分", "LLM复核分", "10%"),
+    ]
+    if any(_score(result.get(key)) is not None for key, _, _ in unified_parts):
+        return [
+            {"来源": label, "分值": _format_score(_score(result.get(key))), "占比": weight}
+            for key, label, weight in unified_parts
+        ]
     evidence_count = len(_pack_items(pack))
     evidence_score = min(100.0, 50.0 + evidence_count * 10.0) if evidence_count else 30.0
     risk_penalty = min(30.0, len(_list(result.get("risk_factors"))) * 8.0 + len(_list(pack.get("data_gaps"))) * 5.0)
     rows = [
-        {"来源": "AI综合评分", "分值": _format_score(score), "占比": "50%"},
+        {"来源": "最终统一评分", "分值": _format_score(score), "占比": "100%"},
         {"来源": "模型置信度", "分值": _format_score(confidence), "占比": "25%"},
         {"来源": "情报完整度", "分值": _format_score(evidence_score), "占比": "15%"},
         {"来源": "风险扣分", "分值": _format_score(max(0.0, 100.0 - risk_penalty)), "占比": "10%"},
@@ -208,7 +221,7 @@ def _rating_distribution_rows(results: List[dict]) -> List[dict]:
     total = max(1, len(results))
     rows = []
     for label, matcher in buckets:
-        count = sum(1 for item in results if matcher(_score(item.get("reliability_score")) if _score(item.get("reliability_score")) is not None else -1))
+        count = sum(1 for item in results if matcher(_final_score(item) if _final_score(item) is not None else -1))
         rows.append({"评级": label, "股票数量": str(count), "占比": _percent(count, total)})
     return rows
 
@@ -221,7 +234,7 @@ def _top_score_rows(results: List[dict]) -> List[dict]:
             "排名": str(index),
             "股票代码": _text(item.get("code") or "-"),
             "股票名称": _text(item.get("name") or item.get("code") or "-"),
-            "综合评分": _format_score(_score(item.get("reliability_score"))),
+            "最终统一评分": _format_score(_final_score(item)),
             "命中规则": _conditions_text(item),
         }
         for index, item in enumerate(results, start=1)
@@ -261,15 +274,15 @@ def _result_table(results: List[dict], fallback: str) -> str:
         rows.append({
             "股票代码": _text(item.get("code") or "-"),
             "股票名称": _text(item.get("name") or item.get("code") or "-"),
-            "综合评分": _format_score(_score(item.get("reliability_score"))),
+            "最终统一评分": _format_score(_final_score(item)),
             "方向": _direction_label(item.get("signal_bias")),
             "命中规则": _conditions_text(item),
             "简明结论": _conclusion(item),
         })
     return "\n".join([
-        "| 股票代码 | 股票名称 | 综合评分 | 方向 | 命中规则 | 简明结论 |",
+        "| 股票代码 | 股票名称 | 最终统一评分 | 方向 | 命中规则 | 简明结论 |",
         "|---|---|---:|---|---|---|",
-        *_table_rows(rows, ["股票代码", "股票名称", "综合评分", "方向", "命中规则", "简明结论"]),
+        *_table_rows(rows, ["股票代码", "股票名称", "最终统一评分", "方向", "命中规则", "简明结论"]),
     ])
 
 
@@ -318,8 +331,8 @@ def _data_gap_text(packs: List[dict], results: List[dict]) -> str:
 def _multi_conclusion(results: List[dict]) -> str:
     if not results:
         return "本次没有可复核的股票结果。"
-    strong = sum(1 for item in results if (_score(item.get("reliability_score")) or 0) >= 70)
-    weak = sum(1 for item in results if (_score(item.get("reliability_score")) or 0) < 50)
+    strong = sum(1 for item in results if (_final_score(item) or 0) >= 70)
+    weak = sum(1 for item in results if (_final_score(item) or 0) < 50)
     return f"本次共复核 {len(results)} 只股票，其中 {strong} 只进入重点关注区，{weak} 只需要谨慎处理。建议先看评分和数据缺失，再结合自身交易计划复盘。"
 
 
@@ -359,7 +372,7 @@ def _conclusion(result: dict) -> str:
     summary = _text(result.get("summary"))
     if summary:
         return summary
-    score = _score(result.get("reliability_score"))
+    score = _final_score(result)
     if score is None:
         return "当前信息不足，适合先补齐数据后再复核。"
     if score >= 70:
@@ -410,6 +423,15 @@ def _score(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _final_score(item: dict) -> Optional[float]:
+    return (
+        _score(item.get("最终统一评分"))
+        or _score(item.get("final_unified_score"))
+        or _score(item.get("final_score"))
+        or _score(item.get("reliability_score"))
+    )
 
 
 def _format_score(value: Optional[float]) -> str:

@@ -166,6 +166,79 @@ def match_hot_sector(sector, name):
     return ("无明确关联", [], f"板块'{sector}'不在当前热点候选列表中")
 
 # ── Scoring ────────────────────────────────────────────────
+def _clamp_score(value):
+    return max(0.0, min(100.0, round(float(value), 1)))
+
+def _num(row, *keys):
+    for key in keys:
+        value = row.get(key, "")
+        if value not in ("", None):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pass
+    return None
+
+def _split_conditions(text):
+    return [part.strip() for part in (text or "").split("|") if part.strip()]
+
+def _technical_score(conditions):
+    items = _split_conditions(conditions)
+    if not items:
+        return 50.0, ["技术规则未命中按50补齐"]
+    bullish = sum(1 for item in items if item.startswith("看涨:"))
+    rebound = sum(1 for item in items if item.startswith("准备反弹:"))
+    zuoyi = sum(1 for item in items if item.startswith("左一看涨:"))
+    generic = len(items) - bullish - rebound - zuoyi
+    score = 50 + bullish * 5 + rebound * 6 + zuoyi * 8 + generic * 4
+    if any("放量" in item for item in items):
+        score += 4
+    if any("RSI超卖" in item or "RSI超卖回升" in item for item in items):
+        score += 3
+    if any("看跌" in item or "超买" in item for item in items):
+        score -= 8
+    return _clamp_score(score), []
+
+def _enterprise_score(row):
+    values = {
+        "宏观": _num(row, "宏观分", "macro_score"),
+        "行业": _num(row, "行业分", "industry_score"),
+        "企业质量": _num(row, "企业质量分", "company_score"),
+        "估值": _num(row, "估值分", "valuation_score"),
+        "交易": _num(row, "交易分", "trading_score"),
+    }
+    total = _num(row, "宏观五模块分", "五模块总分", "enterprise_total_score")
+    if total is None:
+        weights = {"宏观": 0.20, "行业": 0.20, "企业质量": 0.25, "估值": 0.15, "交易": 0.20}
+        total = sum((values[k] if values[k] is not None else 50.0) * weights[k] for k in weights)
+    missing = [f"五模块{k}缺失按50补齐" for k, v in values.items() if v is None]
+    return _clamp_score(total), missing
+
+def _fund_score(mf_risk, mf_score_str):
+    try:
+        if mf_score_str:
+            return _clamp_score(100 - float(mf_score_str)), []
+    except ValueError:
+        pass
+    if mf_risk == "高":
+        return 35.0, []
+    if mf_risk == "中":
+        return 55.0, []
+    if mf_risk in ("低", "无", "无明显风险"):
+        return 80.0, []
+    return 50.0, ["主力资金风险缺失按50补齐"]
+
+def _llm_score(row):
+    score = _num(row, "信号可靠性评分", "reliability_score")
+    confidence = _num(row, "模型置信度", "confidence_score")
+    missing = []
+    if score is None:
+        score = 50.0
+        missing.append("LLM复核分缺失按50补齐")
+    elif confidence is not None:
+        score = score * 0.8 + confidence * 0.2
+    return _clamp_score(score), missing
+
 def score_stock(row):
     conditions = row.get("满足的条件", "").strip()
     direction_raw = row.get("左一方向", "").strip()
@@ -177,55 +250,29 @@ def score_stock(row):
 
     hot_mark, matched, hot_reason = match_hot_sector(sector, name)
 
-    score = 50.0
-    factors = []
-
     # Direction
     if "看跌" in direction_raw and "看涨" not in direction_raw:
         dir_label = "看跌"
-        score -= 5
-        factors.append("看跌信号(-5)")
     elif "看涨" in direction_raw and "看跌" in direction_raw:
         dir_label = "中性"
-        score -= 10
-        factors.append("多空并存(-10)")
     elif "看涨" in direction_raw:
         dir_label = "看涨"
-        factors.append("看涨信号(+0)")
     else:
         dir_label = "信息不足"
 
-    # Signal conditions
-    if "放量超前三日" in conditions:
-        score += 8
-        factors.append("放量(+8)")
-    if "RSI超卖" in conditions:
-        score += 5
-        factors.append("RSI超卖(+5)")
-    if "RSI超买" in conditions:
-        score -= 5
-        factors.append("RSI超买(-5)")
-
-    # Breakthrough speed
-    if breakthrough_days and breakthrough_days.isdigit():
-        d = int(breakthrough_days)
-        if d <= 2:
-            score += 3
-            factors.append(f"快速突破{d}日(+3)")
-        elif d >= 8:
-            score -= 3
-            factors.append(f"慢速突破{d}日(-3)")
-
-    # Hot sector
+    event_hot_score = 50.0
+    event_notes = []
     if hot_mark == "重点":
-        score += 15
-        factors.append("热点匹配(+15)")
+        event_hot_score += 15
+        event_notes.append("热点重点匹配")
     elif hot_mark == "相关":
-        score += 8
-        factors.append("热点相关(+8)")
+        event_hot_score += 10
+        event_notes.append("热点相关")
     elif hot_mark == "观察":
-        score += 5
-        factors.append("热点观察(+5)")
+        event_hot_score += 5
+        event_notes.append("热点观察")
+    else:
+        event_notes.append("公司事件/热点新闻缺失按50基线处理")
 
     # Main force risk
     mf_level = "数据不足"
@@ -234,39 +281,33 @@ def score_stock(row):
         try:
             ms = float(mf_score_str) if mf_score_str else 0
             if ms > 30:
-                score -= 10
                 mf_level = "中"
-                factors.append(f"主力中风险(-10)")
             if ms > 50:
-                score -= 10
                 mf_level = "高"
-                factors.append(f"主力高风险(-10)")
         except ValueError:
             pass
 
-    # PE/market cap bonus (if available)
     pe = row.get("pe", "").strip()
     mcap_str = row.get("市值", "").strip()
-    has_pe = bool(pe)
-    mcap_val = None
-    if mcap_str:
-        try:
-            mcap_val = float(mcap_str)
-        except ValueError:
-            pass
-    if mcap_val and mcap_val > 1e11:  # >1000亿
-        score += 5
-        factors.append("大市值+千亿(+5)")
-    elif mcap_val and mcap_val > 1e10:  # >100亿
-        score += 3
-        factors.append("大市值+百亿(+3)")
-    elif not pe and not mcap_str:
-        score -= 2
-        factors.append("缺基本面(-2)")
 
-    # Clamp
-    score = max(10, min(95, score))
-    score = round(score, 2)
+    technical_score, technical_missing = _technical_score(conditions)
+    enterprise_score, enterprise_missing = _enterprise_score(row)
+    event_hot_score = _clamp_score(event_hot_score)
+    fund_score, fund_missing = _fund_score(mf_level, mf_score_str)
+    llm_score, llm_missing = _llm_score(row)
+    score = _clamp_score(
+        technical_score * 0.30
+        + enterprise_score * 0.30
+        + event_hot_score * 0.20
+        + fund_score * 0.10
+        + llm_score * 0.10
+    )
+    formula = (
+        f"技术 {technical_score:.1f}*30% + 五模块 {enterprise_score:.1f}*30% + "
+        f"事件热点 {event_hot_score:.1f}*20% + 资金风险 {fund_score:.1f}*10% + "
+        f"LLM复核 {llm_score:.1f}*10% = **{score:.1f}**"
+    )
+    missing_items = technical_missing + enterprise_missing + fund_missing + llm_missing
 
     # Signal bias
     if "看涨" in direction_raw and "看跌" not in direction_raw:
@@ -289,7 +330,13 @@ def score_stock(row):
         "direction": dir_label,
         "bias": bias,
         "score": score,
-        "score_factors": " | ".join(factors),
+        "score_factors": formula,
+        "technical_score": technical_score,
+        "enterprise_score": enterprise_score,
+        "event_hot_score": event_hot_score,
+        "fund_score": fund_score,
+        "llm_score": llm_score,
+        "missing_items": "；".join(missing_items),
         "hot_mark": hot_mark,
         "hot_matched": "; ".join(matched) if matched else "—",
         "hot_reason": hot_reason,
@@ -383,6 +430,16 @@ def dir_emoji(d):
 def hot_emoji(m):
     return {"重点": "⭐", "相关": "🔗", "观察": "👀", "无明确关联": "➖", "行业资料不足": "❓"}.get(m, "❓")
 
+def hot_cell(r):
+    parts = [f"{hot_emoji(r['hot_mark'])} {r['hot_mark']}"]
+    if r.get("hot_matched") and r["hot_matched"] != "—":
+        parts.append(f"匹配：{tbl(r['hot_matched'])}")
+    if r.get("hot_reason"):
+        parts.append(f"<small>{tbl(r['hot_reason'])}</small>")
+    elif r.get("hot_mark") not in ("无明确关联", "行业资料不足", "未知"):
+        parts.append("<small>暂无明确匹配说明</small>")
+    return "<br>".join(parts)
+
 def split_conditions(text):
     return [part.strip() for part in (text or "").split("|") if part.strip()]
 
@@ -464,10 +521,10 @@ L.extend([
     f"本报告使用规则链 **`{REPORT_CHAIN_KEY}`**（{MARKET}）的评分框架：",
     "",
     "```",
-    "综合评分 = 技术规则面(60%) + 宏观五模块(40%)",
+    "最终统一评分 = 技术规则分(30%) + 宏观五模块分(30%) + 事件热点分(20%) + 资金风险分(10%) + LLM复核分(10%)",
     "```",
     "",
-    "### 2.1 本期技术规则（权重 60%）",
+    "### 2.1 本期技术规则（用于入围与技术分）",
     "",
     f"从 CSV 中动态提取，以下为本次 {len(rows)} 只股票实际触发的技术规则：",
     "",
@@ -486,33 +543,31 @@ else:
 
 L.extend([
     "",
-    "### 2.2 辅助调整因子",
+    "### 2.2 最终统一评分因子",
     "",
-    "以下因子不在规则链中，但用于辅助微调评分：",
-    "",
-    "| 调整因子 | 影响 | 说明 |",
+    "| 分项 | 权重 | 说明 |",
     "|---|---|---|",
-    "| 突破速度 | ±3分 | ≤2日快速突破+3（动能强）；≥8日慢速突破-3（动能弱） |",
-    "| 热点板块匹配 | +5~15分 | 直接匹配热点+15；相关+8；观察+5；含名称推断兜底 |",
-    "| 市值规模 | +3~5分 | 百亿以上+3；千亿以上+5 |",
-    "| 主力流出风险 | -10~20分 | 中风险-10；高风险-20；数据不足不影响 |",
-    "| 基本面缺失 | -2分 | PE/市值均缺失扣2分（信用惩罚） |",
+    "| 技术规则分 | 30% | 看涨、准备反弹、左一看涨命中数与放量/RSI等质量信号 |",
+    "| 宏观五模块分 | 30% | 宏观、行业、企业质量、估值、交易；缺失模块按50中性补齐 |",
+    "| 事件热点分 | 20% | 公司事件、公司热点新闻、市场热点新闻、热点板块匹配 |",
+    "| 资金风险分 | 10% | 主力风险分或主力风险等级；缺失按50中性补齐 |",
+    "| LLM复核分 | 10% | 信号可靠性、模型置信度、利好/风险因素和方向判断 |",
     "",
-    "### 2.2 宏观五模块（权重 40%）",
+    "### 2.3 宏观五模块（纳入最终统一评分30%）",
     "",
-    "规则链调用 `enterprise_potential_analysis`，输出 BUY/WATCH/SKIP：",
+    "若 CSV 已包含五模块字段则直接使用；缺失模块按50中性补齐，并在评分缺失项中说明：",
     "",
     "| 模块 | 权重(宏观部分) | 核心指标 | 本期状态 |",
     "|---|---|---|---|",
-    f"| **① 宏观** | 30% | CPI/PMI/M2/LPR/VIX/DXY/美债 | {'✅ 数据可用' if MARKET == 'A' else '⚠️ 部分可用（依赖yfinance）'} |",
-    "| **② 行业** | 25% | 行业景气度、板块资金流、热点匹配 | ⚠️ 热点手动配置，板块数据覆盖率50% |",
-    "| **③ 企业质量** | 25% | 盈利、成长性、财务健康 | ❌ PE/市值数据大面积缺失 |",
-    "| **④ 估值** | 10% | PE分位、PB、PS估值水位 | ❌ 同企业质量，数据不足 |",
-    "| **⑤ 交易** | 10% | 量价信号、技术形态确认 | ✅ 左一战法+RSI+放量数据完整 |",
+    "| **① 宏观** | 20% | CPI/PMI/M2/LPR/VIX/DXY/美债 | 实算或50中性补齐 |",
+    "| **② 行业** | 20% | 行业景气度、板块资金流、热点匹配 | 实算或50中性补齐 |",
+    "| **③ 企业质量** | 25% | 盈利、成长性、财务健康 | 实算或50中性补齐 |",
+    "| **④ 估值** | 15% | PE分位、PB、PS估值水位 | 实算或50中性补齐 |",
+    "| **⑤ 交易** | 20% | 量价信号、技术形态确认 | 实算或50中性补齐 |",
     "",
-    "> ⚠️ **本期限制**：宏观五模块中③④因基本面数据缺失无法计算，实际评分以左一技术面为主。完整评分需网络恢复后重跑。",
+    "> 若宏观因子或五模块数据未采集成功，最终评分不会中断生成，而是按50中性补齐并在总览的评分依据中标注缺失。",
     "",
-    "### 2.3 宏观因子采集（`macro_factor_analysis`）",
+    "### 2.4 宏观因子采集（`macro_factor_analysis`）",
     "",
     "| 因子 | 港股来源 | 本期状态 |",
     "|---|---|---|",
@@ -523,7 +578,7 @@ L.extend([
     "| 美债收益率 | yfinance → 全球指标 | ⚠️ 需网络 |",
     "| 恒指 / SP500 | yfinance → 全球指标 | ⚠️ 需网络 |",
     "",
-    "> 本期宏观因子因 DNS 异常全部未能采集，评分中宏观五模块均无法计算，报告中评分以左一技术面为主。",
+    "> 宏观因子采集状态只说明数据来源可用性；最终分会在缺失时按50中性补齐并显示缺失项。",
     "",
     "**评分区间解读**：80+ 重点关注 / 60-79 可关注 / 40-59 偏弱观察 / <40 谨慎",
     "",
@@ -531,7 +586,7 @@ L.extend([
     "",
     "## 三、信号复核总览",
     "",
-    "| # | 代码 | 名称 | 板块 | 方向 | 评分 | 命中规则 | 评分依据 | 热点匹配 | 公司事件 |",
+    "| # | 代码 | 名称 | 板块 | 方向 | 最终评分 | 命中规则 | 最终评分依据 | 热点匹配 | 公司事件 |",
     "|---|---|---|---|---|---|---|---|---|---|",
 ])
 
@@ -542,7 +597,7 @@ for i, r in enumerate(ranked, 1):
         f"**{fmt_score(r['score'])}** | "
         f"{rule_text(r['conditions'])} | "
         f"{tbl(r['score_factors'])} | "
-        f"{hot_emoji(r['hot_mark'])} {r['hot_mark']}<br><small>{tbl(r['hot_matched'])}</small> | "
+        f"{hot_cell(r)} | "
         f"{tbl(r['company_events'])} |"
     )
 
