@@ -24,8 +24,8 @@ DEFAULT_MACRO_SUB_WEIGHTS = {
 
 DEFAULT_MACRO_SCORE_THRESHOLD = 60.0
 JSON_SAFE_MAX_DEPTH = 100
-DEFAULT_TECHNICAL_WEIGHT = 0.6
-DEFAULT_MACRO_WEIGHT = 0.4
+DEFAULT_TECHNICAL_WEIGHT = 0.0
+DEFAULT_MACRO_WEIGHT = 1.0
 
 
 @dataclass(frozen=True)
@@ -105,10 +105,16 @@ def aggregate_rule_scores(
         if strategy_category == "macro":
             if rule_type != "strategy":
                 continue
-            if "macro_score" in details:
-                macro_score = _coerce_score(details.get("macro_score"))
-                if macro_score is not None:
-                    macro_values.append(_clamp_score(macro_score))
+            # 优先取 total_score（EnterprisePotentialAnalysisStrategizer 的五模块综合分），
+            # 其次取 macro_score（MarketIntelMacroScoreStrategizer 的宏观分），
+            # 两者都缺失时不纳入 macro_values。
+            score_value = None
+            if "total_score" in details:
+                score_value = _coerce_score(details.get("total_score"))
+            elif "macro_score" in details:
+                score_value = _coerce_score(details.get("macro_score"))
+            if score_value is not None:
+                macro_values.append(_clamp_score(score_value))
             continue
 
         if rule_type == "strategy":

@@ -367,6 +367,9 @@ class SearchContextStep(AnalysisStep):
                     *documents,
                 ])
 
+        # Apply Chinese financial sentiment pre-scoring to all company documents
+        _apply_sentiment_to_company_documents(context)
+
 
 class MarketIntelEvidenceStep(AnalysisStep):
     name = "MarketIntelEvidenceStep"
@@ -589,6 +592,9 @@ class LLMBatchAnalysisStep(AnalysisStep):
             context.warnings.append(context.skipped_reason)
             return
 
+        # Fetch real-time stock snapshots for context enrichment
+        stock_snapshots = _fetch_stock_snapshots(context.rows)
+
         batch_size = max(1, int(context.settings.batch_size))
         failed_rows: Dict[str, str] = {}
         success_count = 0
@@ -602,6 +608,7 @@ class LLMBatchAnalysisStep(AnalysisStep):
                     sector_documents=context.sector_documents,
                     hot_sectors=context.hot_sectors,
                     company_documents=context.company_documents,
+                    stock_snapshots=stock_snapshots,
                 )
             except Exception as exc:
                 context.warnings.extend(_drain_llm_provider_warnings(context.llm_provider))
@@ -739,9 +746,45 @@ class SignalAnalysisChain:
         ]
 
     def run(self, context: SignalAnalysisContext) -> AnalysisRunResult:
-        for step in self.steps:
+        from concurrent.futures import ThreadPoolExecutor
+
+        i = 0
+        while i < len(self.steps):
             if context.aborted:
                 break
+
+            step = self.steps[i]
+
+            # ── Parallel: MarketIntelEvidenceStep + SearchContextStep ──
+            if (
+                i + 1 < len(self.steps)
+                and isinstance(step, MarketIntelEvidenceStep)
+                and isinstance(self.steps[i + 1], SearchContextStep)
+            ):
+                step5 = self.steps[i + 1]
+                errors: List[str] = []
+
+                def _run_and_collect(s, ctx):
+                    try:
+                        s.run(ctx)
+                        return None
+                    except Exception as exc:
+                        return f"{s.name} 执行失败: {type(exc).__name__}: {exc}"
+
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    f4 = executor.submit(_run_and_collect, step, context)
+                    f5 = executor.submit(_run_and_collect, step5, context)
+                    for err in (f4.result(), f5.result()):
+                        if err:
+                            errors.append(err)
+
+                if errors:
+                    context.warnings.extend(errors)
+                    # Don't abort — both steps are best-effort, other steps can still proceed
+
+                i += 2
+                continue
+
             try:
                 step.run(context)
             except Exception as exc:
@@ -749,6 +792,8 @@ class SignalAnalysisChain:
                 context.skipped_reason = f"{step.name} 执行失败"
                 context.warnings.append(f"{step.name} 执行失败: {type(exc).__name__}: {exc}")
                 break
+
+            i += 1
 
         return AnalysisRunResult(
             success=bool(context.artifact_paths),
@@ -766,6 +811,189 @@ def _drain_llm_provider_warnings(provider: LLMProvider) -> List[str]:
     if not callable(drain):
         return []
     return list(drain())
+
+
+def _fetch_stock_snapshots(
+    rows: List["ScreeningSignalRow"],
+) -> Dict[str, Dict[str, object]]:
+    """Fetch real-time stock snapshot data (price, change%, PE, etc.).
+
+    Uses Sina API for A-shares; returns empty dict for unavailable markets.
+    Each snapshot dict is safe to inject into the LLM prompt.
+    """
+    snapshots: Dict[str, Dict[str, object]] = {}
+    if not rows:
+        return snapshots
+
+    a_share_rows = [r for r in rows if _row_market(r) == "A" and r.code and not getattr(r, "is_etf", False)]
+    if not a_share_rows:
+        return snapshots
+
+    try:
+        import requests
+    except ImportError:
+        return snapshots
+
+    # Build Sina batch query: up to 50 codes per request
+    sina_codes = []
+    for row in a_share_rows[:50]:
+        ticker = _normalize_sina_ticker(row.code)
+        if not ticker:
+            continue
+        sina_codes.append((row.code, ticker))
+
+    if not sina_codes:
+        return snapshots
+
+    query_str = ",".join(t for _, t in sina_codes)
+    url = f"https://hq.sinajs.cn/list={query_str}"
+    try:
+        resp = requests.get(url, headers={"Referer": "https://finance.sina.com.cn"}, timeout=10)
+        resp.raise_for_status()
+        resp.encoding = "gbk"
+        raw = resp.text
+    except Exception:
+        return snapshots
+
+    # Parse Sina response: var hq_str_SH600519="name,open,prev_close,price,high,low,..."
+    for code, ticker in sina_codes:
+        try:
+            prefix = f'var hq_str_{ticker}="'
+            start = raw.find(prefix)
+            if start == -1:
+                continue
+            start += len(prefix)
+            end = raw.find('"', start)
+            if end == -1:
+                continue
+            fields = raw[start:end].split(",")
+            if len(fields) < 32:
+                continue
+
+            snapshots[code] = {
+                "price": _safe_float(fields[3]),
+                "change_pct": _safe_float(fields[9]) if len(fields) > 9 else None,
+                "volume": _safe_int(fields[8]) if len(fields) > 8 else None,
+                "turnover_rate": None,
+                "total_mv_cny_billion": None,
+                "pe_ttm": _safe_float(fields[31]) if len(fields) > 31 else None,
+                "source": "sina",
+            }
+        except Exception:
+            continue
+
+    return snapshots
+
+
+def _row_market(row) -> str:
+    market = str(getattr(row, "market", "") or "").upper()
+    if market in ("A", "HK", "US"):
+        return market
+    code = str(getattr(row, "code", "") or "").strip().upper()
+    if code.startswith(("SH", "SZ", "BJ")) or code.endswith((".SH", ".SZ", ".BJ", ".SS")):
+        return "A"
+    if code.startswith("HK") or code.endswith(".HK"):
+        return "HK"
+    if code.startswith("US") or code.endswith((".US", ".O", ".N")):
+        return "US"
+    return market or "A"
+
+
+def _normalize_sina_ticker(code: str) -> str:
+    """Convert internal code to Sina ticker format (e.g. 'sh600519')."""
+    value = str(code).strip()
+    if "." in value:
+        prefix, ticker = value.split(".", 1)
+        prefix = prefix.upper()
+        if prefix in ("SH", "SZ", "BJ", "SS"):
+            return f"{prefix.lower()}{ticker}"
+        if prefix == "HK":
+            return ""  # Sina uses different format for HK
+        if prefix == "US":
+            return ""  # Sina US format differs
+    if value.upper().startswith("SH"):
+        return value.lower()
+    if value.upper().startswith("SZ"):
+        return value.lower()
+    if value.upper().startswith("BJ"):
+        return value.lower()
+    if value.isdigit() and len(value) >= 6:
+        val6 = value[-6:]
+        if val6.startswith(("60", "68", "90")):
+            return f"sh{val6}"
+        if val6.startswith(("00", "30", "20")):
+            return f"sz{val6}"
+        if val6.startswith(("43", "83", "87", "88")):
+            return f"bj{val6}"
+    return ""
+
+
+def _safe_float(val: str) -> Optional[float]:
+    try:
+        return float(str(val).strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_int(val: str) -> Optional[int]:
+    try:
+        return int(float(str(val).strip()))
+    except (ValueError, TypeError):
+        return None
+
+
+def _apply_sentiment_to_company_documents(context: "SignalAnalysisContext") -> None:
+    """Pre-score company documents with Chinese financial sentiment lexicon.
+
+    Injects a ``[情感:正面|得分:+2.5]`` tag into each document's content field
+    and sets ``doc.score`` to the sentiment score for downstream use.
+    """
+    try:
+        from .sentiment import get_default_analyzer
+    except ImportError:
+        return
+
+    analyzer = get_default_analyzer()
+    for code, docs in context.company_documents.items():
+        updated: List[SearchDocument] = []
+        for doc in docs:
+            text = f"{doc.title} {doc.content}"
+            result = analyzer.analyze(text)
+            new_content = f"{analyzer.analyze_to_tag(text)} {doc.content}"
+            updated.append(
+                SearchDocument(
+                    title=doc.title,
+                    url=doc.url,
+                    content=new_content,
+                    score=result.score,
+                    query=doc.query,
+                )
+            )
+        context.company_documents[code] = updated
+
+
+_SEARCH_SOURCE_DISPLAY_MAP = {
+    "bing_baidu": "Bing/Baidu（免费）",
+    "tavily": "Tavily",
+    "zhipuai": "ZhipuAI",
+    "zhipu": "ZhipuAI",
+}
+
+
+def _format_search_source_label(context: SignalAnalysisContext) -> str:
+    """Dynamically build the search source label for the report banner."""
+    provider_name = _current_company_news_provider(context.search_provider)
+    display = _SEARCH_SOURCE_DISPLAY_MAP.get(provider_name, provider_name)
+    if display:
+        return display
+
+    # Fallback: enumerate all available provider names
+    candidates = _company_news_provider_candidates(context.search_provider)
+    labels = [
+        _SEARCH_SOURCE_DISPLAY_MAP.get(c, c)
+        for c in candidates
+    ]
+    return "/".join(labels) if labels else "Tavily/ZhipuAI"
 
 
 def _company_news_provider_candidates(search_provider: SearchProvider) -> List[str]:
@@ -1297,50 +1525,15 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         return {"重点": "⭐", "相关": "🔗", "观察": "👀"}.get(mark or "", "")
 
     def _build_score_with_formula(item, row):
-        """Compute heuristic score with transparent formula."""
-        score = 50.0
-        parts = ["50"]
-        conds = (row.conditions_met or "") if row else ""
-        if "看跌" in conds and "看涨" not in conds:
-            score -= 5; parts.append("看跌(-5)")
-        elif "看涨" in conds and "看跌" in conds:
-            score -= 10; parts.append("多空并存(-10)")
-        if "放量超前三日" in conds:
-            score += 8; parts.append("放量(+8)")
-        if "RSI超卖" in conds:
-            score += 5; parts.append("RSI超卖(+5)")
-        if "RSI超买" in conds:
-            score -= 5; parts.append("RSI超买(-5)")
-        raw = getattr(row, "raw", {}) if row else {}
-        bd = (raw.get("左一突破用时", "") or raw.get("breakthrough_days", "")).strip()
-        if bd and bd.isdigit():
-            d = int(bd)
-            if d <= 2:
-                score += 3; parts.append(f"快突{d}日(+3)")
-            elif d >= 8:
-                score -= 3; parts.append(f"慢突{d}日(-3)")
-        mark = item.hot_sector_mark or ""
-        if mark == "重点":
-            score += 15; parts.append("热点匹配(+15)")
-        elif mark == "相关":
-            score += 8; parts.append("热点相关(+8)")
-        elif mark == "观察":
-            score += 5; parts.append("热点观察(+5)")
-        mcap_str = (getattr(row, "market_cap", "") or "").strip() if row else ""
-        if mcap_str:
-            try:
-                mc = float(mcap_str)
-                if mc > 1e11: score += 5; parts.append("千亿市值(+5)")
-                elif mc > 1e10: score += 3; parts.append("百亿市值(+3)")
-            except ValueError: pass
-        mf_level = (row.main_force_risk_level or "") if row and hasattr(row, "main_force_risk_level") else ""
-        if mf_level == "中": score -= 10; parts.append("主力中风险(-10)")
-        elif mf_level == "高": score -= 20; parts.append("主力高风险(-20)")
-        pe_str = (getattr(row, "pe_ratio", "") or "").strip() if row else ""
-        if not pe_str and not mcap_str:
-            score -= 2; parts.append("缺基本面(-2)")
-        score = max(10, min(95, round(score, 2)))
-        return score, " + ".join(parts) + f" = **{score:.1f}**"
+        """Display unified score formula (delegates to compute_unified_score).
+
+        技术规则决定 Top20 入围（权重 0%），最终评分口径：
+          五模块×40% + 事件热点×30% + 资金风险×20% + LLM复核×10%
+        """
+        unified = unified_by_code.get(item.code)
+        if unified is not None:
+            return unified.final_score, unified.formula
+        return 50.0, "评分缺失，按50中性补齐"
 
     def _rule_text(row, *, limit=6):
         conds = (row.conditions_met or "") if row else ""
@@ -1468,10 +1661,10 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         f"本报告使用规则链 **`{report_chain_key}`**（{market_name}）的评分框架：",
         "",
         "```",
-        "最终统一评分 = 技术规则分(30%) + 宏观五模块分(30%) + 事件热点分(20%) + 资金风险分(10%) + LLM复核分(10%)",
+        "最终统一评分 = 技术规则分(0%) + 宏观五模块分(40%) + 事件热点分(30%) + 资金风险分(20%) + LLM复核分(10%)",
         "```",
         "",
-        "### 1.1 本期技术规则（用于入围与技术分）",
+        "### 1.1 本期技术规则（用于入围，权重0%不纳入最终评分）",
         "",
     ]
 
@@ -1493,13 +1686,13 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         "| 分项 | 权重 | 说明 |",
         "|---|---|---|",
-        "| 技术规则分 | 30% | 看涨、准备反弹、左一看涨命中数与放量/RSI等质量信号 |",
-        "| 宏观五模块分 | 30% | 宏观、行业、企业质量、估值、交易；缺失模块按50中性补齐 |",
-        "| 事件热点分 | 20% | 公司事件、公司热点新闻、市场热点新闻、热点板块匹配 |",
-        "| 资金风险分 | 10% | 主力风险分或主力风险等级；缺失按50中性补齐 |",
+        "| 技术规则分 | 0% | 看涨、准备反弹、左一看涨命中数用于入围Top20，不纳入最终评分 |",
+        "| 宏观五模块分 | 40% | 宏观、行业、企业质量、估值、交易；缺失模块按50中性补齐 |",
+        "| 事件热点分 | 30% | 公司事件、公司热点新闻、市场热点新闻、热点板块匹配 |",
+        "| 资金风险分 | 20% | 主力风险分或主力风险等级；缺失按50中性补齐 |",
         "| LLM复核分 | 10% | 信号可靠性、模型置信度、利好/风险因素和方向判断 |",
         "",
-        "### 1.3 宏观五模块（`enterprise_potential_analysis`，纳入最终统一评分30%）",
+        "### 1.3 宏观五模块（`enterprise_potential_analysis`，纳入最终统一评分40%）",
         "",
         "| 模块 | 权重 | 核心指标 |",
         "|---|---|---|",
@@ -1627,7 +1820,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "",
         f"- 规则链：{report_chain_key}（{market_name}）",
         f"- 热点板块：{hot_sector_text}",
-        f"- 数据来源：Futu OpenD + YFinance + Tavily/ZhipuAI + DeepSeek",
+        f"- 数据来源：Futu OpenD + YFinance + {_format_search_source_label(context)} + DeepSeek",
         f"- 分析引擎：{context.llm_provider.model_name if hasattr(context.llm_provider, 'model_name') else 'LLM'}",
         "",
         "> 该分析仅用于辅助判断，不构成投资建议。",

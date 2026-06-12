@@ -170,10 +170,10 @@ def render_multi_stock_report(
 
 def _single_score_rows(score: Optional[float], confidence: Optional[float], result: dict, pack: dict) -> List[dict]:
     unified_parts = [
-        ("技术规则分", "技术规则分", "30%"),
-        ("宏观五模块分", "宏观五模块分", "30%"),
-        ("事件热点分", "事件热点分", "20%"),
-        ("资金风险分", "资金风险分", "10%"),
+        ("技术规则分", "技术规则分", "0%"),
+        ("宏观五模块分", "宏观五模块分", "40%"),
+        ("事件热点分", "事件热点分", "30%"),
+        ("资金风险分", "资金风险分", "20%"),
         ("LLM复核分", "LLM复核分", "10%"),
     ]
     if any(_score(result.get(key)) is not None for key, _, _ in unified_parts):

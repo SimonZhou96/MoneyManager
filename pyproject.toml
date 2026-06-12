@@ -5,4 +5,7 @@ requires-python = ">=3.13"
 dependencies = [
     "db>=0.1.1",
     "futu>=0.0.1",
+    "pandas>=3.0.3",
+    "pandas-stubs~=3.0.3",
+    "pymysql>=1.2.0",
 ]

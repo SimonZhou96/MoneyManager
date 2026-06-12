@@ -526,6 +526,7 @@ def load_passed_screening_records(mysql_config: MySqlConfig, task_id: str, marke
         code, name, fd_raw, sector, industry, market_cap, pe_ratio = row
         conditions = []
         zuoyi_summary = {}
+        enterprise_scores = {}
         if fd_raw:
             try:
                 fd = json.loads(fd_raw) if isinstance(fd_raw, str) else fd_raw
@@ -542,6 +543,20 @@ def load_passed_screening_records(mysql_config: MySqlConfig, task_id: str, marke
                             extracted_zuoyi = _extract_zuoyi_csv_fields(d)
                             if extracted_zuoyi:
                                 zuoyi_summary = extracted_zuoyi
+                        # 提取 enterprise_potential_analysis 的五模块分
+                        if d.get("rule_key") == "enterprise_potential_analysis":
+                            details = d.get("details") if isinstance(d.get("details"), dict) else {}
+                            for dk, record_key in (
+                                ("macro_score", "宏观分"),
+                                ("industry_score", "行业分"),
+                                ("company_score", "企业质量分"),
+                                ("valuation_score", "估值分"),
+                                ("trading_score", "交易分"),
+                                ("total_score", "五模块总分"),
+                            ):
+                                val = details.get(dk)
+                                if val is not None:
+                                    enterprise_scores[record_key] = val
             except Exception:
                 pass
         record = {
@@ -553,6 +568,7 @@ def load_passed_screening_records(mysql_config: MySqlConfig, task_id: str, marke
             "market_cap": market_cap,
             "pe_ratio": pe_ratio,
             "conditions_met": "|".join(conditions) if conditions else "",
+            **enterprise_scores,
         }
         record.update(zuoyi_summary)
         passed.append(record)
@@ -736,6 +752,16 @@ def write_screening_csv(records: List[dict], csv_path: str) -> None:
     columns.extend(MAIN_FORCE_CSV_COLUMNS)
     if any(r.get("zuoyi_support_zone") for r in records):
         columns.extend(ZUOYI_CSV_COLUMNS)
+    # 五模块企业潜力评分列（由 unified_bullish_top20 的 enterprise_potential_analysis 产出）
+    if any(r.get("宏观分") is not None or r.get("五模块总分") is not None for r in records):
+        columns.extend([
+            ("宏观分", "宏观分"),
+            ("行业分", "行业分"),
+            ("企业质量分", "企业质量分"),
+            ("估值分", "估值分"),
+            ("交易分", "交易分"),
+            ("五模块总分", "五模块总分"),
+        ])
     # 追加五因素列（如果 records 中存在相关数据）
     if any(r.get("five_factor_total") for r in records):
         columns.extend(FIVE_FACTOR_CSV_COLUMNS)

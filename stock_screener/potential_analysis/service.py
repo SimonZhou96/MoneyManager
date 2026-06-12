@@ -89,6 +89,7 @@ class BatchCompanyFetcher(BatchFetcher):
         except Exception as e:
             logger.warning(f"yf.Tickers 批量失败: {e}, fallback 逐股")
             for c, t in ticker_map.items():
+                per_ticker_sleep()
                 results[c] = self._fetch_one(yf, t, c)
             return results
 
@@ -376,7 +377,13 @@ class EnterprisePotentialService:
 
         quote_ctx = context.get_cache("futu_quote_ctx")
         verbose = getattr(context, "verbose", False)
-        _CHUNK = 50
+        from yf_ratelimit import (
+            yf_sleep, retry_on_rate_limit, per_ticker_sleep, _is_rate_limit_error
+        )
+        # 本地别名，避免循环引用
+        _is_rate_limit_exc = _is_rate_limit_error
+
+        _CHUNK = 25  # 从 50 降到 25，降低单次请求压力
 
         # ── 2. company + valuation + industry — 合并为一次 Tickers ──
         merged_mods = ["company", "valuation", "industry"]
@@ -402,7 +409,19 @@ class EnterprisePotentialService:
                     ticker_map = {c: company_fet._to_yf(market, c) for c in chunk}
 
                     import yfinance as yf
-                    tickers = yf.Tickers(" ".join(ticker_map.values()))
+                    ticker_str = " ".join(ticker_map.values())
+
+                    # yf.Tickers() 重试 3 次应对 429
+                    for retry in range(3):
+                        try:
+                            tickers = yf.Tickers(ticker_str)
+                            break
+                        except Exception as e_:
+                            if retry < 2 and _is_rate_limit_exc(e_):
+                                yf_sleep(10.0, 5.0)
+                                import yfinance as yf
+                            else:
+                                raise
 
                     chunk_ok = 0
                     for code, yf_code in ticker_map.items():
@@ -467,7 +486,7 @@ class EnterprisePotentialService:
                     print(f"  ⏳ [{market}] company/val/ind: {done}/{total} ({chunk_ok} ok, {chunk_ms}ms)")
 
                     if chunk_idx + _CHUNK < total:
-                        time.sleep(min(1.5 + chunk_idx * 0.1, 5.0))
+                        yf_sleep(3.0, 1.0)  # 3s 基础 + 0-1s 抖动
 
                 # Futu 兜底
                 if quote_ctx is not None:
@@ -529,7 +548,7 @@ class EnterprisePotentialService:
                     print(f"  ⏳ [{market}] trading: {done}/{total} ({chunk_ok} ok, {chunk_ms}ms)")
 
                     if chunk_idx + _CHUNK < total:
-                        time.sleep(min(1.5 + chunk_idx * 0.1, 5.0))
+                        yf_sleep(3.0, 1.0)  # 3s 基础 + 0-1s 抖动
 
                 if quote_ctx is not None:
                     from .builders import fill_snapshots_from_futu, _snapshot_is_empty

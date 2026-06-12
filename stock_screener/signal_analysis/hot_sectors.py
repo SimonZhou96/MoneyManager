@@ -76,12 +76,9 @@ class ManualHotSectorConfig:
 
 
 class WebSearchHotSectorProvider:
-    """Dynamic hot-sector discovery via DeepSeek LLM (with Tavily fallback).
+    """Dynamic hot-sector discovery via DeepSeek LLM (with Bing/Baidu → Tavily → ZhipuAI fallback).
 
-    DeepSeek can reason about current market hot sectors. Much cleaner than
-    keyword extraction from raw search results.
-
-    Priority: DeepSeek (default) → Tavily (fallback) → keyword heuristics.
+    Priority: DeepSeek (default) → Bing/Baidu (free) → Tavily → ZhipuAI.
     """
 
     name = "deepseek_hot_sector"
@@ -91,10 +88,22 @@ class WebSearchHotSectorProvider:
         self.api_base = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").strip()
         self.model = os.getenv("DEEPSEEK_LLM_MODEL", "deepseek-chat").strip()
         self.tavily_key = os.getenv("TAVILY_API_KEY", "").strip()
+        self.zhipu_key = (
+            os.getenv("ZHIPUAI_API_KEY", "").strip()
+            or os.getenv("ZHIPU_API_KEY", "").strip()
+            or os.getenv("BIGMODEL_API_KEY", "").strip()
+        )
+        self.zhipu_endpoint = os.getenv(
+            "ZHIPUAI_WEB_SEARCH_ENDPOINT",
+            "https://open.bigmodel.cn/api/paas/v4/web_search",
+        ).strip()
+        self.zhipu_search_engine = os.getenv("ZHIPUAI_WEB_SEARCH_ENGINE", "search_std").strip() or "search_std"
+        self.zhipu_content_size = os.getenv("ZHIPUAI_WEB_SEARCH_CONTENT_SIZE", "medium").strip() or "medium"
+        self.zhipu_recency_filter = os.getenv("ZHIPUAI_WEB_SEARCH_RECENCY_FILTER", "noLimit").strip() or "noLimit"
 
     @property
     def is_available(self) -> bool:
-        return bool(self.api_key) or bool(self.tavily_key)
+        return bool(self.api_key) or bool(self.tavily_key) or bool(self.zhipu_key)
 
     def find_hot_sectors(self, market: str, limit: int = 6) -> List[HotSector]:
         # Priority 1: DeepSeek LLM (clean, reliable)
@@ -103,13 +112,31 @@ class WebSearchHotSectorProvider:
             if sectors:
                 return sectors
 
-        # Priority 2: Tavily search + keyword extraction
+        # Priority 2: Bing/Baidu free browser search
+        sectors = self._bing_baidu_discover(market, limit)
+        if sectors:
+            return sectors
+
+        # Priority 3: Tavily search + keyword extraction
         if self.tavily_key:
             sectors = self._tavily_discover(market, limit)
             if sectors:
                 return sectors
 
+        # Priority 4: ZhipuAI web search + keyword extraction
+        if self.zhipu_key:
+            sectors = self._zhipu_discover(market, limit)
+            if sectors:
+                return sectors
+
         return []
+
+    def find_hot_sectors_or_defaults(self, market: str, limit: int = 6) -> List[HotSector]:
+        """find_hot_sectors with built-in fallback when all search methods fail."""
+        result = self.find_hot_sectors(market, limit)
+        if not result:
+            result = _get_default_sectors(market, limit)
+        return result
 
     def _deepseek_discover(self, market: str, limit: int) -> List[HotSector]:
         market_name = {"HK": "港股", "US": "美股", "A": "A股"}.get(market, market)
@@ -156,20 +183,60 @@ class WebSearchHotSectorProvider:
         sectors = _clean_sector_names(sectors)[:limit]
         return [HotSector(name=s, source="deepseek", score=1.0, reason="LLM动态发现") for s in sectors]
 
+    def _bing_baidu_discover(self, market: str, limit: int) -> List[HotSector]:
+        """Discover hot sectors via free Bing/Baidu browser search."""
+        market_name = {"HK": "港股", "US": "美股", "A": "A股"}.get(market, market)
+        try:
+            from .browser_search_providers import BingBaiduSearchProvider
+            provider = BingBaiduSearchProvider(headless=True, timeout_sec=20)
+            if not provider.is_available:
+                return []
+            query = f"{market_name} 今日热点板块 领涨行业 资金流入"
+            documents = provider.search(query, max(limit, 8))
+            provider.close()
+        except Exception as exc:
+            print(f"[hot_sectors] Bing/Baidu 搜索失败: {exc}")
+            return []
+
+        if not documents:
+            return []
+
+        raw_text = " ".join(
+            (d.title or "") + " " + (d.content or "")
+            for d in documents[:10]
+        )
+        sectors = _extract_sector_names(raw_text)
+        if not sectors:
+            sectors = _keyword_extract_sectors(raw_text)
+        sectors = _clean_sector_names(sectors)
+        sectors = _merge_synonyms(sectors)[:limit]
+        if not sectors:
+            return []
+        print(f"[hot_sectors] Bing/Baidu 发现: {sectors}")
+        return [HotSector(name=s, source="bing_baidu", score=0.6, reason="浏览器搜索关键词提取") for s in sectors]
+
     def _tavily_discover(self, market: str, limit: int) -> List[HotSector]:
         market_name = {"HK": "港股", "US": "美股", "A": "A股"}.get(market, market)
         try:
             import requests
-            resp = requests.post(
-                "https://api.tavily.com/search",
-                json={
-                    "api_key": self.tavily_key,
-                    "query": f"{market_name} 今日热点板块 领涨行业 资金流入",
-                    "search_depth": "basic",
-                    "max_results": max(limit, 8),
-                },
-                timeout=10,
-            )
+            from .search_providers import _http_retry
+
+            def _send():
+                resp = requests.post(
+                    "https://api.tavily.com/search",
+                    json={
+                        "api_key": self.tavily_key,
+                        "query": f"{market_name} 今日热点板块 领涨行业 资金流入",
+                        "search_depth": "basic",
+                        "max_results": max(limit, 8),
+                    },
+                    timeout=10,
+                )
+                if resp.status_code >= 400 and resp.status_code not in (429, 432, 500, 502, 503, 504):
+                    resp.raise_for_status()
+                return resp
+
+            resp = _http_retry(_send, label="hot_sectors.tavily")
             resp.raise_for_status()
             data = resp.json()
         except Exception as exc:
@@ -190,6 +257,55 @@ class WebSearchHotSectorProvider:
         sectors = _clean_sector_names(sectors)[:limit]
         return [HotSector(name=s, source="tavily", score=0.8, reason="搜索关键词提取") for s in sectors]
 
+    def _zhipu_discover(self, market: str, limit: int) -> List[HotSector]:
+        market_name = {"HK": "港股", "US": "美股", "A": "A股"}.get(market, market)
+        try:
+            import requests
+            from .search_providers import _http_retry
+
+            def _send():
+                resp = requests.post(
+                    self.zhipu_endpoint,
+                    json={
+                        "search_query": f"{market_name} 今日热点板块 领涨行业 资金流入 龙头股",
+                        "search_engine": self.zhipu_search_engine,
+                        "search_intent": False,
+                        "count": min(50, max(1, int(limit) * 2)),
+                        "search_recency_filter": self.zhipu_recency_filter,
+                        "content_size": self.zhipu_content_size,
+                    },
+                    headers={
+                        "Authorization": f"Bearer {self.zhipu_key}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=10,
+                )
+                if resp.status_code >= 400 and resp.status_code not in (429, 432, 500, 502, 503, 504):
+                    resp.raise_for_status()
+                return resp
+
+            resp = _http_retry(_send, label="hot_sectors.zhipu")
+            resp.raise_for_status()
+            data = resp.json() or {}
+        except Exception as exc:
+            print(f"[hot_sectors] ZhipuAI 失败: {exc}")
+            return []
+
+        results = (data.get("search_result") or data.get("results") or []) if isinstance(data, dict) else []
+        if not results:
+            return []
+
+        raw_text = " ".join(
+            (r.get("title", "") or "") + " " + (r.get("content", "") or r.get("summary", "") or r.get("snippet", "") or "")
+            for r in results[:10]
+            if isinstance(r, dict)
+        )
+        sectors = _extract_sector_names(raw_text)
+        if not sectors:
+            sectors = _keyword_extract_sectors(raw_text, market)
+        sectors = _clean_sector_names(sectors)[:limit]
+        return [HotSector(name=s, source="zhipuai", score=0.7, reason="智谱AI搜索关键词提取") for s in sectors]
+
 
 _NOISE_WORDS = {
     "今日", "主力", "资金", "市场", "大盘", "恒生", "综合", "按照",
@@ -197,6 +313,12 @@ _NOISE_WORDS = {
     "上周", "本周", "本月", "港股", "美股", "A股", "大市", "午评", "收评",
     "简称", "总市值", "流通市", "成交额", "市盈率", "和消费", "必需",
     "港股通", "科技股", "大型科", "投资主", "表现最", "表现较", "次追逐",
+    # HTML / table fragments from browser scraping
+    "按市场", "所属", "交易日", "每手入", "市场热",
+    "深两市", "包括", "以及各", "数等详", "以下为", "序号",
+    "名次", "最新价", "涨跌额", "涨跌幅", "昨收", "今开", "最高", "最低",
+    "成交量", "成交额", "振幅", "换手率", "量比",
+    "光纤", "目前", "本页面", "数据来", "请仔细", "阅读协",
 }
 _NOISE_PREFIXES = {"和", "及", "与", "按照", "根据", "其中", "包括"}
 _NOISE_SUFFIXES = {"板", "块", "的", "等", "和", "及", "与", "涨", "股", "指", "收"}
@@ -367,10 +489,48 @@ def _clean(value: Any) -> str:
     return "" if text in {"-", "--", "nan", "None", ""} else text
 
 
+# ── Known valid sector names (whitelist) ──
+_VALID_SECTORS: set[str] = {
+    # Tech
+    "AI", "人工智能", "半导体", "芯片", "软件", "互联网", "5G", "算力", "云计算",
+    "大数据", "区块链", "物联网", "机器人", "自动化",
+    # Healthcare
+    "创新药", "医药", "医疗", "生物", "制药", "中药", "医疗器械", "医美",
+    # Consumer
+    "消费", "餐饮", "零售", "白酒", "食品", "饮料", "家电", "汽车", "新能源车",
+    "教育", "旅游", "博彩", "物业管理",
+    # Finance
+    "金融", "银行", "保险", "券商", "房地产",
+    # Energy & Industry
+    "新能源", "光伏", "锂电", "风电", "储能", "电力", "煤炭", "石油",
+    "军工", "航天", "商业航天", "卫星", "高铁", "基建",
+    # Materials
+    "黄金", "贵金属", "稀土", "钢铁", "有色", "化工", "建材",
+    # Others
+    "传媒", "游戏", "电商", "物流", "环保", "农业", "电力设备",
+    # English/abbreviated (from English sources)
+    "SaaS", "EV", "ESG",
+}
+
+# ── Market-specific default sectors (ultimate fallback) ──
+_DEFAULT_SECTORS_BY_MARKET: dict[str, list[str]] = {
+    "HK": ["互联网", "金融", "消费", "创新药", "半导体", "博彩", "新能源", "物业管理", "白酒"],
+    "US": ["AI", "半导体", "SaaS", "新能源车", "生物科技", "云计算", "电商", "航天", "金融"],
+    "A":  ["机器人", "算力", "半导体", "新能源", "券商", "军工", "消费", "白酒", "电力"],
+}
+
+
 def _clean_sector_names(names: List[str]) -> List[str]:
-    """Post-process: strip noise prefix/suffix, filter garbage, merge synonyms."""
-    result = []
+    """Post-process: strip noise, filter garbage, validate against known sectors, merge synonyms."""
+    # Normalize: trim, remove brackets/parens content
+    cleaned: list[str] = []
     for name in names:
+        name = name.strip()
+        if not name:
+            continue
+        # Remove parenthetical notes like "半导体（领涨）" → "半导体"
+        import re
+        name = re.sub(r"[（(][^)）]*[)）]", "", name).strip()
         # Strip leading noise
         for prefix in sorted(_NOISE_PREFIXES, key=len, reverse=True):
             if name.startswith(prefix) and len(name) > len(prefix) + 1:
@@ -380,15 +540,66 @@ def _clean_sector_names(names: List[str]) -> List[str]:
         for suffix in sorted(_NOISE_SUFFIXES, key=len, reverse=True):
             if name.endswith(suffix) and len(name) > len(suffix) + 1:
                 name = name[:-len(suffix)]
-        # Filter: reasonable sector name length (2-4 chars for Chinese)
-        # and must not contain noise words
-        if not name or len(name) < 2 or len(name) > 4:
+        if not name:
             continue
-        if any(nw in name for nw in ["恒生", "指数", "综合", "追逐", "按照", "简称", "总市值",
-                                      "热门", "当日", "主要", "领涨", "也暴", "仅是", "规范", "已形成"]):
+        cleaned.append(name)
+
+    # First pass: keep names that match known valid sectors
+    known: list[str] = []
+    unknown: list[str] = []
+    for name in cleaned:
+        if name in _VALID_SECTORS:
+            known.append(name)
+        else:
+            unknown.append(name)
+
+    # Second pass: filter unknown names
+    for name in unknown:
+        # Must be 2-4 Chinese chars or 2-6 ASCII
+        if not (2 <= len(name) <= 4 and all('一' <= c <= '鿿' or c in '·&' for c in name)):
+            if not (2 <= len(name) <= 6 and all(c.isascii() and (c.isalpha() or c.isdigit()) for c in name)):
+                continue
+        # Must not contain garbage patterns
+        if _is_garbage(name):
             continue
-        result.append(name)
-    return _merge_synonyms(result)
+        if any(nw in name for nw in _NOISE_WORDS):
+            continue
+        # Extra: reject single-char repetitions, numbers-only, etc.
+        if len(set(name)) == 1 and len(name) > 1:
+            continue
+        if name.isdigit():
+            continue
+        known.append(name)
+
+    return _merge_synonyms(known)
+
+
+def _is_garbage(name: str) -> bool:
+    """Heuristic: detect if a name looks like text fragment, not a sector."""
+    garbage_markers = [
+        "下跌", "上涨", "流出", "流入", "净买", "净卖",
+        "交易日", "每手", "简称", "总市值", "流通市",
+        "最新价", "涨跌额", "涨跌幅", "昨收", "今开", "最高", "最低",
+        "成交量", "成交额", "振幅", "换手率", "量比",
+        "本页面", "数据来", "阅读", "条款", "声明",
+        "以下为", "名次", "按市场", "所属",
+        "追逐", "按照", "规范", "已形成", "业板指",
+        "也暴", "仅是", "热门", "恒生", "综合",
+        "技術", "防御", "性板", "类板", "等消", "分类",
+        "数等", "资金", "主力", "大市",
+        # English garbage
+        "http", "www", ".com", ".cn",
+    ]
+    return any(m in name for m in garbage_markers)
+
+
+def _get_default_sectors(market: str, limit: int) -> List[HotSector]:
+    """Return curated default sectors when all search methods fail."""
+    names = _DEFAULT_SECTORS_BY_MARKET.get(market, _DEFAULT_SECTORS_BY_MARKET["HK"])
+    return [
+        HotSector(name=n, source="builtin", score=0.7, reason="内置默认板块")
+        for n in names[:limit]
+    ]
 
 
 def _dedupe_hot_sectors(items: List[HotSector]) -> List[HotSector]:

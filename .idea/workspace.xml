@@ -5,18 +5,34 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="0bf7b9ee-c261-4d26-a715-0c09e20aab7a" name="更改" comment="">
+      <change beforePath="$PROJECT_DIR$/.claude/worktrees/dynamic-dazzling-charm" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/worktrees/dynamic-dazzling-charm" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/CLAUDE.md" beforeDir="false" afterPath="$PROJECT_DIR$/CLAUDE.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/api/screen_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/api/screen_service.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/db.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/db.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/kline_fetcher.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/kline_fetcher.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/market_intel/macro_scoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/market_intel/macro_scoring.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/market_intel/reporting.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/market_intel/reporting.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/potential_analysis/providers.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/potential_analysis/providers.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/potential_analysis/service.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/potential_analysis/service.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/rule_engine.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/rule_engine.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/scheduled_daily_job.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/scheduled_daily_job.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/sector_resolver.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/sector_resolver.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/chain.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/chain.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/sql/001_screening_rules.sql" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/sql/001_screening_rules.sql" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/sql/016_common_technical_atomic_rules.sql" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/sql/016_common_technical_atomic_rules.sql" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/strategy.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/strategy.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/tests/test_market_intel_reporting.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/tests/test_market_intel_reporting.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/tests/test_rule_engine.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/tests/test_rule_engine.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/tests/test_screen_service_strategy_gate.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/tests/test_screen_service_strategy_gate.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/factories.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/factories.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/hot_sectors.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/hot_sectors.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/llm_providers.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/llm_providers.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/search_providers.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/search_providers.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web/auth.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web/auth.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/package-lock.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/package.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/main.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/main.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/styles.css" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/uv.lock" beforeDir="false" afterPath="$PROJECT_DIR$/uv.lock" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -46,6 +62,7 @@
   <component name="PropertiesComponent">{
   &quot;keyToString&quot;: {
     &quot;Go 构建.go build github.com/SimonZhou96/MoneyManager/agent_orchestrator/cmd/worker.executor&quot;: &quot;Debug&quot;,
+    &quot;Python 测试.stock_screener.tests.test_unified_bullish_top20_hk02685.UnifiedBullishTop20HK02685RealDBTest.test_20_print_all_rule_results 的 Python 测试.executor&quot;: &quot;Debug&quot;,
     &quot;RunOnceActivity.GoLinterPluginOnboardingV2&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.GoLinterPluginStorageMigration&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
@@ -68,7 +85,7 @@
     &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
 }</component>
-  <component name="RunManager">
+  <component name="RunManager" selected="Python 测试.stock_screener.tests.test_unified_bullish_top20_hk02685.UnifiedBullishTop20HK02685RealDBTest.test_20_print_all_rule_results 的 Python 测试">
     <configuration name="go build github.com/SimonZhou96/MoneyManager/agent_orchestrator/cmd/worker" type="GoApplicationRunConfiguration" factoryName="Go Application" temporary="true" nameIsGenerated="true">
       <module name="MoneyManager" />
       <working_directory value="$PROJECT_DIR$/agent_orchestrator" />
@@ -79,6 +96,29 @@
       <filePath value="$PROJECT_DIR$/agent_orchestrator/cmd/worker/main.go" />
       <method v="2" />
     </configuration>
+    <configuration name="stock_screener.tests.test_unified_bullish_top20_hk02685.UnifiedBullishTop20HK02685RealDBTest.test_20_print_all_rule_results 的 Python 测试" type="tests" factoryName="Autodetect" temporary="true" nameIsGenerated="true">
+      <module name="moneymanager" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="DEBUG_JUST_MY_CODE" value="false" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="RUN_TOOL" value="" />
+      <option name="_new_additionalArguments" value="&quot;&quot;" />
+      <option name="_new_target" value="&quot;stock_screener.tests.test_unified_bullish_top20_hk02685.UnifiedBullishTop20HK02685RealDBTest.test_20_print_all_rule_results&quot;" />
+      <option name="_new_targetType" value="&quot;PYTHON&quot;" />
+      <method v="2" />
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Python 测试.stock_screener.tests.test_unified_bullish_top20_hk02685.UnifiedBullishTop20HK02685RealDBTest.test_20_print_all_rule_results 的 Python 测试" />
+      </list>
+    </recent_temporary>
   </component>
   <component name="SharedIndexes">
     <attachedChunks>
@@ -99,10 +139,26 @@
       <workItem from="1779964163234" duration="11973000" />
       <workItem from="1780308089940" duration="13389000" />
       <workItem from="1780411491520" duration="14870000" />
+      <workItem from="1780661937810" duration="6440000" />
+      <workItem from="1781143829969" duration="3440000" />
     </task>
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+  </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/stock_screener/tests/test_unified_bullish_top20_hk02685.py</url>
+          <line>286</line>
+          <option name="timeStamp" value="2" />
+        </line-breakpoint>
+      </breakpoints>
+    </breakpoint-manager>
+  </component>
+  <component name="com.intellij.coverage.CoverageDataManagerImpl">
+    <SUITE FILE_PATH="coverage/2026_05_25_stock_screening_terminal_design_md$.coverage" NAME=" 覆盖结果" MODIFIED="1780672490070" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>
 </project>

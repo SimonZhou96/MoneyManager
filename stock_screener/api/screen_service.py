@@ -9,7 +9,7 @@ import uuid
 import os
 import math
 from datetime import date
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from db import MarketDatabase, MySqlConfig
 from filters import (
@@ -543,6 +543,7 @@ def run_screening_task(
         failed_stocks = []  # 记录未通过的股票及原因
         pending_screening_records = []
         unified_candidates = []
+        live_stocks: Dict[str, StockInfo] = {}
         macro_analysis_cache: Dict[str, object] = {}
         macro_warning_cache: Dict[str, list[str]] = {}
         
@@ -553,6 +554,7 @@ def run_screening_task(
             print(f"{'='*80}\n")
         
         for i, si in enumerate(stock_infos, 1):
+            live_stocks[si.code] = si
             if progress_log:
                 print(f"[{i}/{total_count}] 处理中: {si.code} - {si.name or si.code}")
             # 更新进度
@@ -808,6 +810,74 @@ def run_screening_task(
         if is_unified_bullish_top20:
             selected = select_unified_bullish_top_candidates(unified_candidates, top_n=UNIFIED_BULLISH_TOP_N)
             selected_codes = {item["code"] for item in selected}
+
+            # ── 为 Top20 股票注入 signal_analysis_loader ──
+            # unified 链的 requires_signal_analysis() 基于 expression(=ema_breakout) 返回 False，
+            # 但 Top20 后置宏观规则中的 company_event_* 需要 signal_analysis 结果，因此在此强制注入。
+            # 该 loader 供 CompanyEventHotSectorStrategizer / CompanyEventHotNewsStrategizer 复用。
+            def _make_top20_signal_loader():
+                def loader(current_stock: StockInfo) -> Any:
+                    cached = macro_analysis_cache.get(current_stock.code)
+                    if cached is not None:
+                        return cached
+                    analysis, warnings = run_signal_analysis_for_row(
+                        mysql_config=mysql_config,
+                        task_id=f"{task_id}:macro:{current_stock.code}",
+                        row=_build_macro_signal_row(current_stock, market),
+                        market=market,
+                        check_date=context.check_date,
+                        timeframe=timeframe,
+                        enabled=True,
+                    )
+                    macro_analysis_cache[current_stock.code] = analysis
+                    macro_warning_cache[current_stock.code] = list(warnings or [])
+                    if verbose and warnings:
+                        print(f"  ℹ️  {current_stock.code} - 宏观分析告警: {' | '.join(warnings)}")
+                    return analysis
+                return loader
+
+            context.set_cache("signal_analysis_loader", _make_top20_signal_loader())
+
+            # ── 对 Top20 股票执行 4 条宏观规则 ──
+            for record in pending_screening_records:
+                if record["code"] not in selected_codes:
+                    continue
+                si = live_stocks.get(record["code"])
+                if si is None:
+                    continue
+
+                macro_result = rule_engine.evaluate_macro_rules_for_top20(si, context)
+
+                # 合并 macro outputs 到 filter_details
+                for o in macro_result.filter_outputs:
+                    meta = _rule_metadata_for_output(rule_engine, o)
+                    record["filter_details"].append({
+                        "rule_key": meta.rule_key if meta else o.filter_name,
+                        "rule_type": meta.rule_type if meta else "",
+                        "strategy_category": meta.strategy_category if meta else "",
+                        "filter_name": o.filter_name,
+                        "result": o.result.value,
+                        "reason": o.reason or "",
+                        "details": _json_safe_value(o.details or {}),
+                    })
+
+                # 重算评分（现在 filter_details 包含技术规则 + 宏观规则）
+                score_summary = aggregate_rule_scores(
+                    record["filter_details"],
+                    **_score_weights_from_filter_details(record["filter_details"]),
+                )
+                record["technical_score"] = score_summary.get("technical_score")
+                record["macro_score"] = score_summary.get("macro_score")
+                record["final_score"] = score_summary.get("final_score")
+                record["score_details"] = score_summary
+
+                if verbose:
+                    print(f"  ✓ {record['code']} 宏观评分: technical={record.get('technical_score')}, "
+                          f"macro={record.get('macro_score')}, final={record.get('final_score')}")
+
+            # 清除 signal_analysis_loader，避免影响后续非 unified 链使用同一个 context
+            context.set_cache("signal_analysis_loader", None)
+
             passed_stocks = []
             for record in pending_screening_records:
                 is_selected = record["code"] in selected_codes

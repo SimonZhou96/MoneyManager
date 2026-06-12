@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Search provider abstractions for signal analysis."""
+"""Search provider abstractions for signal analysis.
+
+All providers inherit ``_http_with_retry()`` from the base class —
+rate-limit handling (exponential backoff + retry) is built-in by default.
+"""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import os
+import random
 import re
 import sys
-from typing import Dict, List, Optional
+import time
+from typing import Any, Callable, Dict, List, Optional
 
 from .models import ScreeningSignalRow, SearchDocument
 
@@ -19,11 +25,88 @@ except Exception:  # pragma: no cover
     requests = None
 
 
+# ── Module-level retry (reusable outside providers, e.g. hot_sectors) ──
+
+_RETRYABLE_STATUSES: set[int] = {429, 432, 500, 502, 503, 504}
+_RETRY_MAX: int = 3
+_RETRY_BASE_SEC: float = 1.0
+_RETRY_MAX_SEC: float = 30.0
+
+
+def _http_retry(
+    send_fn: Callable[[], Any],
+    label: str = "",
+    max_retries: int = _RETRY_MAX,
+    base_delay: float = _RETRY_BASE_SEC,
+    max_delay: float = _RETRY_MAX_SEC,
+) -> Any:
+    """Call *send_fn*() with exponential backoff on rate-limit errors (429/432/5xx)."""
+    last_exc: Optional[Exception] = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = send_fn()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                delay = min(base_delay * (2 ** attempt), max_delay) + random.uniform(0, 1.0)
+                print(f"[{label}] 异常({type(exc).__name__}), 重试 {attempt+1}/{max_retries} in {delay:.1f}s")
+                time.sleep(delay)
+                continue
+            raise
+
+        status = getattr(response, "status_code", 0)
+        if status in _RETRYABLE_STATUSES:
+            last_exc = RuntimeError(f"HTTP {status}")
+            if attempt < max_retries:
+                delay = min(base_delay * (2 ** attempt), max_delay) + random.uniform(0, 1.0)
+                print(f"[{label}] HTTP {status} 限流, 重试 {attempt+1}/{max_retries} in {delay:.1f}s")
+                time.sleep(delay)
+                continue
+            raise RuntimeError(f"[{label}] HTTP {status} after {max_retries} retries")
+
+        # Zhipu body-level codes
+        if status == 200:
+            try:
+                body = response.json() if callable(getattr(response, "json", None)) else {}
+            except Exception:
+                body = {}
+            if isinstance(body, dict):
+                error = body.get("error") or {}
+                code = str(error.get("code", ""))
+                if code in ("1302", "1305"):
+                    last_exc = RuntimeError(f"ZhipuAI code={code}")
+                    if attempt < max_retries:
+                        delay = min(base_delay * (2 ** attempt), max_delay) + random.uniform(0, 1.0)
+                        print(f"[{label}] ZhipuAI code={code} 限流, 重试 {attempt+1}/{max_retries} in {delay:.1f}s")
+                        time.sleep(delay)
+                        continue
+                    raise RuntimeError(f"[{label}] ZhipuAI code={code} after {max_retries} retries")
+
+        return response
+    raise last_exc if last_exc else RuntimeError(f"[{label}] retries exhausted")
+
+
 class SearchProvider(ABC):
-    """Provider interface for market and company news search."""
+    """Provider interface for market and company news search.
+
+    Every subclass inherits :meth:`_http_with_retry` for built-in rate-limit
+    handling with exponential backoff.  New providers MUST use this method
+    for all outbound HTTP calls to get retry protection by default.
+    """
 
     name = "base"
     is_available = True
+
+    # ── Retry constants (override in subclass if needed) ─────
+
+    _RETRY_MAX_RETRIES: int = 3
+    _RETRY_BASE_DELAY_SEC: float = 1.0
+    _RETRY_MAX_DELAY_SEC: float = 30.0
+
+    # Status codes that always deserve a retry
+    _RETRYABLE_STATUSES: set[int] = {429, 432, 500, 502, 503, 504}
+
+    # ── Abstract contract ───────────────────────────────────
 
     @abstractmethod
     def search(self, query: str, max_results: int) -> List[SearchDocument]:
@@ -37,6 +120,31 @@ class SearchProvider(ABC):
         max_results: int,
     ) -> Dict[str, List[SearchDocument]]:
         """Return company-search snippets grouped by stock code."""
+
+    # ── Shared retry helper ─────────────────────────────────
+
+    def _http_with_retry(
+        self,
+        send_fn: Callable[[], Any],
+        *,
+        max_retries: Optional[int] = None,
+        base_delay: Optional[float] = None,
+        max_delay: Optional[float] = None,
+    ) -> Any:
+        """Call *send_fn*() with exponential backoff on rate-limit errors.
+
+        **All new providers MUST call this for outbound HTTP requests.**
+        This is the standard retry mechanism inherited by every SearchProvider.
+
+        Retryable errors: HTTP 429, 432, 5xx, and ZhipuAI body codes 1302/1305.
+        """
+        return _http_retry(
+            send_fn,
+            label=getattr(self, "name", self.__class__.__name__),
+            max_retries=max_retries if max_retries is not None else self._RETRY_MAX_RETRIES,
+            base_delay=base_delay if base_delay is not None else self._RETRY_BASE_DELAY_SEC,
+            max_delay=max_delay if max_delay is not None else self._RETRY_MAX_DELAY_SEC,
+        )
 
 
 class NullSearchProvider(SearchProvider):
@@ -58,7 +166,7 @@ class NullSearchProvider(SearchProvider):
 
 
 class FallbackSearchProvider(SearchProvider):
-    """Try search providers in order, only falling back when a provider fails."""
+    """Try search providers in order, falling back to the next when one returns no results."""
 
     name = "fallback"
 
@@ -82,13 +190,22 @@ class FallbackSearchProvider(SearchProvider):
     def search(self, query: str, max_results: int) -> List[SearchDocument]:
         self.last_errors = []
         self.last_success_provider = ""
-        for provider in self.providers:
+        total = len(self.providers)
+        for i, provider in enumerate(self.providers):
+            name = getattr(provider, "name", provider.__class__.__name__)
             try:
                 result = provider.search(query, max_results)
-                self.last_success_provider = getattr(provider, "name", provider.__class__.__name__)
-                return result
+                if result:
+                    self.last_success_provider = name
+                    _log_fallback_step(name, "search", True, len(result), i + 1, total)
+                    return result
+                # Empty result → fall through to next provider
+                _log_fallback_step(name, "search", False, 0, i + 1, total, reason="0 results")
             except Exception as exc:
                 self.last_errors.append(self._format_provider_error(provider, exc))
+                _log_fallback_step(name, "search", False, 0, i + 1, total, reason=str(exc)[:80])
+
+        _log_fallback_exhausted("search", total)
         return []
 
     def search_companies_batch(
@@ -97,23 +214,100 @@ class FallbackSearchProvider(SearchProvider):
         rows: List[ScreeningSignalRow],
         max_results: int,
     ) -> Dict[str, List[SearchDocument]]:
+        """Batch-first, then per-stock fallback for unmatched stocks.
+
+        Phase 1: Try batch search with each provider sequentially.
+        Phase 2: For stocks still empty, try per-stock with each provider in order.
+        Each step logs verbosely so the fallback chain is fully observable.
+        """
         if not rows:
             return {}
         self.last_errors = []
         self.last_success_provider = ""
-        for provider in self.providers:
+        total = len(self.providers)
+
+        grouped: Dict[str, List[SearchDocument]] = {row.code: [] for row in rows}
+        code_set = {row.code for row in rows}
+
+        # ── Phase 1: Batch search (fast) ──
+        for i, provider in enumerate(self.providers):
+            name = getattr(provider, "name", provider.__class__.__name__)
+            remaining = [r for r in rows if not grouped.get(r.code)]
+            if not remaining:
+                break
             try:
-                result = provider.search_companies_batch(market, rows, max_results)
-                self.last_success_provider = getattr(provider, "name", provider.__class__.__name__)
-                return {row.code: list((result or {}).get(row.code, [])) for row in rows}
+                result = provider.search_companies_batch(market, remaining, max_results)
+                hit = 0
+                for row in remaining:
+                    docs = list((result or {}).get(row.code, []))
+                    if docs:
+                        grouped[row.code] = docs
+                        hit += 1
+                if hit:
+                    _log_fallback_step(name, "companies_batch", True, hit, i + 1, total)
+                else:
+                    _log_fallback_step(name, "companies_batch", False, hit, i + 1, total,
+                                       reason="0 results after quality filter")
             except Exception as exc:
                 self.last_errors.append(self._format_provider_error(provider, exc))
-        return {row.code: [] for row in rows}
+                _log_fallback_step(name, "companies_batch", False, 0, i + 1, total,
+                                   reason=str(exc)[:80])
+
+        # ── Phase 2: Per-stock fallback for unmatched stocks ──
+        unmatched = [r for r in rows if not grouped.get(r.code)]
+        if unmatched:
+            for row in unmatched:
+                for i, provider in enumerate(self.providers):
+                    name = getattr(provider, "name", provider.__class__.__name__)
+                    try:
+                        result = provider.search_companies_batch(market, [row], max_results)
+                        docs = list((result or {}).get(row.code, []))
+                        if docs:
+                            grouped[row.code] = docs
+                            break
+                    except Exception:
+                        continue
+                if not grouped.get(row.code):
+                    grouped[row.code] = []
+
+        # ── Summary ──
+        matched = sum(1 for docs in grouped.values() if docs)
+        if matched:
+            print(f"[搜索fallback] ✅ 最终: {matched}/{len(rows)} stocks matched "
+                  f"(tried {', '.join(self.provider_names)})")
+        else:
+            _log_fallback_exhausted("companies_batch", total)
+
+        return grouped
 
     @staticmethod
     def _format_provider_error(provider: SearchProvider, exc: Exception) -> str:
         label = getattr(provider, "name", provider.__class__.__name__)
         return f"{label}: {type(exc).__name__}: {exc}"
+
+
+def _log_fallback_step(
+    name: str,
+    mode: str,
+    success: bool,
+    count: int,
+    step: int,
+    total: int,
+    reason: str = "",
+) -> None:
+    if success:
+        print(f"[搜索fallback] ✅ {name} ({mode}) → {count}条 | 步骤 {step}/{total}")
+    else:
+        suffix = f": {reason}" if reason else ""
+        if step < total:
+            next_name = "next provider" if step < total else "none"
+            print(f"[搜索fallback] ⚠️ {name} ({mode}) → 无有效结果{suffix} → fallback to next | 步骤 {step}/{total}")
+        else:
+            print(f"[搜索fallback] ❌ {name} ({mode}) → 失败{suffix} | 步骤 {step}/{total}")
+
+
+def _log_fallback_exhausted(mode: str, total: int) -> None:
+    print(f"[搜索fallback] 🚫 全部 {total} 个 provider 已尝试完毕, 无有效结果 | mode={mode}")
 
 
 class TavilySearchProvider(SearchProvider):
@@ -145,7 +339,14 @@ class TavilySearchProvider(SearchProvider):
             "include_raw_content": False,
             "max_results": max(1, int(max_results)),
         }
-        response = requests.post(self.endpoint, json=payload, timeout=self.timeout_sec)
+
+        def _send():
+            resp = requests.post(self.endpoint, json=payload, timeout=self.timeout_sec)
+            if resp.status_code >= 400 and resp.status_code not in self._RETRYABLE_STATUSES:
+                resp.raise_for_status()
+            return resp
+
+        response = self._http_with_retry(_send)
         if response.status_code >= 400:
             raise RuntimeError(f"Tavily search failed: HTTP {response.status_code} {response.text[:200]}")
         data = response.json() or {}
@@ -237,7 +438,13 @@ class ZhipuWebSearchProvider(SearchProvider):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        response = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout_sec)
+        def _send():
+            resp = requests.post(self.endpoint, json=payload, headers=headers, timeout=self.timeout_sec)
+            if resp.status_code >= 400 and resp.status_code not in self._RETRYABLE_STATUSES:
+                resp.raise_for_status()
+            return resp
+
+        response = self._http_with_retry(_send)
         if response.status_code >= 400:
             raise RuntimeError(f"Zhipu web search failed: HTTP {response.status_code} {response.text[:200]}")
         data = response.json() or {}
@@ -320,12 +527,13 @@ def _build_company_batch_query(
 def _market_authoritative_source_terms(market: str) -> str:
     key = str(market or "").upper()
     if key == "HK":
-        return "HKEX announcement annual report"
+        # Bilingual: Chinese terms work better for Bing/Baidu; "HKEX" still helps Tavily
+        return "港交所公告 年报 HKEX"
     if key == "US":
-        return "SEC filing"
+        return "SEC filing 10-K 10-Q"
     if key == "A":
-        return "巨潮资讯 上交所 深交所"
-    return "official filing annual report investor relations"
+        return "巨潮资讯 上交所 深交所 公告"
+    return "official filing annual report"
 
 
 def _split_rows_by_query_budget(

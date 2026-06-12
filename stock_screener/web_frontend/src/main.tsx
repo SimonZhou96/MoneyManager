@@ -4,7 +4,11 @@ import CodeMirror from '@uiw/react-codemirror'
 import { json } from '@codemirror/lang-json'
 import { api } from './api'
 import { QuantLab } from './features/quant/QuantLab'
+import { MarketAnalysisPage } from './features/marketAnalysis/MarketAnalysisPage'
 import { StockTerminalPanel, type StockTerminalRow } from './features/stockTerminal/StockTerminalPanel'
+import { KlineChart } from './features/marketAnalysis/components/KlineChart'
+import { RuleChainEditor } from './features/ruleEditor/RuleChainEditor'
+import type { ExpressionNode } from './features/ruleEditor/types'
 import './styles.css'
 
 type User = { id: number; username: string; role: string }
@@ -171,6 +175,28 @@ type FilterDetailRow = {
   result?: string
   reason?: string
   details?: Record<string, unknown>
+}
+type StockSearchResult = {
+  code: string
+  name: string
+  sector: string
+  industry: string
+  market_cap: number | null
+}
+type SingleStockHistoryItem = {
+  run_id: string
+  market: string
+  code: string
+  timeframe: string
+  passed: boolean | null
+  chain_key: string
+  chain_name?: string
+  status: string
+  final_score?: number
+  technical_score?: number
+  macro_score?: number
+  created_at: string | null
+  name?: string
 }
 type FactorCitations = Record<string, EvidenceLink[]>
 type OptionCandidate = {
@@ -359,6 +385,16 @@ function ruleDirectionOrder(direction: string) {
   return 4
 }
 
+const PROGRESS_STEP_ORDER = ['init', 'stock_lookup', 'kline_fetch', 'rule_eval', 'read_result', 'save_result', 'done']
+function _progressStepClass(currentStep: string, stepKey: string, status: string): string {
+  const curIdx = PROGRESS_STEP_ORDER.indexOf(currentStep)
+  const stepIdx = PROGRESS_STEP_ORDER.indexOf(stepKey)
+  if (status === 'completed' || (status === 'failed' && stepIdx <= curIdx)) return 'done'
+  if (curIdx >= 0 && stepIdx < curIdx) return 'done'
+  if (stepKey === currentStep) return 'active'
+  return ''
+}
+
 function commonRuleChains(markets: string[], rulesByMarket: Record<string, RulesResponse | undefined>): RuleChain[] {
   if (markets.length === 0) return []
   const firstRules = rulesByMarket[markets[0]]
@@ -368,72 +404,9 @@ function commonRuleChains(markets: string[], rulesByMarket: Record<string, Rules
     .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.priority - b.priority || a.chain_key.localeCompare(b.chain_key))
 }
 
-function Login({ onLogin }: { onLogin: (user: User) => void }) {
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault()
-    setError('')
-    setLoading(true)
-    try {
-      const result = await api<{ user: User }>('/api/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ username, password })
-      })
-      onLogin(result.user)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '登录失败')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <main className="login-shell">
-      <form className="login-panel" onSubmit={submit}>
-        <div>
-          <p className="eyebrow">MoneyManager</p>
-          <h1>选股器登录</h1>
-          <p className="muted">仅固定账号可访问，未登录无法查看任何筛选页面。</p>
-        </div>
-        <label>
-          用户名
-          <input value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" />
-        </label>
-        <label>
-          密码
-          <input type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" />
-        </label>
-        {error && <div className="error">{error}</div>}
-        <button className="primary" disabled={loading}>{loading ? '登录中...' : '登录'}</button>
-      </form>
-    </main>
-  )
-}
-
 function App() {
-  const [user, setUser] = useState<User | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [page, setPage] = useState('dashboard')
+  const [page, setPage] = useState('marketAnalysis')
   const [selectedTaskId, setSelectedTaskId] = useState('')
-
-  useEffect(() => {
-    api<User>('/api/auth/me')
-      .then(setUser)
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false))
-  }, [])
-
-  async function logout() {
-    await api('/api/auth/logout', { method: 'POST' }).catch(() => null)
-    setUser(null)
-  }
-
-  if (loading) return <div className="loading">加载中...</div>
-  if (!user) return <Login onLogin={setUser} />
 
   return (
     <div className="app-shell">
@@ -444,25 +417,24 @@ function App() {
         </div>
         <nav>
           <button className={page === 'dashboard' ? 'active' : ''} onClick={() => setPage('dashboard')}>总览</button>
-          <button className={page === 'screening' ? 'active' : ''} onClick={() => setPage('screening')}>全市场筛选</button>
           <button className={page === 'codeScreening' ? 'active' : ''} onClick={() => setPage('codeScreening')}>个股筛选器</button>
           <button className={page === 'options' ? 'active' : ''} onClick={() => setPage('options')}>期权实验室</button>
           <button className={page === 'quant' ? 'active' : ''} onClick={() => setPage('quant')}>量化实验室</button>
+          <button className={page === 'marketAnalysis' ? 'active' : ''} onClick={() => setPage('marketAnalysis')}>大盘分析</button>
           <button className={page === 'rules' ? 'active' : ''} onClick={() => setPage('rules')}>规则链</button>
         </nav>
         <div className="sidebar-footer">
-          <span>{user.username}</span>
-          <button onClick={logout}>退出</button>
+          <span>MoneyManager</span>
         </div>
       </aside>
       <main className="content">
         {page === 'dashboard' && <Dashboard
           openTask={(taskId) => { setSelectedTaskId(taskId); setPage('task') }}
         />}
-        {page === 'screening' && <Screening />}
         {page === 'codeScreening' && <CodeScreening openTask={(taskId) => { setSelectedTaskId(taskId); setPage('task') }} />}
         {page === 'options' && <OptionLab />}
         {page === 'quant' && <QuantLab />}
+        {page === 'marketAnalysis' && <MarketAnalysisPage />}
         {page === 'rules' && <Rules />}
         {page === 'task' && <TaskDetail taskId={selectedTaskId} />}
       </main>
@@ -636,7 +608,7 @@ function OptionLab() {
     : ['策略名称', '期权评分', '建议限价', '允许滑点', '建议数量', '最大亏损', '目标收益', '盈亏平衡点', '止损价', '止盈价', '计划持有期', '退出条件']
 
   return (
-    <section>
+    <section className="option-lab-scope">
       <Header title="期权实验室" subtitle="评估期权策略、生成订单建议、回填成交并监控风险" />
       <form className="form-grid option-form" onSubmit={submit}>
         <Field label="评估模式">
@@ -884,220 +856,40 @@ function webJobProgressText(row: Task) {
   return webJobStageLabel(row.summary) || statusLabel(row.status)
 }
 
-function Screening() {
-  const [markets, setMarkets] = useState(['HK', 'US', 'A'])
-  const [timeframe, setTimeframe] = useState('1d')
-  const [poolTypes, setPoolTypes] = useState(POOL_OPTIONS.map(item => item.value))
-  const [rulesByMarket, setRulesByMarket] = useState<Record<string, RulesResponse>>({})
-  const [chainKey, setChainKey] = useState('')
-  const [enableAi, setEnableAi] = useState(true)
-  const [sendFeishu, setSendFeishu] = useState(false)
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-
-  function toggleMarket(market: string) {
-    setError('')
-    setMarkets(current => current.includes(market) ? current.filter(item => item !== market) : [...current, market])
-  }
-
-  function togglePoolType(poolType: string) {
-    setError('')
-    setPoolTypes(current => current.includes(poolType) ? current.filter(item => item !== poolType) : [...current, poolType])
-  }
-
-  useEffect(() => {
-    let cancelled = false
-    async function loadRules() {
-      const entries = await Promise.all(markets.map(async market => {
-        const rules = await api<RulesResponse>(`/api/rules?market=${market}&timeframe=${timeframe}`)
-        return [market, rules] as const
-      }))
-      if (!cancelled) {
-        setRulesByMarket(current => ({ ...current, ...Object.fromEntries(entries) }))
-      }
-    }
-    if (markets.length > 0) loadRules().catch(err => setError(err instanceof Error ? err.message : '加载规则链失败'))
-    return () => { cancelled = true }
-  }, [markets.join('|'), timeframe])
-
-  const chainOptions = commonRuleChains(markets, rulesByMarket)
-  const chainOptionKey = chainOptions.map(item => item.chain_key).join('|')
-
-  useEffect(() => {
-    if (chainOptions.length === 0) {
-      setChainKey('')
-      return
-    }
-    const activeKey = rulesByMarket[markets[0]]?.chain?.chain_key
-    if (!chainKey || !chainOptions.some(item => item.chain_key === chainKey)) {
-      setChainKey(activeKey && chainOptions.some(item => item.chain_key === activeKey) ? activeKey : chainOptions[0].chain_key)
-    }
-  }, [chainOptionKey, markets.join('|')])
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault()
-    setMessage('')
-    setError('')
-    if (markets.length === 0) {
-      setError('至少选择一个市场')
-      return
-    }
-    if (poolTypes.length === 0) {
-      setError('至少选择一个股票池类型')
-      return
-    }
-    setSubmitting(true)
-    try {
-      const result = await api<any>('/api/screening/tasks', {
-        method: 'POST',
-        body: JSON.stringify({
-          markets,
-          timeframe,
-          pool_types: poolTypes,
-          chain_key: chainKey || undefined,
-          enable_ai_analysis: enableAi,
-          send_feishu: sendFeishu
-        })
-      })
-      setMessage(result.reused
-        ? `已有任务运行中，已复用任务组 ${result.job_id}。`
-        : `已创建任务组 ${result.job_id}，已进入执行队列，可在最近任务查看状态。`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '创建失败')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <section>
-      <Header title="全市场筛选" subtitle="启动 HK / US / A 批量筛选，后台生成 CSV 和报告" />
-      <form className="form-grid screening-form-grid" onSubmit={submit}>
-        <Field label="市场" className="screening-market-field">
-          <div className="segmented">
-            {MARKET_OPTIONS.map(market => (
-              <button type="button" className={markets.includes(market) ? 'selected' : ''} onClick={() => toggleMarket(market)} key={market}>{market}</button>
-            ))}
-          </div>
-        </Field>
-        <Field label="周期" className="screening-timeframe-field">
-          <select value={timeframe} onChange={event => setTimeframe(event.target.value)}>
-            {TIMEFRAME_OPTIONS.map(item => <option key={item}>{item}</option>)}
-          </select>
-        </Field>
-        <div className="field field-wide screening-pool-field">
-          <span>股票池类型</span>
-          <div className="segmented segmented-wrap">
-            {POOL_OPTIONS.map(item => (
-              <button type="button" className={poolTypes.includes(item.value) ? 'selected' : ''} onClick={() => togglePoolType(item.value)} key={item.value}>{item.label}</button>
-            ))}
-          </div>
-        </div>
-        <Field label="规则链" className="screening-rule-field">
-          <select value={chainKey} onChange={event => setChainKey(event.target.value)} disabled={chainOptions.length === 0}>
-            {chainOptions.length === 0 ? <option value="">暂无共同规则链</option> : chainOptions.map(item => (
-              <option key={item.chain_key} value={item.chain_key}>
-                {item.chain_name} {item.enabled ? '默认候选' : '可试跑'}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <div className="screening-toggles">
-          <label className="check"><input type="checkbox" checked={enableAi} onChange={event => setEnableAi(event.target.checked)} /> AI 分析</label>
-          <label className="check"><input type="checkbox" checked={sendFeishu} onChange={event => setSendFeishu(event.target.checked)} /> 发送飞书</label>
-        </div>
-        <div className="screening-actions">
-          <button className="primary" disabled={submitting || markets.length === 0 || poolTypes.length === 0 || chainOptions.length === 0}>{submitting ? '创建中...' : '启动筛选'}</button>
-        </div>
-      </form>
-      {markets.length === 0 && <div className="inline-error">至少选择一个市场后才能启动筛选。</div>}
-      {poolTypes.length === 0 && <div className="inline-error">至少选择一个股票池类型后才能启动筛选。</div>}
-      {markets.length > 0 && chainOptions.length === 0 && <div className="inline-error">所选市场没有共同规则链，无法创建多市场任务。</div>}
-      {error && <div className="error">{error}</div>}
-      {message && <div className="notice">{message}</div>}
-    </section>
-  )
-}
+const MARKET_LABELS: Record<string, string> = { HK: '港股', US: '美股', A: 'A股' }
 
 function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
-  const [market, setMarket] = useState('US')
+  // ---- form state ----
+  const [market, setMarket] = useState('HK')
   const [timeframe, setTimeframe] = useState('1d')
   const [rules, setRules] = useState<RulesResponse | null>(null)
   const [chainKey, setChainKey] = useState('')
-  const [codes, setCodes] = useState('AAPL, MSFT')
-  const [enableAi, setEnableAi] = useState(true)
-  const [sendFeishu, setSendFeishu] = useState(false)
-  const [jobId, setJobId] = useState('')
-  const [result, setResult] = useState<CustomListResultsResponse | null>(null)
-  const [selectedTerminalRow, setSelectedTerminalRow] = useState<StockTerminalRow | null>(null)
-  const [selectedReportRow, setSelectedReportRow] = useState<CustomListResultRow | null>(null)
+
+  // ---- stock search ----
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<StockSearchResult[]>([])
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [selectedStock, setSelectedStock] = useState<StockSearchResult | null>(null)
+
+  // ---- screening ----
+  const [runId, setRunId] = useState('')
+  const [screening, setScreening] = useState(false)
+  const [screeningResult, setScreeningResult] = useState<Record<string, unknown> | null>(null)
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-  const parsedCodes = useMemo(() => splitCodes(codes), [codes])
+  const [progress, setProgress] = useState({ pct: 0, step: '', detail: '', status: 'running' })
 
-  async function submit(event: React.FormEvent) {
-    event.preventDefault()
-    setError('')
-    setResult(null)
-    setSelectedTerminalRow(null)
-    setSelectedReportRow(null)
-    setJobId('')
-    if (parsedCodes.length === 0) {
-      setError('至少输入一个代码')
-      return
-    }
-    setLoading(true)
-    try {
-      const data = await api<{ job_id: string }>('/api/screening/custom-list-tasks', {
-        method: 'POST',
-        body: JSON.stringify({
-          market,
-          codes: parsedCodes,
-          timeframe,
-          chain_key: chainKey || undefined,
-          enable_ai_analysis: enableAi,
-          send_feishu: sendFeishu
-        })
-      })
-      const nextJobId = data.job_id || ''
-      setJobId(nextJobId)
-      if (nextJobId) await refreshJob(nextJobId)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '创建代码筛选任务失败')
-      setLoading(false)
-    }
-  }
+  // ---- K-line ----
+  const [klineRows, setKlineRows] = useState<Record<string, unknown>[]>([])
+  const [klineLoading, setKlineLoading] = useState(false)
+  const [klineError, setKlineError] = useState('')
 
-  async function refreshJob(jobId: string) {
-    try {
-      const data = await api<CustomListResultsResponse>(`/api/screening/custom-list-tasks/${jobId}/results`)
-      setResult(data)
-      if (data.status === 'completed' || data.status === 'failed' || data.status === 'error') setLoading(false)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '加载代码筛选结果失败')
-      setLoading(false)
-    }
-  }
+  // ---- report tab ----
+  const [reportTab, setReportTab] = useState<'current' | 'history'>('current')
+  const [historyRuns, setHistoryRuns] = useState<SingleStockHistoryItem[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
 
-  useEffect(() => {
-    if (!jobId || !loading) return
-    refreshJob(jobId).catch(console.error)
-    const timer = window.setInterval(() => refreshJob(jobId).catch(console.error), 5000)
-    return () => window.clearInterval(timer)
-  }, [jobId, loading])
-
-  useEffect(() => {
-    if (!result || !jobId) return
-    if (result.status === 'completed' || result.status === 'failed' || result.status === 'error') {
-      setLoading(false)
-    }
-    if (selectedReportRow && !(result.rows || []).some(row => row.code === selectedReportRow.code && row.input === selectedReportRow.input)) {
-      setSelectedReportRow(null)
-      setSelectedTerminalRow(null)
-    }
-  }, [result, jobId])
-
+  // ---- load rules on market / timeframe change ----
   useEffect(() => {
     let cancelled = false
     api<RulesResponse>(`/api/rules?market=${market}&timeframe=${timeframe}`)
@@ -1113,19 +905,187 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
     return () => { cancelled = true }
   }, [market, timeframe])
 
-  const selectedChain = (rules?.chains || []).find(item => item.chain_key === chainKey) || rules?.chain
-  const selectResultRow = (row: CustomListResultRow) => {
-    setSelectedReportRow(row)
-    setSelectedTerminalRow(normalizeCodeScreeningTerminalRow(row, result?.market || market))
+  // ---- stock name search with debounce ----
+  useEffect(() => {
+    if (searchQuery.trim().length < 1) {
+      setSearchResults([])
+      setSearchOpen(false)
+      return
+    }
+    const timer = setTimeout(async () => {
+      setSearchLoading(true)
+      try {
+        const data = await api<{ results: StockSearchResult[] }>(
+          `/api/stocks/search?q=${encodeURIComponent(searchQuery.trim())}&market=${market}&limit=10`
+        )
+        setSearchResults(data.results || [])
+        setSearchOpen(true)
+      } catch { /* ignore search errors */ }
+      finally { setSearchLoading(false) }
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchQuery, market])
+
+  // ---- select stock from autocomplete ----
+  function selectStock(stock: StockSearchResult) {
+    setSelectedStock(stock)
+    setSearchQuery(stock.name)
+    setSearchOpen(false)
+    // reset previous results
+    setScreeningResult(null)
+    setRunId('')
+    setKlineRows([])
+    setKlineError('')
+    setError('')
+    setHistoryRuns([])
   }
+
+  // ---- fetch K-line data ----
+  async function fetchKline(code: string) {
+    setKlineLoading(true)
+    setKlineError('')
+    try {
+      const data = await api<{ rows: Array<Record<string, unknown>> }>(
+        `/api/stock-terminal/${encodeURIComponent(market)}/${encodeURIComponent(code)}/klines?timeframe=${encodeURIComponent(timeframe)}&limit=200`
+      )
+      setKlineRows(Array.isArray(data.rows) ? data.rows : [])
+    } catch (err) {
+      setKlineError(err instanceof Error ? err.message : '加载K线失败')
+      setKlineRows([])
+    } finally { setKlineLoading(false) }
+  }
+
+  // ---- SSE progress tracking ----
+  useEffect(() => {
+    if (!runId || !screening) return
+    let cancelled = false
+    const es = new EventSource(`/api/screening/single-stock/${runId}/progress`)
+
+    es.onmessage = (event) => {
+      if (cancelled) return
+      try {
+        const data = JSON.parse(event.data)
+        setProgress({ pct: data.pct || 0, step: data.step || '', detail: data.detail || '', status: data.status || 'running' })
+
+        if (data.status === 'completed' || data.status === 'failed') {
+          es.close()
+          // Fetch the full result
+          api<Record<string, unknown>>(`/api/screening/single-stock/${runId}`)
+            .then(resultData => {
+              if (!cancelled) {
+                setScreening(false)
+                setScreeningResult(resultData)
+                if (resultData.rule_details) {
+                  setScreeningResult(prev => ({ ...prev, rule_details: resultData.rule_details }))
+                }
+              }
+            })
+            .catch(() => { if (!cancelled) setScreening(false) })
+        }
+      } catch { /* ignore parse errors */ }
+    }
+
+    es.onerror = () => {
+      // Fallback: try polling if SSE fails
+      es.close()
+      if (cancelled) return
+      let pollCount = 0
+      const pollTimer = window.setInterval(async () => {
+        if (cancelled) { window.clearInterval(pollTimer); return }
+        pollCount++
+        try {
+          const data = await api<Record<string, unknown>>(`/api/screening/single-stock/${runId}`)
+          if (cancelled) return
+          const status = String(data.status || '')
+          if (status === 'completed' || status === 'failed') {
+            window.clearInterval(pollTimer)
+            setScreening(false)
+            setScreeningResult(data)
+            if (data.rule_details) {
+              setScreeningResult(prev => ({ ...prev, rule_details: data.rule_details }))
+            }
+          } else if (pollCount > 30) {
+            window.clearInterval(pollTimer)
+            setScreening(false)
+            setError('筛选任务超时，请稍后查看历史记录')
+          }
+        } catch { /* ignore */ }
+      }, 2000)
+    }
+
+    return () => { cancelled = true; es.close() }
+  }, [runId, screening])
+
+  // ---- submit screening ----
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    setError('')
+    setScreeningResult(null)
+    setRunId('')
+    setKlineRows([])
+    setKlineError('')
+    setProgress({ pct: 0, step: '', detail: '', status: 'running' })
+
+    if (!selectedStock) {
+      setError('请先搜索并选择一只股票')
+      return
+    }
+    setScreening(true)
+
+    // 1. fetch K-line immediately
+    fetchKline(selectedStock.code)
+
+    // 2. create single-stock screening run (web mode)
+    try {
+      const data = await api<{ run_id: string; status: string }>('/api/screening/single-stock', {
+        method: 'POST',
+        body: JSON.stringify({
+          market,
+          code: selectedStock.code,
+          timeframe,
+          chain_key: chainKey || undefined,
+          mode: 'web',  // run immediately in web backend thread
+        })
+      })
+      setRunId(data.run_id || '')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '创建筛选任务失败')
+      setScreening(false)
+    }
+  }
+
+  // ---- load history ----
+  async function loadHistory() {
+    if (!selectedStock) return
+    setHistoryLoading(true)
+    try {
+      const data = await api<{ history: SingleStockHistoryItem[] }>(
+        `/api/screening/single-stock/history/${encodeURIComponent(selectedStock.code)}?market=${market}&limit=20`
+      )
+      setHistoryRuns(data.history || [])
+    } catch { /* ignore */ }
+    finally { setHistoryLoading(false) }
+  }
+
+  useEffect(() => {
+    if (reportTab === 'history' && selectedStock && historyRuns.length === 0) {
+      loadHistory()
+    }
+  }, [reportTab, selectedStock?.code])
+
+  const selectedChain = (rules?.chains || []).find(item => item.chain_key === chainKey) || rules?.chain
+  const ruleDetails: FilterDetailRow[] = (screeningResult?.rule_details as FilterDetailRow[]) || []
+  const resultJson = (screeningResult?.result_json || screeningResult || {}) as Record<string, unknown>
 
   return (
     <section className="code-screening-layout">
-      <Header title="个股筛选器" subtitle="输入一个或多个代码，使用自定义列表任务按原始顺序返回筛选结果" />
+      <Header title="个股筛选器" subtitle="输入股票名称，一键筛选并查看K线与分析报告" />
+
+      {/* ---- search form ---- */}
       <form className="compact-form-grid" onSubmit={submit}>
         <Field label="市场">
-          <select value={market} onChange={event => setMarket(event.target.value)}>
-            {MARKET_OPTIONS.map(item => <option key={item}>{item}</option>)}
+          <select value={market} onChange={event => { setMarket(event.target.value); setSelectedStock(null); setSearchQuery('') }}>
+            {Object.entries(MARKET_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         </Field>
         <Field label="周期">
@@ -1133,94 +1093,237 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
             {TIMEFRAME_OPTIONS.map(item => <option key={item}>{item}</option>)}
           </select>
         </Field>
-        <Field label="规则链" className="code-rule-field">
+        <Field label="规则链">
           <select value={chainKey} onChange={event => setChainKey(event.target.value)}>
             {(rules?.chains || []).map(item => (
               <option key={item.chain_key} value={item.chain_key}>
-                {item.chain_name} {item.enabled ? '默认候选' : '可试跑'}
+                {item.chain_name} {item.enabled ? '(默认)' : ''}
               </option>
             ))}
           </select>
         </Field>
-        <div className="code-screening-toggles">
-          <label className="check"><input type="checkbox" checked={enableAi} onChange={event => setEnableAi(event.target.checked)} /> AI 分析</label>
-          <label className="check"><input type="checkbox" checked={sendFeishu} onChange={event => setSendFeishu(event.target.checked)} /> 发送飞书</label>
-        </div>
-        <Field label="代码列表" className="field-wide code-list-field">
-          <textarea className="code-input" rows={5} value={codes} onChange={event => setCodes(event.target.value)} placeholder="AAPL, MSFT 或每行一个代码" />
-        </Field>
-        <div className="code-preview-actions">
-          <button className="primary" disabled={loading || parsedCodes.length === 0 || (rules?.chains || []).length === 0}>{loading ? '创建任务中...' : '启动代码筛选'}</button>
-        </div>
-      </form>
-      <Panel title="输入预览">
-        {parsedCodes.length === 0 ? (
-          <div className="empty">暂无可提交代码</div>
-        ) : (
-          <div className="code-preview-grid">
-            {parsedCodes.slice(0, 12).map((code, index) => (
-              <article className="code-preview-card" key={`${code}-${index}`}>
-                <header>
-                  <h3>{code}</h3>
-                  <span className="status-badge">待提交</span>
-                </header>
-                <dl>
-                  <dt>市场</dt><dd>{optionMarketLabel(market)}</dd>
-                  <dt>周期</dt><dd>{timeframe}</dd>
-                  <dt>规则链</dt><dd>{selectedChain ? chainDisplay(selectedChain) : '未加载'}</dd>
-                </dl>
-              </article>
-            ))}
-            {parsedCodes.length > 12 && (
-              <article className="code-preview-card">
-                <header>
-                  <h3>其余代码</h3>
-                  <span className="status-badge">+{parsedCodes.length - 12}</span>
-                </header>
-                <p>提交时会按输入顺序一起进入自定义列表筛选。</p>
-              </article>
+        <Field label="股票名称" className="field-wide">
+          <div className="stock-search">
+            <input
+              value={searchQuery}
+              onChange={event => setSearchQuery(event.target.value)}
+              onFocus={() => { if (searchResults.length > 0) setSearchOpen(true) }}
+              onBlur={() => setTimeout(() => setSearchOpen(false), 200)}
+              placeholder="输入股票名称，如：腾讯 / Apple / 茅台"
+              autoComplete="off"
+            />
+            {searchLoading && <span className="search-spinner" />}
+            {searchOpen && searchResults.length > 0 && (
+              <div className="search-dropdown">
+                {searchResults.map(r => (
+                  <div className="search-item" key={r.code} onMouseDown={() => selectStock(r)}>
+                    <span className="stock-name">{r.name}</span>
+                    <span className="stock-code">{r.code}</span>
+                    <span className="stock-sector">{r.sector || r.industry || ''}</span>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
-        )}
-      </Panel>
+        </Field>
+        <div className="code-preview-actions">
+          <button className="primary" disabled={screening || !selectedStock || (rules?.chains || []).length === 0}>
+            {screening ? '筛选中...' : '开始筛选'}
+          </button>
+        </div>
+      </form>
+
+      {/* ---- selected stock info ---- */}
+      {selectedStock && (
+        <div className="metric-grid">
+          <Metric label="股票名称" value={selectedStock.name} />
+          <Metric label="股票代码" value={selectedStock.code} />
+          <Metric label="市场" value={MARKET_LABELS[market] || market} />
+          <Metric label="板块" value={selectedStock.sector || selectedStock.industry || '-'} />
+          <Metric label="规则链" value={chainDisplay(selectedChain)} />
+          <Metric label="周期" value={timeframe} />
+        </div>
+      )}
+
       {error && <div className="error">{error}</div>}
-      {result && (
-        <>
-          <div className="metric-grid">
-            <Metric label="任务组" value={result.job_id ? result.job_id.slice(0, 8) : '-'} />
-            <Metric label="市场" value={optionMarketLabel(result.market)} />
-            <Metric label="周期" value={result.timeframe} />
-            <Metric label="规则链" value={chainDisplay({ chain_key: result.chain_key || selectedChain?.chain_key, chain_name: result.chain_name || selectedChain?.chain_name })} />
-            <Metric label="状态" value={<StatusBadge value={result.status} />} />
-            <Metric label="通过" value={displayMissing(result.input_summary?.['通过数量'])} />
+
+      {/* ---- K-line chart ---- */}
+      {selectedStock && (
+        <div className="kline-panel-wrap">
+          <KlineChart
+            rows={klineRows}
+            loading={klineLoading}
+            error={klineError}
+            timeframe={timeframe as any}
+            symbol={`${selectedStock.name} (${selectedStock.code})`}
+          />
+        </div>
+      )}
+
+      {/* ---- progress bar ---- */}
+      {screening && (
+        <div className="screening-progress">
+          <div className="screening-progress-bar">
+            <div
+              className={`screening-progress-fill ${progress.status === 'completed' ? 'done' : progress.status === 'failed' ? 'failed' : ''}`}
+              style={{ width: `${progress.pct > 0 ? progress.pct : 5}%` }}
+            />
           </div>
-          <Panel title="任务摘要">
-            <dl className="info-list">
-              <div><dt>输入数量</dt><dd>{displayMissing(result.input_summary?.['输入数量'] || result.input_summary?.input_count)}</dd></div>
-              <div><dt>有效数量</dt><dd>{displayMissing(result.input_summary?.['有效代码数'] || result.input_summary?.valid_count)}</dd></div>
-              <div><dt>无效代码</dt><dd>{displayMissing(result.input_summary?.['无效代码数'])}</dd></div>
-              <div><dt>重复代码</dt><dd>{displayMissing(result.input_summary?.['重复代码数'])}</dd></div>
-              <div><dt>未通过数量</dt><dd>{displayMissing(result.input_summary?.['未通过数量'])}</dd></div>
-              <div><dt>筛选任务</dt><dd>{result.task_id ? <button className="link-button" onClick={() => openTask(result.task_id || '')}>{result.task_id.slice(0, 8)}</button> : '等待任务创建'}</dd></div>
-            </dl>
-          </Panel>
-          <div className="code-screening-workbench">
-            <Panel title="筛选结果">
-              <CodeScreeningResultTable
-                rows={result.rows || []}
-                terminalMarket={result.market || market}
-                taskId={result.task_id}
-                openTask={openTask}
-                selectedCode={selectedTerminalRow?.code}
-                onSelectRow={selectResultRow}
-              />
-            </Panel>
-            <div className="code-screening-side-panel">
-              <CodeScreeningReportPanel row={selectedReportRow} />
-              <StockTerminalPanel row={selectedTerminalRow} />
+          <span className="screening-progress-label">
+            {progress.detail || '正在初始化...'}
+            {progress.pct > 0 && ` (${progress.pct}%)`}
+          </span>
+          <div className="screening-progress-steps">
+            {[
+              { key: 'init', label: '初始化' },
+              { key: 'stock_lookup', label: '查询股票' },
+              { key: 'kline_fetch', label: '获取K线' },
+              { key: 'rule_eval', label: '执行规则' },
+              { key: 'read_result', label: '读取结果' },
+              { key: 'save_result', label: '保存报告' },
+            ].map(s => (
+              <span key={s.key} className={`progress-step ${_progressStepClass(progress.step, s.key, progress.status)}`}>
+                {s.label}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ---- report panel ---- */}
+      {screeningResult && (
+        <Panel title="筛选报告">
+          {/* tabs */}
+          <div className="report-tabs">
+            <button className={`report-tab ${reportTab === 'current' ? 'active' : ''}`} onClick={() => setReportTab('current')}>
+              📊 本次结果
+            </button>
+            <button className={`report-tab ${reportTab === 'history' ? 'active' : ''}`} onClick={() => setReportTab('history')}>
+              📋 历史记录
+            </button>
+          </div>
+
+          {reportTab === 'current' && (
+            <>
+              <div className="metric-grid" style={{ marginTop: 16 }}>
+                <Metric label="筛选状态" value={<StatusBadge value={screeningResult.passed ? 'passed' : 'failed'} />} />
+                <Metric label="综合评分" value={displayMissing(resultJson.final_score)} />
+                <Metric label="技术分" value={displayMissing(resultJson.technical_score)} />
+                <Metric label="宏观分" value={displayMissing(resultJson.macro_score)} />
+                <Metric label="数据来源" value={displayMissing(screeningResult.data_source)} />
+                <Metric label="完成时间" value={displayMissing(screeningResult.finished_at)} />
+              </div>
+
+              {/* scoring detail */}
+              {(screeningResult.score_details || screeningResult.filter_details) && (
+                <div style={{ marginTop: 16 }}>
+                  <h3 style={{ color: '#e8e0d0', margin: '0 0 12px' }}>规则明细</h3>
+                  {ruleDetails.length > 0 ? (
+                    <table className="data-table" style={{ width: '100%' }}>
+                      <thead>
+                        <tr>
+                          <th>规则</th>
+                          <th>类型</th>
+                          <th>结果</th>
+                          <th>原因</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ruleDetails.map((d, i) => (
+                          <tr key={i}>
+                            <td style={{ color: '#e8e0d0' }}>{d.rule_key || d.filter_name || '-'}</td>
+                            <td>{d.rule_type || d.strategy_category || '-'}</td>
+                            <td><StatusBadge value={d.result || ''} /></td>
+                            <td style={{ color: '#c0b8a0', maxWidth: 320 }}>{d.reason || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="empty">暂无规则明细数据</div>
+                  )}
+                </div>
+              )}
+
+              {/* filter_details array */}
+              {!ruleDetails.length && Array.isArray(screeningResult.filter_details) && (screeningResult.filter_details as FilterDetailRow[]).length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <h3 style={{ color: '#e8e0d0', margin: '0 0 12px' }}>筛选详情</h3>
+                  <table className="data-table" style={{ width: '100%' }}>
+                    <thead>
+                      <tr><th>规则</th><th>结果</th><th>原因</th></tr>
+                    </thead>
+                    <tbody>
+                      {(screeningResult.filter_details as FilterDetailRow[]).map((d, i) => (
+                        <tr key={i}>
+                          <td style={{ color: '#e8e0d0' }}>{d.rule_key || d.filter_name || '-'}</td>
+                          <td><StatusBadge value={d.result || ''} /></td>
+                          <td style={{ color: '#c0b8a0' }}>{d.reason || '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* ai analysis summary */}
+              {(screeningResult.ai_analysis as Record<string, unknown>) && (
+                <div style={{ marginTop: 16 }}>
+                  <h3 style={{ color: '#e8e0d0', margin: '0 0 12px' }}>AI 分析摘要</h3>
+                  <div className="ai-analysis-box">
+                    {Object.entries(screeningResult.ai_analysis as Record<string, unknown>).map(([k, v]) => (
+                      <div key={k} style={{ marginBottom: 8 }}>
+                        <strong style={{ color: '#c9a84c' }}>{k}：</strong>
+                        <span style={{ color: '#c0b8a0' }}>{typeof v === 'string' ? v : JSON.stringify(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {reportTab === 'history' && (
+            <div style={{ marginTop: 16 }}>
+              {historyLoading ? (
+                <div className="empty">加载中...</div>
+              ) : historyRuns.length === 0 ? (
+                <div className="empty">暂无历史筛选记录</div>
+              ) : (
+                <table className="data-table" style={{ width: '100%' }}>
+                  <thead>
+                    <tr>
+                      <th>时间</th>
+                      <th>规则链</th>
+                      <th>状态</th>
+                      <th>综合分</th>
+                      <th>技术分</th>
+                      <th>宏观分</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historyRuns.map(r => (
+                      <tr key={r.run_id} style={{ cursor: 'pointer' }} onClick={async () => {
+                        try {
+                          const data = await api<Record<string, unknown>>(`/api/screening/single-stock/${r.run_id}`)
+                          setScreeningResult(data)
+                          setReportTab('current')
+                        } catch { /* ignore */ }
+                      }}>
+                        <td style={{ color: '#e8e0d0' }}>{String(r.created_at || '').replace('T', ' ').slice(0, 19)}</td>
+                        <td style={{ color: '#c9a84c' }}>{r.chain_name || r.chain_key || '-'}</td>
+                        <td><StatusBadge value={r.passed ? 'passed' : 'failed'} /></td>
+                        <td style={{ color: '#e8c560' }}>{r.final_score != null ? Number(r.final_score).toFixed(1) : '-'}</td>
+                        <td>{r.technical_score != null ? Number(r.technical_score).toFixed(1) : '-'}</td>
+                        <td>{r.macro_score != null ? Number(r.macro_score).toFixed(1) : '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
-          </div>
-        </>
+          )}
+        </Panel>
       )}
     </section>
   )
@@ -1418,6 +1521,7 @@ function Rules() {
   const [ruleDirectionFilter, setRuleDirectionFilter] = useState('all')
   const [rulePage, setRulePage] = useState(0)
   const rulePageSize = 12
+  const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
   const [editor, setEditor] = useState({
     timeframe: '1d',
     chain_key: '',
@@ -1430,6 +1534,23 @@ function Rules() {
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+
+  // Parse current expression_text into typed object for visual editor
+  const visualExpression = useMemo<ExpressionNode | null>(() => {
+    try {
+      return JSON.parse(editor.expression_text) as ExpressionNode
+    } catch {
+      return null
+    }
+  }, [editor.expression_text])
+
+  // Called when visual editor modifies the expression
+  function handleVisualExpressionChange(expr: ExpressionNode) {
+    setEditor(current => ({
+      ...current,
+      expression_text: JSON.stringify(expr, null, 2),
+    }))
+  }
 
   async function loadRules() {
     const data = await api<RulesResponse>(`/api/rules?market=${market}&timeframe=${timeframe}`)
@@ -1605,7 +1726,7 @@ function Rules() {
   }
   return (
     <section>
-      <Header title="规则链" subtitle="查看原子规则，并以 JSON DSL 新增、编辑、删除规则链" />
+      <Header title="规则链" subtitle="拖拽节点编排规则链，或切换到 JSON 模式直接编辑表达式" />
       <div className="toolbar toolbar-row">
         <select value={market} onChange={event => setMarket(event.target.value)}>
           {MARKET_OPTIONS.map(item => <option key={item}>{item}</option>)}
@@ -1622,7 +1743,11 @@ function Rules() {
         </Field>
         <button type="button" className="secondary-button" onClick={startNewChain}>新建</button>
       </div>
-      <div className="table-note">规则链表达式使用 JSON DSL。可从下方原子规则复制 `ref` 节点；当前版本不做可视化编排器。</div>
+      <div className="table-note">
+        {editMode === 'visual'
+          ? '拖拽左侧规则到画布，用 AND/OR 逻辑门连接。改动自动同步到 JSON 表达式。'
+          : '使用 JSON DSL 组合原子规则，可从下方原子规则复制 ref 节点。'}
+      </div>
       {error && <div className="error">{error}</div>}
       {notice && <div className="notice">{notice}</div>}
       <Panel title="规则链列表">
@@ -1634,8 +1759,21 @@ function Rules() {
         }))} columns={['chain_name', 'chain_key', 'timeframe', 'enabled', 'priority', 'description']} onRowClick={(row) => setChainKey(row.chain_key)} />
       </Panel>
       <Panel title="规则链编辑">
-        <div className="rule-editor-layout">
-          <div className="rule-editor-fields">
+        {/* Mode toggle */}
+        <div className="rule-editor-mode-bar">
+          <div className="segmented">
+            <button type="button" className={editMode === 'visual' ? 'selected' : ''} onClick={() => setEditMode('visual')}>
+              🎨 可视化编排
+            </button>
+            <button type="button" className={editMode === 'json' ? 'selected' : ''} onClick={() => setEditMode('json')}>
+              📝 JSON 编辑
+            </button>
+          </div>
+        </div>
+
+        {/* Metadata fields — shared between modes */}
+        <div className="rule-editor-fields" style={{ marginTop: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, alignItems: 'end' }}>
             <Field label="规则链 Key"><input value={editor.chain_key} onChange={event => setEditor(current => ({ ...current, chain_key: event.target.value }))} /></Field>
             <Field label="适用周期">
               <select value={editor.timeframe} onChange={event => setEditor(current => ({ ...current, timeframe: event.target.value }))}>
@@ -1644,22 +1782,39 @@ function Rules() {
               </select>
             </Field>
             <Field label="规则链名称"><input value={editor.chain_name} onChange={event => setEditor(current => ({ ...current, chain_name: event.target.value }))} /></Field>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 12, alignItems: 'end', marginTop: 10 }}>
             <Field label="优先级"><input type="number" value={editor.priority} onChange={event => setEditor(current => ({ ...current, priority: Number(event.target.value) }))} /></Field>
             <Field label="说明"><input value={editor.description} onChange={event => setEditor(current => ({ ...current, description: event.target.value }))} /></Field>
             <label className="check"><input type="checkbox" checked={editor.enabled} onChange={event => setEditor(current => ({ ...current, enabled: event.target.checked }))} /> 启用为默认候选</label>
           </div>
-          <div className="rule-json-editor">
+        </div>
+
+        {/* Visual editor */}
+        {editMode === 'visual' && (
+          <div className="rule-visual-editor-wrap" style={{ marginTop: 14 }}>
+            <RuleChainEditor
+              rules={(rules?.metadata || []) as any[]}
+              expression={visualExpression}
+              onExpressionChange={handleVisualExpressionChange}
+            />
+          </div>
+        )}
+
+        {/* JSON editor */}
+        {editMode === 'json' && (
+          <div className="rule-json-editor" style={{ marginTop: 14 }}>
             <div className="json-editor-heading">
               <div>
                 <strong>expression_json</strong>
-                <span>使用 JSON DSL 组合原子规则，点击下方原子规则可复制 ref 节点。</span>
+                <span>使用 JSON DSL 组合原子规则。节点：ref、and、any、all_enabled、any_enabled</span>
               </div>
               <span className={`json-status ${jsonStatus.ok ? 'valid' : 'invalid'}`}>{jsonStatus.message}</span>
             </div>
             <div className="json-editor-shell">
               <CodeMirror
                 value={editor.expression_text}
-                height="360px"
+                height="300px"
                 basicSetup={{
                   lineNumbers: true,
                   foldGutter: true,
@@ -1676,11 +1831,20 @@ function Rules() {
               <span>常用节点：ref、and、any、all_enabled、any_enabled</span>
               <div className="toolbar-row json-editor-actions">
                 <button type="button" className="secondary-button" onClick={formatExpressionJson}>格式化 JSON</button>
-                <button type="button" className="primary" disabled={saving || !jsonStatus.ok} onClick={saveChain}>{saving ? '保存中...' : '保存'}</button>
-                <button type="button" className="secondary-button" disabled={saving || !editor.chain_key} onClick={deleteChain}>删除</button>
               </div>
             </div>
           </div>
+        )}
+
+        {/* Save / Delete bar — shared */}
+        <div className="toolbar-row" style={{ marginTop: 14, justifyContent: 'flex-end', gap: 8 }}>
+          <span className={`json-status ${jsonStatus.ok ? 'valid' : 'invalid'}`} style={{ marginRight: 'auto' }}>
+            {jsonStatus.message}
+          </span>
+          <button type="button" className="primary" disabled={saving || !jsonStatus.ok} onClick={saveChain}>
+            {saving ? '保存中...' : '保存'}
+          </button>
+          <button type="button" className="secondary-button" disabled={saving || !editor.chain_key} onClick={deleteChain}>删除</button>
         </div>
       </Panel>
       <Panel title="原子规则">

@@ -707,6 +707,41 @@ class RuleEngine:
             label = str(details.get("label") or output.filter_name or "").strip()
         return label
 
+    def evaluate_macro_rules_for_top20(
+        self,
+        stock: StockInfo,
+        filter_context: FilterContext,
+    ) -> StockFilterResult:
+        """Evaluate macro rules for Top20 selected stocks only.
+
+        These rules (macro_factor_analysis, enterprise_potential_analysis,
+        company_event_hot_sector_link, company_event_hot_news_link) have
+        strategy_category='macro' and are excluded from
+        evaluate_bullish_technical_rules(). They run after the Top20
+        technical selection to provide the final macro scoring layer.
+        """
+        execution = RuleExecutionContext(
+            stock=stock,
+            filter_context=filter_context,
+            metadata_by_key=self.metadata_by_key,
+            registry=self.registry,
+        )
+        for rule_key in (
+            'macro_factor_analysis',
+            'enterprise_potential_analysis',
+            'company_event_hot_sector_link',
+            'company_event_hot_news_link',
+        ):
+            metadata = self.metadata_by_key.get(rule_key)
+            if metadata is not None and metadata.enabled:
+                execution.execute(rule_key)
+
+        return StockFilterResult(
+            stock=stock,
+            passed=True,
+            filter_outputs=execution.ordered_outputs,
+        )
+
     def evaluate_stock(
         self,
         stock: StockInfo,

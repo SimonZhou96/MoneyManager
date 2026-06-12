@@ -173,14 +173,20 @@ class YFinanceKlineFetcher(KlineFetcherBase):
             # 抑制 yfinance 的警告信息
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
+                from yf_ratelimit import retry_on_rate_limit
+
+                @retry_on_rate_limit
+                def _download():
+                    return self.yf.download(
+                        yf_code,
+                        period=period,
+                        interval=timeframe,
+                        auto_adjust=True,
+                        progress=False,
+                    )
+
                 self._suppress_yfinance_warnings()
-                data = self.yf.download(
-                    yf_code,
-                    period=period,
-                    interval=timeframe,
-                    auto_adjust=True,
-                    progress=False,
-                )
+                data = _download()
             
             if data is None or data.empty:
                 return None

@@ -311,7 +311,10 @@ class GlobalMacroProvider(MacroDataProvider):
             snapshot.data_gaps.append("yfinance 库未安装")
             return snapshot
 
+        from yf_ratelimit import per_ticker_sleep
+
         for ticker, key, name in self.TICKERS:
+            per_ticker_sleep()  # 5 只 macro ticker 之间 0.3s 延迟
             self._fetch_one(snapshot, yf, ticker, key, name)
 
         return snapshot

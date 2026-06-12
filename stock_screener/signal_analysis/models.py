@@ -95,11 +95,13 @@ HOT_SECTOR_MARK_CRITERIA = (
     "观察=暂无明确匹配但可跟踪轮动；无明确关联=当前信息看不出关联；未知=信息不足"
 )
 
+# 统一评分权重：技术规则决定 Top20 入围，不参与最终评分（0%）；
+# 五模块/事件热点/资金风险/LLM 复核构成最终评分口径。
 UNIFIED_SCORE_WEIGHTS = {
-    "technical": 0.30,
-    "enterprise": 0.30,
-    "event_hot": 0.20,
-    "fund_risk": 0.10,
+    "technical": 0.00,
+    "enterprise": 0.40,
+    "event_hot": 0.30,
+    "fund_risk": 0.20,
     "llm": 0.10,
 }
 
@@ -286,10 +288,10 @@ def compute_unified_score(
     )
     final = _clamp_score(final)
     formula = (
-        f"技术 {technical_score:.1f}*30% + "
-        f"五模块 {enterprise_score:.1f}*30% + "
-        f"事件热点 {event_hot_score:.1f}*20% + "
-        f"资金风险 {fund_risk_score:.1f}*10% + "
+        f"技术 {technical_score:.1f}*0% + "
+        f"五模块 {enterprise_score:.1f}*40% + "
+        f"事件热点 {event_hot_score:.1f}*30% + "
+        f"资金风险 {fund_risk_score:.1f}*20% + "
         f"LLM复核 {llm_score:.1f}*10% = {final:.1f}"
     )
     return UnifiedScoreBreakdown(

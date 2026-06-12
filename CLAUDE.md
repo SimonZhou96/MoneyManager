@@ -13,6 +13,7 @@ Detailed context lives in the memory directory. Read the relevant files before w
 
 ## Key Conventions
 
+- **Three-mode compatibility**: All backend changes MUST work across desktop app (`desktop.py` + pywebview), web frontend (Vite → uvicorn), AND interactive shell (`interactive_screening.py`). See `memory/backend-compatibility-rule.md` for details. After any backend change, verify: `python3 desktop.py` starts, `curl localhost:8000/api/...` returns data.
 - **Failure isolation**: AI analysis and sector enrichment failures must never block CSV generation or Feishu delivery.
 - **Sync SQL and Python**: Whenever default rules/chains/schema change, update both the `sql/` deployment files and the Python default constants.
 - **Quota awareness**: Before adding external API calls, estimate call counts for a realistic batch (e.g., 100 stocks) and prefer batching.
@@ -102,3 +103,37 @@ Detailed context lives in the memory directory. Read the relevant files before w
 **Score transparency**: Replaced black-box LLM score with heuristic formula display. Each stock now shows the full calculation. `_recommendation()` fixed: neutral bias → 🟡 持有/观察 (was ⚠️ 回避).
 
 **Feishu file delivery**: `send_screening_result()` previously only sent `.csv` files. Now sends `.md` reports as file attachments too, using the same Feishu app API upload path.
+
+### 2026-06-06 — unified_bullish_top20 宏观后置 + 评分公式统一 + YFRateLimitError 修复
+
+**Files changed**:
+- `stock_screener/rule_engine.py` — 新增 `evaluate_macro_rules_for_top20()` 方法
+- `stock_screener/api/screen_service.py` — Top20 后置宏观评估 + 评分重算；`typing.Any` 导入
+- `stock_screener/signal_analysis/models.py` — `UNIFIED_SCORE_WEIGHTS` → 0/0.40/0.30/0.20/0.10；`compute_unified_score` formula 字符串更新
+- `stock_screener/market_intel/macro_scoring.py` — `DEFAULT_TECHNICAL_WEIGHT=0.0, DEFAULT_MACRO_WEIGHT=1.0`；`aggregate_rule_scores` 对 macro 规则优先取 `total_score`
+- `stock_screener/market_intel/reporting.py` — `_single_score_rows` 权重列表 30/30/20/10/10 → 0/40/30/20/10
+- `stock_screener/signal_analysis/chain.py` — `_build_score_with_formula` 改为委托 `compute_unified_score`；报告模板 §1.1/1.2/1.3 权重更新
+- `stock_screener/yf_ratelimit.py` (新建) — 共享频控模块：`yf_sleep()`、`per_ticker_sleep()`、`retry_on_rate_limit`
+- `stock_screener/potential_analysis/service.py` — chunk 50→25, delay 1.5s→3s+jitter, Tickers() 429 重试, fallback 加 per_ticker_sleep
+- `stock_screener/sector_resolver.py` — `YahooFinanceSectorProvider` 逐只加 `per_ticker_sleep()`
+- `stock_screener/potential_analysis/providers.py` — `GlobalMacroProvider` 5 只 ticker 间加 `per_ticker_sleep()`
+- `stock_screener/kline_fetcher.py` — `yf.download()` 包裹 `@retry_on_rate_limit`
+- `stock_screener/tests/test_unified_bullish_top20_hk02685.py` — 26 个测试覆盖技术+宏观规则评估
+- `stock_screener/tests/test_e2e_unified_bullish_top20_scoring.py` — 15 个端到端测试覆盖 DB/CSV/报告 评分一致性
+- `CLAUDE.md` — this entry
+
+**Fixes applied**:
+
+1. **unified_bullish_top20 链路**：全部股票 → 21 条技术规则 → Top20 → **仅对这 20 只** 执行 4 条宏观规则（`macro_factor_analysis`, `enterprise_potential_analysis`, `company_event_hot_sector_link`, `company_event_hot_news_link`）→ 合并 filter_details → 重算 final_score → 写 DB。`evaluate_bullish_technical_rules()` 和 `evaluate_macro_rules_for_top20()` 是独立方法，互不污染。
+
+2. **评分公式统一**：`aggregate_rule_scores`（DB 层）→ final_score = 技术×0.0 + 宏观×1.0。`compute_unified_score`（报告层）→ 技术×0% + 五模块×40% + 事件热点×30% + 资金风险×20% + LLM×10%。两个公式口径在报告 §1.2 和 CSV "最终评分公式" 列中完整展示。
+
+3. **aggregate_rule_scores priority fix**：对 `strategy_category="macro"` 规则，优先取 `details.total_score`（EnterprisePotentialAnalysis 的五模块综合分），其次取 `details.macro_score`（MarketIntelMacroScore 的宏观分）。修复了误将五模块宏观子分（macro=100）当作宏观总分的问题。
+
+4. **YFRateLimitError 修复**：新建 `yf_ratelimit.py` 共享频控模块，所有 yfinance 调用点统一使用 `yf_sleep()` / `per_ticker_sleep()` / `retry_on_rate_limit`。chunk 50→25，delay 1.5s→3s+jitter，429 指数退避重试（5s/10s/20s）。
+
+**⚠️ 后续改动注意事项**：
+- 修改 `evaluate_bullish_technical_rules()` 或 `bullish_technical_rule_keys()` 时，不要引入 `strategy_category != "technical"` 之外的过滤条件，也不要移除现有条件——这 4 层过滤（enabled/strategy/category/direction）是 unified_bullish_top20 的核心约定
+- 修改 `aggregate_rule_scores()` 时，保持 `total_score` > `macro_score` 的优先级顺序
+- 修改 `UNIFIED_SCORE_WEIGHTS` 时，同步更新 `market_intel/reporting.py` 和 `signal_analysis/chain.py` 报告模板中的权重表格
+- yfinance 调用不要移除 `per_ticker_sleep()` 或增大 chunk >25，否则会重新触发 429

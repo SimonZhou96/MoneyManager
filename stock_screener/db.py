@@ -1168,6 +1168,37 @@ class MarketDatabase:
                 ]
             return [{"code": r[0], "name": r[1], "sector": r[2], "industry": r[3]} for r in rows]
 
+    def search_stocks_by_name(self, market: str, keyword: str, limit: int = 10) -> List[dict]:
+        """模糊搜索股票名称，支持中英文。按匹配精度 + 市值降序排列。"""
+        pattern = f"%{keyword}%"
+        prefix = f"{keyword}%"
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """SELECT DISTINCT code, name, sector, industry, market_cap
+                   FROM stocks
+                   WHERE market = %s
+                     AND (name LIKE %s OR code LIKE %s)
+                   ORDER BY
+                     CASE WHEN name = %s THEN 0
+                          WHEN name LIKE %s THEN 1
+                          ELSE 2
+                     END,
+                     market_cap DESC
+                   LIMIT %s""",
+                (market, pattern, pattern, keyword, prefix, int(limit)),
+            )
+            rows = cursor.fetchall() or []
+            return [
+                {
+                    "code": r[0],
+                    "name": r[1] or "",
+                    "sector": r[2] or "",
+                    "industry": r[3] or "",
+                    "market_cap": float(r[4]) if r[4] else None,
+                }
+                for r in rows
+            ]
+
     def update_stock_sector(self, market, code, sector=None, sector_code=None, industry=None, industry_code=None):
         sql = """UPDATE stocks SET
                     sector=COALESCE(%s,sector), sector_code=COALESCE(%s,sector_code),
@@ -4123,6 +4154,45 @@ class MarketDatabase:
             result.append(item)
         return result
 
+    def list_single_stock_runs_by_code(self, market: str, code: str, limit: int = 20) -> List[dict]:
+        """按股票代码查询历史筛选记录"""
+        sql = """
+            SELECT r.run_id, r.user_id, r.market, r.code, r.normalized_code, r.timeframe, r.passed,
+                   r.chain_key, r.data_source, r.status,
+                   r.warnings_json, r.ai_analysis_json, r.result_json,
+                   r.created_at, r.finished_at
+            FROM single_stock_runs r
+            WHERE r.market = %s AND (r.code = %s OR r.normalized_code = %s)
+              AND r.status IN ('completed', 'failed')
+            ORDER BY r.created_at DESC
+            LIMIT %s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, (market, code, code, int(limit)))
+            rows = cursor.fetchall() or []
+        result = []
+        for row in rows:
+            result_json = _decode_json_field(row[12], {})
+            item = {
+                "run_id": row[0],
+                "market": row[2],
+                "code": row[3],
+                "timeframe": row[5],
+                "passed": bool(row[6]) if row[6] is not None else None,
+                "chain_key": row[7],
+                "status": row[9],
+                "created_at": str(row[14]) if row[14] else None,
+                "finished_at": str(row[15]) if row[15] else None,
+            }
+            if isinstance(result_json, dict):
+                item["name"] = result_json.get("name", "")
+                item["chain_name"] = (result_json.get("rule_chain") or {}).get("chain_name", "")
+                item["final_score"] = result_json.get("final_score")
+                item["technical_score"] = result_json.get("technical_score")
+                item["macro_score"] = result_json.get("macro_score")
+            result.append(item)
+        return result
+
     def complete_single_stock_run_from_agent(self, run_id: str, result: dict, rule_details: Iterable[dict]) -> None:
         sql = """
             UPDATE single_stock_runs
@@ -4650,6 +4720,69 @@ class MarketDatabase:
                 "as_of_date": str(row[5]) if row[5] else None,
             })
         return result
+
+    def get_stocks_by_sector_name(self, market: str, sector_name: str, limit: int = 30) -> List[dict]:
+        """按板块名称查询成分股，附带最新价格。"""
+        sql = """
+            SELECT
+                m.code,
+                COALESCE(p.name, m.code) AS name,
+                p.close_price,
+                p.change_percent,
+                p.volume,
+                p.market_cap,
+                p.pe_ratio
+            FROM stock_sector_memberships m
+            LEFT JOIN stock_pool p ON p.market = m.market AND p.code = m.code
+            WHERE m.market = %s AND m.sector_name = %s
+            ORDER BY
+                CASE m.sector_type WHEN 'industry' THEN 0 WHEN 'sector' THEN 1 ELSE 2 END,
+                p.market_cap DESC
+            LIMIT %s
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, [market, sector_name, limit])
+            rows = cursor.fetchall() or []
+        return [
+            {
+                "code": row[0],
+                "name": row[1],
+                "close_price": row[2],
+                "change_percent": row[3],
+                "volume": row[4],
+                "market_cap": row[5],
+                "pe_ratio": row[6],
+            }
+            for row in rows
+        ]
+
+    def get_sector_summaries(self, market: str, sector_names: List[str]) -> Dict[str, dict]:
+        """按板块名称批量获取成分股数量和平均涨跌。"""
+        if not sector_names:
+            return {}
+        placeholders = ",".join(["%s"] * len(sector_names))
+        sql = f"""
+            SELECT
+                m.sector_name,
+                COUNT(DISTINCT m.code) AS stock_count,
+                AVG(p.change_percent) AS avg_change_pct,
+                AVG(p.close_price) AS avg_price
+            FROM stock_sector_memberships m
+            LEFT JOIN stock_pool p ON p.market = m.market AND p.code = m.code
+            WHERE m.market = %s AND m.sector_name IN ({placeholders})
+            GROUP BY m.sector_name
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, [market] + sector_names)
+            rows = cursor.fetchall() or []
+        return {
+            row[0]: {
+                "stock_count": row[1] or 0,
+                "avg_change_pct": round(float(row[2] or 0), 2),
+                "avg_price": round(float(row[3] or 0), 2),
+            }
+            for row in rows
+        }
 
     def init_signal_analysis_schema(self):
         """初始化选股信号 AI 辅助分析表。"""

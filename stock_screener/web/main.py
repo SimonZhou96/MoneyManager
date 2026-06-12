@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-import os
+import asyncio
 import hashlib
+import json
+import os
+import threading
+import time
 import uuid
 from datetime import date, datetime
 from pathlib import Path
@@ -10,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -42,6 +46,7 @@ from .market_intel import router as market_intel_router
 from .jobs import run_web_screening_job
 from .options import router as options_router
 from .quant import router as quant_router
+from .sectors import router as sectors_router
 from .stock_terminal import router as stock_terminal_router
 from .rate_limit import (
     ARTIFACT_DOWNLOAD_RULE,
@@ -73,6 +78,7 @@ app.add_exception_handler(RequestValidationError, request_validation_exception_h
 app.include_router(options_router)
 app.include_router(quant_router)
 app.include_router(market_intel_router)
+app.include_router(sectors_router)
 app.include_router(stock_terminal_router)
 
 SCREENING_RESULT_SCORE_FIELDS = ("technical_score", "macro_score", "final_score", "score_details")
@@ -97,6 +103,7 @@ class SingleStockApiRequest(BaseModel):
     code: str
     timeframe: str = "1d"
     chain_key: Optional[str] = None
+    mode: Optional[str] = None  # "web" = run in background thread immediately; None/absent = queued for agent
 
 
 class CustomListScreeningTaskRequest(BaseModel):
@@ -171,6 +178,187 @@ def run_custom_list_backend_job(job_id: str) -> None:
             )
         except Exception:
             pass
+    finally:
+        db.close()
+
+
+# In-memory progress store for web-mode single-stock screening.
+# Keyed by run_id, each value is a dict with: step, pct, status, detail, updated_at.
+_single_stock_progress: Dict[str, dict] = {}
+_single_stock_progress_lock = threading.Lock()
+
+
+def _set_progress(run_id: str, step: str, pct: int, status: str = "running", detail: str = "") -> None:
+    with _single_stock_progress_lock:
+        _single_stock_progress[run_id] = {
+            "step": step, "pct": pct, "status": status,
+            "detail": detail, "updated_at": datetime.now(ZoneInfo("UTC")).isoformat(),
+        }
+
+
+def _clear_progress(run_id: str) -> None:
+    with _single_stock_progress_lock:
+        _single_stock_progress.pop(run_id, None)
+
+
+def run_single_stock_web_job(run_id: str) -> None:
+    """在 web 后台线程中执行单股筛选，并更新 single_stock_runs 表和进度。"""
+    mysql_config = mysql_config_from_env()
+    db = MarketDatabase(mysql_config)
+    try:
+        run = db.get_single_stock_run(run_id)
+        if not run:
+            return
+
+        market = str(run.get("market") or "HK")
+        code = str(run.get("code") or "")
+        normalized_code = str(run.get("normalized_code") or code)
+        timeframe = str(run.get("timeframe") or "1d")
+        chain_key = run.get("chain_key")
+
+        # Step 1: init
+        _set_progress(run_id, "init", 5, detail="初始化数据库表结构")
+        db.init_schema(timeframe)
+
+        # Step 2: fetch stock info
+        _set_progress(run_id, "stock_lookup", 10, detail=f"查询股票: {code}")
+        stock_rows = db.get_stocks_by_codes(market, [code], include_fundamentals=True)
+        stock_info = stock_rows[0] if stock_rows else {"code": code, "name": code}
+        name = stock_info.get("name") or code
+        sector = stock_info.get("sector") or ""
+        industry = stock_info.get("industry") or ""
+
+        # Step 3: K-line fetch
+        _set_progress(run_id, "kline_fetch", 20, detail=f"获取 {name} K线数据")
+        from api.screen_service import run_screening_task, create_rule_engine_from_db
+        from scheduled_daily_job import get_default_screening_params, load_passed_screening_records
+
+        params = get_default_screening_params()
+        if chain_key:
+            params["chain_key"] = chain_key
+
+        task_id = f"web_single_{run_id[:12]}"
+        db.create_screening_task(
+            task_id=task_id,
+            market=market,
+            timeframe=timeframe,
+            total_count=1,
+            params_json=params,
+            check_date=date.today(),
+        )
+
+        # Step 4: rule evaluation (run_screening_task with 1-stock watchlist)
+        _set_progress(run_id, "rule_eval", 40, detail=f"执行筛选规则: {name}")
+
+        # Patch: override progress update to track single-stock progress
+        original_update = db.update_task_progress
+        def _patched_update(tid, completed_count=0, current_stock_code=None, current_stock_name=None, **kw):
+            if tid == task_id:
+                pct = min(40 + int(40 * (completed_count / max(1, 1))), 80)
+                _set_progress(run_id, "rule_eval", pct,
+                              detail=f"规则评估完成: {current_stock_name or code}")
+            return original_update(tid, completed_count=completed_count,
+                                   current_stock_code=current_stock_code,
+                                   current_stock_name=current_stock_name, **kw)
+        db.update_task_progress = _patched_update
+
+        watchlist = [{
+            "code": code,
+            "name": name,
+            "sector": sector,
+            "industry": industry,
+            "market_cap": stock_info.get("market_cap"),
+            "pe_ratio": stock_info.get("pe_ratio"),
+            "pb_ratio": stock_info.get("pb_ratio"),
+        }]
+
+        try:
+            run_screening_task(
+                mysql_config=mysql_config,
+                task_id=task_id,
+                market=market,
+                timeframe=timeframe,
+                params=params,
+                verbose=False,
+                watchlist=watchlist,
+                progress_log=True,
+                chain_key=chain_key,
+            )
+        finally:
+            db.update_task_progress = original_update
+
+        # Step 5: read result
+        _set_progress(run_id, "read_result", 85, detail="读取筛选结果")
+        all_records = load_passed_screening_records(mysql_config, task_id, market)
+
+        # Also load all records (including failed) via existing method
+        result_rows = db.get_screening_results_by_task(task_id, limit=10, offset=0)
+        stock_result = None
+        for r in result_rows:
+            if r.get("code") == code:
+                stock_result = r
+                break
+        if not stock_result and result_rows:
+            stock_result = result_rows[0]
+
+        if not stock_result:
+            stock_result = {
+                "code": code, "name": name, "is_passed": False,
+                "filter_summary": "未找到筛选结果",
+                "filter_details": [],
+            }
+
+        passed = bool(stock_result.get("is_passed"))
+        filter_details = stock_result.get("filter_details") or []
+        filter_summary = stock_result.get("filter_summary") or ""
+
+        # Step 6: save to single_stock_runs
+        _set_progress(run_id, "save_result", 95, detail="保存筛选报告")
+        result_data = {
+            "passed": passed,
+            "status": "completed",
+            "data_source": "web_backend",
+            "warnings": [],
+            "name": name,
+            "sector": sector,
+            "industry": industry,
+            "filter_summary": filter_summary,
+            "final_score": stock_result.get("final_score"),
+            "technical_score": stock_result.get("technical_score"),
+            "macro_score": stock_result.get("macro_score"),
+            "close_price": stock_result.get("close_price"),
+            "market_cap": stock_result.get("market_cap"),
+            "pe_ratio": stock_result.get("pe_ratio"),
+            "rule_chain": {
+                "chain_key": chain_key or "",
+                "chain_name": run.get("chain_name") or chain_key or "",
+            },
+        }
+        rule_details = []
+        for idx, fd in enumerate(filter_details):
+            rule_details.append({
+                "rule_key": fd.get("rule_key") or fd.get("filter_name") or "",
+                "rule_name": fd.get("filter_name") or fd.get("rule_key") or "",
+                "rule_type": fd.get("rule_type") or fd.get("strategy_category") or "",
+                "result": fd.get("result") or "",
+                "reason": fd.get("reason") or "",
+                "details": fd.get("details", {}),
+                "display_order": idx,
+            })
+        db.complete_single_stock_run_from_agent(run_id, result_data, rule_details)
+
+        _set_progress(run_id, "done", 100, status="completed", detail="筛选完成 ✓")
+        # Keep progress for 60s so late-arriving SSE clients can read final state
+        threading.Timer(60, lambda: _clear_progress(run_id)).start()
+
+    except Exception as exc:
+        message = f"{type(exc).__name__}: {exc}"
+        try:
+            db.fail_single_stock_run(run_id, message)
+        except Exception:
+            pass
+        _set_progress(run_id, "error", 0, status="failed", detail=message)
+        threading.Timer(60, lambda: _clear_progress(run_id)).start()
     finally:
         db.close()
 
@@ -280,6 +468,8 @@ def startup() -> None:
         db.init_web_schema()
         db.init_market_intel_schema()
         db.init_stock_terminal_schema()
+        # 初始化核心 schema（stocks/kline 表 + 规则元数据/规则链表）
+        db.init_schema("1d")
         username = os.getenv("WEB_BOOTSTRAP_USERNAME", "").strip()
         password = os.getenv("WEB_BOOTSTRAP_PASSWORD", "").strip()
         if username and password and not db.get_web_user_by_username(username):
@@ -574,6 +764,7 @@ def single_stock(payload: SingleStockApiRequest, user: CurrentUser = Depends(req
         raise BusinessError("INVALID_SINGLE_STOCK", f"单股参数不合法：{exc}") from exc
     chain = resolve_rule_chain(db, [market], timeframe=timeframe, chain_key=payload.chain_key)
     run_id = str(uuid.uuid4())
+    web_mode = (payload.mode or "").strip().lower() == "web"
     db.create_single_stock_run({
         "run_id": run_id,
         "user_id": user.id,
@@ -582,12 +773,15 @@ def single_stock(payload: SingleStockApiRequest, user: CurrentUser = Depends(req
         "normalized_code": normalized_code,
         "timeframe": timeframe,
         "chain_key": chain["chain_key"],
-        "status": "queued",
+        "status": "running" if web_mode else "queued",
     })
+    if web_mode:
+        # Start background thread to run screening immediately
+        threading.Thread(target=run_single_stock_web_job, args=(run_id,), daemon=True).start()
     return {
         "run_id": run_id,
-        "status": "queued",
-        "runner": "local_agent",
+        "status": "running" if web_mode else "queued",
+        "runner": "web_backend" if web_mode else "local_agent",
         "market": market,
         "code": normalized_code,
         "timeframe": timeframe,
@@ -603,6 +797,63 @@ def get_single_stock(run_id: str, _: CurrentUser = Depends(require_read_user), d
     if not result:
         raise BusinessError("SINGLE_STOCK_NOT_FOUND", "单股任务不存在")
     return result
+
+
+@app.get("/api/screening/single-stock/{run_id}/progress")
+async def single_stock_progress(
+    run_id: str,
+    _: CurrentUser = Depends(require_read_user),
+):
+    """SSE 端点：流式推送单股筛选进度。"""
+    async def event_stream():
+        last_state_hash = ""
+        # Keep streaming until terminal state or timeout (120s)
+        for _ in range(240):  # max 240 * 0.5s = 120s
+            with _single_stock_progress_lock:
+                state = _single_stock_progress.get(run_id)
+            if state:
+                h = hash(json.dumps(state, sort_keys=True, default=str))
+                if h != last_state_hash:
+                    last_state_hash = h
+                    payload = json.dumps(state, default=str)
+                    yield f"data: {payload}\n\n"
+                if state.get("status") in ("completed", "failed"):
+                    return
+            else:
+                # Progress not found yet — send initial waiting event
+                if last_state_hash != "waiting":
+                    last_state_hash = "waiting"
+                    yield f"data: {json.dumps({'step': 'waiting', 'pct': 0, 'status': 'running', 'detail': '等待任务启动...'})}\n\n"
+            await asyncio.sleep(0.5)
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/api/stocks/search")
+def search_stocks(
+    q: str = Query(..., min_length=1, description="搜索关键词，支持股票名称或代码"),
+    market: str = Query("HK", description="市场 HK/US/A"),
+    limit: int = Query(10, ge=1, le=30, description="返回结果数上限"),
+    _: CurrentUser = Depends(require_read_user),
+    db: MarketDatabase = Depends(get_db),
+):
+    """股票名称/代码模糊搜索，用于自动补全。按匹配精度 + 市值降序排列。"""
+    market = normalize_market(market)
+    results = db.search_stocks_by_name(market, q, limit)
+    return {"query": q, "market": market, "results": results}
+
+
+@app.get("/api/screening/single-stock/history/{code}")
+def stock_screening_history(
+    code: str,
+    market: str = Query("HK"),
+    limit: int = Query(20, ge=1, le=50),
+    _: CurrentUser = Depends(require_read_user),
+    db: MarketDatabase = Depends(get_db),
+):
+    """查询某只股票的历史筛选记录"""
+    market = normalize_market(market)
+    history = db.list_single_stock_runs_by_code(market, code, limit)
+    return {"code": code, "market": market, "history": history}
 
 
 @app.get("/api/rules")

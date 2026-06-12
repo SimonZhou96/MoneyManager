@@ -352,11 +352,14 @@ class YahooFinanceSectorProvider(SectorProvider):
         except Exception:
             return {}
 
+        from yf_ratelimit import per_ticker_sleep
+
         result: Dict[str, SectorInfo] = {}
         for code in codes[: self.max_codes]:
             symbol = _to_yahoo_symbol(market, code)
             if not symbol:
                 continue
+            per_ticker_sleep()  # 逐只 0.3s 延迟，避免触发频控
             try:
                 info = yf.Ticker(symbol).info or {}
             except Exception:

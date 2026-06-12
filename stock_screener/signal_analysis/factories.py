@@ -16,6 +16,7 @@ from .llm_providers import (
     NullLLMProvider,
     OpenAICompatibleLLMProvider,
 )
+from .browser_search_providers import BingBaiduSearchProvider
 from .models import AnalysisSettings
 from .search_providers import (
     FallbackSearchProvider,
@@ -39,7 +40,7 @@ def _env_int(name: str, default: int) -> int:
 class SearchProviderFactory:
     """Create a search provider from environment configuration."""
 
-    DEFAULT_PROVIDER_ORDER = ["tavily", "zhipuai"]
+    DEFAULT_PROVIDER_ORDER = ["bing_baidu", "tavily", "zhipuai"]
 
     @staticmethod
     def from_env(settings: AnalysisSettings) -> SearchProvider:
@@ -57,11 +58,22 @@ class SearchProviderFactory:
 
     @staticmethod
     def _provider_from_env(provider: str, settings: AnalysisSettings) -> SearchProvider:
+        if provider == "bing_baidu":
+            return SearchProviderFactory._bing_baidu_from_env(settings)
         if provider == "tavily":
             return SearchProviderFactory._tavily_from_env(settings)
         if provider == "zhipuai":
             return SearchProviderFactory._zhipu_from_env(settings)
         return NullSearchProvider()
+
+    @staticmethod
+    def _bing_baidu_from_env(settings: AnalysisSettings) -> SearchProvider:
+        headless = os.getenv("BING_BAIDU_BROWSER_HEADLESS", "true").strip().lower() != "false"
+        timeout = _env_int("BING_BAIDU_SEARCH_TIMEOUT_SEC", min(30, settings.timeout_sec))
+        provider = BingBaiduSearchProvider(headless=headless, timeout_sec=timeout)
+        if not provider.is_available:
+            return NullSearchProvider()
+        return provider
 
     @staticmethod
     def _tavily_from_env(settings: AnalysisSettings) -> SearchProvider:
@@ -112,14 +124,19 @@ class SearchProviderFactory:
             "zhipu": "zhipuai",
             "zhipu_ai": "zhipuai",
             "zhipu_web_search": "zhipuai",
+            "bing": "bing_baidu",
+            "baidu": "bing_baidu",
+            "free_search": "bing_baidu",
+            "browser": "bing_baidu",
         }
+        valid = set(SearchProviderFactory.DEFAULT_PROVIDER_ORDER)
         names: List[str] = []
         seen = set()
         for raw_name in raw_names:
             name = aliases.get(str(raw_name).strip().lower(), str(raw_name).strip().lower())
             if not name or name in seen:
                 continue
-            if name not in set(SearchProviderFactory.DEFAULT_PROVIDER_ORDER):
+            if name not in valid:
                 continue
             names.append(name)
             seen.add(name)

@@ -39,6 +39,7 @@ class LLMProvider(ABC):
         sector_documents: List[SearchDocument],
         hot_sectors: List[str],
         company_documents: Dict[str, List[SearchDocument]],
+        stock_snapshots: Optional[Dict[str, Dict[str, object]]] = None,
     ) -> List[SignalAnalysisResult]:
         """Analyze a batch of screened stocks."""
 
@@ -110,6 +111,7 @@ class FallbackLLMProvider(LLMProvider):
         sector_documents: List[SearchDocument],
         hot_sectors: List[str],
         company_documents: Dict[str, List[SearchDocument]],
+        stock_snapshots: Optional[Dict[str, Dict[str, object]]] = None,
     ) -> List[SignalAnalysisResult]:
         self._warnings = []
         self._last_success_provider = ""
@@ -125,6 +127,7 @@ class FallbackLLMProvider(LLMProvider):
                     sector_documents=sector_documents,
                     hot_sectors=hot_sectors,
                     company_documents=company_documents,
+                    stock_snapshots=stock_snapshots,
                 )
                 if signals and not results:
                     raise RuntimeError("provider returned no analysis results")
@@ -207,16 +210,29 @@ class SignalAnalysisPromptBuilder:
         sector_documents: List[SearchDocument],
         hot_sectors: List[str],
         company_documents: Dict[str, List[SearchDocument]],
+        stock_snapshots: Optional[Dict[str, Dict[str, object]]] = None,
     ) -> str:
         market_context_limit = _env_int("SIGNAL_MARKET_CONTEXT_LIMIT", 2)
         sector_context_limit = _env_int("SIGNAL_SECTOR_CONTEXT_LIMIT", 3)
         company_context_limit = _env_int("SIGNAL_COMPANY_CONTEXT_LIMIT", 2)
         content_chars = _env_int("SIGNAL_SEARCH_CONTENT_CHARS", 300)
+
+        # Enrich signals with real-time stock snapshots if available
+        snapshots = stock_snapshots or {}
+        enriched_signals = []
+        for row in signals:
+            signal_dict = row.to_prompt_dict()
+            if row.code in snapshots:
+                signal_dict["stock_snapshot"] = snapshots[row.code]
+            enriched_signals.append(signal_dict)
+
         input_payload = {
             "market": market,
             "task": (
                 "评估这些已经通过技术规则筛选的股票信号可靠性；不要改变筛选结果，只做辅助判断。"
                 "每条 signal 都包含 instrument_type，取值为 股票 或 ETF。"
+                "若某股票附带了 stock_snapshot（实时行情快照，仅股票有效），请结合 price/change_pct/pe_ttm "
+                "等精确数字辅助判断信号可靠性，但不要替代新闻分析。"
                 "股票需要重点看公司新闻、公告、业绩、订单、监管、并购等公司事件；"
                 "ETF 不做公司事件判断，请按跟踪指数、投资主题、板块暴露和宏观环境判断，"
                 "ETF 的 company_events 和 company_hot_news 如无明确基金/主题新闻可以留空。"
@@ -225,7 +241,7 @@ class SignalAnalysisPromptBuilder:
                 "请从 hot_sector_candidates 和 sector_context 识别热点板块，并结合每只股票的 sector/name "
                 "标注热点板块关系；所有股票都要保留，非热点股票也标注为观察、无明确关联或未知。"
             ),
-            "signals": [row.to_prompt_dict() for row in signals],
+            "signals": enriched_signals,
             "hot_sector_candidates": hot_sectors,
             "market_context": [
                 _document_to_prompt_dict(doc, content_chars)
@@ -355,6 +371,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         sector_documents: List[SearchDocument],
         hot_sectors: List[str],
         company_documents: Dict[str, List[SearchDocument]],
+        stock_snapshots: Optional[Dict[str, Dict[str, object]]] = None,
     ) -> List[SignalAnalysisResult]:
         if requests is None:
             raise RuntimeError("requests is not installed")
@@ -374,6 +391,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
                         sector_documents,
                         hot_sectors,
                         company_documents,
+                        stock_snapshots=stock_snapshots,
                     ),
                 },
             ],
@@ -520,6 +538,7 @@ class CodexResponsesLLMProvider(LLMProvider):
         sector_documents: List[SearchDocument],
         hot_sectors: List[str],
         company_documents: Dict[str, List[SearchDocument]],
+        stock_snapshots: Optional[Dict[str, Dict[str, object]]] = None,
     ) -> List[SignalAnalysisResult]:
         if requests is None:
             raise RuntimeError("requests is not installed")
@@ -539,6 +558,7 @@ class CodexResponsesLLMProvider(LLMProvider):
                 "schema": self.prompt_builder.json_schema(),
                 "strict": True,
             },
+            stock_snapshots=stock_snapshots,
         )
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -559,6 +579,7 @@ class CodexResponsesLLMProvider(LLMProvider):
                 hot_sectors,
                 company_documents,
                 text_format={"type": "json_object"},
+                stock_snapshots=stock_snapshots,
             )
             response = requests.post(
                 self.responses_url,
@@ -631,6 +652,7 @@ class CodexResponsesLLMProvider(LLMProvider):
         hot_sectors: List[str],
         company_documents: Dict[str, List[SearchDocument]],
         text_format: Dict[str, object],
+        stock_snapshots: Optional[Dict[str, Dict[str, object]]] = None,
     ) -> Dict[str, object]:
         return {
             "model": self.model,
@@ -645,6 +667,7 @@ class CodexResponsesLLMProvider(LLMProvider):
                         sector_documents,
                         hot_sectors,
                         company_documents,
+                        stock_snapshots=stock_snapshots,
                     ),
                 },
             ],
