@@ -6,33 +6,13 @@
   <component name="ChangeListManager">
     <list default="true" id="0bf7b9ee-c261-4d26-a715-0c09e20aab7a" name="更改" comment="">
       <change beforePath="$PROJECT_DIR$/.claude/worktrees/dynamic-dazzling-charm" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/worktrees/dynamic-dazzling-charm" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/CLAUDE.md" beforeDir="false" afterPath="$PROJECT_DIR$/CLAUDE.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/api/screen_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/api/screen_service.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/db.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/db.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/kline_fetcher.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/kline_fetcher.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/market_intel/macro_scoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/market_intel/macro_scoring.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/market_intel/reporting.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/market_intel/reporting.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/potential_analysis/providers.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/potential_analysis/providers.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/potential_analysis/service.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/potential_analysis/service.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/rule_engine.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/rule_engine.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/scheduled_daily_job.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/scheduled_daily_job.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/sector_resolver.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/sector_resolver.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/chain.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/chain.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/factories.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/factories.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/hot_sectors.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/hot_sectors.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/llm_providers.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/llm_providers.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/models.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/signal_analysis/search_providers.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/signal_analysis/search_providers.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web/auth.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web/auth.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web/config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/package-lock.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/package.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/main.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/main.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/styles.css" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/uv.lock" beforeDir="false" afterPath="$PROJECT_DIR$/uv.lock" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/stock_terminal/providers/eastmoney.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/stock_terminal/providers/eastmoney.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web/sectors.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web/sectors.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/MarketAnalysisPage.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/MarketAnalysisPage.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/components/KlineChart.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/components/KlineChart.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/components/SectorTreemap.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/components/SectorTreemap.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/types.ts" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -140,7 +120,7 @@
       <workItem from="1780308089940" duration="13389000" />
       <workItem from="1780411491520" duration="14870000" />
       <workItem from="1780661937810" duration="6440000" />
-      <workItem from="1781143829969" duration="3440000" />
+      <workItem from="1781143829969" duration="4149000" />
     </task>
     <servers />
   </component>

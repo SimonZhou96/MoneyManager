@@ -43,28 +43,36 @@ class EastmoneyStockTerminalProvider:
         return parse_eastmoney_quote(market, code, response.json())
 
     def fetch_klines(self, market: str, code: str, timeframe: str, limit: int) -> List[KlinePoint]:
+        import sys
         try:
             from ...kline_fetcher import KlineFetcherFactory
         except ImportError:
             from kline_fetcher import KlineFetcherFactory
 
-        fetchers = KlineFetcherFactory.create_fetcher_chain(db=self.db)
-        errors = []
+        # 跳过 DB 缓存——MySqlStockTerminalRepository.get_klines() 已经查过同一张表了
+        fetchers = KlineFetcherFactory.create_fetcher_chain(db=self.db, skip_db_cache=True)
+        failures: list[str] = []
         for fetcher in fetchers:
             source = fetcher.get_name()
             try:
                 frame = fetcher.fetch(code, market=market, timeframe=timeframe, max_count=limit)
             except Exception as exc:
-                errors.append(f"{source}: {exc}")
+                msg = f"{source}: {exc}"
+                print(f"[eastmoney] {msg}", file=sys.stderr)
+                failures.append(msg)
                 continue
             rows = self._rows_from_frame(frame, limit)
             if rows:
                 self.last_source = source
+                print(f"[eastmoney] OK {len(rows)} bars via {source} code={code} timeframe={timeframe}", file=sys.stderr)
                 return rows
+            else:
+                msg = f"{source}: returned empty"
+                print(f"[eastmoney] {msg} code={code} timeframe={timeframe}", file=sys.stderr)
+                failures.append(msg)
 
-        if errors:
-            raise RuntimeError("; ".join(errors))
-        raise RuntimeError("eastmoney kline provider returned no data")
+        detail = "; ".join(failures) if failures else "no fetchers available"
+        raise RuntimeError(f"K-line fetch failed: {detail}")
 
     def fetch_minute(self, market: str, code: str) -> List[MinutePoint]:
         response = self.session.get(

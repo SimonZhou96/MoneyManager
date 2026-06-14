@@ -162,31 +162,30 @@ def _translate_name(english: str) -> str:
 def _compute_heat_scores(
     sectors: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """根据换手率/股票数/市值三个维度计算归一化热度分 (0–100)。
-
-    不依赖 stock_kline_cache，完全基于 stock_pools 的实时成交数据。
-    """
+    """根据涨跌幅/换手率/广度/市值四个维度计算归一化热度分 (0–100)。"""
     if not sectors:
         return sectors
 
+    raw_change = [s.get("avg_change_pct", 0) or 0 for s in sectors]
     raw_turnover = [s.get("avg_turnover_ratio", 0) or 0 for s in sectors]
     raw_count = [s.get("stock_count", 0) for s in sectors]
     raw_cap = [s.get("avg_market_cap", 0) or 0 for s in sectors]
 
+    max_abs_change = max(max(abs(v) for v in raw_change), 0.01)
     max_turnover = max(max(raw_turnover), 0.0001)
     max_count = max(max(raw_count), 1)
     max_cap = max(max(raw_cap), 1)
 
     for i, s in enumerate(sectors):
-        # 归一化 (0–100)
+        norm_change = abs(raw_change[i]) / max_abs_change * 100
         norm_turnover = min(raw_turnover[i] / max_turnover * 100, 100)
         norm_count = raw_count[i] / max_count * 100
         norm_cap = min(raw_cap[i] / max_cap * 100, 100)
 
-        # 加权合成: 换手率 40% + 广度 30% + 市值 30%
-        heat = norm_turnover * 0.4 + norm_count * 0.3 + norm_cap * 0.3
+        # 加权: 涨跌幅 30% + 换手率 30% + 广度 20% + 市值 20%
+        heat = norm_change * 0.3 + norm_turnover * 0.3 + norm_count * 0.2 + norm_cap * 0.2
         s["heat_score"] = round(min(heat, 100), 1)
-        s["change_pct"] = round(s.get("avg_change_pct", 0), 2)
+        s["change_pct"] = round(raw_change[i], 2)
         s["avg_turnover_ratio"] = round(raw_turnover[i], 4)
         s["up_ratio"] = round(norm_count, 1)
 
@@ -195,81 +194,103 @@ def _compute_heat_scores(
 
 def _query_sector_heat(
     db: MarketDatabase, market: str, limit: int
-) -> List[Dict[str, Any]]:
-    """从 DB 查询板块热度（基于 stock_pools 成交额，不依赖 stock_kline_cache）。
+) -> tuple:
+    """从 DB 查询板块热度。返回 (sectors, data_date)。
 
-    热度计算维度：
-      1. 平均换手率 (avg turnover ratio) — 权重 40%
-      2. 成分股数量 (stock count factor) — 权重 30%
-      3. 平均市值 (avg market cap) — 权重 30%（大盘股主导的板块更受关注）
+    数据源:
+      - stock_pools: 当日价格/市值/成交额
+      - stock_kline_cache: 前日收盘价（计算涨跌幅）
     """
-    # Step 1: 从 stock_pools（best 池） JOIN 板块成员关系。用 pool_type='best' 命中唯一索引。
-    sql = """
+    # Step 1: stock_pools JOIN 板块成员 → 价格、市值、成交额。用 pool_type='best' 命中唯一索引。
+    sql_pool = """
         SELECT m.sector_name, m.code,
-               p.price, p.market_cap, p.turnover, p.pe_ratio
+               p.price, p.market_cap, p.turnover
         FROM stock_sector_memberships m
         JOIN stock_pools p
             ON p.market = m.market AND p.code = m.code AND p.pool_type = 'best'
         WHERE m.market = %s
     """
     with db.conn.cursor() as cursor:
-        cursor.execute(sql, [market])
-        rows = cursor.fetchall() or []
+        cursor.execute(sql_pool, [market])
+        pool_rows = cursor.fetchall() or []
 
-    if not rows:
-        return []
+    if not pool_rows:
+        return [], None
 
-    # Step 2: Python 侧按板块聚合
+    # Step 2: stock_kline_cache → 前一日收盘价（计算涨跌幅）+ 最新交易日
+    data_date: Optional[str] = None
+    prev_close_by_code: Dict[str, float] = {}
+    with db.conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT MAX(bar_time) FROM stock_kline_cache WHERE market=%s AND timeframe='1d'",
+            [market],
+        )
+        latest = (cursor.fetchone() or [None])[0]
+        if latest:
+            data_date = str(latest)[:10]  # YYYY-MM-DD
+        if latest:
+            cursor.execute(
+                "SELECT MAX(bar_time) FROM stock_kline_cache "
+                "WHERE market=%s AND timeframe='1d' AND bar_time < %s",
+                [market, latest],
+            )
+            prev_date = (cursor.fetchone() or [None])[0]
+            if prev_date:
+                cursor.execute(
+                    "SELECT code, close FROM stock_kline_cache "
+                    "WHERE market=%s AND timeframe='1d' AND bar_time=%s",
+                    [market, prev_date],
+                )
+                for code, close in cursor.fetchall() or []:
+                    prev_close_by_code[code] = float(close or 0)
+
+    # Step 3: Python 聚合（换手率 + 涨跌幅 + 市值 + 广度）
     sector_agg: Dict[str, Dict[str, Any]] = defaultdict(
-        lambda: {"codes": set(), "sum_turnover_ratio": 0.0, "sum_market_cap": 0.0, "count_with_data": 0}
+        lambda: {"codes": set(), "sum_change": 0.0, "sum_turnover_ratio": 0.0,
+                 "sum_cap": 0.0, "count": 0, "up": 0}
     )
-
-    for sector_name, code, price, market_cap, turnover, pe_ratio in rows:
+    for sector_name, code, price, market_cap, turnover in pool_rows:
+        cur = float(price or 0)
         cap = float(market_cap or 0)
         t = float(turnover or 0)
-        turnover_ratio = t / cap if cap > 0 else 0
+        if cur <= 0:
+            continue
+        prev = prev_close_by_code.get(code, 0)
+        change_pct = (cur - prev) / prev * 100 if prev > 0 else 0
 
         agg = sector_agg[sector_name]
         agg["codes"].add(code)
-        agg["sum_turnover_ratio"] += turnover_ratio
-        agg["sum_market_cap"] += cap
-        agg["count_with_data"] += 1
+        agg["sum_change"] += change_pct
+        agg["sum_turnover_ratio"] += t / cap if cap > 0 else 0
+        agg["sum_cap"] += cap
+        agg["count"] += 1
+        if change_pct > 0:
+            agg["up"] += 1
 
-    # Step 3: 构建结果
+    # Step 4: 构建结果
     result = []
     for name, agg in sector_agg.items():
-        n = agg["count_with_data"]
+        n = agg["count"]
         if n < 3:
             continue
-        avg_turnover_ratio = agg["sum_turnover_ratio"] / n
-        avg_market_cap = agg["sum_market_cap"] / n
-        stock_count = len(agg["codes"])
         result.append({
             "name": name,
-            "stock_count": stock_count,
-            "avg_turnover_ratio": avg_turnover_ratio,
-            "avg_market_cap": avg_market_cap,
-            # 兼容旧字段（无涨跌幅数据时用成交活跃度替代）
-            "avg_change_pct": 0,
-            "up_count": 0,
+            "stock_count": len(agg["codes"]),
+            "avg_change_pct": round(agg["sum_change"] / n, 2),
+            "avg_turnover_ratio": round(agg["sum_turnover_ratio"] / n, 6),
+            "avg_market_cap": round(agg["sum_cap"] / n, 2),
+            "up_count": agg["up"],
         })
 
-    return result
-
-    # Sort by avg_change_pct desc
     result.sort(key=lambda s: s["avg_change_pct"], reverse=True)
-    return result[: limit * 2]
+    return result, data_date
 
 
 def _aggregate_hot_sectors(market: str, limit: int = 15) -> List[Dict[str, Any]]:
-    """聚合热点板块数据（stock_pools 驱动，零 stock_kline_cache 依赖）。
-
-    数据源:
-      HK/US: stock_pools (成交额/市值) + stock_sector_memberships (板块归属)
-      A:    优先 Akshare 概念/行业板块 (实时涨跌幅+换手率+广度)
-    """
+    """聚合热点板块数据。返回 (sectors, data_date)。"""
     normalized = normalize_market(market)
     sectors: List[Dict[str, Any]] = []
+    data_date: Optional[str] = None
 
     # 1. A股: 直接用 Akshare 板块数据（实时涨跌+换手率+广度，最全）
     if normalized == "A":
@@ -289,7 +310,7 @@ def _aggregate_hot_sectors(market: str, limit: int = 15) -> List[Dict[str, Any]]
             # 也补充 stock_pools 板块数据（合并）
             db = MarketDatabase(mysql_config_from_env())
             try:
-                db_sectors = _query_sector_heat(db, normalized, limit)
+                db_sectors, _ = _query_sector_heat(db, normalized, limit)
                 existing_names = {s["name"] for s in sectors}
                 for s in db_sectors:
                     if s["name"] not in existing_names:
@@ -297,17 +318,16 @@ def _aggregate_hot_sectors(market: str, limit: int = 15) -> List[Dict[str, Any]]
             finally:
                 db.close()
         except Exception:
-            # Akshare 挂了 → fallback to stock_pools
             db = MarketDatabase(mysql_config_from_env())
             try:
-                sectors = _query_sector_heat(db, normalized, limit * 2)
+                sectors, _ = _query_sector_heat(db, normalized, limit * 2)
             finally:
                 db.close()
     else:
-        # 2. HK/US: stock_pools 成交额驱动
+        # 2. HK/US: stock_pools + kline_cache 双源驱动
         db = MarketDatabase(mysql_config_from_env())
         try:
-            sectors = _query_sector_heat(db, normalized, limit * 2)
+            sectors, data_date = _query_sector_heat(db, normalized, limit * 2)
         finally:
             db.close()
 
@@ -330,7 +350,7 @@ def _aggregate_hot_sectors(market: str, limit: int = 15) -> List[Dict[str, Any]]
             "reason": s.get("reason", f"换手率={s.get('avg_turnover_ratio', 0):.4f} 成分股={s.get('stock_count', 0)}只"),
         })
 
-    return result
+    return result, data_date
 
 
 @router.get("/hot")
@@ -356,7 +376,7 @@ def get_hot_sectors(
 
     # Compute
     try:
-        sectors = _aggregate_hot_sectors(normalized, limit=limit)
+        sectors, data_date = _aggregate_hot_sectors(normalized, limit=limit)
     except Exception as exc:
         raise BusinessError("SECTORS_HOT_FAILED", f"获取热点板块失败: {exc}") from exc
 
@@ -364,6 +384,7 @@ def get_hot_sectors(
         "market": normalized,
         "sectors": sectors,
         "total": len(sectors),
+        "data_date": data_date,
     }
 
     # Store cache
@@ -395,8 +416,10 @@ def get_sector_stocks(
         raise BusinessError("SECTORS_STOCKS_FAILED", f"查询板块成分股失败: {exc}") from exc
 
     stocks = []
+    missing_codes = []
     for item in members:
         code = item.get("code", "")
+        has_price = item.get("close") is not None
         stocks.append({
             "code": code,
             "name": item.get("name") or code,
@@ -406,6 +429,12 @@ def get_sector_stocks(
             "market_cap": item.get("market_cap"),
             "date": item.get("date"),
         })
+        if not has_price:
+            missing_codes.append(code)
+
+    # 对没有 K 线缓存的股票，并发实时获取（最多 3 只，单只 5s 超时）
+    if missing_codes:
+        _fill_missing_klines(db, normalized, stocks, missing_codes, timeout_per_stock=5.0, max_workers=3)
 
     return {
         "market": normalized,
@@ -413,6 +442,96 @@ def get_sector_stocks(
         "stocks": stocks,
         "total": len(members),
     }
+
+
+def _fill_missing_klines(
+    db: MarketDatabase,
+    market: str,
+    stocks: list,
+    missing_codes: list,
+    timeout_per_stock: float = 5.0,
+    max_workers: int = 3,
+) -> None:
+    """对缺失 K 线数据的股票，从 fallback 链实时获取并写回缓存。"""
+    import sys
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from kline_fetcher import KlineFetcherFactory
+
+    fetchers = KlineFetcherFactory.create_fetcher_chain(db=db)
+
+    def _fetch_one(code: str) -> dict | None:
+        import math
+        for fetcher in fetchers:
+            try:
+                df = fetcher.fetch(code, market=market, timeframe="1d", max_count=5)
+            except Exception:
+                continue
+            if df is None or getattr(df, "empty", True) or len(df) < 1:
+                continue
+            latest = df.iloc[-1]
+            close = float(latest.get("close") or 0)
+            open_val = float(latest.get("open") or 0)
+            volume_val = float(latest.get("volume") or 0)
+            date_val = str(latest.get("date") or "")
+            if close <= 0:
+                continue
+            # 计算前一日收盘价（用于涨跌幅）
+            prev_close = None
+            if len(df) >= 2:
+                prev_close = float(df.iloc[-2].get("close") or 0)
+            return {
+                "code": code,
+                "close": close,
+                "open": open_val if open_val > 0 else None,
+                "volume": volume_val if volume_val > 0 else None,
+                "date": date_val,
+                "prev_close": prev_close if prev_close and prev_close > 0 else None,
+                "source": fetcher.get_name(),
+            }
+        return None
+
+    codes_to_fetch = missing_codes[:max(1, min(len(missing_codes), 5))]  # 最多并发 5 只
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_fetch_one, code): code for code in codes_to_fetch}
+        for future in as_completed(futures, timeout=timeout_per_stock * 2):
+            code = futures[future]
+            try:
+                result = future.result(timeout=timeout_per_stock)
+            except Exception:
+                continue
+            if result is None:
+                continue
+
+            # 写回 stock_kline_cache
+            try:
+                db.upsert_kline_cache([{
+                    "market": market,
+                    "code": result["code"],
+                    "timeframe": "1d",
+                    "bar_time": result["date"],
+                    "open": result.get("open"),
+                    "high": result.get("close"),  # fallback: 只用 close 近似
+                    "low": result.get("close"),
+                    "close": result["close"],
+                    "volume": result.get("volume"),
+                    "source": result.get("source", "sector_fallback"),
+                }])
+            except Exception as exc:
+                print(f"[sectors] cache write failed for {result['code']}: {exc}", file=sys.stderr)
+
+            # 更新返回结果中的对应股票
+            for stock in stocks:
+                if stock["code"] != result["code"]:
+                    continue
+                stock["price"] = result["close"]
+                if result["date"]:
+                    stock["date"] = result["date"]
+                stock["volume"] = result.get("volume")
+                change = None
+                if result.get("prev_close") and result["prev_close"] > 0:
+                    change = round((result["close"] - result["prev_close"]) / result["prev_close"] * 100, 2)
+                stock["change_pct"] = change
+                break
 
 
 def _reverse_lookup_cn(cn_name: str) -> str:
@@ -444,20 +563,21 @@ def _query_sector_stocks(
         )
         prev_date = (cursor.fetchone() or [None])[0]
 
-    # 一次查询拉取成分股代码 + 最新 K 线 + 前一日 K 线 + 基本资料
+    # 用 LEFT JOIN 确保没有 K 线数据的股票也能展示（价格/涨跌为空）
+    # DISTINCT 去重（同一只股票可能属于同一板块的多个子分类）
     sql = """
-        SELECT m.code, s.name, s.market_cap,
+        SELECT DISTINCT m.code, s.name, s.market_cap,
                k1.close, k1.volume, k1.bar_time,
                k2.close AS prev_close
         FROM stock_sector_memberships m
-        JOIN stock_kline_cache k1
+        LEFT JOIN stocks s
+            ON s.market = m.market AND s.code = m.code
+        LEFT JOIN stock_kline_cache k1
             ON k1.market = m.market AND k1.code = m.code
             AND k1.timeframe = '1d' AND k1.bar_time = %s
         LEFT JOIN stock_kline_cache k2
             ON k2.market = m.market AND k2.code = m.code
             AND k2.timeframe = '1d' AND k2.bar_time = %s
-        LEFT JOIN stocks s
-            ON s.market = m.market AND s.code = m.code
         WHERE m.market = %s AND m.sector_name = %s
         ORDER BY s.market_cap DESC
         LIMIT %s

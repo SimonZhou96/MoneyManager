@@ -32,6 +32,7 @@ export function MarketAnalysisPage() {
   const [sectors, setSectors] = useState<HotSector[]>([])
   const [sectorsLoading, setSectorsLoading] = useState(false)
   const [sectorsError, setSectorsError] = useState('')
+  const [sectorsDate, setSectorsDate] = useState('')
   const [selectedSector, setSelectedSector] = useState<HotSector | null>(null)
 
   // ── Sector stocks state ──
@@ -75,6 +76,7 @@ export function MarketAnalysisPage() {
     try {
       const data = await getHotSectors(market, 15)
       setSectors(data.sectors || [])
+      setSectorsDate((data as any).data_date || '')
     } catch (err) {
       setSectorsError(err instanceof Error ? err.message : '加载热点板块失败')
     } finally {
@@ -110,8 +112,10 @@ export function MarketAnalysisPage() {
     // Load klines
     setKlineLoading(true)
     setKlineError('')
+    console.log('[Kline] fetching', market, code, timeframe)
     try {
       const data = await getKlines(market, code, timeframe, 120)
+      console.log('[Kline] got', data.rows?.length, 'rows')
       setKlineRows(data.rows || [])
     } catch (err) {
       setKlineError(err instanceof Error ? err.message : '加载K线失败')
@@ -245,6 +249,11 @@ export function MarketAnalysisPage() {
         <div className="section-label">
           <span className="gold-dot" />
           热点板块
+          {sectorsDate && (
+            <span className="section-meta" style={{ marginLeft: 12, color: '#8a8070', fontSize: 12 }}>
+              数据日期: {sectorsDate}
+            </span>
+          )}
           {selectedSector && (
             <span className="section-breadcrumb">
               <span className="breadcrumb-sep">›</span>

@@ -883,6 +883,9 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
   const [klineRows, setKlineRows] = useState<Record<string, unknown>[]>([])
   const [klineLoading, setKlineLoading] = useState(false)
   const [klineError, setKlineError] = useState('')
+  const [klineDiagnostics, setKlineDiagnostics] = useState<{
+    status: string; source: string; error_message?: string
+  } | null>(null)
 
   // ---- report tab ----
   const [reportTab, setReportTab] = useState<'current' | 'history'>('current')
@@ -944,11 +947,32 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
   async function fetchKline(code: string) {
     setKlineLoading(true)
     setKlineError('')
+    setKlineDiagnostics(null)
     try {
-      const data = await api<{ rows: Array<Record<string, unknown>> }>(
+      const data = await api<{
+        rows: Array<Record<string, unknown>>
+        source_status?: { kline?: { status: string; source: string; error_message?: string; stale?: boolean } }
+        data_gaps?: string[]
+      }>(
         `/api/stock-terminal/${encodeURIComponent(market)}/${encodeURIComponent(code)}/klines?timeframe=${encodeURIComponent(timeframe)}&limit=200`
       )
       setKlineRows(Array.isArray(data.rows) ? data.rows : [])
+
+      // 保存 K 线数据源诊断信息
+      const klineStat = data.source_status?.kline
+      if (klineStat) {
+        setKlineDiagnostics({
+          status: klineStat.status || 'unknown',
+          source: klineStat.source || '',
+          error_message: klineStat.error_message || (klineStat.stale ? '数据可能已过期' : undefined),
+        })
+        if (klineStat.status === 'error' || klineStat.status === 'empty') {
+          setKlineError(klineStat.error_message || 'K线数据获取失败 — 所有数据源均无返回')
+        }
+        if ((data.data_gaps || []).includes('kline') && !klineStat.error_message) {
+          setKlineError('K线数据缺失 — 当前股票在该周期下无可用数据')
+        }
+      }
     } catch (err) {
       setKlineError(err instanceof Error ? err.message : '加载K线失败')
       setKlineRows([])
@@ -1137,15 +1161,42 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
       {selectedStock && (
         <div className="metric-grid">
           <Metric label="股票名称" value={selectedStock.name} />
-          <Metric label="股票代码" value={selectedStock.code} />
+          <Metric label="股票代码" value={
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontFamily: 'ui-monospace, monospace' }}>{selectedStock.code}</span>
+              <button className="link-button" style={{ fontSize: 11, padding: 0, minHeight: 20 }}
+                onClick={() => { navigator.clipboard?.writeText(selectedStock.code).catch(() => undefined) }}
+                title="复制代码">📋</button>
+            </span>
+          } />
           <Metric label="市场" value={MARKET_LABELS[market] || market} />
-          <Metric label="板块" value={selectedStock.sector || selectedStock.industry || '-'} />
-          <Metric label="规则链" value={chainDisplay(selectedChain)} />
+          <Metric label="板块" value={
+            <span
+              title={(selectedStock.sector || selectedStock.industry) || undefined}
+              style={{ overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}
+            >{selectedStock.sector || selectedStock.industry || '-'}</span>
+          } />
+          <Metric label="规则链" value={
+            <span
+              title={chainDisplay(selectedChain)}
+              style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}
+            >{chainDisplay(selectedChain)}</span>
+          } />
           <Metric label="周期" value={timeframe} />
         </div>
       )}
 
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <ErrorRecoveryCard
+          error={error}
+          failedStep={progress.step}
+          screeningResult={screeningResult}
+          onRetry={() => { submit(new Event('retry') as any) }}
+          onTechOnly={() => { setChainKey(''); submit(new Event('techonly') as any) }}
+          onSwitchTimeframe={(tf) => { setTimeframe(tf); }}
+          currentTimeframe={timeframe}
+        />
+      )}
 
       {/* ---- K-line chart ---- */}
       {selectedStock && (
@@ -1154,6 +1205,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
             rows={klineRows}
             loading={klineLoading}
             error={klineError}
+            diagnostics={klineDiagnostics}
             timeframe={timeframe as any}
             symbol={`${selectedStock.name} (${selectedStock.code})`}
           />
@@ -1190,6 +1242,17 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
         </div>
       )}
 
+      {/* ---- data diagnostic panel ---- */}
+      {screeningResult && (
+        <DataDiagnosticPanel
+          selectedStock={selectedStock}
+          klineDiagnostics={klineDiagnostics}
+          klineRows={klineRows}
+          screeningResult={screeningResult}
+          progress={progress}
+        />
+      )}
+
       {/* ---- report panel ---- */}
       {screeningResult && (
         <Panel title="筛选报告">
@@ -1205,14 +1268,20 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
 
           {reportTab === 'current' && (
             <>
+              {/* P0-2: 评分概览卡片 */}
+              <ScoreOverviewCards ruleDetails={ruleDetails} resultJson={resultJson} screeningResult={screeningResult} />
+
               <div className="metric-grid" style={{ marginTop: 16 }}>
                 <Metric label="筛选状态" value={<StatusBadge value={screeningResult.passed ? 'passed' : 'failed'} />} />
-                <Metric label="综合评分" value={displayMissing(resultJson.final_score)} />
-                <Metric label="技术分" value={displayMissing(resultJson.technical_score)} />
-                <Metric label="宏观分" value={displayMissing(resultJson.macro_score)} />
-                <Metric label="数据来源" value={displayMissing(screeningResult.data_source)} />
+                <Metric label="数据来源" value={dataSourceLabel(screeningResult.data_source)} />
                 <Metric label="完成时间" value={displayMissing(screeningResult.finished_at)} />
+                <Metric label="规则链" value={chainDisplay(selectedChain)} />
               </div>
+
+              {/* P1-5: score formula visualization */}
+              {ruleDetails.length > 0 && resultJson.final_score != null && (
+                <ScoreFormulaDisplay ruleDetails={ruleDetails} resultJson={resultJson} />
+              )}
 
               {/* scoring detail */}
               {(screeningResult.score_details || screeningResult.filter_details) && (
@@ -1288,17 +1357,20 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
               {historyLoading ? (
                 <div className="empty">加载中...</div>
               ) : historyRuns.length === 0 ? (
-                <div className="empty">暂无历史筛选记录</div>
+                <div className="empty">
+                  <div style={{ marginBottom: 8 }}>暂无历史筛选记录</div>
+                  <small style={{ color: '#605850' }}>选择股票并点击"开始筛选"后，结果将自动保存在这里</small>
+                </div>
               ) : (
                 <table className="data-table" style={{ width: '100%' }}>
                   <thead>
                     <tr>
                       <th>时间</th>
                       <th>规则链</th>
-                      <th>状态</th>
+                      <th>结果</th>
                       <th>综合分</th>
-                      <th>技术分</th>
-                      <th>宏观分</th>
+                      <th>失败原因</th>
+                      <th>操作</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1310,12 +1382,44 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
                           setReportTab('current')
                         } catch { /* ignore */ }
                       }}>
-                        <td style={{ color: '#e8e0d0' }}>{String(r.created_at || '').replace('T', ' ').slice(0, 19)}</td>
-                        <td style={{ color: '#c9a84c' }}>{r.chain_name || r.chain_key || '-'}</td>
+                        <td style={{ color: '#e8e0d0', whiteSpace: 'nowrap' }}>{String(r.created_at || '').replace('T', ' ').slice(0, 16)}</td>
+                        <td style={{ color: '#c9a84c', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.chain_name || r.chain_key}>{r.chain_name || r.chain_key || '-'}</td>
                         <td><StatusBadge value={r.passed ? 'passed' : 'failed'} /></td>
-                        <td style={{ color: '#e8c560' }}>{r.final_score != null ? Number(r.final_score).toFixed(1) : '-'}</td>
-                        <td>{r.technical_score != null ? Number(r.technical_score).toFixed(1) : '-'}</td>
-                        <td>{r.macro_score != null ? Number(r.macro_score).toFixed(1) : '-'}</td>
+                        <td style={{ color: r.final_score != null ? '#e8c560' : '#8a8070', fontWeight: r.final_score != null ? 700 : 400 }}>
+                          {r.final_score != null ? Number(r.final_score).toFixed(1) : '—'}
+                        </td>
+                        <td style={{ color: '#ef4444', fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {r.status === 'failed' || r.passed === false ? (r.status === 'failed' ? '执行失败' : '未通过筛选') : '-'}
+                        </td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <button
+                            className="link-button"
+                            style={{ fontSize: 12, marginRight: 8 }}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setMarket(r.market)
+                              setTimeframe(r.timeframe)
+                              setChainKey(r.chain_key)
+                              if (selectedStock?.code === r.code) {
+                                setTimeout(() => submit(new Event('history_retry') as any), 100)
+                              }
+                            }}
+                            title="使用相同参数重新筛选"
+                          >🔄 重筛</button>
+                          <button
+                            className="link-button"
+                            style={{ fontSize: 12 }}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              const params = JSON.stringify({
+                                market: r.market, code: r.code, timeframe: r.timeframe,
+                                chain_key: r.chain_key, chain_name: r.chain_name || '',
+                              }, null, 2)
+                              navigator.clipboard?.writeText(params).catch(() => undefined)
+                            }}
+                            title="复制筛选参数"
+                          >📋</button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -2208,6 +2312,391 @@ function StatusBadge({ value }: { value: string | boolean }) {
   return <span className={`status ${className}`}>{label}</span>
 }
 
+type DataStatus = 'computed' | 'not_computed' | 'missing' | 'error'
+
+const DATA_STATUS_LABELS: Record<DataStatus, string> = {
+  computed: '已计算',
+  not_computed: '未计算',
+  missing: '数据缺失',
+  error: '接口失败',
+}
+
+function DataStatusBadge({ status }: { status: DataStatus }) {
+  return <span className={`data-status ${status}`}>{DATA_STATUS_LABELS[status]}</span>
+}
+
+/** 根据值和后端状态推断数据完整性 */
+function inferDataStatus(value: unknown, meta?: { status?: string; error?: string }): DataStatus {
+  if (meta?.status === 'error' || meta?.error) return 'error'
+  if (meta?.status === 'missing' || value === undefined || value === null || value === '') return 'not_computed'
+  return 'computed'
+}
+
+/** 错误恢复建议 */
+interface ErrorSuggestion {
+  label: string
+  action: string
+}
+function analyzeErrorSuggestions(
+  error: string,
+  failedStep: string,
+  screeningResult: Record<string, unknown> | null,
+  currentTimeframe: string,
+): ErrorSuggestion[] {
+  const suggestions: ErrorSuggestion[] = []
+
+  // 重试总是可用
+  suggestions.push({ label: '🔄 重新筛选', action: 'retry' })
+
+  // K线相关错误 → 建议切换周期
+  if (
+    error.includes('K-line') || error.includes('K线') || error.includes('kline') ||
+    error.includes('kline') || error.includes('数据不足') || error.includes('returned empty') ||
+    failedStep === 'kline_fetch'
+  ) {
+    const altTimeframes = ['1d', '1wk', '1mo'].filter(tf => tf !== currentTimeframe)
+    for (const tf of altTimeframes) {
+      const label = tf === '1d' ? '日线(1d)' : tf === '1wk' ? '周线(1wk)' : '月线(1mo)'
+      suggestions.push({ label: `📅 切换至${label}`, action: `switch_${tf}` })
+    }
+  }
+
+  // 规则执行失败 → 建议仅技术面
+  if (error.includes('rule') || error.includes('规则') || failedStep === 'rule_eval') {
+    suggestions.push({ label: '⚙️ 仅执行技术面分析', action: 'tech_only' })
+  }
+
+  // 宏观/外部API 错误 → 建议跳过宏观
+  if (error.includes('macro') || error.includes('宏观') || error.includes('Tavily') || error.includes('timeout')) {
+    if (!suggestions.some(s => s.action === 'tech_only')) {
+      suggestions.push({ label: '⚙️ 跳过宏观数据', action: 'tech_only' })
+    }
+  }
+
+  suggestions.push({ label: '📋 复制错误详情', action: 'copy' })
+
+  return suggestions
+}
+
+/** ── Score overview cards (P0-2) ── */
+interface ScoreCardProps {
+  title: string
+  score: string | number
+  scoreStatus: DataStatus
+  weightLabel: string
+  passCount: number
+  failCount: number
+  unknownCount: number
+  missingCount: number
+  highlight?: boolean
+  direction?: string
+}
+
+function ScoreCard({ title, score, scoreStatus, weightLabel, passCount, failCount, unknownCount, missingCount, highlight, direction }: ScoreCardProps) {
+  const dirLabel = direction === 'bullish' ? '🟢 看涨' : direction === 'bearish' ? '🔴 看跌' : ''
+  return (
+    <div className={`score-card${highlight ? ' score-card-highlight' : ''}`}>
+      <div className="score-card-head">
+        <span className="score-card-title">{title}</span>
+        <span className="score-card-weight">{weightLabel}</span>
+      </div>
+      <div className="score-card-value">
+        <span className="score-number">{score}</span>
+        <DataStatusBadge status={scoreStatus} />
+      </div>
+      {dirLabel && <div className="score-card-direction">{dirLabel}</div>}
+      <div className="score-card-counts">
+        <span className="sc-pass">{passCount} 通过</span>
+        <span className="sc-fail">{failCount} 未通过</span>
+        {unknownCount > 0 && <span className="sc-unknown">{unknownCount} 无法计算</span>}
+        {missingCount > 0 && <span className="sc-missing">{missingCount} 缺失</span>}
+      </div>
+    </div>
+  )
+}
+
+function ScoreOverviewCards({ ruleDetails, resultJson, screeningResult }: {
+  ruleDetails: FilterDetailRow[]
+  resultJson: Record<string, unknown>
+  screeningResult: Record<string, unknown> | null
+}) {
+  // 按 strategy_category 分组统计
+  const techRules = ruleDetails.filter(d => d.strategy_category === 'technical' || !d.strategy_category)
+  const macroRules = ruleDetails.filter(d => d.strategy_category === 'macro')
+
+  function counts(rules: FilterDetailRow[]) {
+    return {
+      pass: rules.filter(d => d.result === 'pass').length,
+      fail: rules.filter(d => d.result === 'fail').length,
+      unknown: rules.filter(d => d.result !== 'pass' && d.result !== 'fail').length,
+      missing: 0,
+    }
+  }
+  const techCounts = counts(techRules)
+  const macroCounts = counts(macroRules)
+
+  const finalScore = formatScoreWithStatus(resultJson.final_score)
+  const techScore = formatScoreWithStatus(resultJson.technical_score)
+  const macroScore = formatScoreWithStatus(resultJson.macro_score)
+
+  // 推断方向（从final_score或ai_analysis）
+  const aiAnalysis = screeningResult?.ai_analysis as Record<string, unknown> | undefined
+  const direction = (aiAnalysis?.signal_bias as string) || ''
+
+  return (
+    <div className="score-overview-grid" style={{ marginTop: 16 }}>
+      <ScoreCard
+        title="综合评分" score={finalScore.display} scoreStatus={finalScore.status}
+        weightLabel="100%" passCount={techCounts.pass + macroCounts.pass}
+        failCount={techCounts.fail + macroCounts.fail}
+        unknownCount={techCounts.unknown + macroCounts.unknown}
+        missingCount={techCounts.missing + macroCounts.missing}
+        highlight direction={direction}
+      />
+      <ScoreCard
+        title="技术维度" score={techScore.display} scoreStatus={techScore.status}
+        weightLabel="权重 40%"
+        passCount={techCounts.pass} failCount={techCounts.fail}
+        unknownCount={techCounts.unknown} missingCount={techCounts.missing}
+      />
+      <ScoreCard
+        title="宏观维度" score={macroScore.display} scoreStatus={macroScore.status}
+        weightLabel="权重 30%"
+        passCount={macroCounts.pass} failCount={macroCounts.fail}
+        unknownCount={macroCounts.unknown} missingCount={macroCounts.missing}
+      />
+      <ScoreCard
+        title="资金风险" score="—" scoreStatus="not_computed"
+        weightLabel="权重 20%" passCount={0} failCount={0}
+        unknownCount={0} missingCount={1}
+      />
+    </div>
+  )
+}
+
+/** ── Score formula visualization (P1-5) ── */
+const STRATEGY_CATEGORY_LABELS: Record<string, string> = {
+  technical: '技术面', macro: '宏观面', event_hot: '事件热度', capital_risk: '资金风险',
+}
+
+function ScoreFormulaDisplay({ ruleDetails, resultJson }: {
+  ruleDetails: FilterDetailRow[]
+  resultJson: Record<string, unknown>
+}) {
+  // 找出贡献非零的规则
+  const contributing = ruleDetails
+    .filter(d => d.result === 'pass' && d.details)
+    .map(d => {
+      const score = (d.details as any)?.score ?? (d.details as any)?.total_score ?? 0
+      return { name: d.rule_key || d.filter_name || '', score: Number(score) || 0, category: d.strategy_category || '' }
+    })
+    .filter(d => d.score !== 0)
+
+  const baseScore = 50
+  const additions = contributing.map(d => `+${d.score.toFixed(1)}(${d.name})`)
+  const formula = baseScore + (contributing.length ? ' ' + additions.join(' ') : '')
+  const final = Number(resultJson.final_score) || baseScore
+
+  return (
+    <div className="score-formula-box" style={{ marginTop: 16 }}>
+      <div className="score-formula-title">📐 评分公式</div>
+      <div className="score-formula-text">{formula}</div>
+      <div className="score-formula-result">= {final.toFixed(1)}</div>
+      {contributing.length === 0 && (
+        <div className="score-formula-note">无额外加分项 — 仅基础分 50.0</div>
+      )}
+    </div>
+  )
+}
+
+function ErrorRecoveryCard({
+  error,
+  failedStep,
+  screeningResult,
+  onRetry,
+  onTechOnly,
+  onSwitchTimeframe,
+  currentTimeframe,
+}: {
+  error: string
+  failedStep: string
+  screeningResult: Record<string, unknown> | null
+  onRetry: () => void
+  onTechOnly: () => void
+  onSwitchTimeframe: (tf: string) => void
+  currentTimeframe: string
+}) {
+  const suggestions = analyzeErrorSuggestions(error, failedStep, screeningResult, currentTimeframe)
+  const warnings = (screeningResult?.warnings as string[]) || []
+
+  function handleSuggestion(suggestion: ErrorSuggestion) {
+    switch (suggestion.action) {
+      case 'retry': onRetry(); break
+      case 'tech_only': onTechOnly(); break
+      case 'copy':
+        navigator.clipboard?.writeText(`错误: ${error}\n${warnings.length ? '警告: ' + warnings.join('; ') : ''}`)
+          .catch(() => undefined)
+        break
+      default:
+        if (suggestion.action.startsWith('switch_')) {
+          onSwitchTimeframe(suggestion.action.replace('switch_', ''))
+        }
+    }
+  }
+
+  const stepLabel = (() => {
+    if (!failedStep) return ''
+    const labels: Record<string, string> = {
+      init: '初始化', stock_lookup: '查询股票', kline_fetch: '获取K线',
+      rule_eval: '执行规则', read_result: '读取结果', save_result: '保存报告',
+    }
+    return labels[failedStep] || failedStep
+  })()
+
+  return (
+    <div className="error-recovery-card">
+      <div className="error-recovery-header">
+        <span className="error-recovery-icon">⚠️</span>
+        <div>
+          <h3>筛选未完成</h3>
+          {stepLabel && <span className="error-recovery-step">失败阶段: {stepLabel}</span>}
+        </div>
+      </div>
+      <p className="error-recovery-detail">{error}</p>
+      {warnings.length > 0 && (
+        <ul className="error-recovery-warnings">
+          {warnings.map((w, i) => <li key={i}>{w}</li>)}
+        </ul>
+      )}
+      <div className="error-recovery-actions">
+        {suggestions.map(s => (
+          <button key={s.action} className="secondary-button" onClick={() => handleSuggestion(s)}>
+            {s.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** ── Data diagnostic panel (P0-3) ── */
+interface DiagItem {
+  key: string
+  label: string
+  status: DataStatus
+  detail: string
+}
+
+function DataDiagnosticPanel({
+  selectedStock, klineDiagnostics, klineRows, screeningResult, progress,
+}: {
+  selectedStock: StockSearchResult | null
+  klineDiagnostics: { status: string; source: string; error_message?: string } | null
+  klineRows: Record<string, unknown>[]
+  screeningResult: Record<string, unknown> | null
+  progress: { pct: number; step: string; detail: string; status: string }
+}) {
+  const ruleDetails = (screeningResult?.rule_details as FilterDetailRow[]) || []
+  const resultJson = (screeningResult?.result_json || screeningResult || {}) as Record<string, unknown>
+
+  const items: DiagItem[] = [
+    {
+      key: 'stock', label: '股票识别',
+      status: selectedStock ? 'computed' : 'error',
+      detail: selectedStock
+        ? `已识别 — ${selectedStock.name} (${selectedStock.code})`
+        : '未选择股票',
+    },
+    {
+      key: 'kline', label: 'K线数据',
+      status: klineDiagnostics
+        ? (klineDiagnostics.status === 'cached' || klineDiagnostics.status === 'fresh' ? 'computed'
+          : klineDiagnostics.status === 'error' ? 'error' : 'missing')
+        : klineRows.length > 0 ? 'computed' : 'not_computed',
+      detail: klineRows.length > 0
+        ? `已获取 — ${klineRows.length} 条 ${progress.step === 'kline_fetch' ? '(加载中...)' : ''}`
+        : klineDiagnostics?.error_message
+          ? `获取失败 — ${klineDiagnostics.error_message}`
+          : klineDiagnostics?.source
+            ? `数据源 ${klineDiagnostics.source}: 无数据返回` : '未获取',
+    },
+    {
+      key: 'technical', label: '技术指标',
+      status: ruleDetails.length > 0 ? 'computed'
+        : screeningResult ? 'not_computed' : 'not_computed',
+      detail: ruleDetails.length > 0
+        ? `已计算 — ${ruleDetails.filter(d => d.result === 'pass').length}/${ruleDetails.length} 条规则通过`
+        : screeningResult ? '规则评估未产生明细' : '尚未执行',
+    },
+    {
+      key: 'macro', label: '宏观数据',
+      status: resultJson.macro_score !== undefined && resultJson.macro_score !== null ? 'computed'
+        : screeningResult ? 'missing' : 'not_computed',
+      detail: resultJson.macro_score !== undefined && resultJson.macro_score !== null
+        ? `已补齐 — 宏观分 ${Number(resultJson.macro_score).toFixed(1)}`
+        : screeningResult ? '宏观数据未补齐 — 外部API可能超时或数据不足' : '尚未执行',
+    },
+    {
+      key: 'industry', label: '行业数据',
+      status: selectedStock?.industry || selectedStock?.sector ? 'computed' : 'missing',
+      detail: selectedStock?.industry || selectedStock?.sector
+        ? `已获取 — ${selectedStock.industry || selectedStock.sector}`
+        : '行业数据不可用',
+    },
+    {
+      key: 'backend', label: '后端状态',
+      status: screeningResult
+        ? (screeningResult.status === 'completed' ? 'computed'
+          : screeningResult.status === 'failed' ? 'error' : 'not_computed')
+        : 'not_computed',
+      detail: screeningResult
+        ? (screeningResult.status === 'completed' ? '已完成 — 无异常'
+          : `异常 — ${screeningResult.status || 'unknown'}`)
+        : '尚未连接',
+    },
+  ]
+
+  const hasError = items.some(i => i.status === 'error')
+
+  return (
+    <details open={hasError} className="diagnostic-panel">
+      <summary className="diagnostic-summary">
+        <span className="diagnostic-title">📡 数据诊断</span>
+        <span className="diagnostic-counts">
+          <span className="diag-ok">{items.filter(i => i.status === 'computed').length} 正常</span>
+          {items.filter(i => i.status === 'error').length > 0 && (
+            <span className="diag-err">{items.filter(i => i.status === 'error').length} 异常</span>
+          )}
+          {items.filter(i => i.status === 'missing').length > 0 && (
+            <span className="diag-warn">{items.filter(i => i.status === 'missing').length} 缺失</span>
+          )}
+        </span>
+      </summary>
+      <div className="diagnostic-items">
+        {items.map(item => (
+          <div key={item.key} className="diagnostic-item">
+            <DataStatusBadge status={item.status} />
+            <span className="diagnostic-label">{item.label}</span>
+            <span className="diagnostic-detail">{item.detail}</span>
+          </div>
+        ))}
+      </div>
+    </details>
+  )
+}
+
+/** 格式化分数，返回 {display, status} 以支持不同展示 */
+function formatScoreWithStatus(value?: number | string | null, meta?: { status?: string; error?: string }): { display: string; status: DataStatus } {
+  if (value === undefined || value === null || value === '' || (typeof value === 'string' && value.trim() === '')) {
+    return { display: '—', status: meta?.status === 'error' ? 'error' : 'not_computed' }
+  }
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return { display: String(value), status: meta?.status === 'error' ? 'error' : 'missing' }
+  }
+  return { display: numeric.toFixed(1), status: 'computed' }
+}
+
 function statusLabel(value: string | boolean) {
   const key = String(value).toLowerCase()
   return STATUS_LABELS[key] || String(value || '未补齐')
@@ -2388,6 +2877,29 @@ function formatScore(value?: number | string | null) {
   if (value === undefined || value === null || value === '') return '-'
   const numeric = Number(value)
   return Number.isFinite(numeric) ? numeric.toFixed(1) : String(value)
+}
+
+/** data_source 值 → 用户可读的中文标签 */
+const DATA_SOURCE_LABELS: Record<string, string> = {
+  web_backend: 'Web 后端直连',
+  eastmoney: '东方财富',
+  yfinance: 'Yahoo Finance',
+  akshare: 'AKShare',
+  futu: '富途 OpenD',
+  opend_cache: '富途 OpenD (缓存)',
+  DatabaseKlineCache: '数据库缓存',
+  failed: '获取失败',
+}
+
+function dataSourceLabel(value: unknown): string {
+  const key = String(value || '').trim()
+  if (!key) return '未补齐'
+  // 尝试精确匹配，然后前缀匹配
+  if (DATA_SOURCE_LABELS[key]) return DATA_SOURCE_LABELS[key]
+  for (const [prefix, label] of Object.entries(DATA_SOURCE_LABELS)) {
+    if (key.toLowerCase().startsWith(prefix.toLowerCase())) return label
+  }
+  return key
 }
 
 function formatReportValue(value: unknown): string {

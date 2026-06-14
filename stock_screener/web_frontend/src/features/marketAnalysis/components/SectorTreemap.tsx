@@ -9,14 +9,13 @@ interface Props {
   onSectorClick: (sector: HotSector) => void
 }
 
-/** Exact threshold color: green(positive) / red(negative), darker near zero */
 function sectorColor(changePct: number): string {
   const abs = Math.abs(changePct)
   if (changePct >= 0) {
-    if (abs < 0.5)  return '#164e3b'
-    if (abs < 1.5)  return '#047857'
-    if (abs < 3)    return '#059669'
-    if (abs < 5)    return '#10b981'
+    if (abs < 0.5) return '#164e3b'
+    if (abs < 1.5) return '#047857'
+    if (abs < 3)   return '#059669'
+    if (abs < 5)   return '#10b981'
     return '#00c781'
   }
   if (abs < 0.5) return '#4c1d25'
@@ -30,6 +29,7 @@ export function SectorTreemap({ sectors, loading, selectedName, onSectorClick }:
   const chartRef = useRef<HTMLDivElement>(null)
   const instanceRef = useRef<echarts.ECharts | null>(null)
 
+  // Init chart ONCE — never re-create on re-render
   useEffect(() => {
     if (!chartRef.current) return
     if (!instanceRef.current) {
@@ -45,6 +45,7 @@ export function SectorTreemap({ sectors, loading, selectedName, onSectorClick }:
     }
   }, [])
 
+  // Update chart data
   useEffect(() => {
     const chart = instanceRef.current
     if (!chart) return
@@ -148,29 +149,16 @@ export function SectorTreemap({ sectors, loading, selectedName, onSectorClick }:
     })
   }, [sectors, loading, selectedName, onSectorClick])
 
-  if (loading) {
-    return (
-      <div className="sector-treemap-chart">
-        <div ref={chartRef} style={{ width: '100%', aspectRatio: '16/9', background: '#111827', borderRadius: 8 }} />
-      </div>
-    )
-  }
-
-  if (sectors.length === 0) {
-    return (
-      <div className="sector-treemap-chart">
-        <div className="empty-state">
+  return (
+    <div className="sector-treemap-chart">
+      {sectors.length === 0 && !loading && (
+        <div className="empty-state" style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
           <div className="empty-icon">📊</div>
           <div>暂无热点板块数据</div>
           <span className="muted">切换市场或稍后重试</span>
         </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="sector-treemap-chart">
-      <div ref={chartRef} style={{ width: '100%', aspectRatio: '16/9', borderRadius: 8 }} />
+      )}
+      <div ref={chartRef} style={{ width: '100%', aspectRatio: '16/9', background: '#111827', borderRadius: 8 }} />
     </div>
   )
 }

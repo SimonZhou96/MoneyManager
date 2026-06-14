@@ -17,6 +17,7 @@ export interface HotSectorsResponse {
   market: MarketCode
   sectors: HotSector[]
   total: number
+  data_date?: string | null
 }
 
 export interface SectorStock {

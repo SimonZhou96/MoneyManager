@@ -202,6 +202,7 @@ class YFinanceKlineFetcher(KlineFetcherBase):
             df = _normalize_dataframe(data)
             if df is None:
                 return None
+            df = df.sort_values("date").drop_duplicates(subset=["date"]).reset_index(drop=True)
             return df.tail(max_count).reset_index(drop=True)
         except Exception as e:
             print(f"[YFinance] fetch failed: code={stock_code} market={market} timeframe={timeframe} error={e}", file=sys.stderr)
@@ -533,6 +534,58 @@ class FutuKlineFetcher(KlineFetcherBase):
 
 
 # ---------------------------------------------------------------------------
+# Futu OpenD 自动连接（通过环境变量配置，每次 fetch 创建临时连接）
+# ---------------------------------------------------------------------------
+
+class OpenDQuotedKlineFetcher(KlineFetcherBase):
+    """通过环境变量自动连接 Futu OpenD 的 K 线获取器。
+
+    与 FutuKlineFetcher 不同，此类自行管理 OpenD 连接生命周期：
+    每次 fetch() 时创建临时 quote_ctx，用完即释放。
+    适用于 web 后端多请求并发场景（每个请求独立连接，避免连接池耗尽）。
+
+    配置：
+        FUTU_OPEN_HOST — OpenD 主机地址（默认不设置，不启用）
+        FUTU_OPEN_PORT — OpenD 端口（默认 11111）
+
+    安全提示：
+        OpenD 默认仅监听 127.0.0.1。如需远程访问，应通过 SSH tunnel，
+        不要将 OpenD 直接暴露在公网上。
+    """
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 11111, rate_limiter=None):
+        self.host = host
+        self.port = port
+        self.rate_limiter = rate_limiter
+
+    def get_name(self) -> str:
+        return f"FutuOpenD({self.host}:{self.port})"
+
+    def fetch(
+        self,
+        stock_code: str,
+        market: str = "HK",
+        timeframe: str = "1d",
+        max_count: int = 2000,
+    ) -> Optional[pd.DataFrame]:
+        import futu as ft
+        quote_ctx = None
+        try:
+            quote_ctx = ft.OpenQuoteContext(host=self.host, port=self.port)
+            inner = FutuKlineFetcher(quote_ctx, self.rate_limiter)
+            return inner.fetch(stock_code, market=market, timeframe=timeframe, max_count=max_count)
+        except Exception as e:
+            _log_fetch_warning(f"FutuOpenD({self.host}:{self.port})", f"fetch code={stock_code}", e)
+            return None
+        finally:
+            if quote_ctx is not None:
+                try:
+                    quote_ctx.close()
+                except Exception:
+                    pass
+
+
+# ---------------------------------------------------------------------------
 # 工厂
 # ---------------------------------------------------------------------------
 
@@ -551,31 +604,43 @@ class KlineFetcherFactory:
         quote_ctx=None,
         db=None,
         rate_limiter=None,
+        skip_db_cache: bool = False,
     ) -> List[KlineFetcherBase]:
         """
         创建获取器链。
         默认优先级：
-        - 有 OpenD: Futu > YFinance > AKShare
-        - 无 OpenD: YFinance > AKShare
+        - DB 缓存 > OpenD(如有) > YFinance > AKShare
 
-        这样可以优先使用本地 OpenD，减少 AKShare 外部站点波动对任务稳定性的影响。
+        Args:
+            skip_db_cache: True 时跳过 DatabaseKlineFetcher（调用方已自行查过 DB 缓存时使用，
+                           避免同一 (market, code, timeframe) 被查两次）
         """
         fetchers: List[KlineFetcherBase] = []
         disable_akshare = KlineFetcherFactory._env_enabled("KLINE_DISABLE_AKSHARE", default=False)
 
         # 1. Database cache（云端优先使用本地 Agent 推送的 OpenD 缓存）
-        if db is not None:
+        if db is not None and not skip_db_cache:
             try:
                 fetchers.append(DatabaseKlineFetcher(db))
             except Exception:
                 pass
 
-        # 2. Futu（仅本地任务显式传入 OpenD 时使用；云端不要连接 OpenD）
+        # 2. Futu OpenD：显式传入 quote_ctx 或通过 FUTU_OPEN_HOST 环境变量自动连接
         if quote_ctx is not None:
             try:
                 fetchers.append(FutuKlineFetcher(quote_ctx, rate_limiter))
             except Exception:
                 pass
+        else:
+            futu_host = os.getenv("FUTU_OPEN_HOST", "").strip()
+            if futu_host:
+                futu_port = int(os.getenv("FUTU_OPEN_PORT", "11111") or "11111")
+                try:
+                    fetchers.append(OpenDQuotedKlineFetcher(
+                        host=futu_host, port=futu_port, rate_limiter=rate_limiter,
+                    ))
+                except Exception:
+                    pass
 
         # 3. YFinance（全 timeframe）
         try:
