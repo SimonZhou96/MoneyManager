@@ -9,6 +9,13 @@ import { StockTerminalPanel, type StockTerminalRow } from './features/stockTermi
 import { KlineChart } from './features/marketAnalysis/components/KlineChart'
 import { RuleChainEditor } from './features/ruleEditor/RuleChainEditor'
 import type { ExpressionNode } from './features/ruleEditor/types'
+import {
+  TradingBiasCard, ScoreBreakdownCards, FactorSummary, ObserveConditions,
+  EnhancedHistory, EnhancedDataDiagnostics, FilteredRulesTable,
+  scoreToBias, computeDimensionBreakdown, extractTopPositiveFactors,
+  extractTopNegativeFactors, generateObserveConditions, computeScoreTrend,
+  type DimensionBreakdown,
+} from './features/screeningReport'
 import './styles.css'
 
 type User = { id: number; username: string; role: string }
@@ -941,6 +948,20 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
     setKlineError('')
     setError('')
     setHistoryRuns([])
+    // 选中股票后立即加载历史记录
+    loadHistoryForStock(stock.code)
+  }
+
+  // load history for any stock (no dependency on screening result)
+  async function loadHistoryForStock(code: string) {
+    setHistoryLoading(true)
+    try {
+      const data = await api<{ history: SingleStockHistoryItem[] }>(
+        `/api/screening/single-stock/history/${encodeURIComponent(code)}?market=${market}&limit=20`
+      )
+      setHistoryRuns(data.history || [])
+    } catch { /* ignore */ }
+    finally { setHistoryLoading(false) }
   }
 
   // ---- fetch K-line data ----
@@ -1078,17 +1099,10 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
     }
   }
 
-  // ---- load history ----
+  // ---- load history (delegates to shared function) ----
   async function loadHistory() {
     if (!selectedStock) return
-    setHistoryLoading(true)
-    try {
-      const data = await api<{ history: SingleStockHistoryItem[] }>(
-        `/api/screening/single-stock/history/${encodeURIComponent(selectedStock.code)}?market=${market}&limit=20`
-      )
-      setHistoryRuns(data.history || [])
-    } catch { /* ignore */ }
-    finally { setHistoryLoading(false) }
+    await loadHistoryForStock(selectedStock.code)
   }
 
   useEffect(() => {
@@ -1101,11 +1115,74 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
   const ruleDetails: FilterDetailRow[] = (screeningResult?.rule_details as FilterDetailRow[]) || []
   const resultJson = (screeningResult?.result_json || screeningResult || {}) as Record<string, unknown>
 
+  // ── 报告页衍生数据（useMemo 避免重复计算）──
+  const dimensions = useMemo<DimensionBreakdown[]>(() => {
+    if (ruleDetails.length === 0) return []
+    return computeDimensionBreakdown(ruleDetails, resultJson)
+  }, [ruleDetails, resultJson])
+
+  const positiveFactors = useMemo(() => {
+    if (ruleDetails.length === 0) return []
+    return extractTopPositiveFactors(ruleDetails)
+  }, [ruleDetails])
+
+  const negativeFactors = useMemo(() => {
+    if (ruleDetails.length === 0) return []
+    return extractTopNegativeFactors(ruleDetails)
+  }, [ruleDetails])
+
+  const observeConditions = useMemo(() => {
+    if (ruleDetails.length === 0) return []
+    return generateObserveConditions(ruleDetails)
+  }, [ruleDetails])
+
+  const historyTrend = useMemo(() => {
+    if (historyRuns.length === 0) return []
+    return computeScoreTrend(historyRuns)
+  }, [historyRuns])
+
+  const bias = scoreToBias(resultJson.final_score as number | null | undefined)
+
+  const diagItems = useMemo(() => {
+    const items: Array<{ key: string; label: string; status: string; detail: string }> = []
+    items.push({
+      key: 'stock', label: '股票识别',
+      status: selectedStock ? 'computed' : 'missing',
+      detail: selectedStock ? `${selectedStock.name} (${selectedStock.code})` : '未选择股票',
+    })
+    items.push({
+      key: 'kline', label: 'K线数据',
+      status: klineRows.length > 0 ? 'computed' : (klineDiagnostics?.status === 'error' ? 'error' : 'missing'),
+      detail: klineRows.length > 0 ? `${klineRows.length} 条K线` : (klineDiagnostics?.error_message || '未获取'),
+    })
+    items.push({
+      key: 'technical', label: '技术指标',
+      status: ruleDetails.length > 0 ? 'computed' : 'not_computed',
+      detail: ruleDetails.length > 0 ? `${ruleDetails.filter(d => d.result === 'pass').length}/${ruleDetails.length} 条通过` : '未计算',
+    })
+    items.push({
+      key: 'macro', label: '宏观数据',
+      status: resultJson.macro_score != null ? 'computed' : 'not_computed',
+      detail: resultJson.macro_score != null ? `得分 ${Number(resultJson.macro_score).toFixed(1)}` : '未计算',
+    })
+    items.push({
+      key: 'industry', label: '行业数据',
+      status: (screeningResult?.sector || screeningResult?.industry) ? 'computed' : 'not_computed',
+      detail: [screeningResult?.sector, screeningResult?.industry].filter(Boolean).join(' · ') || '未获取',
+    })
+    items.push({
+      key: 'backend', label: '后端状态',
+      status: screeningResult?.status === 'completed' ? 'computed' : (screeningResult?.status === 'failed' ? 'error' : 'not_computed'),
+      detail: String(screeningResult?.status || '未知'),
+    })
+    return items
+  }, [selectedStock, klineRows, klineDiagnostics, ruleDetails, resultJson.macro_score, screeningResult])
+
   return (
     <section className="code-screening-layout">
       <Header title="个股筛选器" subtitle="输入股票名称，一键筛选并查看K线与分析报告" />
 
-      {/* ---- search form ---- */}
+      {/* ---- search form: 两行布局 ---- */}
       <form className="compact-form-grid" onSubmit={submit}>
         <Field label="市场">
           <select value={market} onChange={event => { setMarket(event.target.value); setSelectedStock(null); setSearchQuery('') }}>
@@ -1126,63 +1203,72 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
             ))}
           </select>
         </Field>
-        <Field label="股票名称" className="field-wide">
-          <div className="stock-search">
-            <input
-              value={searchQuery}
-              onChange={event => setSearchQuery(event.target.value)}
-              onFocus={() => { if (searchResults.length > 0) setSearchOpen(true) }}
-              onBlur={() => setTimeout(() => setSearchOpen(false), 200)}
-              placeholder="输入股票名称，如：腾讯 / Apple / 茅台"
-              autoComplete="off"
-            />
-            {searchLoading && <span className="search-spinner" />}
-            {searchOpen && searchResults.length > 0 && (
-              <div className="search-dropdown">
-                {searchResults.map(r => (
-                  <div className="search-item" key={r.code} onMouseDown={() => selectStock(r)}>
-                    <span className="stock-name">{r.name}</span>
-                    <span className="stock-code">{r.code}</span>
-                    <span className="stock-sector">{r.sector || r.industry || ''}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </Field>
-        <div className="code-preview-actions">
-          <button className="primary" disabled={screening || !selectedStock || (rules?.chains || []).length === 0}>
+        {/* 第二行：股票名称 + 按钮 */}
+        <div className="form-row2">
+          <Field label="股票名称">
+            <div className="stock-search">
+              <input
+                value={searchQuery}
+                onChange={event => setSearchQuery(event.target.value)}
+                onFocus={() => { if (searchResults.length > 0) setSearchOpen(true) }}
+                onBlur={() => setTimeout(() => setSearchOpen(false), 200)}
+                placeholder="输入股票名称，如：腾讯 / Apple / 茅台"
+                autoComplete="off"
+              />
+              {searchLoading && <span className="search-spinner" />}
+              {searchOpen && searchResults.length > 0 && (
+                <div className="search-dropdown">
+                  {searchResults.map(r => (
+                    <div className="search-item" key={r.code} onMouseDown={() => selectStock(r)}>
+                      <span className="stock-name">{r.name}</span>
+                      <span className="stock-code">{r.code}</span>
+                      <span className="stock-sector">{r.sector || r.industry || ''}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Field>
+          <button className="primary" type="submit" disabled={screening || !selectedStock || (rules?.chains || []).length === 0}>
             {screening ? '筛选中...' : '开始筛选'}
           </button>
         </div>
       </form>
 
-      {/* ---- selected stock info ---- */}
+      {/* ---- selected stock info: 精简卡片 ---- */}
       {selectedStock && (
         <div className="metric-grid">
-          <Metric label="股票名称" value={selectedStock.name} />
-          <Metric label="股票代码" value={
-            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontFamily: 'ui-monospace, monospace' }}>{selectedStock.code}</span>
-              <button className="link-button" style={{ fontSize: 11, padding: 0, minHeight: 20 }}
-                onClick={() => { navigator.clipboard?.writeText(selectedStock.code).catch(() => undefined) }}
+          <div className="metric metric-name">
+            <span>股票名称</span>
+            <strong title={selectedStock.name}>{selectedStock.name}</strong>
+          </div>
+          <div className="metric metric-code">
+            <span>股票代码</span>
+            <strong title={selectedStock.code}>
+              {selectedStock.code}
+              <button className="link-button" style={{ fontSize: 11, padding: '0 0 0 6px', minHeight: 20, verticalAlign: 'middle' }}
+                onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(selectedStock.code).catch(() => undefined) }}
                 title="复制代码">📋</button>
-            </span>
-          } />
-          <Metric label="市场" value={MARKET_LABELS[market] || market} />
-          <Metric label="板块" value={
-            <span
-              title={(selectedStock.sector || selectedStock.industry) || undefined}
-              style={{ overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}
-            >{selectedStock.sector || selectedStock.industry || '-'}</span>
-          } />
-          <Metric label="规则链" value={
-            <span
-              title={chainDisplay(selectedChain)}
-              style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}
-            >{chainDisplay(selectedChain)}</span>
-          } />
-          <Metric label="周期" value={timeframe} />
+            </strong>
+          </div>
+          <div className="metric">
+            <span>市场</span>
+            <strong>{MARKET_LABELS[market] || market}</strong>
+          </div>
+          <div className="metric">
+            <span>板块</span>
+            <strong title={(selectedStock.sector || selectedStock.industry) || undefined}>
+              {selectedStock.sector || selectedStock.industry || '-'}
+            </strong>
+          </div>
+          <div className="metric">
+            <span>规则链</span>
+            <strong title={chainDisplay(selectedChain)}>{chainDisplay(selectedChain)}</strong>
+          </div>
+          <div className="metric">
+            <span>周期</span>
+            <strong>{timeframe}</strong>
+          </div>
         </div>
       )}
 
@@ -1201,6 +1287,18 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
       {/* ---- K-line chart ---- */}
       {selectedStock && (
         <div className="kline-panel-wrap">
+          <div className="kline-chart-bar">
+            <div className="kline-chart-bar-left">
+              <span className="chart-symbol">{selectedStock.name} ({selectedStock.code})</span>
+              <span className="chart-tf-badge">{timeframe}</span>
+            </div>
+            <div className="kline-chart-tools">
+              <button className="kline-tool-btn" title="移动平均线" disabled>MA</button>
+              <button className="kline-tool-btn" title="成交量" disabled>VOL</button>
+              <button className="kline-tool-btn" title="MACD" disabled>MACD</button>
+              <button className="kline-tool-btn" title="全屏" disabled>⛶</button>
+            </div>
+          </div>
           <KlineChart
             rows={klineRows}
             loading={klineLoading}
@@ -1242,108 +1340,68 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
         </div>
       )}
 
-      {/* ---- data diagnostic panel ---- */}
+      {/* ---- report panel (本次结果) ---- */}
       {screeningResult && (
-        <DataDiagnosticPanel
-          selectedStock={selectedStock}
-          klineDiagnostics={klineDiagnostics}
-          klineRows={klineRows}
-          screeningResult={screeningResult}
-          progress={progress}
-        />
-      )}
-
-      {/* ---- report panel ---- */}
-      {screeningResult && (
-        <Panel title="筛选报告">
-          {/* tabs */}
+        <section className="panel">
+          <h2>筛选报告</h2>
           <div className="report-tabs">
             <button className={`report-tab ${reportTab === 'current' ? 'active' : ''}`} onClick={() => setReportTab('current')}>
               📊 本次结果
             </button>
-            <button className={`report-tab ${reportTab === 'history' ? 'active' : ''}`} onClick={() => setReportTab('history')}>
-              📋 历史记录
-            </button>
+            {selectedStock && (
+              <button className={`report-tab ${reportTab === 'history' ? 'active' : ''}`} onClick={() => setReportTab('history')}>
+                📋 历史记录{historyRuns.length > 0 ? ` (${historyRuns.length})` : ''}
+              </button>
+            )}
           </div>
 
           {reportTab === 'current' && (
             <>
-              {/* P0-2: 评分概览卡片 */}
-              <ScoreOverviewCards ruleDetails={ruleDetails} resultJson={resultJson} screeningResult={screeningResult} />
+              {/* 第一级：交易倾向卡 + 买入评分 + 评分条 */}
+              <TradingBiasCard
+                finalScore={resultJson.final_score as number | null | undefined}
+                aiAnalysis={screeningResult.ai_analysis as Record<string, unknown> | null | undefined}
+                ruleDetails={ruleDetails}
+                dimensions={dimensions}
+              />
 
-              <div className="metric-grid" style={{ marginTop: 16 }}>
-                <Metric label="筛选状态" value={<StatusBadge value={screeningResult.passed ? 'passed' : 'failed'} />} />
-                <Metric label="数据来源" value={dataSourceLabel(screeningResult.data_source)} />
-                <Metric label="完成时间" value={displayMissing(screeningResult.finished_at)} />
-                <Metric label="规则链" value={chainDisplay(selectedChain)} />
+              {/* 第二级：买入评分构成 */}
+              {dimensions.length > 0 && (
+                <ScoreBreakdownCards dimensions={dimensions} />
+              )}
+
+              {/* 第二级：主要加分项 / 扣分项 */}
+              <FactorSummary positiveFactors={positiveFactors} negativeFactors={negativeFactors} />
+
+              {/* 第三级：观察条件 */}
+              <ObserveConditions conditions={observeConditions} biasLabel={bias.label} />
+
+              {/* 辅助信息行 */}
+              <div className="report-meta" style={{ marginTop: 12 }}>
+                <span><span className="meta-label">数据来源:</span> {dataSourceLabel(screeningResult.data_source)}</span>
+                <span><span className="meta-label">完成时间:</span> {displayMissing(screeningResult.finished_at)}</span>
+                <span><span className="meta-label">规则链:</span> {chainDisplay(selectedChain)}</span>
               </div>
 
-              {/* P1-5: score formula visualization */}
-              {ruleDetails.length > 0 && resultJson.final_score != null && (
-                <ScoreFormulaDisplay ruleDetails={ruleDetails} resultJson={resultJson} />
-              )}
+              {/* 第三级：数据诊断 */}
+              <div style={{ marginTop: 14 }}>
+                <EnhancedDataDiagnostics diagItems={diagItems} />
+              </div>
 
-              {/* scoring detail */}
-              {(screeningResult.score_details || screeningResult.filter_details) && (
-                <div style={{ marginTop: 16 }}>
-                  <h3 style={{ color: '#e8e0d0', margin: '0 0 12px' }}>规则明细</h3>
-                  {ruleDetails.length > 0 ? (
-                    <table className="data-table" style={{ width: '100%' }}>
-                      <thead>
-                        <tr>
-                          <th>规则</th>
-                          <th>类型</th>
-                          <th>结果</th>
-                          <th>原因</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {ruleDetails.map((d, i) => (
-                          <tr key={i}>
-                            <td style={{ color: '#e8e0d0' }}>{d.rule_key || d.filter_name || '-'}</td>
-                            <td>{d.rule_type || d.strategy_category || '-'}</td>
-                            <td><StatusBadge value={d.result || ''} /></td>
-                            <td style={{ color: '#c0b8a0', maxWidth: 320 }}>{d.reason || '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <div className="empty">暂无规则明细数据</div>
-                  )}
-                </div>
-              )}
+              {/* 第四级：规则明细表（折叠 + 筛选） */}
+              <div style={{ marginTop: 16 }}>
+                <FilteredRulesTable ruleDetails={ruleDetails} />
+              </div>
 
-              {/* filter_details array */}
-              {!ruleDetails.length && Array.isArray(screeningResult.filter_details) && (screeningResult.filter_details as FilterDetailRow[]).length > 0 && (
-                <div style={{ marginTop: 16 }}>
-                  <h3 style={{ color: '#e8e0d0', margin: '0 0 12px' }}>筛选详情</h3>
-                  <table className="data-table" style={{ width: '100%' }}>
-                    <thead>
-                      <tr><th>规则</th><th>结果</th><th>原因</th></tr>
-                    </thead>
-                    <tbody>
-                      {(screeningResult.filter_details as FilterDetailRow[]).map((d, i) => (
-                        <tr key={i}>
-                          <td style={{ color: '#e8e0d0' }}>{d.rule_key || d.filter_name || '-'}</td>
-                          <td><StatusBadge value={d.result || ''} /></td>
-                          <td style={{ color: '#c0b8a0' }}>{d.reason || '-'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              {/* ai analysis summary */}
+              {/* AI 分析摘要 */}
               {(screeningResult.ai_analysis as Record<string, unknown>) && (
-                <div style={{ marginTop: 16 }}>
-                  <h3 style={{ color: '#e8e0d0', margin: '0 0 12px' }}>AI 分析摘要</h3>
+                <div style={{ marginTop: 14 }}>
+                  <h3 style={{ fontSize: 14, fontWeight: 600, color: '#E5E7EB', margin: '0 0 10px' }}>AI 分析摘要</h3>
                   <div className="ai-analysis-box">
                     {Object.entries(screeningResult.ai_analysis as Record<string, unknown>).map(([k, v]) => (
-                      <div key={k} style={{ marginBottom: 8 }}>
-                        <strong style={{ color: '#c9a84c' }}>{k}：</strong>
-                        <span style={{ color: '#c0b8a0' }}>{typeof v === 'string' ? v : JSON.stringify(v)}</span>
+                      <div key={k} style={{ marginBottom: 6 }}>
+                        <strong style={{ color: '#D8B84E' }}>{k}：</strong>
+                        <span style={{ color: '#9CA3AF' }}>{typeof v === 'string' ? v : JSON.stringify(v)}</span>
                       </div>
                     ))}
                   </div>
@@ -1354,80 +1412,44 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
 
           {reportTab === 'history' && (
             <div style={{ marginTop: 16 }}>
-              {historyLoading ? (
-                <div className="empty">加载中...</div>
-              ) : historyRuns.length === 0 ? (
-                <div className="empty">
-                  <div style={{ marginBottom: 8 }}>暂无历史筛选记录</div>
-                  <small style={{ color: '#605850' }}>选择股票并点击"开始筛选"后，结果将自动保存在这里</small>
-                </div>
-              ) : (
-                <table className="data-table" style={{ width: '100%' }}>
-                  <thead>
-                    <tr>
-                      <th>时间</th>
-                      <th>规则链</th>
-                      <th>结果</th>
-                      <th>综合分</th>
-                      <th>失败原因</th>
-                      <th>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {historyRuns.map(r => (
-                      <tr key={r.run_id} style={{ cursor: 'pointer' }} onClick={async () => {
-                        try {
-                          const data = await api<Record<string, unknown>>(`/api/screening/single-stock/${r.run_id}`)
-                          setScreeningResult(data)
-                          setReportTab('current')
-                        } catch { /* ignore */ }
-                      }}>
-                        <td style={{ color: '#e8e0d0', whiteSpace: 'nowrap' }}>{String(r.created_at || '').replace('T', ' ').slice(0, 16)}</td>
-                        <td style={{ color: '#c9a84c', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.chain_name || r.chain_key}>{r.chain_name || r.chain_key || '-'}</td>
-                        <td><StatusBadge value={r.passed ? 'passed' : 'failed'} /></td>
-                        <td style={{ color: r.final_score != null ? '#e8c560' : '#8a8070', fontWeight: r.final_score != null ? 700 : 400 }}>
-                          {r.final_score != null ? Number(r.final_score).toFixed(1) : '—'}
-                        </td>
-                        <td style={{ color: '#ef4444', fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {r.status === 'failed' || r.passed === false ? (r.status === 'failed' ? '执行失败' : '未通过筛选') : '-'}
-                        </td>
-                        <td style={{ whiteSpace: 'nowrap' }}>
-                          <button
-                            className="link-button"
-                            style={{ fontSize: 12, marginRight: 8 }}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setMarket(r.market)
-                              setTimeframe(r.timeframe)
-                              setChainKey(r.chain_key)
-                              if (selectedStock?.code === r.code) {
-                                setTimeout(() => submit(new Event('history_retry') as any), 100)
-                              }
-                            }}
-                            title="使用相同参数重新筛选"
-                          >🔄 重筛</button>
-                          <button
-                            className="link-button"
-                            style={{ fontSize: 12 }}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              const params = JSON.stringify({
-                                market: r.market, code: r.code, timeframe: r.timeframe,
-                                chain_key: r.chain_key, chain_name: r.chain_name || '',
-                              }, null, 2)
-                              navigator.clipboard?.writeText(params).catch(() => undefined)
-                            }}
-                            title="复制筛选参数"
-                          >📋</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+              <EnhancedHistory
+                runs={historyRuns}
+                loading={historyLoading}
+                trend={historyTrend}
+                onSelectRun={async (runId) => {
+                  try {
+                    const data = await api<Record<string, unknown>>(`/api/screening/single-stock/${runId}`)
+                    setScreeningResult(data)
+                    setReportTab('current')
+                  } catch { /* ignore */ }
+                }}
+              />
             </div>
           )}
-        </Panel>
+        </section>
+      )}
+
+      {/* ---- 历史记录面板（独立于筛选结果） ---- */}
+      {!screeningResult && selectedStock && (
+        <section className="panel">
+          <div className="history-toolbar">
+            <h3>📋 历史筛选记录</h3>
+            <button className="secondary-button" onClick={() => loadHistoryForStock(selectedStock.code)} style={{ fontSize: 12 }}>
+              🔄 刷新
+            </button>
+          </div>
+          <EnhancedHistory
+            runs={historyRuns}
+            loading={historyLoading}
+            trend={historyTrend}
+            onSelectRun={async (runId) => {
+              try {
+                const data = await api<Record<string, unknown>>(`/api/screening/single-stock/${runId}`)
+                setScreeningResult(data)
+              } catch { /* ignore */ }
+            }}
+          />
+        </section>
       )}
     </section>
   )
@@ -2312,26 +2334,6 @@ function StatusBadge({ value }: { value: string | boolean }) {
   return <span className={`status ${className}`}>{label}</span>
 }
 
-type DataStatus = 'computed' | 'not_computed' | 'missing' | 'error'
-
-const DATA_STATUS_LABELS: Record<DataStatus, string> = {
-  computed: '已计算',
-  not_computed: '未计算',
-  missing: '数据缺失',
-  error: '接口失败',
-}
-
-function DataStatusBadge({ status }: { status: DataStatus }) {
-  return <span className={`data-status ${status}`}>{DATA_STATUS_LABELS[status]}</span>
-}
-
-/** 根据值和后端状态推断数据完整性 */
-function inferDataStatus(value: unknown, meta?: { status?: string; error?: string }): DataStatus {
-  if (meta?.status === 'error' || meta?.error) return 'error'
-  if (meta?.status === 'missing' || value === undefined || value === null || value === '') return 'not_computed'
-  return 'computed'
-}
-
 /** 错误恢复建议 */
 interface ErrorSuggestion {
   label: string
@@ -2376,137 +2378,6 @@ function analyzeErrorSuggestions(
   suggestions.push({ label: '📋 复制错误详情', action: 'copy' })
 
   return suggestions
-}
-
-/** ── Score overview cards (P0-2) ── */
-interface ScoreCardProps {
-  title: string
-  score: string | number
-  scoreStatus: DataStatus
-  weightLabel: string
-  passCount: number
-  failCount: number
-  unknownCount: number
-  missingCount: number
-  highlight?: boolean
-  direction?: string
-}
-
-function ScoreCard({ title, score, scoreStatus, weightLabel, passCount, failCount, unknownCount, missingCount, highlight, direction }: ScoreCardProps) {
-  const dirLabel = direction === 'bullish' ? '🟢 看涨' : direction === 'bearish' ? '🔴 看跌' : ''
-  return (
-    <div className={`score-card${highlight ? ' score-card-highlight' : ''}`}>
-      <div className="score-card-head">
-        <span className="score-card-title">{title}</span>
-        <span className="score-card-weight">{weightLabel}</span>
-      </div>
-      <div className="score-card-value">
-        <span className="score-number">{score}</span>
-        <DataStatusBadge status={scoreStatus} />
-      </div>
-      {dirLabel && <div className="score-card-direction">{dirLabel}</div>}
-      <div className="score-card-counts">
-        <span className="sc-pass">{passCount} 通过</span>
-        <span className="sc-fail">{failCount} 未通过</span>
-        {unknownCount > 0 && <span className="sc-unknown">{unknownCount} 无法计算</span>}
-        {missingCount > 0 && <span className="sc-missing">{missingCount} 缺失</span>}
-      </div>
-    </div>
-  )
-}
-
-function ScoreOverviewCards({ ruleDetails, resultJson, screeningResult }: {
-  ruleDetails: FilterDetailRow[]
-  resultJson: Record<string, unknown>
-  screeningResult: Record<string, unknown> | null
-}) {
-  // 按 strategy_category 分组统计
-  const techRules = ruleDetails.filter(d => d.strategy_category === 'technical' || !d.strategy_category)
-  const macroRules = ruleDetails.filter(d => d.strategy_category === 'macro')
-
-  function counts(rules: FilterDetailRow[]) {
-    return {
-      pass: rules.filter(d => d.result === 'pass').length,
-      fail: rules.filter(d => d.result === 'fail').length,
-      unknown: rules.filter(d => d.result !== 'pass' && d.result !== 'fail').length,
-      missing: 0,
-    }
-  }
-  const techCounts = counts(techRules)
-  const macroCounts = counts(macroRules)
-
-  const finalScore = formatScoreWithStatus(resultJson.final_score)
-  const techScore = formatScoreWithStatus(resultJson.technical_score)
-  const macroScore = formatScoreWithStatus(resultJson.macro_score)
-
-  // 推断方向（从final_score或ai_analysis）
-  const aiAnalysis = screeningResult?.ai_analysis as Record<string, unknown> | undefined
-  const direction = (aiAnalysis?.signal_bias as string) || ''
-
-  return (
-    <div className="score-overview-grid" style={{ marginTop: 16 }}>
-      <ScoreCard
-        title="综合评分" score={finalScore.display} scoreStatus={finalScore.status}
-        weightLabel="100%" passCount={techCounts.pass + macroCounts.pass}
-        failCount={techCounts.fail + macroCounts.fail}
-        unknownCount={techCounts.unknown + macroCounts.unknown}
-        missingCount={techCounts.missing + macroCounts.missing}
-        highlight direction={direction}
-      />
-      <ScoreCard
-        title="技术维度" score={techScore.display} scoreStatus={techScore.status}
-        weightLabel="权重 40%"
-        passCount={techCounts.pass} failCount={techCounts.fail}
-        unknownCount={techCounts.unknown} missingCount={techCounts.missing}
-      />
-      <ScoreCard
-        title="宏观维度" score={macroScore.display} scoreStatus={macroScore.status}
-        weightLabel="权重 30%"
-        passCount={macroCounts.pass} failCount={macroCounts.fail}
-        unknownCount={macroCounts.unknown} missingCount={macroCounts.missing}
-      />
-      <ScoreCard
-        title="资金风险" score="—" scoreStatus="not_computed"
-        weightLabel="权重 20%" passCount={0} failCount={0}
-        unknownCount={0} missingCount={1}
-      />
-    </div>
-  )
-}
-
-/** ── Score formula visualization (P1-5) ── */
-const STRATEGY_CATEGORY_LABELS: Record<string, string> = {
-  technical: '技术面', macro: '宏观面', event_hot: '事件热度', capital_risk: '资金风险',
-}
-
-function ScoreFormulaDisplay({ ruleDetails, resultJson }: {
-  ruleDetails: FilterDetailRow[]
-  resultJson: Record<string, unknown>
-}) {
-  // 找出贡献非零的规则
-  const contributing = ruleDetails
-    .filter(d => d.result === 'pass' && d.details)
-    .map(d => {
-      const score = (d.details as any)?.score ?? (d.details as any)?.total_score ?? 0
-      return { name: d.rule_key || d.filter_name || '', score: Number(score) || 0, category: d.strategy_category || '' }
-    })
-    .filter(d => d.score !== 0)
-
-  const baseScore = 50
-  const additions = contributing.map(d => `+${d.score.toFixed(1)}(${d.name})`)
-  const formula = baseScore + (contributing.length ? ' ' + additions.join(' ') : '')
-  const final = Number(resultJson.final_score) || baseScore
-
-  return (
-    <div className="score-formula-box" style={{ marginTop: 16 }}>
-      <div className="score-formula-title">📐 评分公式</div>
-      <div className="score-formula-text">{formula}</div>
-      <div className="score-formula-result">= {final.toFixed(1)}</div>
-      {contributing.length === 0 && (
-        <div className="score-formula-note">无额外加分项 — 仅基础分 50.0</div>
-      )}
-    </div>
-  )
 }
 
 function ErrorRecoveryCard({
@@ -2577,124 +2448,6 @@ function ErrorRecoveryCard({
       </div>
     </div>
   )
-}
-
-/** ── Data diagnostic panel (P0-3) ── */
-interface DiagItem {
-  key: string
-  label: string
-  status: DataStatus
-  detail: string
-}
-
-function DataDiagnosticPanel({
-  selectedStock, klineDiagnostics, klineRows, screeningResult, progress,
-}: {
-  selectedStock: StockSearchResult | null
-  klineDiagnostics: { status: string; source: string; error_message?: string } | null
-  klineRows: Record<string, unknown>[]
-  screeningResult: Record<string, unknown> | null
-  progress: { pct: number; step: string; detail: string; status: string }
-}) {
-  const ruleDetails = (screeningResult?.rule_details as FilterDetailRow[]) || []
-  const resultJson = (screeningResult?.result_json || screeningResult || {}) as Record<string, unknown>
-
-  const items: DiagItem[] = [
-    {
-      key: 'stock', label: '股票识别',
-      status: selectedStock ? 'computed' : 'error',
-      detail: selectedStock
-        ? `已识别 — ${selectedStock.name} (${selectedStock.code})`
-        : '未选择股票',
-    },
-    {
-      key: 'kline', label: 'K线数据',
-      status: klineDiagnostics
-        ? (klineDiagnostics.status === 'cached' || klineDiagnostics.status === 'fresh' ? 'computed'
-          : klineDiagnostics.status === 'error' ? 'error' : 'missing')
-        : klineRows.length > 0 ? 'computed' : 'not_computed',
-      detail: klineRows.length > 0
-        ? `已获取 — ${klineRows.length} 条 ${progress.step === 'kline_fetch' ? '(加载中...)' : ''}`
-        : klineDiagnostics?.error_message
-          ? `获取失败 — ${klineDiagnostics.error_message}`
-          : klineDiagnostics?.source
-            ? `数据源 ${klineDiagnostics.source}: 无数据返回` : '未获取',
-    },
-    {
-      key: 'technical', label: '技术指标',
-      status: ruleDetails.length > 0 ? 'computed'
-        : screeningResult ? 'not_computed' : 'not_computed',
-      detail: ruleDetails.length > 0
-        ? `已计算 — ${ruleDetails.filter(d => d.result === 'pass').length}/${ruleDetails.length} 条规则通过`
-        : screeningResult ? '规则评估未产生明细' : '尚未执行',
-    },
-    {
-      key: 'macro', label: '宏观数据',
-      status: resultJson.macro_score !== undefined && resultJson.macro_score !== null ? 'computed'
-        : screeningResult ? 'missing' : 'not_computed',
-      detail: resultJson.macro_score !== undefined && resultJson.macro_score !== null
-        ? `已补齐 — 宏观分 ${Number(resultJson.macro_score).toFixed(1)}`
-        : screeningResult ? '宏观数据未补齐 — 外部API可能超时或数据不足' : '尚未执行',
-    },
-    {
-      key: 'industry', label: '行业数据',
-      status: selectedStock?.industry || selectedStock?.sector ? 'computed' : 'missing',
-      detail: selectedStock?.industry || selectedStock?.sector
-        ? `已获取 — ${selectedStock.industry || selectedStock.sector}`
-        : '行业数据不可用',
-    },
-    {
-      key: 'backend', label: '后端状态',
-      status: screeningResult
-        ? (screeningResult.status === 'completed' ? 'computed'
-          : screeningResult.status === 'failed' ? 'error' : 'not_computed')
-        : 'not_computed',
-      detail: screeningResult
-        ? (screeningResult.status === 'completed' ? '已完成 — 无异常'
-          : `异常 — ${screeningResult.status || 'unknown'}`)
-        : '尚未连接',
-    },
-  ]
-
-  const hasError = items.some(i => i.status === 'error')
-
-  return (
-    <details open={hasError} className="diagnostic-panel">
-      <summary className="diagnostic-summary">
-        <span className="diagnostic-title">📡 数据诊断</span>
-        <span className="diagnostic-counts">
-          <span className="diag-ok">{items.filter(i => i.status === 'computed').length} 正常</span>
-          {items.filter(i => i.status === 'error').length > 0 && (
-            <span className="diag-err">{items.filter(i => i.status === 'error').length} 异常</span>
-          )}
-          {items.filter(i => i.status === 'missing').length > 0 && (
-            <span className="diag-warn">{items.filter(i => i.status === 'missing').length} 缺失</span>
-          )}
-        </span>
-      </summary>
-      <div className="diagnostic-items">
-        {items.map(item => (
-          <div key={item.key} className="diagnostic-item">
-            <DataStatusBadge status={item.status} />
-            <span className="diagnostic-label">{item.label}</span>
-            <span className="diagnostic-detail">{item.detail}</span>
-          </div>
-        ))}
-      </div>
-    </details>
-  )
-}
-
-/** 格式化分数，返回 {display, status} 以支持不同展示 */
-function formatScoreWithStatus(value?: number | string | null, meta?: { status?: string; error?: string }): { display: string; status: DataStatus } {
-  if (value === undefined || value === null || value === '' || (typeof value === 'string' && value.trim() === '')) {
-    return { display: '—', status: meta?.status === 'error' ? 'error' : 'not_computed' }
-  }
-  const numeric = Number(value)
-  if (!Number.isFinite(numeric)) {
-    return { display: String(value), status: meta?.status === 'error' ? 'error' : 'missing' }
-  }
-  return { display: numeric.toFixed(1), status: 'computed' }
 }
 
 function statusLabel(value: string | boolean) {

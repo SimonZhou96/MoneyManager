@@ -6,13 +6,7 @@
   <component name="ChangeListManager">
     <list default="true" id="0bf7b9ee-c261-4d26-a715-0c09e20aab7a" name="更改" comment="">
       <change beforePath="$PROJECT_DIR$/.claude/worktrees/dynamic-dazzling-charm" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/worktrees/dynamic-dazzling-charm" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/CLAUDE.md" beforeDir="false" afterPath="$PROJECT_DIR$/CLAUDE.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/stock_terminal/providers/eastmoney.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/stock_terminal/providers/eastmoney.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web/sectors.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web/sectors.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/MarketAnalysisPage.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/MarketAnalysisPage.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/components/KlineChart.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/components/KlineChart.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/components/SectorTreemap.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/components/SectorTreemap.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/marketAnalysis/types.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.claude/worktrees/p0-kline-fixes" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/worktrees/p0-kline-fixes" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -120,7 +114,7 @@
       <workItem from="1780308089940" duration="13389000" />
       <workItem from="1780411491520" duration="14870000" />
       <workItem from="1780661937810" duration="6440000" />
-      <workItem from="1781143829969" duration="4149000" />
+      <workItem from="1781143829969" duration="4784000" />
     </task>
     <servers />
   </component>

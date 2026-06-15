@@ -186,3 +186,16 @@ Detailed context lives in the memory directory. Read the relevant files before w
 **Fix**: 
 1. 前端根据 timeframe 选择时间格式：日线/周线/月线→`YYYY-MM-DD`，分钟线→保留时分秒
 2. YFinance fetcher 补上 `drop_duplicates`，与 Futu(第527行)/AKShare(第527行) 一致
+
+### 2026-06-15 — list_single_stock_runs_by_code IndexError + KlineChart 前端去重
+
+**Files changed**:
+- `stock_screener/db.py` — `list_single_stock_runs_by_code()` 列索引修复
+- `stock_screener/web_frontend/src/features/marketAnalysis/components/KlineChart.tsx` — `applyData()` candle/volume 去重
+- `CLAUDE.md` — this entry
+
+**Fixes applied**:
+
+1. **History API 500 修复** (`list_single_stock_runs_by_code`): SELECT 返回 15 列（索引 0-14），`created_at` 在索引 13，`finished_at` 在索引 14，但代码错误地使用了 `row[14]` 和 `row[15]`。`row[15]` 越界导致 `IndexError: tuple index out of range`。修正为 `row[13]` 和 `row[14]`。
+
+2. **KlineChart 前端去重**: `toChartTime()` 对日线数据做 `slice(0,10)` 可能将同日期不同时间的多条 K 线映射为相同 chart time。lightweight-charts `setData()` 要求时间严格递增且无重复，否则抛 `Assertion failed: data must be asc ordered by time`。在 `applyData()` 中新增 `Set` 去重逻辑，保留首次出现的条目，并同步过滤 volume 数据。

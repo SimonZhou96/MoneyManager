@@ -51,15 +51,31 @@ function applyData(
     return
   }
 
+  // Deduplicate by chart time — keep first occurrence (earliest in array)
+  const seen = new Set<string>()
+  const deduped = candleData.filter(c => {
+    const key = String(c.time)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  if (deduped.length < candleData.length) {
+    console.warn(`KlineChart: removed ${candleData.length - deduped.length} duplicate time entries`)
+  }
+
+  // Also filter volumeData to match deduped candle times
+  const dedupedTimes = new Set(deduped.map(c => c.time))
   const volumeData = rows
     .map(row => {
       const time = String(row.at || row.date || row.time || row.t || '')
       const volume = Number((row as any).v ?? row.volume ?? 0)
       if (!time) return null
+      const chartTime = toChartTime(time, timeframe)
+      if (!dedupedTimes.has(chartTime)) return null
       const closeVal = Number((row as any).c ?? row.close ?? 0)
       const openVal = Number((row as any).o ?? row.open ?? 0)
       return {
-        time: toChartTime(time, timeframe) as any,
+        time: chartTime as any,
         value: volume,
         color: closeVal >= openVal
           ? 'rgba(34,197,94,0.25)'
@@ -69,11 +85,11 @@ function applyData(
     .filter(Boolean) as any[]
 
   try {
-    candleSeries.setData(candleData.slice(-200))
+    candleSeries.setData(deduped.slice(-200))
     volumeSeries.setData(volumeData.slice(-200))
     chart.timeScale().fitContent()
   } catch (e) {
-    console.error('KlineChart setData error:', e, 'first candle:', candleData[0])
+    console.error('KlineChart setData error:', e, 'first candle:', deduped[0])
   }
 }
 

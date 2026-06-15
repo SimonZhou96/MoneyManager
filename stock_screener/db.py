@@ -4181,8 +4181,8 @@ class MarketDatabase:
                 "passed": bool(row[6]) if row[6] is not None else None,
                 "chain_key": row[7],
                 "status": row[9],
-                "created_at": str(row[14]) if row[14] else None,
-                "finished_at": str(row[15]) if row[15] else None,
+                "created_at": str(row[13]) if row[13] else None,
+                "finished_at": str(row[14]) if row[14] else None,
             }
             if isinstance(result_json, dict):
                 item["name"] = result_json.get("name", "")
