@@ -10,11 +10,12 @@ import { KlineChart } from './features/marketAnalysis/components/KlineChart'
 import { RuleChainEditor } from './features/ruleEditor/RuleChainEditor'
 import type { ExpressionNode } from './features/ruleEditor/types'
 import {
-  TradingBiasCard, ScoreBreakdownCards, FactorSummary, ObserveConditions,
-  EnhancedHistory, EnhancedDataDiagnostics, FilteredRulesTable,
+  TradingBiasCard, ScoreFormulaPanel, ScoreBreakdownCards, FactorSummary,
+  ObserveConditions, EnhancedHistory, EnhancedDataDiagnostics, FilteredRulesTable,
   scoreToBias, computeDimensionBreakdown, extractTopPositiveFactors,
   extractTopNegativeFactors, generateObserveConditions, computeScoreTrend,
-  type DimensionBreakdown,
+  ruleMarkersFromDetails,
+  type DimensionBreakdown, type RuleMarker,
 } from './features/screeningReport'
 import './styles.css'
 
@@ -412,7 +413,7 @@ function commonRuleChains(markets: string[], rulesByMarket: Record<string, Rules
 }
 
 function App() {
-  const [page, setPage] = useState('marketAnalysis')
+  const [page, setPage] = useState('codeScreening')
   const [selectedTaskId, setSelectedTaskId] = useState('')
 
   return (
@@ -425,9 +426,10 @@ function App() {
         <nav>
           <button className={page === 'dashboard' ? 'active' : ''} onClick={() => setPage('dashboard')}>总览</button>
           <button className={page === 'codeScreening' ? 'active' : ''} onClick={() => setPage('codeScreening')}>个股筛选器</button>
-          <button className={page === 'options' ? 'active' : ''} onClick={() => setPage('options')}>期权实验室</button>
-          <button className={page === 'quant' ? 'active' : ''} onClick={() => setPage('quant')}>量化实验室</button>
-          <button className={page === 'marketAnalysis' ? 'active' : ''} onClick={() => setPage('marketAnalysis')}>大盘分析</button>
+          {/* 暂时隐藏，等个股实验室和规则链完善后再开放 */}
+          {/* <button className={page === 'options' ? 'active' : ''} onClick={() => setPage('options')}>期权实验室</button> */}
+          {/* <button className={page === 'quant' ? 'active' : ''} onClick={() => setPage('quant')}>量化实验室</button> */}
+          {/* <button className={page === 'marketAnalysis' ? 'active' : ''} onClick={() => setPage('marketAnalysis')}>大盘分析</button> */}
           <button className={page === 'rules' ? 'active' : ''} onClick={() => setPage('rules')}>规则链</button>
         </nav>
         <div className="sidebar-footer">
@@ -440,8 +442,9 @@ function App() {
         />}
         {page === 'codeScreening' && <CodeScreening openTask={(taskId) => { setSelectedTaskId(taskId); setPage('task') }} />}
         {page === 'options' && <OptionLab />}
-        {page === 'quant' && <QuantLab />}
-        {page === 'marketAnalysis' && <MarketAnalysisPage />}
+        {/* 暂时隐藏，等个股实验室和规则链完善后再开放 */}
+        {/* {page === 'quant' && <QuantLab />} */}
+        {/* {page === 'marketAnalysis' && <MarketAnalysisPage />} */}
         {page === 'rules' && <Rules />}
         {page === 'task' && <TaskDetail taskId={selectedTaskId} />}
       </main>
@@ -894,6 +897,11 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
     status: string; source: string; error_message?: string
   } | null>(null)
 
+  // ---- chart tools ----
+  const [showMA, setShowMA] = useState(false)
+  const [showVolume, setShowVolume] = useState(true)
+  const [showMACD, setShowMACD] = useState(false)
+
   // ---- report tab ----
   const [reportTab, setReportTab] = useState<'current' | 'history'>('current')
   const [historyRuns, setHistoryRuns] = useState<SingleStockHistoryItem[]>([])
@@ -1136,6 +1144,12 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
     return generateObserveConditions(ruleDetails)
   }, [ruleDetails])
 
+  // ── K 线图规则标记：将满足的规则日期映射到图表 ──
+  const ruleMarkers = useMemo<RuleMarker[]>(() => {
+    if (ruleDetails.length === 0) return []
+    return ruleMarkersFromDetails(ruleDetails)
+  }, [ruleDetails])
+
   const historyTrend = useMemo(() => {
     if (historyRuns.length === 0) return []
     return computeScoreTrend(historyRuns)
@@ -1293,10 +1307,34 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
               <span className="chart-tf-badge">{timeframe}</span>
             </div>
             <div className="kline-chart-tools">
-              <button className="kline-tool-btn" title="移动平均线" disabled>MA</button>
-              <button className="kline-tool-btn" title="成交量" disabled>VOL</button>
-              <button className="kline-tool-btn" title="MACD" disabled>MACD</button>
-              <button className="kline-tool-btn" title="全屏" disabled>⛶</button>
+              <button
+                className={`kline-tool-btn${showMA ? ' active' : ''}`}
+                title="移动平均线 MA5/MA10/MA20/MA60"
+                onClick={() => setShowMA(v => !v)}
+              >MA</button>
+              <button
+                className={`kline-tool-btn${showVolume ? ' active' : ''}`}
+                title="成交量"
+                onClick={() => setShowVolume(v => !v)}
+              >VOL</button>
+              <button
+                className={`kline-tool-btn${showMACD ? ' active' : ''}`}
+                title="MACD"
+                onClick={() => setShowMACD(v => !v)}
+              >MACD</button>
+              <button
+                className="kline-tool-btn"
+                title="全屏"
+                onClick={() => {
+                  const el = document.querySelector('.kline-panel-wrap')
+                  if (!el) return
+                  if (document.fullscreenElement) {
+                    document.exitFullscreen()
+                  } else {
+                    el.requestFullscreen()
+                  }
+                }}
+              >⛶</button>
             </div>
           </div>
           <KlineChart
@@ -1306,6 +1344,10 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
             diagnostics={klineDiagnostics}
             timeframe={timeframe as any}
             symbol={`${selectedStock.name} (${selectedStock.code})`}
+            markers={ruleMarkers}
+            showMA={showMA}
+            showVolume={showVolume}
+            showMACD={showMACD}
           />
         </div>
       )}
@@ -1364,6 +1406,15 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
                 ruleDetails={ruleDetails}
                 dimensions={dimensions}
               />
+
+              {/* 评分公式（买入评分 → 评分构成 之间的桥梁） */}
+              {ruleDetails.length > 0 && (
+                <ScoreFormulaPanel
+                  ruleDetails={ruleDetails}
+                  dimensions={dimensions}
+                  finalScore={resultJson.final_score as number | null | undefined}
+                />
+              )}
 
               {/* 第二级：买入评分构成 */}
               {dimensions.length > 0 && (

@@ -3232,6 +3232,19 @@ textarea.code-input::placeholder {
   color: var(--cs-text-primary);
   background: rgba(216,184,78,0.08);
 }
+.kline-tool-btn.active {
+  color: #fbbf24;
+  background: rgba(251,191,36,0.12);
+}
+
+/* ── Fullscreen K-line ── */
+.kline-panel-wrap:fullscreen {
+  background: #141820;
+  padding: 12px 16px;
+}
+.kline-panel-wrap:fullscreen .kline-chart-container {
+  height: calc(100vh - 80px) !important;
+}
 
 /* ── K-line chart height (code-screening scope) ── */
 .code-screening-layout .kline-chart-container {
@@ -4099,6 +4112,127 @@ section { background: transparent; }
 }
 @media (max-width: 420px) {
   .tbc-bar-label { font-size: 10px; }
+}
+
+/* ── ScoreFormulaPanel（买入评分 → 评分构成 之间的公式桥接）── */
+
+.score-formula-panel {
+  margin-top: 16px;
+  padding: 16px 18px;
+  background: var(--cs-bg-input);
+  border: 1px solid var(--cs-border);
+  border-radius: 8px;
+}
+
+/* 权重标签行 */
+.sfp-weights {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.sfp-weight-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: var(--cs-text-secondary);
+  background: rgba(216,184,78,0.08);
+  border: 1px solid rgba(216,184,78,0.2);
+}
+.sfp-weight-excluded {
+  color: var(--cs-text-muted);
+  background: transparent;
+  border-color: rgba(107,114,128,0.25);
+  text-decoration: line-through;
+}
+
+/* 公式主体 */
+.sfp-formula-body {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+.sfp-formula-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.sfp-base {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--cs-gold);
+}
+.sfp-op {
+  font-size: 14px;
+  color: var(--cs-text-muted);
+}
+
+/* 维度分组 */
+.sfp-group {
+  margin: 6px 0 6px 16px;
+  padding-left: 12px;
+  border-left: 2px solid rgba(216,184,78,0.2);
+}
+.sfp-cat-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cs-text-muted);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.sfp-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.sfp-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  font-size: 13px;
+}
+.sfp-item-score {
+  font-weight: 700;
+  color: #22c55e;
+}
+.sfp-item-name {
+  color: var(--cs-text-secondary);
+}
+
+/* 结果行 */
+.sfp-result-line {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--cs-border);
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.sfp-equals {
+  font-size: 14px;
+  color: var(--cs-text-muted);
+}
+.sfp-total {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--cs-gold);
+}
+.sfp-outof {
+  font-size: 14px;
+  color: var(--cs-text-muted);
+}
+.sfp-note {
+  font-size: 11px;
+  color: var(--cs-text-muted);
+  margin-left: 8px;
+  font-family: system-ui, sans-serif;
+}
+.sfp-empty {
+  font-size: 12px;
+  color: var(--cs-text-muted);
+  margin: 4px 0 0;
 }
 
 /* ── ScoreBreakdownCards (第二级: 买入评分构成) ── */

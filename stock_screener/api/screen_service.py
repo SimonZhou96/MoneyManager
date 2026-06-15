@@ -764,6 +764,7 @@ def run_screening_task(
                 metadata = _rule_metadata_for_output(rule_engine, o)
                 filter_details.append({
                     "rule_key": metadata.rule_key if metadata else o.filter_name,
+                    "rule_name": metadata.rule_name if metadata else o.filter_name,
                     "rule_type": metadata.rule_type if metadata else "",
                     "strategy_category": metadata.strategy_category if metadata else "",
                     "filter_name": o.filter_name,

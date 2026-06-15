@@ -439,6 +439,81 @@ TREND_CAPITAL_ACCUMULATION_WATCH_EXPRESSION = {
 
 UNIFIED_BULLISH_TOP20_EXPRESSION = {"ref": "ema_breakout"}
 
+# ── 市场特定默认规则链 ──
+# A股宏观敏感期：宏观因子是真门禁（ref），必须达标
+ZUOYI_WITH_MACRO_STRICT_EXPRESSION = {
+    "and": [
+        {
+            "all_enabled": [
+                "market_cap_range", "avg_daily_volume_range", "price_range",
+                "pe_range", "profitability",
+            ]
+        },
+        {"ref": "zuoyi_signal"},
+        {
+            "any_enabled": [
+                "ema_breakout", "rsi_oversold", "rsi_overbought",
+                "volume_spike_prior3", "daily_drop_6_65", "daily_rise_4_45",
+            ]
+        },
+        {"ref": "macro_factor_analysis"},
+        {
+            "any_enabled": [
+                "company_event_hot_sector_link", "company_event_hot_news_link",
+                "market_intel_macro_score_link",
+            ]
+        },
+        {"ref": "enterprise_potential_analysis"},
+    ]
+}
+
+# HK/US 日常筛选：宏观因子用 any_enabled 兜底（跑通即过，不阻断）
+ZUOYI_WITH_MACRO_ENHANCED_EXPRESSION = {
+    "and": [
+        {
+            "all_enabled": [
+                "market_cap_range", "avg_daily_volume_range", "price_range",
+                "pe_range", "profitability",
+            ]
+        },
+        {"ref": "zuoyi_signal"},
+        {
+            "any_enabled": [
+                "ema_breakout", "rsi_oversold", "rsi_overbought",
+                "volume_spike_prior3", "daily_drop_6_65", "daily_rise_4_45",
+            ]
+        },
+        {
+            "any_enabled": [
+                "macro_factor_analysis", "company_event_hot_sector_link",
+                "company_event_hot_news_link", "market_intel_macro_score_link",
+            ]
+        },
+        {"ref": "enterprise_potential_analysis"},
+    ]
+}
+
+# 市场 → 默认规则链 key 映射
+MARKET_DEFAULT_CHAIN_MAP = {
+    "A": "zuoyi_with_macro_strict",
+    "HK": "zuoyi_with_macro_enhanced",
+    "US": "zuoyi_with_macro_enhanced",
+}
+
+# 市场特定链的完整定义（chain_key → {chain_name, expression, description}）
+_MARKET_SPECIFIC_CHAIN_DEFS = {
+    "zuoyi_with_macro_strict": {
+        "chain_name": "左一战法+宏观严选标签+五模块评分",
+        "expression": ZUOYI_WITH_MACRO_STRICT_EXPRESSION,
+        "description": "门禁(硬筛选+左一+技术+宏观因子必达标)→标签层(sector/news/macro_score出pass/fail标签,不阻断)→五模块综合评分(所有通过门禁的股票都评分)",
+    },
+    "zuoyi_with_macro_enhanced": {
+        "chain_name": "左一战法+宏观标签+五模块评分",
+        "expression": ZUOYI_WITH_MACRO_ENHANCED_EXPRESSION,
+        "description": "门禁(硬筛选+左一+技术)→标签层(宏观因子跑通即过,sector/news/macro_score出pass/fail标签)→五模块综合评分(所有通过门禁的股票都评分)",
+    },
+}
+
 
 def _default_rule_params_for_market(market: str, rule_key: str, params: dict) -> dict:
     result = dict(params or {})
@@ -460,6 +535,9 @@ def _default_rule_description_for_market(market: str, rule_key: str, description
 
 
 def _default_rule_chain_expression_for_market(market: str) -> dict:
+    chain_key = MARKET_DEFAULT_CHAIN_MAP.get(market)
+    if chain_key and chain_key in _MARKET_SPECIFIC_CHAIN_DEFS:
+        return _MARKET_SPECIFIC_CHAIN_DEFS[chain_key]["expression"]
     return DEFAULT_RULE_CHAIN_EXPRESSION
 
 
@@ -4402,6 +4480,21 @@ class MarketDatabase:
 
         chain_rows = []
         for market in DEFAULT_RULE_MARKETS:
+            # 市场特定默认链（priority=50，高于通用的 default_zuoyi_and_other 的 100）
+            market_chain_key = MARKET_DEFAULT_CHAIN_MAP.get(market)
+            if market_chain_key and market_chain_key in _MARKET_SPECIFIC_CHAIN_DEFS:
+                chain_def = _MARKET_SPECIFIC_CHAIN_DEFS[market_chain_key]
+                chain_rows.append((
+                    market,
+                    "*",
+                    market_chain_key,
+                    chain_def["chain_name"],
+                    json.dumps(chain_def["expression"], ensure_ascii=False),
+                    1,
+                    50,
+                    chain_def["description"],
+                ))
+            # 通用回退链（priority=200，仅当市场特定链不存在时生效）
             chain_rows.append((
                 market,
                 "*",
@@ -4409,8 +4502,8 @@ class MarketDatabase:
                 "左一战法与其他策略默认链",
                 json.dumps(_default_rule_chain_expression_for_market(market), ensure_ascii=False),
                 1,
-                100,
-                "启用硬筛选全部通过 && 左一战法命中 && 至少一个其他策略命中",
+                200,
+                "启用硬筛选全部通过 && 左一战法命中 && 至少一个其他策略命中（市场特定链的回退）",
             ))
             chain_rows.append((
                 market,
@@ -4451,6 +4544,21 @@ class MarketDatabase:
                 """,
                 chain_rows,
             )
+            # 修复已有部署的优先级：将市场特定链的 priority 更新为 50（原 SQL 迁移设为 200）
+            # 将通用 default_zuoyi_and_other 的 priority 更新为 200（原为 100）
+            for market in DEFAULT_RULE_MARKETS:
+                market_chain_key = MARKET_DEFAULT_CHAIN_MAP.get(market)
+                if market_chain_key:
+                    cursor.execute(
+                        "UPDATE screening_rule_chains SET priority=50 "
+                        "WHERE market=%s AND chain_key=%s AND priority > 50",
+                        (market, market_chain_key),
+                    )
+                cursor.execute(
+                    "UPDATE screening_rule_chains SET priority=200 "
+                    "WHERE market=%s AND chain_key=%s AND priority < 200",
+                    (market, DEFAULT_RULE_CHAIN_KEY),
+                )
 
     def get_screening_rule_metadata(self, market: str) -> List[dict]:
         """读取某个市场的所有原子规则元数据。"""

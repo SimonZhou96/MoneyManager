@@ -12,6 +12,7 @@ Detailed context lives in the memory directory. Read the relevant files before w
 - **[Signal Analysis Chain](memory/signal-analysis-chain.md)** — Post-screening search + LLM pipeline, provider fallback chain (`OpenAICompatible` / `Codex` / `DeepSeek`), environment variable reference, API quota discipline, artifact rules.
 - **[Stock Sector Enrichment](memory/stock-sector-enrichment.md)** — Sector/industry enrichment pipeline, provider priority order, merge rules.
 - **[Skill Abstraction Guidance](memory/skill-abstraction-guidance.md)** — When to propose new project skills from repeatable workflows.
+- **[K-line Chart Dedup Rule](memory/kline-chart-dedup-rule.md)** — ⚠️ 每次修改 KlineChart.tsx 必读：任何 `series.setData()` 前必须去重，否则抛 "data must be asc ordered by time"
 
 ## Key Conventions
 
@@ -199,3 +200,45 @@ Detailed context lives in the memory directory. Read the relevant files before w
 1. **History API 500 修复** (`list_single_stock_runs_by_code`): SELECT 返回 15 列（索引 0-14），`created_at` 在索引 13，`finished_at` 在索引 14，但代码错误地使用了 `row[14]` 和 `row[15]`。`row[15]` 越界导致 `IndexError: tuple index out of range`。修正为 `row[13]` 和 `row[14]`。
 
 2. **KlineChart 前端去重**: `toChartTime()` 对日线数据做 `slice(0,10)` 可能将同日期不同时间的多条 K 线映射为相同 chart time。lightweight-charts `setData()` 要求时间严格递增且无重复，否则抛 `Assertion failed: data must be asc ordered by time`。在 `applyData()` 中新增 `Set` 去重逻辑，保留首次出现的条目，并同步过滤 volume 数据。
+
+### 2026-06-15 (2) — 市场特定默认规则链 + 规则中文名展示 + K线图规则标记
+
+**Files changed**:
+- `stock_screener/db.py` — 新增 `ZUOYI_WITH_MACRO_STRICT_EXPRESSION`、`ZUOYI_WITH_MACRO_ENHANCED_EXPRESSION`、`MARKET_DEFAULT_CHAIN_MAP`、`_MARKET_SPECIFIC_CHAIN_DEFS` 常量；`_default_rule_chain_expression_for_market()` 支持市场特定链；`seed_default_screening_rules()` 按市场插入特定默认链（priority=50）+ UPDATE 修复已有部署优先级
+- `stock_screener/web/rule_chains.py` — `resolve_rule_chain()` 改为每个市场独立加载活跃链，支持不同市场不同默认链；多市场时返回 `per_market_chains` 字典
+- `stock_screener/web/main.py` — `run_single_stock_web_job()` 中 `rule_details` 的 `rule_name` 优先从 DB 元数据表查找中文名
+- `stock_screener/api/screen_service.py` — `filter_details` 新增 `rule_name` 字段（来自 `RuleMetadata.rule_name`）
+- `stock_screener/web_frontend/src/features/marketAnalysis/components/KlineChart.tsx` — `TradeMarker` 接口扩展 `label`/`color`/`shape` 字段；标记渲染逻辑支持自定义样式
+- `stock_screener/web_frontend/src/features/screeningReport/utils.ts` — 新增 `ruleMarkersFromDetails()` 从 `rule_details` 提取规则满足日期并映射为 K 线图标记
+- `stock_screener/web_frontend/src/main.tsx` — 导入 `ruleMarkersFromDetails`，useMemo 计算规则标记，传入 `KlineChart` 的 `markers` prop
+- `CLAUDE.md` — this entry
+
+**Changes applied**:
+
+1. **市场特定默认规则链**: A 股默认使用 `zuoyi_with_macro_strict`（宏观因子必达标），港股/美股默认使用 `zuoyi_with_macro_enhanced`（宏观因子兜底不阻断）。通过 `MARKET_DEFAULT_CHAIN_MAP` 映射 + `seed_default_screening_rules()` 中 priority=50 确保新部署和已有部署均生效。
+
+2. **规则中文名展示**: 修复了 `rule_details` 中 `rule_name` 显示英文实现类名（如 `ZuoYiStrategizer`）的问题。在 `screen_service.py` 中新增 `rule_name` 字段从 `RuleMetadata` 获取中文名；在 `web/main.py` 中单股筛选通过 DB 元数据表查找中文名。
+
+3. **K线图规则标记**: 点击开始筛选后，将满足的规则（左一突破日、EMA突破日、放量日、技术形态日等）以标记点形式叠加到 K 线图上。不同规则类型有不同颜色和形状（绿色箭头=看涨突破、蓝色圆=EMA突破、橙色方块=放量等），鼠标悬停可看到规则中文名。
+
+### 2026-06-15 (3) — K线图工具栏 MA/VOL/MACD/全屏 + volumeSeries 去重修复
+
+**Files changed**:
+- `stock_screener/web_frontend/src/features/marketAnalysis/components/KlineChart.tsx` — 重写支持 MA 均线、MACD 副图、成交量显隐；新增文件头去重铁律注释；`_applyAll()` volume 去重；`_syncMA()` 尾行去重兜底
+- `stock_screener/web_frontend/src/main.tsx` — 新增 `showMA`/`showVolume`/`showMACD` 状态；工具栏按钮联动（高亮+点击切换）；全屏按钮使用 Fullscreen API；KlineChart 传入新 props
+- `stock_screener/web_frontend/src/styles.css` — `.kline-tool-btn.active` 高亮样式 + `.kline-panel-wrap:fullscreen` 全屏样式
+- `CLAUDE.md` — this entry
+
+**Changes applied**:
+
+1. **MA 均线**: 点击 MA 按钮切换 MA5/MA10/MA20/MA60 四条 SMA 均线，叠加在蜡烛图价格轴上。颜色：黄/橙/紫/蓝。
+
+2. **VOL 成交量**: 点击 VOL 按钮切换成交量柱状图显示/隐藏（`series.applyOptions({ visible })`），默认开启。
+
+3. **MACD 副图**: 点击 MACD 按钮添加 MACD 副图（DIF 黄线 + DEA 蓝线 + 红绿柱状图），激活时蜡烛图自动压缩腾出空间。
+
+4. **全屏**: 点击 ⛶ 按钮使用 `element.requestFullscreen()` / `document.exitFullscreen()` 切换。
+
+5. **volumeSeries 去重修复**: `_applyAll()` 中 volumeData 用 `candleTimeSet.has()` 过滤行但未去重——两个同日期 row 都通过检查导致 `setData()` 抛 `"data must be asc ordered by time"`。新增 `volSeen` Set 去重。
+
+6. **记忆沉淀**: 创建 `memory/kline-chart-dedup-rule.md`，记录去重铁律及四个 setData 调用点的去重要求。KlineChart.tsx 文件头添加醒目注释引用该记忆文件。

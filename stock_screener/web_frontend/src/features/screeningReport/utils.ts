@@ -354,3 +354,129 @@ function _safeNum(v: unknown): number | null {
   const n = Number(v)
   return Number.isFinite(n) ? n : null
 }
+
+// ── K 线图规则标记 ──
+
+export interface RuleMarker {
+  time: string
+  side: 'buy' | 'sell'
+  label: string
+  color: string
+  shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'
+}
+
+/** 规则详情行（最小接口） */
+interface RuleDetailLike {
+  rule_key?: string
+  rule_name?: string
+  rule_type?: string
+  result?: string
+  reason?: string
+  details?: Record<string, unknown>
+}
+
+/** K 线图标记配色方案：按规则类型分配颜色和形状 */
+const RULE_MARKER_STYLE: Record<string, { color: string; shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'; bullish: boolean }> = {
+  zuoyi_signal:            { color: '#22c55e', shape: 'arrowUp',   bullish: true },
+  zuoyi_bullish_signal:    { color: '#22c55e', shape: 'arrowUp',   bullish: true },
+  ema_breakout:             { color: '#3b82f6', shape: 'circle',    bullish: true },
+  volume_spike_prior3:      { color: '#f97316', shape: 'square',    bullish: true },
+  daily_rise_4_45:          { color: '#10b981', shape: 'circle',    bullish: true },
+  daily_drop_6_65:          { color: '#f43f5e', shape: 'circle',    bullish: false },
+  rsi_oversold:             { color: '#06b6d4', shape: 'circle',    bullish: true },
+  rsi_overbought:           { color: '#d97706', shape: 'circle',    bullish: false },
+  // 技术形态
+  bullish_engulfing:        { color: '#22c55e', shape: 'arrowUp',   bullish: true },
+  hammer_reversal:          { color: '#22c55e', shape: 'arrowUp',   bullish: true },
+  morning_star:             { color: '#22c55e', shape: 'arrowUp',   bullish: true },
+  piercing_line:            { color: '#22c55e', shape: 'arrowUp',   bullish: true },
+  three_white_soldiers:     { color: '#22c55e', shape: 'arrowUp',   bullish: true },
+  bearish_engulfing:        { color: '#ef4444', shape: 'arrowDown',  bullish: false },
+  shooting_star:            { color: '#ef4444', shape: 'arrowDown',  bullish: false },
+  evening_star:             { color: '#ef4444', shape: 'arrowDown',  bullish: false },
+  dark_cloud_cover:         { color: '#ef4444', shape: 'arrowDown',  bullish: false },
+  three_black_crows:        { color: '#ef4444', shape: 'arrowDown',  bullish: false },
+}
+
+/** 默认标记样式（未匹配到特定规则时） */
+const DEFAULT_PASS_STYLE = { color: '#22c55e', shape: 'arrowUp' as const, bullish: true }
+const DEFAULT_FAIL_STYLE = { color: '#ef4444', shape: 'arrowDown' as const, bullish: false }
+
+/**
+ * 从规则详情中提取日期，返回可能的日期列表
+ * 规则引擎输出的 details 中日期字段名各异，此处逐一尝试
+ */
+function _extractDates(details: Record<string, unknown> | null | undefined): string[] {
+  if (!details) return []
+  const dates: string[] = []
+
+  // ZuoYiStrategizer: details.signals[].breakout_date / left_one_date / median_date
+  const signals = details.signals
+  if (Array.isArray(signals)) {
+    for (const sig of signals) {
+      if (!sig || typeof sig !== 'object') continue
+      for (const key of ['breakout_date', 'left_one_date', 'median_date', 'date']) {
+        const v = (sig as any)[key]
+        if (typeof v === 'string' && v.length >= 8) dates.push(v)
+      }
+    }
+  }
+
+  // 直接日期字段
+  for (const key of ['breakout_date', 'signal_date', 'date', 'event_date', 'trigger_date', 'cross_date']) {
+    const v = details[key]
+    if (typeof v === 'string' && v.length >= 8) dates.push(v)
+  }
+
+  // EMABreakout: details.breakout_date（已在上方覆盖）
+
+  // 去重
+  return [...new Set(dates)]
+}
+
+/**
+ * 将筛选规则详情转换为 K 线图标记
+ *
+ * 仅提取包含明确日期的规则命中（如左一突破日、EMA 突破日、放量日等），
+ * 不含日期的规则（如市值筛选、PE 筛选等）不会生成标记。
+ *
+ * @param ruleDetails - 筛选返回的 rule_details 数组
+ * @returns 按时间排序的 RuleMarker 数组，可直接传给 KlineChart 的 markers prop
+ */
+export function ruleMarkersFromDetails(ruleDetails: RuleDetailLike[]): RuleMarker[] {
+  if (!ruleDetails || ruleDetails.length === 0) return []
+
+  const markers: RuleMarker[] = []
+
+  for (const rd of ruleDetails) {
+    // 只处理 pass 的规则（满足的规则才标记到图上）
+    if (rd.result !== 'pass') continue
+
+    const rk = rd.rule_key || ''
+    const rn = rd.rule_name || rk || '未知规则'
+    const details = rd.details
+
+    // 获取该规则的标记样式
+    const style = RULE_MARKER_STYLE[rk] || (DEFAULT_PASS_STYLE)
+
+    // 尝试从 details 中提取日期
+    const dates = _extractDates(details)
+
+    for (const date of dates) {
+      markers.push({
+        time: date.slice(0, 10), // YYYY-MM-DD
+        side: style.bullish ? 'buy' : 'sell',
+        label: rn,
+        color: style.color,
+        shape: style.shape,
+      })
+    }
+
+    // 无日期则跳过（如市值、PE、公司时事等规则无法定位到具体 K 线）
+  }
+
+  // 按时间排序
+  markers.sort((a, b) => a.time.localeCompare(b.time))
+
+  return markers
+}

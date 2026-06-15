@@ -125,39 +125,7 @@ export function FilteredRulesTable({ ruleDetails }: Props) {
           {expanded ? '收起' : `展开全部（共 ${filtered.length} 条）`}
         </button>
       )}
-
-      {/* 评分公式（仅在有数据时展示） */}
-      <details className="score-formula-box" style={{ marginTop: 14 }}>
-        <summary className="score-formula-summary">评分公式</summary>
-        <ScoreFormulaBreakdown ruleDetails={ruleDetails} />
-      </details>
     </div>
   )
 }
 
-/** 评分公式明细 */
-function ScoreFormulaBreakdown({ ruleDetails }: { ruleDetails: RuleDetailRow[] }) {
-  const contributions = ruleDetails
-    .filter(d => d.result === 'pass')
-    .map(d => {
-      const contrib = computeContribution('pass', d.details)
-      return { name: d.rule_name || d.rule_key || '?', score: contrib.score }
-    })
-    .filter(c => c.score > 0)
-
-  const total = contributions.reduce((sum, c) => sum + c.score, 0)
-  const base = 50
-
-  if (contributions.length === 0) {
-    return <p className="score-formula-text">无额外加分项 — 仅基础分 {base.toFixed(1)}</p>
-  }
-
-  return (
-    <div>
-      <p className="score-formula-text">
-        {base} {contributions.map(c => ` +${c.score.toFixed(1)}(${c.name})`).join('')}
-      </p>
-      <p className="score-formula-result">= {((base + total) > 100 ? 100 : base + total).toFixed(1)}</p>
-    </div>
-  )
-}

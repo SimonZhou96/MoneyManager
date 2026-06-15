@@ -1,3 +1,19 @@
+/**
+ * K 线图组件 — lightweight-charts 封装。
+ *
+ * ⚠️  **铁律：任何 series.setData() 调用前必须确保数据按 time 去重且升序。**
+ *
+ * lightweight-charts 内部将时间字符串转为 Unix timestamp，重复时间戳会抛：
+ *   "Assertion failed: data must be asc ordered by time, index=N, time=T, prev time=T"
+ *
+ * 去重必须在以下 **每一个** setData 调用点执行：
+ *   1. candleSeries.setData()   — buildCandleData() 内已去重
+ *   2. volumeSeries.setData()   — _applyAll() 内 volSeen Set 去重
+ *   3. MA LineSeries.setData()  — _syncMA() 内尾行去重
+ *   4. MACD series.setData()   — _syncMACD() 内尾行去重
+ *
+ * 已犯多次 → 参见 CLAUDE.md fix log: 2026-06-13 / 2026-06-15 / 2026-06-15(2)
+ */
 import React, { useEffect, useRef } from 'react'
 import type { Timeframe } from '../types'
 
@@ -5,6 +21,21 @@ export interface TradeMarker {
   time: string
   side: 'buy' | 'sell'
   price?: number
+  /** 自定义标签文本（规则标记时使用） */
+  label?: string
+  /** 自定义颜色（规则标记时使用），不传则根据 side 自动选择 */
+  color?: string
+  /** 自定义形状（规则标记时使用），不传则根据 side 自动选择 */
+  shape?: 'arrowUp' | 'arrowDown' | 'circle' | 'square'
+}
+
+/** 规则标记：将 rule_details 中有日期的规则命中映射为图表标记 */
+export interface RuleChartMarker {
+  time: string
+  ruleName: string
+  result: 'pass' | 'fail'
+  ruleKey: string
+  color?: string
 }
 
 interface Props {
@@ -15,89 +46,133 @@ interface Props {
   timeframe: Timeframe
   symbol: string
   markers?: TradeMarker[]
+  showMA?: boolean
+  showVolume?: boolean
+  showMACD?: boolean
 }
 
 /** 将原始行数据转换为 lightweight-charts 格式 */
 function toChartTime(raw: string, timeframe: Timeframe): string {
   const iso = raw.replace(' ', 'T')
-  // 日线/周线/月线 → YYYY-MM-DD（10字符）；分钟线 → ISO datetime（19字符）
   const isDaily = timeframe === '1d' || timeframe === '1wk' || timeframe === '1mo'
   return isDaily ? iso.slice(0, 10) : iso.slice(0, 19)
 }
 
-function applyData(
-  chart: any, candleSeries: any, volumeSeries: any,
-  rows: Array<Record<string, unknown>>,
-  timeframe: Timeframe,
-) {
-  const candleData = rows
-    .map((row, idx) => {
+// ── 指标计算 ──
+
+function sma(values: number[], period: number): (number | null)[] {
+  const result: (number | null)[] = []
+  let sum = 0
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i]
+    if (i >= period) sum -= values[i - period]
+    result.push(i >= period - 1 ? sum / period : null)
+  }
+  return result
+}
+
+function ema(values: number[], period: number): (number | null)[] {
+  const result: (number | null)[] = []
+  const k = 2 / (period + 1)
+  let prev: number | null = null
+  for (let i = 0; i < values.length; i++) {
+    if (i < period - 1) {
+      result.push(null)
+      continue
+    }
+    if (prev === null) {
+      // 首个值用 SMA 初始化
+      let sum = 0
+      for (let j = i - period + 1; j <= i; j++) sum += values[j]
+      prev = sum / period
+    } else {
+      prev = values[i] * k + prev * (1 - k)
+    }
+    result.push(prev)
+  }
+  return result
+}
+
+interface CandleLike { time: string; close: number }
+interface MACDData { time: string; dif: number | null; dea: number | null; macd: number | null }
+
+function computeMACD(candles: CandleLike[], fast = 12, slow = 26, signal = 9): MACDData[] {
+  const closes = candles.map(c => c.close)
+  const fastEMA = ema(closes, fast)
+  const slowEMA = ema(closes, slow)
+  const dif: (number | null)[] = []
+  for (let i = 0; i < closes.length; i++) {
+    if (fastEMA[i] != null && slowEMA[i] != null) {
+      dif.push(fastEMA[i]! - slowEMA[i]!)
+    } else {
+      dif.push(null)
+    }
+  }
+  const difVals = dif.map(v => v ?? 0)
+  const dea = ema(difVals, signal)
+  // DEA should be null where DIF is null
+  for (let i = 0; i < dea.length; i++) {
+    if (dif[i] == null) dea[i] = null
+  }
+  const result: MACDData[] = []
+  for (let i = 0; i < candles.length; i++) {
+    result.push({
+      time: candles[i].time,
+      dif: dif[i] ?? null,
+      dea: dea[i] ?? null,
+      macd: (dif[i] != null && dea[i] != null) ? (dif[i]! - dea[i]!) * 2 : null,
+    })
+  }
+  return result
+}
+
+// ── 数据应用 ──
+
+function buildCandleData(rows: Array<Record<string, unknown>>, timeframe: Timeframe) {
+  const candles = rows
+    .map((row) => {
       const time = String(row.at || row.date || row.time || row.t || '')
       const open = Number((row as any).o ?? row.open ?? 0)
       const high = Number((row as any).h ?? row.high ?? 0)
       const low = Number((row as any).l ?? row.low ?? 0)
       const close = Number((row as any).c ?? row.close ?? 0)
-      if (!time || !Number.isFinite(open)) {
-        if (idx === 0) console.warn('KlineChart: first row has invalid fields', row)
-        return null
-      }
+      if (!time || !Number.isFinite(open)) return null
       const chartTime = toChartTime(time, timeframe)
-      return { time: chartTime as any, open, high, low, close }
+      return { time: chartTime, open, high, low, close }
     })
-    .filter(Boolean) as any[]
+    .filter(Boolean) as { time: string; open: number; high: number; low: number; close: number }[]
 
-  if (candleData.length === 0) {
-    console.warn('KlineChart: all rows filtered! first row:', rows[0])
-    return
-  }
-
-  // Deduplicate by chart time — keep first occurrence (earliest in array)
+  // 去重
   const seen = new Set<string>()
-  const deduped = candleData.filter(c => {
-    const key = String(c.time)
-    if (seen.has(key)) return false
-    seen.add(key)
+  return candles.filter(c => {
+    if (seen.has(c.time)) return false
+    seen.add(c.time)
     return true
   })
-  if (deduped.length < candleData.length) {
-    console.warn(`KlineChart: removed ${candleData.length - deduped.length} duplicate time entries`)
-  }
-
-  // Also filter volumeData to match deduped candle times
-  const dedupedTimes = new Set(deduped.map(c => c.time))
-  const volumeData = rows
-    .map(row => {
-      const time = String(row.at || row.date || row.time || row.t || '')
-      const volume = Number((row as any).v ?? row.volume ?? 0)
-      if (!time) return null
-      const chartTime = toChartTime(time, timeframe)
-      if (!dedupedTimes.has(chartTime)) return null
-      const closeVal = Number((row as any).c ?? row.close ?? 0)
-      const openVal = Number((row as any).o ?? row.open ?? 0)
-      return {
-        time: chartTime as any,
-        value: volume,
-        color: closeVal >= openVal
-          ? 'rgba(34,197,94,0.25)'
-          : 'rgba(239,68,68,0.25)',
-      }
-    })
-    .filter(Boolean) as any[]
-
-  try {
-    candleSeries.setData(deduped.slice(-200))
-    volumeSeries.setData(volumeData.slice(-200))
-    chart.timeScale().fitContent()
-  } catch (e) {
-    console.error('KlineChart setData error:', e, 'first candle:', deduped[0])
-  }
 }
 
-export function KlineChart({ rows, loading, error, diagnostics, timeframe, symbol, markers }: Props) {
+interface ChartRef {
+  chart: any
+  candleSeries: any
+  volumeSeries: any
+  maSeries: any[]
+  macdDIF: any
+  macdDEA: any
+  macdHistogram: any
+  indicatorData: CandleLike[] | null
+  LineSeries: any
+  HistogramSeries: any
+}
+
+export function KlineChart({ rows, loading, error, diagnostics, timeframe, symbol, markers, showMA, showVolume, showMACD }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const chartRef = useRef<{ chart: any; candleSeries: any; volumeSeries: any } | null>(null)
+  const chartRef = useRef<ChartRef | null>(null)
   const rowsRef = useRef(rows)
-  rowsRef.current = rows  // 始终保持最新 rows 引用，供异步回调读取
+  rowsRef.current = rows
+  const showMARef = useRef(showMA)
+  showMARef.current = showMA
+  const showMACDRef = useRef(showMACD)
+  showMACDRef.current = showMACD
 
   // Dispose chart on unmount
   useEffect(() => {
@@ -117,7 +192,7 @@ export function KlineChart({ rows, loading, error, diagnostics, timeframe, symbo
     let cancelled = false
 
     const initChart = async () => {
-      const { createChart, CandlestickSeries, HistogramSeries } = await import('lightweight-charts')
+      const { createChart, CandlestickSeries, HistogramSeries, LineSeries } = await import('lightweight-charts')
       if (cancelled) return
 
       // Clean up previous
@@ -173,11 +248,22 @@ export function KlineChart({ rows, loading, error, diagnostics, timeframe, symbo
         color: 'rgba(201,168,76,0.15)',
       })
 
-      chartRef.current = { chart, candleSeries, volumeSeries }
+      chartRef.current = {
+        chart,
+        candleSeries,
+        volumeSeries,
+        maSeries: [],
+        macdDIF: null,
+        macdDEA: null,
+        macdHistogram: null,
+        indicatorData: null,
+        LineSeries,
+        HistogramSeries,
+      }
 
-      // 异步初始化完成后立即应用已到达的数据（解决竞态）
+      // 异步初始化完成后立即应用已到达的数据
       if (!cancelled && rowsRef.current.length > 0) {
-        applyData(chart, candleSeries, volumeSeries, rowsRef.current, timeframe)
+        _applyAll(chartRef.current, rowsRef.current, timeframe, { showMA: showMARef.current, showMACD: showMACDRef.current })
       } else {
         chart.timeScale().fitContent()
       }
@@ -187,12 +273,38 @@ export function KlineChart({ rows, loading, error, diagnostics, timeframe, symbo
     return () => { cancelled = true }
   }, [timeframe])
 
-  // Update data when rows change
+  // Update candle/volume when rows change
   useEffect(() => {
     const ref = chartRef.current
     if (!ref || rows.length === 0) return
-    applyData(ref.chart, ref.candleSeries, ref.volumeSeries, rows, timeframe)
+    _applyAll(ref, rows, timeframe, { showMA: showMA, showMACD: showMACD })
   }, [rows, timeframe])
+
+  // ── MA 均线 ──
+  useEffect(() => {
+    const ref = chartRef.current
+    if (!ref) return
+    _syncMA(ref, showMA ?? false)
+  }, [showMA])
+
+  // ── Volume 可见性 ──
+  useEffect(() => {
+    const ref = chartRef.current
+    if (!ref) return
+    const vis = showVolume ?? true
+    try { ref.volumeSeries.applyOptions({ visible: vis }) } catch (_) { /* ignore */ }
+    try {
+      const volScale = ref.chart.priceScale('volume')
+      if (volScale) volScale.applyOptions({ visible: vis })
+    } catch (_) { /* ignore */ }
+  }, [showVolume])
+
+  // ── MACD ──
+  useEffect(() => {
+    const ref = chartRef.current
+    if (!ref) return
+    _syncMACD(ref, showMACD ?? false)
+  }, [showMACD, rows])
 
   // Overlay trade markers
   useEffect(() => {
@@ -203,14 +315,18 @@ export function KlineChart({ rows, loading, error, diagnostics, timeframe, symbo
       return
     }
     const formatted = markers
-      .map(m => ({
-        time: toChartTime(String(m.time || ''), timeframe) as any,
-        position: m.side === 'buy' ? 'belowBar' as const : 'aboveBar' as const,
-        shape: m.side === 'buy' ? 'arrowUp' as const : 'arrowDown' as const,
-        color: m.side === 'buy' ? '#22c55e' : '#ef4444',
-        text: m.side === 'buy' ? '买入' : '卖出',
-        size: 2,
-      }))
+      .map(m => {
+        const side: string = m.side || 'buy'
+        const isBuy = side === 'buy'
+        return {
+          time: toChartTime(String(m.time || ''), timeframe) as any,
+          position: (isBuy ? 'belowBar' : 'aboveBar') as 'belowBar' | 'aboveBar',
+          shape: (m.shape || (isBuy ? 'arrowUp' : 'arrowDown')) as 'arrowUp' | 'arrowDown' | 'circle' | 'square',
+          color: m.color || (isBuy ? '#22c55e' : '#ef4444'),
+          text: m.label || (isBuy ? '买入' : '卖出'),
+          size: m.label ? 2 : 2,
+        }
+      })
       .filter(m => !!m.time)
     try { ref.candleSeries.setMarkers(formatted) } catch (_) { /* ignore */ }
   }, [markers, timeframe])
@@ -271,4 +387,171 @@ export function KlineChart({ rows, loading, error, diagnostics, timeframe, symbo
       </div>
     </div>
   )
+}
+
+// ── 内部辅助 ──
+
+const MA_PERIODS = [5, 10, 20, 60]
+const MA_COLORS = ['#fbbf24', '#f97316', '#e879f9', '#38bdf8'] // 黄、橙、紫、蓝
+
+function _applyAll(ref: ChartRef, rows: Array<Record<string, unknown>>, timeframe: Timeframe, opts?: { showMA?: boolean; showMACD?: boolean }) {
+  const candles = buildCandleData(rows, timeframe)
+  if (candles.length === 0) return
+
+  const tail = candles.slice(-200)
+  ref.candleSeries.setData(tail)
+
+  // Volume — 注意：rows 可能有同日期多条记录，必须去重后再 setData，
+  // 否则 lightweight-charts 抛 "data must be asc ordered by time"
+  const candleTimeSet = new Set(tail.map(c => c.time))
+  const volSeen = new Set<string>()
+  const volumeData = rows
+    .map(row => {
+      const time = String(row.at || row.date || row.time || row.t || '')
+      const volume = Number((row as any).v ?? row.volume ?? 0)
+      if (!time) return null
+      const chartTime = toChartTime(time, timeframe)
+      if (!candleTimeSet.has(chartTime) || volSeen.has(chartTime)) return null
+      volSeen.add(chartTime)
+      const closeVal = Number((row as any).c ?? row.close ?? 0)
+      const openVal = Number((row as any).o ?? row.open ?? 0)
+      return {
+        time: chartTime as any,
+        value: volume,
+        color: closeVal >= openVal
+          ? 'rgba(34,197,94,0.25)'
+          : 'rgba(239,68,68,0.25)',
+      }
+    })
+    .filter(Boolean) as any[]
+  ref.volumeSeries.setData(volumeData)
+
+  // Store candle data for indicator computation
+  ref.indicatorData = candles
+
+  ref.chart.timeScale().fitContent()
+
+  // 数据更新后同步指标（处理先开指标后加载数据的竞态）
+  if (opts?.showMA) _syncMA(ref, true)
+  if (opts?.showMACD) _syncMACD(ref, true)
+}
+
+// ── MA 同步 ──
+
+function _syncMA(ref: ChartRef, show: boolean) {
+  // 清理旧 MA 线
+  for (const s of ref.maSeries) {
+    try { ref.chart.removeSeries(s) } catch (_) { /* ignore */ }
+  }
+  ref.maSeries = []
+
+  if (!show || !ref.indicatorData || ref.indicatorData.length === 0) return
+
+  const closes = ref.indicatorData.map(c => c.close)
+  const times = ref.indicatorData.map(c => c.time)
+  // 只取尾部 200 根
+  const tailCloses = closes.slice(-200)
+  const tailTimes = times.slice(-200)
+
+  MA_PERIODS.forEach((period, idx) => {
+    if (tailCloses.length < period) return
+    const maVals = sma(tailCloses, period)
+    const data = tailTimes.map((t, i) => ({
+      time: t as any,
+      value: maVals[i],
+    })).filter(d => d.value != null)
+
+    // 去重：indicatorData 已去重，此处为安全兜底
+    const maSeen = new Set<string>()
+    const deduped = data.filter(d => {
+      const k = String(d.time)
+      if (maSeen.has(k)) return false
+      maSeen.add(k)
+      return true
+    })
+
+    if (deduped.length === 0) return
+
+    const lineSeries = ref.chart.addSeries(ref.LineSeries, {
+      color: MA_COLORS[idx],
+      lineWidth: 1,
+      priceScaleId: 'right',
+    })
+    lineSeries.setData(deduped)
+    ref.maSeries.push(lineSeries)
+  })
+}
+
+// ── MACD 同步 ──
+
+function _syncMACD(ref: ChartRef, show: boolean) {
+  // 清理旧 MACD 系列
+  if (ref.macdDIF) { try { ref.chart.removeSeries(ref.macdDIF) } catch (_) { /* ignore */ } ref.macdDIF = null }
+  if (ref.macdDEA) { try { ref.chart.removeSeries(ref.macdDEA) } catch (_) { /* ignore */ } ref.macdDEA = null }
+  if (ref.macdHistogram) { try { ref.chart.removeSeries(ref.macdHistogram) } catch (_) { /* ignore */ } ref.macdHistogram = null }
+
+  if (!show || !ref.indicatorData || ref.indicatorData.length === 0) {
+    // 还原价格比例
+    try {
+      ref.candleSeries.applyOptions({ priceScaleId: 'right' })
+      ref.chart.priceScale('right').applyOptions({
+        scaleMargins: { top: 0.1, bottom: 0.25 },
+      })
+    } catch (_) { /* ignore */ }
+    return
+  }
+
+  const candles = ref.indicatorData.slice(-200)
+  if (candles.length < 26) return
+
+  const macdData = computeMACD(candles)
+
+  // 为 MACD 创建独立价格轴
+  const macdScaleId = 'macd'
+
+  // DIF 快线
+  ref.macdDIF = ref.chart.addSeries(ref.LineSeries, {
+    color: '#fbbf24',
+    lineWidth: 1,
+    priceScaleId: macdScaleId,
+  })
+  ref.macdDIF.setData(
+    macdData.filter(d => d.dif != null).map(d => ({ time: d.time as any, value: d.dif }))
+  )
+
+  // DEA 慢线
+  ref.macdDEA = ref.chart.addSeries(ref.LineSeries, {
+    color: '#38bdf8',
+    lineWidth: 1,
+    priceScaleId: macdScaleId,
+  })
+  ref.macdDEA.setData(
+    macdData.filter(d => d.dea != null).map(d => ({ time: d.time as any, value: d.dea }))
+  )
+
+  // 柱状图
+  ref.macdHistogram = ref.chart.addSeries(ref.HistogramSeries, {
+    priceScaleId: macdScaleId,
+    priceFormat: { type: 'volume' },
+  })
+  ref.macdHistogram.setData(
+    macdData.filter(d => d.macd != null).map(d => ({
+      time: d.time as any,
+      value: d.macd,
+      color: d.macd! >= 0 ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.4)',
+    }))
+  )
+
+  // 调整价格比例
+  ref.chart.priceScale(macdScaleId).applyOptions({
+    scaleMargins: { top: 0.8, bottom: 0.05 },
+  })
+
+  // 蜡烛图区域让出空间给 MACD
+  ref.candleSeries.applyOptions({
+    priceScaleId: 'right',
+  })
+  ref.chart.priceScale('right').applyOptions({
+    scaleMargins: { top: 0.05, bottom: 0.35 },
+  })
 }

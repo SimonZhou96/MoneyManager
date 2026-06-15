@@ -14,11 +14,16 @@ const CONTRIBUTION_COLORS: Record<string, string> = {
 }
 
 export function ScoreBreakdownCards({ dimensions }: Props) {
+  // 只展示有实际得分的维度（排除 N/A 和 0.0）
+  const visible = dimensions.filter(d => d.score != null && d.score > 0)
+
+  if (visible.length === 0) return null
+
   return (
     <div className="score-breakdown-section">
       <h3 className="screening-subtitle">买入评分构成</h3>
       <div className="score-overview-grid">
-        {dimensions.map(dim => (
+        {visible.map(dim => (
           <div
             key={dim.key}
             className={`score-card${dim.contributionType === 'negative' ? ' score-card-negative' : ''}${dim.contributionType === 'strong_positive' ? ' score-card-positive' : ''}`}

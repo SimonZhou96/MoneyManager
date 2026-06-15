@@ -335,10 +335,27 @@ def run_single_stock_web_job(run_id: str) -> None:
             },
         }
         rule_details = []
+        # 构建 rule_key → 中文 rule_name 查找表
+        rule_name_map: dict[str, str] = {}
+        try:
+            metadata_rows = db.get_screening_rule_metadata(market)
+            for row in metadata_rows:
+                rk = str(row.get("rule_key") or "")
+                rn = str(row.get("rule_name") or "")
+                if rk and rn:
+                    rule_name_map[rk] = rn
+        except Exception:
+            pass
         for idx, fd in enumerate(filter_details):
+            rk = fd.get("rule_key") or fd.get("filter_name") or ""
+            # 优先用中文 rule_name（从元数据表查找），其次用 details 中的 rule_key，
+            # 再次用 filter_name，最后兜底用 rule_key
+            cn_name = rule_name_map.get(rk) or rule_name_map.get(
+                str(fd.get("details", {}).get("rule_key") or "")
+            )
             rule_details.append({
-                "rule_key": fd.get("rule_key") or fd.get("filter_name") or "",
-                "rule_name": fd.get("filter_name") or fd.get("rule_key") or "",
+                "rule_key": rk,
+                "rule_name": cn_name or fd.get("filter_name") or fd.get("rule_key") or "",
                 "rule_type": fd.get("rule_type") or fd.get("strategy_category") or "",
                 "result": fd.get("result") or "",
                 "reason": fd.get("reason") or "",

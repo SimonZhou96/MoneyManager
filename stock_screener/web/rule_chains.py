@@ -19,6 +19,11 @@ def resolve_rule_chain(
 
     Explicit chain_key may point to a disabled trial chain; active-chain loading
     remains the default when no key is provided.
+
+    When no chain_key is given and markets have different default chains,
+    each market uses its own active chain. The returned dict represents the
+    primary (first) market's chain; callers iterating per-market should
+    rely on each market's own active chain via load_active_chain().
     """
     if not markets:
         raise BusinessError("INVALID_RULE_CHAIN", "至少选择一个市场后才能选择规则链")
@@ -29,10 +34,8 @@ def resolve_rule_chain(
         if requested:
             chains = [repository.load_chain(market, requested, timeframe) for market in markets]
         else:
-            active = repository.load_active_chain(markets[0], timeframe)
-            chains = [active]
-            for market in markets[1:]:
-                chains.append(repository.load_chain(market, active.chain_key, timeframe))
+            # 每个市场独立加载其活跃链（支持不同市场不同默认链）
+            chains = [repository.load_active_chain(market, timeframe) for market in markets]
     except Exception as exc:
         label = requested or "默认生效链"
         raise BusinessError(
@@ -40,13 +43,26 @@ def resolve_rule_chain(
             f"规则链 {label} 不适用于所选市场，请重新选择规则链",
         ) from exc
     first = chains[0]
-    return {
+    result = {
         "chain_key": first.chain_key,
         "chain_timeframe": first.timeframe,
         "chain_name": first.chain_name,
         "enabled": first.enabled,
         "description": first.description,
     }
+    # 当不同市场使用不同链时，附加每个市场的链信息
+    if not requested and len(markets) > 1:
+        per_market = {}
+        for m, c in zip(markets, chains):
+            if c.chain_key != first.chain_key:
+                per_market[m] = {
+                    "chain_key": c.chain_key,
+                    "chain_name": c.chain_name,
+                    "timeframe": c.timeframe,
+                }
+        if per_market:
+            result["per_market_chains"] = per_market
+    return result
 
 
 def parse_rule_expression(raw_expression) -> dict:

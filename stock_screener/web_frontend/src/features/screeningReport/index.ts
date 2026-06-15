@@ -1,4 +1,5 @@
 export { TradingBiasCard } from './TradingBiasCard'
+export { ScoreFormulaPanel } from './ScoreFormulaPanel'
 export { ScoreBreakdownCards } from './ScoreBreakdownCards'
 export { FactorSummary } from './FactorSummary'
 export { ObserveConditions } from './ObserveConditions'
