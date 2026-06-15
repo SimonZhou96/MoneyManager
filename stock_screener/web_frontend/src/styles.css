@@ -3246,6 +3246,21 @@ textarea.code-input::placeholder {
   height: calc(100vh - 80px) !important;
 }
 
+/* ── K-line pagination loading bar ── */
+.chart-loading-more-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 12px;
+  background: rgba(20, 24, 32, 0.88);
+  font-size: 11px;
+  color: #D8B84E;
+  pointer-events: none;
+}
+
 /* ── K-line chart height (code-screening scope) ── */
 .code-screening-layout .kline-chart-container {
   height: 440px;

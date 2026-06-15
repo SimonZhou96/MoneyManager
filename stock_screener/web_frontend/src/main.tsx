@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import CodeMirror from '@uiw/react-codemirror'
 import { json } from '@codemirror/lang-json'
@@ -401,6 +401,23 @@ function _progressStepClass(currentStep: string, stepKey: string, status: string
   if (curIdx >= 0 && stepIdx < curIdx) return 'done'
   if (stepKey === currentStep) return 'active'
   return ''
+}
+
+/** 从 K 线行中提取排序用的时间 key */
+function _rowTimeKey(row: Record<string, unknown>): string {
+  return String(row.at || row.date || row.time || row.t || '')
+}
+
+/** 找出 K 线行数组中最早的时间 */
+function _oldestTime(rows: Array<Record<string, unknown>>): string | null {
+  if (rows.length === 0) return null
+  let oldest: string | null = null
+  for (const r of rows) {
+    const t = _rowTimeKey(r)
+    if (!t) continue
+    if (oldest === null || t < oldest) oldest = t
+  }
+  return oldest
 }
 
 function commonRuleChains(markets: string[], rulesByMarket: Record<string, RulesResponse | undefined>): RuleChain[] {
@@ -890,12 +907,16 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
   const [progress, setProgress] = useState({ pct: 0, step: '', detail: '', status: 'running' })
 
   // ---- K-line ----
-  const [klineRows, setKlineRows] = useState<Record<string, unknown>[]>([])
+  const [klineAllRows, setKlineAllRows] = useState<Record<string, unknown>[]>([])
   const [klineLoading, setKlineLoading] = useState(false)
+  const [klineLoadingMore, setKlineLoadingMore] = useState(false)
+  const [klineHasMore, setKlineHasMore] = useState(true)
   const [klineError, setKlineError] = useState('')
   const [klineDiagnostics, setKlineDiagnostics] = useState<{
     status: string; source: string; error_message?: string
   } | null>(null)
+  const klineFetchingRef = useRef(false)
+  const oldestBarTimeRef = useRef<string | null>(null)
 
   // ---- chart tools ----
   const [showMA, setShowMA] = useState(false)
@@ -952,7 +973,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
     // reset previous results
     setScreeningResult(null)
     setRunId('')
-    setKlineRows([])
+    setKlineAllRows([])
     setKlineError('')
     setError('')
     setHistoryRuns([])
@@ -977,15 +998,27 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
     setKlineLoading(true)
     setKlineError('')
     setKlineDiagnostics(null)
+    setKlineHasMore(true)
+    klineFetchingRef.current = false
     try {
       const data = await api<{
         rows: Array<Record<string, unknown>>
         source_status?: { kline?: { status: string; source: string; error_message?: string; stale?: boolean } }
         data_gaps?: string[]
       }>(
-        `/api/stock-terminal/${encodeURIComponent(market)}/${encodeURIComponent(code)}/klines?timeframe=${encodeURIComponent(timeframe)}&limit=200`
+        `/api/stock-terminal/${encodeURIComponent(market)}/${encodeURIComponent(code)}/klines?timeframe=${encodeURIComponent(timeframe)}&limit=300`
       )
-      setKlineRows(Array.isArray(data.rows) ? data.rows : [])
+      const rows = Array.isArray(data.rows) ? data.rows : []
+      setKlineAllRows(rows)
+
+      // 追踪最早 bar 时间，用于分页请求
+      if (rows.length > 0) {
+        oldestBarTimeRef.current = _oldestTime(rows)
+        setKlineHasMore(rows.length >= 300)
+      } else {
+        oldestBarTimeRef.current = null
+        setKlineHasMore(false)
+      }
 
       // 保存 K 线数据源诊断信息
       const klineStat = data.source_status?.kline
@@ -1004,8 +1037,59 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
       }
     } catch (err) {
       setKlineError(err instanceof Error ? err.message : '加载K线失败')
-      setKlineRows([])
+      setKlineAllRows([])
     } finally { setKlineLoading(false) }
+  }
+
+  /** 加载更早的历史 K 线（向左滚动触发） */
+  async function fetchOlderKline() {
+    if (!selectedStock || klineFetchingRef.current || !klineHasMore) return
+    const oldest = oldestBarTimeRef.current
+    if (!oldest) return
+
+    klineFetchingRef.current = true
+    setKlineLoadingMore(true)
+    try {
+      const data = await api<{
+        rows: Array<Record<string, unknown>>
+        source_status?: { kline?: { status: string } }
+      }>(
+        `/api/stock-terminal/${encodeURIComponent(market)}/${encodeURIComponent(selectedStock.code)}/klines` +
+        `?timeframe=${encodeURIComponent(timeframe)}&limit=300` +
+        `&before=${encodeURIComponent(oldest)}`
+      )
+      const newRows = Array.isArray(data.rows) ? data.rows : []
+
+      if (newRows.length === 0) {
+        setKlineHasMore(false)
+        return
+      }
+
+      setKlineAllRows(prev => {
+        const seen = new Set<string>()
+        const merged = [...prev]
+        merged.forEach(r => seen.add(_rowTimeKey(r)))
+        for (const r of newRows) {
+          const t = _rowTimeKey(r)
+          if (!seen.has(t) && t) {
+            merged.push(r)
+            seen.add(t)
+          }
+        }
+        // 按时间升序（lightweight-charts 要求）
+        merged.sort((a, b) => _rowTimeKey(a).localeCompare(_rowTimeKey(b)))
+        return merged
+      })
+
+      // 更新最早 bar 时间
+      oldestBarTimeRef.current = _oldestTime(newRows)
+      setKlineHasMore(newRows.length >= 300)
+    } catch (_) {
+      // 加载失败静默处理，保留已有数据
+    } finally {
+      setKlineLoadingMore(false)
+      klineFetchingRef.current = false
+    }
   }
 
   // ---- SSE progress tracking ----
@@ -1075,7 +1159,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
     setError('')
     setScreeningResult(null)
     setRunId('')
-    setKlineRows([])
+    setKlineAllRows([])
     setKlineError('')
     setProgress({ pct: 0, step: '', detail: '', status: 'running' })
 
@@ -1166,8 +1250,8 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
     })
     items.push({
       key: 'kline', label: 'K线数据',
-      status: klineRows.length > 0 ? 'computed' : (klineDiagnostics?.status === 'error' ? 'error' : 'missing'),
-      detail: klineRows.length > 0 ? `${klineRows.length} 条K线` : (klineDiagnostics?.error_message || '未获取'),
+      status: klineAllRows.length > 0 ? 'computed' : (klineDiagnostics?.status === 'error' ? 'error' : 'missing'),
+      detail: klineAllRows.length > 0 ? `${klineAllRows.length} 条K线` : (klineDiagnostics?.error_message || '未获取'),
     })
     items.push({
       key: 'technical', label: '技术指标',
@@ -1190,7 +1274,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
       detail: String(screeningResult?.status || '未知'),
     })
     return items
-  }, [selectedStock, klineRows, klineDiagnostics, ruleDetails, resultJson.macro_score, screeningResult])
+  }, [selectedStock, klineAllRows, klineDiagnostics, ruleDetails, resultJson.macro_score, screeningResult])
 
   return (
     <section className="code-screening-layout">
@@ -1338,7 +1422,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
             </div>
           </div>
           <KlineChart
-            rows={klineRows}
+            rows={klineAllRows}
             loading={klineLoading}
             error={klineError}
             diagnostics={klineDiagnostics}
@@ -1348,6 +1432,8 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
             showMA={showMA}
             showVolume={showVolume}
             showMACD={showMACD}
+            loadingMore={klineLoadingMore}
+            onNeedOlderData={fetchOlderKline}
           />
         </div>
       )}

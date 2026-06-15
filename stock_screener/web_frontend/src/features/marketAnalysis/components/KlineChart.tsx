@@ -41,6 +41,7 @@ export interface RuleChartMarker {
 interface Props {
   rows: Array<Record<string, unknown>>
   loading: boolean
+  loadingMore?: boolean
   error: string
   diagnostics?: { status: string; source: string; error_message?: string } | null
   timeframe: Timeframe
@@ -49,6 +50,8 @@ interface Props {
   showMA?: boolean
   showVolume?: boolean
   showMACD?: boolean
+  /** 用户向左滚动到最早数据时触发，用于分页加载更早的 K 线 */
+  onNeedOlderData?: () => void
 }
 
 /** 将原始行数据转换为 lightweight-charts 格式 */
@@ -164,7 +167,7 @@ interface ChartRef {
   HistogramSeries: any
 }
 
-export function KlineChart({ rows, loading, error, diagnostics, timeframe, symbol, markers, showMA, showVolume, showMACD }: Props) {
+export function KlineChart({ rows, loading, loadingMore, error, diagnostics, timeframe, symbol, markers, showMA, showVolume, showMACD, onNeedOlderData }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ChartRef | null>(null)
   const rowsRef = useRef(rows)
@@ -173,6 +176,10 @@ export function KlineChart({ rows, loading, error, diagnostics, timeframe, symbo
   showMARef.current = showMA
   const showMACDRef = useRef(showMACD)
   showMACDRef.current = showMACD
+  const onNeedOlderDataRef = useRef(onNeedOlderData)
+  onNeedOlderDataRef.current = onNeedOlderData
+  const isUpdatingRef = useRef(false)
+  const isInitialRef = useRef(true)
 
   // Dispose chart on unmount
   useEffect(() => {
@@ -261,23 +268,58 @@ export function KlineChart({ rows, loading, error, diagnostics, timeframe, symbo
         HistogramSeries,
       }
 
+      // 监听用户滚动到左边界 → 触发分页加载
+      chart.timeScale().subscribeVisibleTimeRangeChange((newRange: { from: any; to: any } | null) => {
+        if (isUpdatingRef.current || !newRange || newRange.from == null) return
+        const currentRows = rowsRef.current
+        if (currentRows.length === 0) return
+        // 找到当前数据中最旧的 bar 时间
+        const oldest = currentRows.reduce((a, b) => {
+          const ta = String((a as any).at || (a as any).date || (a as any).time || (a as any).t || '')
+          const tb = String((b as any).at || (b as any).date || (b as any).time || (b as any).t || '')
+          return ta < tb ? a : b
+        })
+        const oldestTime = String((oldest as any).at || (oldest as any).date || (oldest as any).time || (oldest as any).t || '')
+        if (!oldestTime) return
+        // 当可见范围左边界到达或超过最旧 bar 时触发
+        if (String(newRange.from) <= oldestTime) {
+          onNeedOlderDataRef.current?.()
+        }
+      })
+
       // 异步初始化完成后立即应用已到达的数据
       if (!cancelled && rowsRef.current.length > 0) {
         _applyAll(chartRef.current, rowsRef.current, timeframe, { showMA: showMARef.current, showMACD: showMACDRef.current })
+        isInitialRef.current = false
       } else {
         chart.timeScale().fitContent()
       }
     }
 
     initChart().catch(console.error)
-    return () => { cancelled = true }
+    return () => { cancelled = true; isInitialRef.current = true }
   }, [timeframe])
 
-  // Update candle/volume when rows change
+  // Update candle/volume when rows change — 保存/恢复可视范围避免跳动
   useEffect(() => {
     const ref = chartRef.current
     if (!ref || rows.length === 0) return
+
+    isUpdatingRef.current = true
+    const savedRange = !isInitialRef.current
+      ? ref.chart.timeScale().getVisibleRange()
+      : null
+
     _applyAll(ref, rows, timeframe, { showMA: showMA, showMACD: showMACD })
+
+    if (savedRange && (savedRange as any).from != null && (savedRange as any).to != null) {
+      try { ref.chart.timeScale().setVisibleRange(savedRange as any) } catch (_) { /* ignore */ }
+    } else {
+      ref.chart.timeScale().fitContent()
+    }
+
+    isInitialRef.current = false
+    isUpdatingRef.current = false
   }, [rows, timeframe])
 
   // ── MA 均线 ──
@@ -383,6 +425,11 @@ export function KlineChart({ rows, loading, error, diagnostics, timeframe, symbo
             <span className="chart-empty-hint">建议：切换至更长周期（周线/月线），或检查股票代码是否正确</span>
           </div>
         )}
+        {loadingMore && (
+          <div className="chart-loading-more-overlay">
+            <span>加载更多K线数据...</span>
+          </div>
+        )}
         <div ref={containerRef} className="kline-chart-container" />
       </div>
     </div>
@@ -398,12 +445,11 @@ function _applyAll(ref: ChartRef, rows: Array<Record<string, unknown>>, timefram
   const candles = buildCandleData(rows, timeframe)
   if (candles.length === 0) return
 
-  const tail = candles.slice(-200)
-  ref.candleSeries.setData(tail)
+  ref.candleSeries.setData(candles)
 
   // Volume — 注意：rows 可能有同日期多条记录，必须去重后再 setData，
   // 否则 lightweight-charts 抛 "data must be asc ordered by time"
-  const candleTimeSet = new Set(tail.map(c => c.time))
+  const candleTimeSet = new Set(candles.map(c => c.time))
   const volSeen = new Set<string>()
   const volumeData = rows
     .map(row => {
@@ -428,8 +474,6 @@ function _applyAll(ref: ChartRef, rows: Array<Record<string, unknown>>, timefram
 
   // Store candle data for indicator computation
   ref.indicatorData = candles
-
-  ref.chart.timeScale().fitContent()
 
   // 数据更新后同步指标（处理先开指标后加载数据的竞态）
   if (opts?.showMA) _syncMA(ref, true)

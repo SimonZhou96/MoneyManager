@@ -192,11 +192,14 @@ class InMemoryStockTerminalRepository:
         timeframe: str,
         limit: int = 500,
         now: Optional[datetime] = None,
+        before: Optional[datetime] = None,
     ) -> Tuple[List[KlinePoint], BlockStatus]:
         cached = self._klines.get((market, code, timeframe))
         if cached is None:
             return [], _empty_status()
         rows, source, fetched_at, expires_at = cached
+        if before is not None:
+            rows = [r for r in rows if r.at < before]
         return deepcopy(rows[-max(1, int(limit)):]), _cache_status(source, fetched_at, expires_at, now=now)
 
     def save_minute(
@@ -315,8 +318,9 @@ class MySqlStockTerminalRepository:
         timeframe: str,
         limit: int = 500,
         now: Optional[datetime] = None,
+        before: Optional[datetime] = None,
     ) -> Tuple[List[KlinePoint], BlockStatus]:
-        frame = self.db.get_kline_cache(market, code, timeframe, max_count=limit)
+        frame = self.db.get_kline_cache(market, code, timeframe, max_count=limit, before=before)
         rows = _kline_from_frame(frame, limit)
         if not rows:
             return [], _empty_status()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from datetime import datetime
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Query
 
@@ -41,6 +42,7 @@ def get_klines(
     code: str,
     timeframe: str = Query(default="1d"),
     limit: int = Query(default=120, ge=1, le=500),
+    before: Optional[str] = Query(default=None),
     user: CurrentUser = Depends(require_user),
     service: StockTerminalService = Depends(get_stock_terminal_service),
 ) -> Dict[str, Any]:
@@ -48,9 +50,13 @@ def get_klines(
     try:
         normalized_market, normalized_code = _normalize_stock(market, code)
         normalized_timeframe = parse_timeframe(timeframe)
+        before_dt = datetime.fromisoformat(before) if before else None
     except ValueError as exc:
         raise BusinessError("STOCK_TERMINAL_INVALID_REQUEST", str(exc)) from exc
-    return service.get_klines(normalized_market, normalized_code, normalized_timeframe, limit)
+    return service.get_klines(
+        normalized_market, normalized_code, normalized_timeframe, limit,
+        before=before_dt,
+    )
 
 
 @router.get("/{market}/{code}/minute")

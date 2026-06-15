@@ -2691,16 +2691,33 @@ class MarketDatabase:
         self._execute_with_retry(operation, label="upsert_kline_cache")
         return len(values)
 
-    def get_kline_cache(self, market: str, code: str, timeframe: str, max_count: int = 500) -> pd.DataFrame:
-        sql = """
-            SELECT bar_time, open, high, low, close, volume, turnover, source, updated_at
-            FROM stock_kline_cache
-            WHERE market=%s AND code=%s AND timeframe=%s
-            ORDER BY bar_time DESC
-            LIMIT %s
+    def get_kline_cache(self, market: str, code: str, timeframe: str, max_count: int = 500,
+                         before: Optional[datetime] = None) -> pd.DataFrame:
+        """获取缓存的 K 线数据。
+
+        Args:
+            before: 可选，只返回严格早于此时间的 bar。用于分页加载更早的历史数据。
         """
+        if before is not None:
+            sql = """
+                SELECT bar_time, open, high, low, close, volume, turnover, source, updated_at
+                FROM stock_kline_cache
+                WHERE market=%s AND code=%s AND timeframe=%s AND bar_time < %s
+                ORDER BY bar_time DESC
+                LIMIT %s
+            """
+            params = (market, code, timeframe, before, int(max_count))
+        else:
+            sql = """
+                SELECT bar_time, open, high, low, close, volume, turnover, source, updated_at
+                FROM stock_kline_cache
+                WHERE market=%s AND code=%s AND timeframe=%s
+                ORDER BY bar_time DESC
+                LIMIT %s
+            """
+            params = (market, code, timeframe, int(max_count))
         with self.conn.cursor() as cursor:
-            cursor.execute(sql, (market, code, timeframe, int(max_count)))
+            cursor.execute(sql, params)
             rows = cursor.fetchall() or []
         if not rows:
             return pd.DataFrame()

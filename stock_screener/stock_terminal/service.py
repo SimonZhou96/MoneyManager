@@ -83,8 +83,17 @@ class StockTerminalService:
             statuses={"quote": fresh_status},
         ).to_dict()
 
-    def get_klines(self, market: str, code: str, timeframe: str, limit: int = 500) -> dict:
+    def get_klines(self, market: str, code: str, timeframe: str, limit: int = 500,
+                   before: Optional[datetime] = None) -> dict:
         current = self.now()
+
+        # 分页模式：仅走缓存，不触发外部 provider（避免对历史数据发起慢速 yfinance/AKShare 请求）
+        if before is not None:
+            rows, status = self.repository.get_klines(
+                market, code, timeframe, limit=limit, now=current, before=before,
+            )
+            return self._series_payload(market, code, rows, "kline", status, timeframe=timeframe)
+
         rows, status = self.repository.get_klines(market, code, timeframe, limit=limit, now=current)
         if rows and status.status == "cached":
             return self._series_payload(market, code, rows, "kline", status, timeframe=timeframe)
