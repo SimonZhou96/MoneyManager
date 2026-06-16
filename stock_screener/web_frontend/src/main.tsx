@@ -10,10 +10,10 @@ import { KlineChart } from './features/marketAnalysis/components/KlineChart'
 import { RuleChainEditor } from './features/ruleEditor/RuleChainEditor'
 import type { ExpressionNode } from './features/ruleEditor/types'
 import {
-  TradingBiasCard, ScoreFormulaPanel, ScoreBreakdownCards, FactorSummary,
-  ObserveConditions, EnhancedHistory, EnhancedDataDiagnostics, FilteredRulesTable,
+  TradingBiasCard, ScoreBreakdownCards, FactorSummary,
+  EnhancedHistory, EnhancedDataDiagnostics, FilteredRulesTable,
   scoreToBias, computeDimensionBreakdown, extractTopPositiveFactors,
-  extractTopNegativeFactors, generateObserveConditions, computeScoreTrend,
+  extractTopNegativeFactors, computeScoreTrend,
   ruleMarkersFromDetails,
   type DimensionBreakdown, type RuleMarker,
 } from './features/screeningReport'
@@ -445,7 +445,7 @@ function App() {
           <button className={page === 'codeScreening' ? 'active' : ''} onClick={() => setPage('codeScreening')}>个股筛选器</button>
           {/* 暂时隐藏，等个股实验室和规则链完善后再开放 */}
           {/* <button className={page === 'options' ? 'active' : ''} onClick={() => setPage('options')}>期权实验室</button> */}
-          {/* <button className={page === 'quant' ? 'active' : ''} onClick={() => setPage('quant')}>量化实验室</button> */}
+          <button className={page === 'quant' ? 'active' : ''} onClick={() => setPage('quant')}>量化实验室</button>
           {/* <button className={page === 'marketAnalysis' ? 'active' : ''} onClick={() => setPage('marketAnalysis')}>大盘分析</button> */}
           <button className={page === 'rules' ? 'active' : ''} onClick={() => setPage('rules')}>规则链</button>
         </nav>
@@ -459,8 +459,8 @@ function App() {
         />}
         {page === 'codeScreening' && <CodeScreening openTask={(taskId) => { setSelectedTaskId(taskId); setPage('task') }} />}
         {page === 'options' && <OptionLab />}
-        {/* 暂时隐藏，等个股实验室和规则链完善后再开放 */}
-        {/* {page === 'quant' && <QuantLab />} */}
+        {page === 'quant' && <QuantLab />}
+        {/* 暂时隐藏，等大盘分析完善后再开放 */}
         {/* {page === 'marketAnalysis' && <MarketAnalysisPage />} */}
         {page === 'rules' && <Rules />}
         {page === 'task' && <TaskDetail taskId={selectedTaskId} />}
@@ -1223,11 +1223,6 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
     return extractTopNegativeFactors(ruleDetails)
   }, [ruleDetails])
 
-  const observeConditions = useMemo(() => {
-    if (ruleDetails.length === 0) return []
-    return generateObserveConditions(ruleDetails)
-  }, [ruleDetails])
-
   // ── K 线图规则标记：将满足的规则日期映射到图表 ──
   const ruleMarkers = useMemo<RuleMarker[]>(() => {
     if (ruleDetails.length === 0) return []
@@ -1493,15 +1488,6 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
                 dimensions={dimensions}
               />
 
-              {/* 评分公式（买入评分 → 评分构成 之间的桥梁） */}
-              {ruleDetails.length > 0 && (
-                <ScoreFormulaPanel
-                  ruleDetails={ruleDetails}
-                  dimensions={dimensions}
-                  finalScore={resultJson.final_score as number | null | undefined}
-                />
-              )}
-
               {/* 第二级：买入评分构成 */}
               {dimensions.length > 0 && (
                 <ScoreBreakdownCards dimensions={dimensions} />
@@ -1509,9 +1495,6 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
 
               {/* 第二级：主要加分项 / 扣分项 */}
               <FactorSummary positiveFactors={positiveFactors} negativeFactors={negativeFactors} />
-
-              {/* 第三级：观察条件 */}
-              <ObserveConditions conditions={observeConditions} biasLabel={bias.label} />
 
               {/* 辅助信息行 */}
               <div className="report-meta" style={{ marginTop: 12 }}>
