@@ -1,15 +1,9 @@
 """Quant Lab 经典策略库"""
 
-from .base import BaseStrategy
-
-
-# 策略注册表：前端 GET /api/quant/strategies 的源数据
-STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {}
-
-
-def _register(cls: type[BaseStrategy]) -> type[BaseStrategy]:
-    STRATEGY_REGISTRY[cls.strategy_type()] = cls
-    return cls
+from .base import BaseStrategy, STRATEGY_REGISTRY, _register
+from .ma_cross import MACrossStrategy  # noqa: F401 — triggers @_register
+from .macd import MACDStrategy        # noqa: F401
+from .rsi import RSIStrategy          # noqa: F401
 
 
 def list_strategies() -> list[dict]:
@@ -24,7 +18,7 @@ def list_strategies() -> list[dict]:
     ]
 
 
-def create_strategy(strategy_type: str, params: dict, **kwargs) -> "BaseStrategy":
+def create_strategy(strategy_type: str, params: dict, **kwargs) -> BaseStrategy:
     """工厂方法：根据 strategy_type 创建策略实例"""
     from ..models import StrategyConfig
     cls = STRATEGY_REGISTRY.get(strategy_type)

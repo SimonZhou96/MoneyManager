@@ -7,6 +7,15 @@ import pandas as pd
 from ..models import Signal, StrategyConfig
 
 
+# 策略注册表
+STRATEGY_REGISTRY: dict[str, type["BaseStrategy"]] = {}
+
+
+def _register(cls: type["BaseStrategy"]) -> type["BaseStrategy"]:
+    STRATEGY_REGISTRY[cls.strategy_type()] = cls
+    return cls
+
+
 class BaseStrategy(ABC):
     """经典量化策略抽象基类
 
