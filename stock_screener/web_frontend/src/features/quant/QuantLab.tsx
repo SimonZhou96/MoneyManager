@@ -1,417 +1,397 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState, useCallback } from 'react'
 import { api } from '../../api'
-import type { QuantBacktestRequest, QuantBacktestStatus, QuantBacktestSubmitResponse, QuantStrategyOverlay, QuantSymbolChart } from './types'
+import type {
+  StrategyMeta, StrategyBacktestRequest, OptimizationRequest,
+  QuantBacktestStatus, OptimizationResultItem, QuantSymbolChart,
+} from './types'
 
-const TERMINAL_STATUSES = new Set(['completed', 'failed'])
+const TERMINAL = new Set(['completed', 'failed'])
+const MARKETS = { HK: '港股', US: '美股', A: 'A股' } as const
+const OBJECTIVES = { sharpe: 'Sharpe', total_return: '总收益', calmar: 'Calmar', win_rate: '胜率' } as const
 
 export function QuantLab() {
-  const [market, setMarket] = useState('US')
-  const [symbols, setSymbols] = useState('US.AAPL')
-  const [entryChainKey, setEntryChainKey] = useState('default')
-  const [exitPolicy, setExitPolicy] = useState('fixed_holding_days')
-  const [status, setStatus] = useState('')
-  const [error, setError] = useState('')
+  // ── 表单状态 ──
+  const [market, setMarket] = useState('HK')
+  const [symbol, setSymbol] = useState('HK.00700')
+  const [strategies, setStrategies] = useState<StrategyMeta[]>([])
+  const [strategyType, setStrategyType] = useState('ma_cross')
+  const [params, setParams] = useState<Record<string, number>>({})
+  const [entrySide, setEntrySide] = useState('long')
+  const [dateRange, setDateRange] = useState({ start: '2025-01-01', end: '2026-01-01' })
+  const [initialCash, setInitialCash] = useState(100000)
+  const [quantity, setQuantity] = useState(10)
+
+  // ── 风控 ──
+  const [useRisk, setUseRisk] = useState(false)
+  const [stopLoss, setStopLoss] = useState(0.08)
+  const [takeProfit, setTakeProfit] = useState(0.20)
+  const [trailingStop, setTrailingStop] = useState(0.05)
+
+  // ── 优化 ──
+  const [showOptimize, setShowOptimize] = useState(false)
+  const [objective, setObjective] = useState('sharpe')
+  const [paramSpaceText, setParamSpaceText] = useState('{"fast": [3,5,10], "slow": [10,20,30]}')
+
+  // ── 运行状态 ──
   const [runId, setRunId] = useState('')
   const [run, setRun] = useState<QuantBacktestStatus | null>(null)
+  const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  const isActiveRun = Boolean(runId && run && !TERMINAL_STATUSES.has(run.status))
-  const metricValues = useMemo(() => run?.metrics || {}, [run])
-  const selectedChart = run?.chart?.symbols?.[0]
+  const isActive = Boolean(runId && run && !TERMINAL.has(run.status))
 
-  async function refreshRun(nextRunId = runId) {
-    if (!nextRunId) return
-    const response = await api<QuantBacktestStatus>(`/api/quant/backtests/${nextRunId}`)
-    setRun(response)
-    setStatus(statusText(response))
-    if (response.status === 'failed') {
-      setError(response.error_message || '回测执行失败')
+  // ── 加载策略列表 ──
+  useEffect(() => {
+    api<StrategyMeta[]>('/api/quant/strategies').then(list => {
+      setStrategies(list)
+      if (list.length > 0) {
+        setStrategyType(list[0].type)
+        const defaults: Record<string, number> = {}
+        Object.entries(list[0].params).forEach(([k, v]) => { defaults[k] = v.default })
+        setParams(defaults)
+      }
+    }).catch(() => {})
+  }, [])
+
+  // ── 切换策略时重置参数 ──
+  const onStrategyChange = useCallback((type: string) => {
+    setStrategyType(type)
+    const meta = strategies.find(s => s.type === type)
+    if (meta) {
+      const defaults: Record<string, number> = {}
+      Object.entries(meta.params).forEach(([k, v]) => { defaults[k] = v.default })
+      setParams(defaults)
+      if (showOptimize) {
+        const space: Record<string, number[]> = {}
+        Object.entries(meta.params).forEach(([k, v]) => {
+          const step = v.type === 'int' ? Math.max(1, Math.round((v.max - v.min) / 5)) : (v.max - v.min) / 5
+          space[k] = [v.default, Math.round(v.default + step), Math.round(v.default + step * 2)]
+        })
+        setParamSpaceText(JSON.stringify(space))
+      }
     }
-  }
+  }, [strategies, showOptimize])
+
+  // ── 轮询 ──
+  const refresh = useCallback(async (id: string) => {
+    const r = await api<QuantBacktestStatus>(`/api/quant/backtests/${id}`)
+    setRun(r)
+    if (r.status === 'failed') setError(r.error_message || '执行失败')
+  }, [])
 
   useEffect(() => {
-    if (!runId || (run && TERMINAL_STATUSES.has(run.status))) {
-      return
-    }
-    const timer = window.setInterval(() => {
-      refreshRun(runId).catch((err) => {
-        setError(err instanceof Error ? err.message : '刷新回测进度失败')
-      })
-    }, 1500)
-    return () => window.clearInterval(timer)
-  }, [runId, run?.status])
+    if (!runId || (run && TERMINAL.has(run.status))) return
+    const t = setInterval(() => { refresh(runId).catch(() => {}) }, 1500)
+    return () => clearInterval(t)
+  }, [runId, run?.status, refresh])
 
-  async function submit() {
-    setError('')
-    setStatus('提交中')
-    setRun(null)
-    setRunId('')
-    setSubmitting(true)
-    const payload: QuantBacktestRequest = {
-      market,
-      symbols: symbols.split(/[,\n]/).map((item) => item.trim()).filter(Boolean),
-      strategy_source: 'rule_chain',
-      entry_chain_key: entryChainKey,
-      exit_policy: exitPolicy === 'fixed_holding_days' ? { type: 'fixed_holding_days', days: 5 } : { type: 'stop_loss', pct: 0.08 },
-      start: '2026-01-01',
-      end: '2026-05-18',
-      initial_cash: 100000,
-      quantity: 100,
-      commission_rate: 0.001,
-      slippage_rate: 0.001,
-      max_position_weight: 0.2
+  // ── 提交回测 ──
+  const submit = async () => {
+    setError(''); setRun(null); setRunId(''); setSubmitting(true)
+    const payload: StrategyBacktestRequest = {
+      market, symbols: [symbol],
+      strategy: { type: strategyType, params, entry_side: entrySide },
+      start: dateRange.start, end: dateRange.end,
+      initial_cash: initialCash, quantity,
+      commission_rate: 0.001, slippage_rate: 0.001, max_position_weight: 1.0,
+    }
+    if (useRisk) {
+      payload.risk = {}
+      if (stopLoss) payload.risk.stop_loss_pct = -Math.abs(stopLoss)
+      if (takeProfit) payload.risk.take_profit_pct = takeProfit
+      if (trailingStop) payload.risk.trailing_stop_pct = trailingStop
     }
     try {
-      const response = await api<QuantBacktestSubmitResponse>('/api/quant/backtests', {
-        method: 'POST',
-        body: JSON.stringify(payload)
+      const r = await api<{ run_id: string }>('/api/quant/backtests/strategy', {
+        method: 'POST', body: JSON.stringify(payload),
       })
-      setRunId(response.run_id)
-      setStatus(`已创建回测: ${response.run_id}`)
-      await refreshRun(response.run_id)
-    } catch (err) {
-      setStatus('')
-      setError(err instanceof Error ? err.message : '创建回测失败')
+      setRunId(r.run_id)
+      await refresh(r.run_id)
+    } catch (e: any) {
+      setError(e?.message || '提交失败')
     } finally {
       setSubmitting(false)
     }
   }
 
+  // ── 提交优化 ──
+  const submitOptimize = async () => {
+    setError(''); setRun(null); setRunId(''); setSubmitting(true)
+    let paramSpace: Record<string, number[]>
+    try { paramSpace = JSON.parse(paramSpaceText) } catch {
+      setError('参数空间 JSON 格式错误'); setSubmitting(false); return
+    }
+    const payload: OptimizationRequest = {
+      market, symbol, strategy_type: strategyType,
+      param_space: paramSpace, objective,
+      start: dateRange.start, end: dateRange.end,
+      initial_cash: initialCash, quantity,
+    }
+    try {
+      const r = await api<{ run_id: string }>('/api/quant/backtests/optimize', {
+        method: 'POST', body: JSON.stringify(payload),
+      })
+      setRunId(r.run_id)
+      await refresh(r.run_id)
+    } catch (e: any) {
+      setError(e?.message || '提交失败')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  // ── 派生数据 ──
+  const metrics = useMemo(() => run?.metrics || {}, [run])
+  const selectedChart = useMemo(() => run?.chart?.symbols?.[0] as QuantSymbolChart | undefined, [run])
+  const optimizationResults = useMemo(() => run?.chart?.optimization_results || [], [run])
+  const currentStrategy = useMemo(() => strategies.find(s => s.type === strategyType), [strategies, strategyType])
+
   return (
     <section className="quant-lab">
       <header className="page-header">
         <h1>量化实验室</h1>
-        <p>使用现有规则链生成模拟交易点，回测胜率、收益、回撤和纸面交易表现。</p>
+        <p>经典量化策略回测 — 均线交叉、MACD、RSI 等，支持参数网格搜索优化</p>
       </header>
-      <div className="quant-grid">
+
+      <div className="quant-lab-layout">
+        {/* ── 左侧：配置面板 ── */}
         <aside className="panel quant-config">
           <label>市场</label>
-          <select value={market} onChange={(event) => setMarket(event.target.value)}>
-            <option value="US">美股</option>
-            <option value="HK">港股</option>
-            <option value="A">A股</option>
+          <select value={market} onChange={e => setMarket(e.target.value)}>
+            {Object.entries(MARKETS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
-          <label>标的</label>
-          <div className="symbol-input">
-            <textarea
-              value={symbols}
-              onChange={(event) => setSymbols(event.target.value)}
-              placeholder="每行一个标的，例如：US.AAPL"
-              spellCheck={false}
-            />
-            <span>{symbols.split(/[,\n]/).map((item) => item.trim()).filter(Boolean).length} 个标的，支持逗号或换行分隔</span>
+
+          <label>标的代码</label>
+          <input value={symbol} onChange={e => setSymbol(e.target.value)} placeholder="HK.00700" />
+
+          <label>策略类型</label>
+          <select value={strategyType} onChange={e => onStrategyChange(e.target.value)}>
+            {strategies.map(s => <option key={s.type} value={s.type}>{s.name}</option>)}
+          </select>
+
+          {/* 动态参数表单 */}
+          {currentStrategy && Object.entries(currentStrategy.params).map(([key, def]) => (
+            <div key={key} className="param-field">
+              <label>{def.label || key}</label>
+              <input
+                type="number"
+                value={params[key] ?? def.default}
+                min={def.min} max={def.max}
+                step={def.type === 'int' ? 1 : 0.01}
+                onChange={e => setParams(prev => ({ ...prev, [key]: parseFloat(e.target.value) || 0 }))}
+              />
+            </div>
+          ))}
+
+          <label>方向</label>
+          <select value={entrySide} onChange={e => setEntrySide(e.target.value)}>
+            <option value="long">仅做多</option>
+            <option value="both">多空双向</option>
+          </select>
+
+          <label>回测区间</label>
+          <div className="date-range">
+            <input type="date" value={dateRange.start} onChange={e => setDateRange(p => ({ ...p, start: e.target.value }))} />
+            <span>—</span>
+            <input type="date" value={dateRange.end} onChange={e => setDateRange(p => ({ ...p, end: e.target.value }))} />
           </div>
-          <label>入口规则链</label>
-          <input value={entryChainKey} onChange={(event) => setEntryChainKey(event.target.value)} />
-          <label>退出策略</label>
-          <select value={exitPolicy} onChange={(event) => setExitPolicy(event.target.value)}>
-            <option value="fixed_holding_days">固定持有 5 天</option>
-            <option value="stop_loss">止损 8%</option>
-          </select>
-          <button onClick={submit} disabled={submitting || isActiveRun}>{submitting || isActiveRun ? '回测处理中' : '开始回测'}</button>
-          {status && <div className="notice">{status}</div>}
+
+          <div className="param-row">
+            <label>初始资金</label>
+            <input type="number" value={initialCash} min={1000} step={10000} onChange={e => setInitialCash(Number(e.target.value))} />
+          </div>
+
+          <div className="param-row">
+            <label>每笔数量</label>
+            <input type="number" value={quantity} min={1} onChange={e => setQuantity(Number(e.target.value))} />
+          </div>
+
+          {/* 风控开关 */}
+          <label className="checkbox-label">
+            <input type="checkbox" checked={useRisk} onChange={e => setUseRisk(e.target.checked)} />
+            启用风控
+          </label>
+          {useRisk && (
+            <div className="risk-config">
+              <div className="param-row">
+                <label>止损</label>
+                <input type="number" value={stopLoss} min={0.01} max={0.5} step={0.01} onChange={e => setStopLoss(Number(e.target.value))} />
+                <span className="unit">{-stopLoss * 100}%</span>
+              </div>
+              <div className="param-row">
+                <label>止盈</label>
+                <input type="number" value={takeProfit} min={0.01} max={1.0} step={0.01} onChange={e => setTakeProfit(Number(e.target.value))} />
+                <span className="unit">+{takeProfit * 100}%</span>
+              </div>
+              <div className="param-row">
+                <label>移动止损</label>
+                <input type="number" value={trailingStop} min={0.01} max={0.3} step={0.01} onChange={e => setTrailingStop(Number(e.target.value))} />
+                <span className="unit">{trailingStop * 100}%</span>
+              </div>
+            </div>
+          )}
+
+          <div className="config-actions">
+            <button onClick={submit} disabled={submitting || isActive} className="btn-primary">
+              {submitting && !showOptimize ? '提交中...' : isActive ? '回测中...' : '开始回测'}
+            </button>
+          </div>
+
+          {/* 参数优化 */}
+          <details open={showOptimize} onToggle={e => setShowOptimize((e.target as HTMLDetailsElement).open)}>
+            <summary>参数优化（网格搜索）</summary>
+            <div className="optimize-config">
+              <label>优化目标</label>
+              <select value={objective} onChange={e => setObjective(e.target.value)}>
+                {Object.entries(OBJECTIVES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+              <label>参数空间 (JSON)</label>
+              <textarea
+                value={paramSpaceText}
+                onChange={e => setParamSpaceText(e.target.value)}
+                rows={3}
+                spellCheck={false}
+              />
+              <button onClick={submitOptimize} disabled={submitting || isActive} className="btn-secondary">
+                {submitting && showOptimize ? '优化中...' : '开始优化'}
+              </button>
+            </div>
+          </details>
+
           {error && <div className="error">{error}</div>}
         </aside>
-        <main className="quant-results">
-          <div className="metric-row">
-            <div className="metric-card">总收益<span>{formatPercent(metricValues.total_return)}</span></div>
-            <div className="metric-card">最大回撤<span>{formatPercent(metricValues.max_drawdown)}</span></div>
-            <div className="metric-card">胜率<span>{formatPercent(metricValues.win_rate)}</span></div>
-            <div className="metric-card">盈亏比<span>{formatNumber(metricValues.win_loss_ratio)}</span></div>
-          </div>
-          <div className="panel quant-progress-panel">
-            <div className="progress-header">
-              <div>
-                <h2>服务端进度</h2>
-                <p>{run ? statusText(run) : '尚未创建回测任务'}</p>
+
+        {/* ── 中间：图表区 ── */}
+        <main className="quant-chart-area">
+          <EquityChart data={run} />
+          {selectedChart && selectedChart.bars.length > 0 && (
+            <TradeList data={selectedChart} />
+          )}
+          {!run && (
+            <div className="panel chart-placeholder">
+              <p>配置策略参数后点击「开始回测」查看权益曲线和买卖信号</p>
+            </div>
+          )}
+          {/* 进度条 */}
+          {run && (
+            <div className="panel quant-progress-panel">
+              <div className="progress-header">
+                <strong>{run.current_stage || run.status}</strong>
+                <strong>{run.progress_pct}%</strong>
               </div>
-              <strong>{run ? `${run.progress_pct}%` : '-'}</strong>
+              <div className={`progress-track ${run.status === 'failed' ? 'failed' : ''} ${run.status === 'completed' ? 'completed' : ''}`}>
+                <span style={{ width: `${run.progress_pct}%` }} />
+              </div>
+              {run.error_message && <div className="error">{run.error_message}</div>}
             </div>
-            <div className={`progress-track ${run?.status === 'failed' ? 'failed' : ''} ${run?.status === 'completed' ? 'completed' : ''}`} aria-label="回测进度">
-              <span style={{ width: `${run?.progress_pct || 0}%` }} />
-            </div>
-            {run?.error_message && <div className="error compact-error">{run.error_message}</div>}
-          </div>
-          <CandlestickChart data={selectedChart} />
-          <div className="panel quant-log-panel">
-            <h2>服务端日志</h2>
-            {run?.progress_logs?.length ? (
-              <ol>
-                {run.progress_logs.map((item, index) => (
-                  <li key={`${item.time || 'log'}-${index}`}>
-                    {item.time && <time>{item.time}</time>}
-                    <span>{item.message}</span>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p className="muted">提交回测后会显示服务端处理过程。</p>
-            )}
-          </div>
+          )}
         </main>
+
+        {/* ── 右侧：指标 + 结果 ── */}
+        <aside className="quant-results">
+          {/* 绩效指标卡 */}
+          <div className="metrics-grid">
+            <MetricCard label="Sharpe" value={metrics.sharpe} fmt="decimal" />
+            <MetricCard label="年化收益" value={metrics.cagr} fmt="percent" />
+            <MetricCard label="总收益" value={metrics.total_return} fmt="percent" />
+            <MetricCard label="最大回撤" value={metrics.max_drawdown} fmt="percent" />
+            <MetricCard label="胜率" value={metrics.win_rate} fmt="percent" />
+            <MetricCard label="盈亏比" value={metrics.win_loss_ratio} fmt="decimal" />
+            <MetricCard label="Calmar" value={metrics.calmar} fmt="decimal" />
+            <MetricCard label="Sortino" value={metrics.sortino} fmt="decimal" />
+            <MetricCard label="交易次数" value={metrics.trade_count} fmt="integer" />
+            <MetricCard label="年化波动" value={metrics.annual_volatility} fmt="percent" />
+          </div>
+
+          {/* 优化结果排名表 */}
+          {optimizationResults.length > 0 && (
+            <div className="panel optimization-results">
+              <h2>参数优化排名</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>排名</th>
+                    <th>参数</th>
+                    <th>{OBJECTIVES[objective as keyof typeof OBJECTIVES] || objective}</th>
+                    <th>Sharpe</th>
+                    <th>收益</th>
+                    <th>回撤</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(optimizationResults as OptimizationResultItem[]).slice(0, 10).map(r => (
+                    <tr key={r.rank} className={r.rank === 1 ? 'best' : ''}>
+                      <td>{r.rank}</td>
+                      <td>{JSON.stringify(r.params)}</td>
+                      <td>{r.objective_value.toFixed(4)}</td>
+                      <td>{r.sharpe.toFixed(2)}</td>
+                      <td className={r.total_return >= 0 ? 'positive' : 'negative'}>{(r.total_return * 100).toFixed(2)}%</td>
+                      <td className="negative">{(r.max_drawdown * 100).toFixed(2)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </aside>
       </div>
     </section>
   )
 }
 
-function statusText(run: QuantBacktestStatus) {
-  const statusMap: Record<string, string> = {
-    queued: '排队中',
-    running: '运行中',
-    completed: '已完成',
-    failed: '失败'
-  }
-  const label = statusMap[run.status] || run.status
-  return `${label}${run.current_stage ? `：${run.current_stage}` : ''}`
-}
+// ── 辅助组件 ──
 
-function formatPercent(value: number | undefined) {
-  if (value === undefined || Number.isNaN(value)) return '-'
-  return `${(value * 100).toFixed(2)}%`
-}
-
-function formatNumber(value: number | undefined) {
-  if (value === undefined || Number.isNaN(value)) return '-'
-  return value.toFixed(2)
-}
-
-function CandlestickChart({ data }: { data?: QuantSymbolChart }) {
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
-
-  if (!data || !data.bars.length) {
-    return <div className="panel chart-placeholder">K 线图 / 买入卖出信号。若服务端提示 missing_bars，请先同步该标的 K 线或使用可用的数据源。</div>
-  }
-
-  const width = 720
-  const height = 470
-  const padding = { top: 24, right: 42, bottom: 34, left: 48 }
-  const pricePanelHeight = 230
-  const rsiPanel = { top: 286, height: 64 }
-  const volumePanel = { top: 382, height: 50 }
-  const plotWidth = width - padding.left - padding.right
-  const plotHeight = pricePanelHeight
-  const high = Math.max(...data.bars.map((bar) => bar.high))
-  const low = Math.min(...data.bars.map((bar) => bar.low))
-  const priceRange = Math.max(high - low, 1)
-  const y = (price: number) => padding.top + ((high - price) / priceRange) * plotHeight
-  const x = (index: number) => padding.left + (data.bars.length === 1 ? plotWidth / 2 : (index / (data.bars.length - 1)) * plotWidth)
-  const candleWidth = Math.max(4, Math.min(18, plotWidth / Math.max(data.bars.length, 1) * 0.56))
-  const indexByDate = new Map(data.bars.map((bar, index) => [bar.date, index]))
-  const markerByDate = data.signals.filter((signal) => signal.direction === 'buy' || signal.direction === 'sell')
-  const overlays = data.overlays || []
-  const zuoyiOverlay = overlays.find((item) => item.type === 'zuoyi')
-  const emaOverlay = overlays.find((item) => item.type === 'ema')
-  const rsiOverlay = overlays.find((item) => item.type === 'rsi')
-  const volumeOverlay = overlays.find((item) => item.type === 'volume')
-  const pctOverlay = overlays.find((item) => item.type === 'pct_change')
-  const hoveredBar = hoveredIndex === null ? null : data.bars[hoveredIndex]
-  const tooltipWidth = 150
-  const tooltipHeight = 116
-  const tooltipX = hoveredIndex === null ? 0 : Math.min(x(hoveredIndex) + 14, width - padding.right - tooltipWidth)
-  const tooltipY = hoveredBar ? Math.max(padding.top, y(hoveredBar.high) - tooltipHeight - 10) : 0
-
+function MetricCard({ label, value, fmt }: { label: string; value?: number; fmt: 'percent' | 'decimal' | 'integer' }) {
+  const display = value == null || Number.isNaN(value) ? '-' :
+    fmt === 'percent' ? `${(value * 100).toFixed(2)}%` :
+    fmt === 'integer' ? String(Math.round(value)) :
+    value.toFixed(4)
   return (
-    <div className="panel kline-panel">
-      <div className="kline-heading">
-        <h2>{data.symbol} K 线与买卖信号</h2>
-        <div className="kline-legend">
-          <span className="buy-dot">买入</span>
-          <span className="sell-dot">卖出</span>
-          {zuoyiOverlay && <span className="zuoyi-dot">左一</span>}
-          {emaOverlay && <span className="ema-dot">EMA</span>}
-        </div>
-      </div>
-      <svg className="kline-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${data.symbol} K线图`}>
-        <line className="axis" x1={padding.left} y1={padding.top + plotHeight} x2={width - padding.right} y2={padding.top + plotHeight} />
-        <line className="axis" x1={padding.left} y1={padding.top} x2={padding.left} y2={padding.top + plotHeight} />
-        {[high, low].map((price) => (
-          <g key={price}>
-            <text className="price-label" x={width - padding.right + 8} y={y(price) + 4}>{price.toFixed(2)}</text>
-          </g>
-        ))}
-        {renderEmaOverlay(emaOverlay, indexByDate, x, y)}
-        {renderZuoYiOverlay(zuoyiOverlay, indexByDate, x, y)}
-        {renderPctOverlay(pctOverlay, indexByDate, x, y, data)}
-        {data.bars.map((bar, index) => {
-          const cx = x(index)
-          const openY = y(bar.open)
-          const closeY = y(bar.close)
-          const bullish = bar.close >= bar.open
-          return (
-            <g
-              key={bar.date}
-              className={bullish ? 'candle up' : 'candle down'}
-              onMouseEnter={() => setHoveredIndex(index)}
-              onMouseLeave={() => setHoveredIndex(null)}
-              onFocus={() => setHoveredIndex(index)}
-              onBlur={() => setHoveredIndex(null)}
-              tabIndex={0}
-            >
-              <line x1={cx} y1={y(bar.high)} x2={cx} y2={y(bar.low)} />
-              <rect x={cx - candleWidth / 2} y={Math.min(openY, closeY)} width={candleWidth} height={Math.max(Math.abs(openY - closeY), 2)} rx="2" />
-              <rect className="candle-hitbox" x={cx - Math.max(candleWidth, 12) / 2} y={padding.top} width={Math.max(candleWidth, 12)} height={plotHeight} />
-              {(index === 0 || index === data.bars.length - 1) && <text className="date-label" x={cx} y={height - 14}>{bar.date.slice(5)}</text>}
-            </g>
-          )
-        })}
-        {hoveredBar && (
-          <g className="kline-tooltip" transform={`translate(${tooltipX} ${tooltipY})`} pointerEvents="none">
-            <rect width={tooltipWidth} height={tooltipHeight} rx="8" />
-            <text x="12" y="22" className="tooltip-title">{hoveredBar.date}</text>
-            <text x="12" y="44">开盘 <tspan>{formatPrice(hoveredBar.open)}</tspan></text>
-            <text x="12" y="62">最高 <tspan>{formatPrice(hoveredBar.high)}</tspan></text>
-            <text x="12" y="80">最低 <tspan>{formatPrice(hoveredBar.low)}</tspan></text>
-            <text x="12" y="98">收盘 <tspan>{formatPrice(hoveredBar.close)}</tspan></text>
-          </g>
-        )}
-        {markerByDate.map((signal, markerIndex) => {
-          const index = indexByDate.get(signal.date)
-          if (index === undefined) return null
-          const bar = data.bars[index]
-          const cx = x(index)
-          const baseY = signal.direction === 'buy' ? y(bar.low) + 18 : y(bar.high) - 18
-          const markerClass = signal.direction === 'buy' ? 'marker buy' : 'marker sell'
-          const label = signal.direction === 'buy' ? 'B' : 'S'
-          return (
-            <g key={`${signal.signal_id}-${markerIndex}`} className={markerClass}>
-              <circle cx={cx} cy={baseY} r="10" />
-              <text x={cx} y={baseY + 4}>{label}</text>
-            <title>{`${label} ${signal.date} ${signal.reason}`}</title>
-          </g>
-          )
-        })}
-        {renderRsiOverlay(rsiOverlay, indexByDate, x, padding.left, width - padding.right, rsiPanel)}
-        {renderVolumeOverlay(volumeOverlay, indexByDate, x, padding.left, width - padding.right, volumePanel)}
-      </svg>
-      {overlays.length > 0 && (
-        <div className="strategy-overlay-list">
-          {overlays.map((overlay) => (
-            <span key={`${overlay.type}-${overlay.rule_key}`}>{overlay.rule_name}</span>
-          ))}
-        </div>
-      )}
+    <div className="metric-card">
+      <span className="metric-label">{label}</span>
+      <span className="metric-value">{display}</span>
     </div>
   )
 }
 
-function renderEmaOverlay(overlay: QuantStrategyOverlay | undefined, indexByDate: Map<string, number>, x: (index: number) => number, y: (price: number) => number) {
-  if (!overlay?.lines?.length) return null
+function EquityChart({ data }: { data?: QuantBacktestStatus | null }) {
+  if (!data || data.status !== 'completed') return null
+  const m = data.metrics
   return (
-    <g className="ema-overlay">
-      {overlay.lines.map((line, lineIndex) => (
-        <polyline key={line.name} className={lineIndex === 0 ? 'ema-fast' : 'ema-slow'} points={line.points.map((point) => {
-          const index = indexByDate.get(point.date)
-          return index === undefined ? '' : `${x(index)},${y(point.value)}`
-        }).filter(Boolean).join(' ')} />
-      ))}
-      {overlay.signals?.map((signal, index) => {
-        const pointIndex = indexByDate.get(signal.date)
-        if (pointIndex === undefined) return null
-        return <circle key={`${signal.date}-${index}`} className="ema-signal" cx={x(pointIndex)} cy={18} r="5"><title>{signal.label || overlay.rule_name}</title></circle>
-      })}
-    </g>
+    <div className="panel equity-summary">
+      <h2>回测完成</h2>
+      <div className="equity-stats">
+        <span>总收益: <strong className={m.total_return >= 0 ? 'positive' : 'negative'}>{(m.total_return * 100).toFixed(2)}%</strong></span>
+        <span>Sharpe: <strong>{m.sharpe?.toFixed(2) || '-'}</strong></span>
+        <span>胜率: <strong>{(m.win_rate * 100).toFixed(1)}%</strong></span>
+      </div>
+    </div>
   )
 }
 
-function renderZuoYiOverlay(overlay: QuantStrategyOverlay | undefined, indexByDate: Map<string, number>, x: (index: number) => number, y: (price: number) => number) {
-  if (!overlay?.items?.length) return null
+function TradeList({ data }: { data: QuantSymbolChart }) {
+  if (!data.bars.length) return null
+  const trades = data.trades || []
   return (
-    <g className="zuoyi-overlay">
-      {overlay.items.map((item, index) => {
-        const leftIndex = indexByDate.get(item.left_one_date)
-        const medianIndex = indexByDate.get(item.median_date)
-        const breakoutIndex = indexByDate.get(item.breakout_date)
-        if (leftIndex === undefined || medianIndex === undefined || breakoutIndex === undefined) return null
-        const highY = y(item.left_one_high)
-        const lowY = y(item.left_one_low)
-        return (
-          <g key={`${item.direction}-${item.left_one_date}-${item.breakout_date}-${index}`}>
-            <line x1={x(leftIndex)} y1={highY} x2={x(breakoutIndex)} y2={highY} />
-            <line x1={x(leftIndex)} y1={lowY} x2={x(breakoutIndex)} y2={lowY} />
-            <circle className="median-point" cx={x(medianIndex)} cy={y(item.direction === 'bullish' ? item.median_low || item.left_one_low : item.median_high || item.left_one_high)} r="5" />
-            <rect className="left-one-point" x={x(leftIndex) - 5} y={(highY + lowY) / 2 - 5} width="10" height="10" rx="2" />
-            <text x={x(breakoutIndex)} y={item.direction === 'bullish' ? highY - 8 : lowY + 16}>{item.direction === 'bullish' ? '左一突破' : '左一跌破'}</text>
-            <title>{`左一战法 ${item.direction}：左一 ${item.left_one_date}，中位 ${item.median_date}，突破 ${item.breakout_date}`}</title>
-          </g>
-        )
-      })}
-    </g>
+    <div className="panel trade-list">
+      <h2>交易明细</h2>
+      <div className="trade-table-wrap">
+        <table>
+          <thead>
+            <tr><th>日期</th><th>方向</th><th>价格</th><th>数量</th></tr>
+          </thead>
+          <tbody>
+            {trades.map((t, i) => (
+              <tr key={t.trade_id || i}>
+                <td>{t.date || '-'}</td>
+                <td className={t.side === 'buy' ? 'positive' : 'negative'}>{t.side === 'buy' ? '买入' : '卖出'}</td>
+                <td>{t.price.toFixed(2)}</td>
+                <td>{t.quantity}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   )
-}
-
-function renderPctOverlay(overlay: QuantStrategyOverlay | undefined, indexByDate: Map<string, number>, x: (index: number) => number, y: (price: number) => number, data: QuantSymbolChart) {
-  if (!overlay?.signals?.length) return null
-  return (
-    <g className="pct-overlay">
-      {overlay.signals.map((signal, index) => {
-        const pointIndex = indexByDate.get(signal.date)
-        if (pointIndex === undefined) return null
-        const bar = data.bars[pointIndex]
-        return (
-          <g key={`${signal.rule_key}-${signal.date}-${index}`}>
-            <path d={`M ${x(pointIndex)} ${y(bar.high) - 26} l 7 7 l -7 7 l -7 -7 z`} />
-            <text x={x(pointIndex)} y={y(bar.high) - 32}>{formatSignedPercent(signal.pct_change)}</text>
-            <title>{`${signal.rule_name || '单日涨跌幅'} ${formatSignedPercent(signal.pct_change)}`}</title>
-          </g>
-        )
-      })}
-    </g>
-  )
-}
-
-function renderRsiOverlay(overlay: QuantStrategyOverlay | undefined, indexByDate: Map<string, number>, x: (index: number) => number, left: number, right: number, panel: { top: number; height: number }) {
-  if (!overlay?.lines?.length) return null
-  const yRsi = (value: number) => panel.top + panel.height - (Math.max(0, Math.min(100, value)) / 100) * panel.height
-  return (
-    <g className="indicator-panel rsi-panel">
-      <text x={left} y={panel.top - 8}>{overlay.rule_name}</text>
-      <line x1={left} y1={panel.top + panel.height} x2={right} y2={panel.top + panel.height} />
-      {overlay.thresholds?.map((threshold) => (
-        <line key={threshold} className="threshold" x1={left} y1={yRsi(threshold)} x2={right} y2={yRsi(threshold)} />
-      ))}
-      {overlay.lines.map((line) => (
-        <polyline key={line.name} points={line.points.map((point) => {
-          const index = indexByDate.get(point.date)
-          return index === undefined ? '' : `${x(index)},${yRsi(point.value)}`
-        }).filter(Boolean).join(' ')} />
-      ))}
-      {overlay.signals?.map((signal, index) => {
-        const pointIndex = indexByDate.get(signal.date)
-        if (pointIndex === undefined || signal.value == null) return null
-        return <circle key={`${signal.date}-${index}`} cx={x(pointIndex)} cy={yRsi(signal.value)} r="4"><title>{signal.rule_name}</title></circle>
-      })}
-    </g>
-  )
-}
-
-function renderVolumeOverlay(overlay: QuantStrategyOverlay | undefined, indexByDate: Map<string, number>, x: (index: number) => number, left: number, right: number, panel: { top: number; height: number }) {
-  if (!overlay?.bars?.length) return null
-  const maxVolume = Math.max(...overlay.bars.map((bar) => bar.value), 1)
-  const barWidth = 4
-  return (
-    <g className="indicator-panel volume-panel">
-      <text x={left} y={panel.top - 8}>{overlay.rule_name}</text>
-      <line x1={left} y1={panel.top + panel.height} x2={right} y2={panel.top + panel.height} />
-      {overlay.bars.map((bar) => {
-        const index = indexByDate.get(bar.date)
-        if (index === undefined) return null
-        const h = Math.max(1, (bar.value / maxVolume) * panel.height)
-        return <rect key={bar.date} x={x(index) - barWidth / 2} y={panel.top + panel.height - h} width={barWidth} height={h} />
-      })}
-      {overlay.signals?.map((signal, index) => {
-        const pointIndex = indexByDate.get(signal.date)
-        if (pointIndex === undefined) return null
-        return <circle key={`${signal.date}-${index}`} cx={x(pointIndex)} cy={panel.top + 8} r="4"><title>{`${overlay.rule_name}: ${signal.today_volume || '-'}`}</title></circle>
-      })}
-    </g>
-  )
-}
-
-function formatPrice(value: number) {
-  return Number.isFinite(value) ? value.toFixed(2) : '-'
-}
-
-function formatSignedPercent(value?: number | null) {
-  if (value === undefined || value === null || Number.isNaN(value)) return '-'
-  return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
 }

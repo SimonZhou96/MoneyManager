@@ -97,6 +97,12 @@ class MetricSnapshot:
     average_holding_period: float = 0
     capital_utilization: float = 0
     max_position_weight: float = 0
+    # 新增字段
+    sharpe: float = 0
+    sortino: float = 0
+    calmar: float = 0
+    cagr: float = 0
+    annual_volatility: float = 0
     option_metrics: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -137,3 +143,41 @@ def trade_to_dict(trade: Trade) -> Dict[str, Any]:
         "fee": float(trade.fee),
         "slippage": float(trade.slippage),
     }
+
+
+# ---------------------------------------------------------------------------
+# Strategy layer models
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class StrategyConfig:
+    """策略配置（JSON-serializable，对前端暴露）"""
+    strategy_type: str          # "ma_cross" | "macd" | "rsi" | "bollinger" | "momentum" | "turtle"
+    params: dict                # 策略参数，如 {"fast": 5, "slow": 20}
+    entry_side: str = "long"    # "long" | "short" | "both"
+
+
+@dataclass(frozen=True)
+class ParamGrid:
+    """参数网格定义"""
+    strategy_type: str
+    param_space: dict           # {"fast": [5,10,20], "slow": [20,30,60]}
+    objective: str = "sharpe"   # "sharpe" | "total_return" | "calmar" | "win_rate"
+
+
+@dataclass(frozen=True)
+class RiskConfig:
+    """风控配置（可选）"""
+    stop_loss_pct: Optional[float] = None        # 固定止损比例，如 -0.08
+    take_profit_pct: Optional[float] = None      # 固定止盈比例，如 +0.20
+    trailing_stop_pct: Optional[float] = None    # 移动止损，回撤超过 X% 出场
+
+
+@dataclass(frozen=True)
+class OptimizationResult:
+    """一组参数的回测结果"""
+    params: dict                        # {"fast": 5, "slow": 20}
+    metrics: "MetricSnapshot"           # 完整绩效指标
+    equity_curve: list                  # list[EquityPoint]
+    rank: int                           # 排名（按 objective）
+    objective_value: float              # 目标函数值

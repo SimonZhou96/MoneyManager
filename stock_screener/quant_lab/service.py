@@ -113,6 +113,145 @@ class QuantLabService:
         except Exception as exc:
             self.repository.fail_quant_backtest_run(run_id, str(exc))
 
+    # ── 策略回测 ──
+
+    def submit_strategy_backtest(self, payload: dict, user_id: int | None = None) -> dict[str, Any]:
+        run_id = str(uuid.uuid4())
+        self.repository.create_quant_backtest_run({
+            "run_id": run_id, "user_id": user_id, "status": "queued",
+            "progress_pct": 5, "current_stage": "queued", "request": payload,
+            "warnings": [], "progress_logs": [_progress_log_entry("策略回测任务已创建，等待执行")],
+        })
+        return {"run_id": run_id, "status": "queued"}
+
+    def run_strategy_backtest(self, run_id: str) -> None:
+        row = self.repository.get_quant_backtest_run(run_id)
+        if not row:
+            return
+        try:
+            self.repository.update_quant_backtest_progress(
+                run_id, status="running", progress_pct=10,
+                current_stage="准备数据", log_message="开始加载K线数据",
+            )
+            payload = row.get("request") or {}
+            created_data_provider = self.data_provider is None
+            data_provider = self.data_provider or _build_default_data_provider(self.repository, payload)
+
+            from .strategies import create_strategy
+            from .models import RiskConfig
+
+            strategy_cfg = payload.get("strategy") or {}
+            strategy = create_strategy(
+                strategy_cfg["type"],
+                strategy_cfg.get("params") or {},
+                entry_side=strategy_cfg.get("entry_side", "long"),
+            )
+            risk_raw = payload.get("risk")
+            risk = RiskConfig(
+                stop_loss_pct=risk_raw.get("stop_loss_pct") if risk_raw else None,
+                take_profit_pct=risk_raw.get("take_profit_pct") if risk_raw else None,
+                trailing_stop_pct=risk_raw.get("trailing_stop_pct") if risk_raw else None,
+            ) if risk_raw else None
+
+            request = BacktestRequest(
+                market=str(payload["market"]),
+                symbols=list(payload["symbols"]),
+                start=_parse_date(payload["start"]),
+                end=_parse_date(payload["end"]),
+                initial_cash=float(payload["initial_cash"]),
+                quantity=int(payload.get("quantity") or 10),
+                commission_rate=float(payload.get("commission_rate") or 0.001),
+                slippage_rate=float(payload.get("slippage_rate") or 0.001),
+                max_position_weight=float(payload.get("max_position_weight") or 1.0),
+                risk_config=risk,
+            )
+            self.repository.update_quant_backtest_progress(
+                run_id, progress_pct=40, current_stage="生成信号",
+                log_message=f"策略类型: {strategy_cfg['type']}, 标的: {request.symbols}",
+            )
+            try:
+                runner = BacktestRunner(data_provider=data_provider, strategy=strategy)
+                result = runner.run(request)
+            finally:
+                if created_data_provider and hasattr(data_provider, "close"):
+                    data_provider.close()
+            self.repository.update_quant_backtest_progress(
+                run_id, progress_pct=85, current_stage="计算指标",
+                log_message=f"生成 {len(result.signals)} 个信号，成交 {len(result.trades)} 笔",
+            )
+            self.repository.finish_quant_backtest_run(
+                run_id, asdict(result.metrics), warnings=result.warnings,
+                chart=_chart_payload_for_strategy(result),
+            )
+        except Exception as exc:
+            self.repository.fail_quant_backtest_run(run_id, str(exc))
+
+    # ── 参数优化 ──
+
+    def submit_optimization(self, payload: dict, user_id: int | None = None) -> dict[str, Any]:
+        run_id = str(uuid.uuid4())
+        self.repository.create_quant_backtest_run({
+            "run_id": run_id, "user_id": user_id, "status": "queued",
+            "progress_pct": 5, "current_stage": "queued", "request": payload,
+            "warnings": [], "progress_logs": [_progress_log_entry("参数优化任务已创建，等待执行")],
+        })
+        return {"run_id": run_id, "status": "queued"}
+
+    def run_optimization(self, run_id: str) -> None:
+        row = self.repository.get_quant_backtest_run(run_id)
+        if not row:
+            return
+        try:
+            self.repository.update_quant_backtest_progress(
+                run_id, status="running", progress_pct=10,
+                current_stage="准备数据", log_message="开始加载K线数据",
+            )
+            payload = row.get("request") or {}
+            created_data_provider = self.data_provider is None
+            data_provider = self.data_provider or _build_default_data_provider(self.repository, payload)
+
+            from .models import ParamGrid
+            from .optimizer import GridSearchOptimizer
+
+            param_space = payload.get("param_space") or {}
+            objective = str(payload.get("objective") or "sharpe")
+            optimizer = GridSearchOptimizer(data_provider, objective=objective)
+            param_grid = ParamGrid(
+                strategy_type=str(payload["strategy_type"]),
+                param_space={str(k): list(v) for k, v in param_space.items()},
+                objective=objective,
+            )
+            self.repository.update_quant_backtest_progress(
+                run_id, progress_pct=20, current_stage="网格搜索",
+                log_message=f"策略: {param_grid.strategy_type}, 参数空间: {param_space}",
+            )
+            try:
+                results = optimizer.optimize(
+                    market=str(payload["market"]),
+                    symbol=str(payload["symbol"]),
+                    start=_parse_date(payload["start"]),
+                    end=_parse_date(payload["end"]),
+                    param_grid=param_grid,
+                    initial_cash=float(payload.get("initial_cash") or 100000),
+                )
+            finally:
+                if created_data_provider and hasattr(data_provider, "close"):
+                    data_provider.close()
+            self.repository.update_quant_backtest_progress(
+                run_id, progress_pct=85, current_stage="汇总结果",
+                log_message=f"测试 {len(results)} 组参数，最优: {results[0].params if results else 'N/A'}",
+            )
+            best_metrics = asdict(results[0].metrics) if results else {}
+            best_metrics["optimization_total"] = len(results)
+            best_metrics["optimization_top_params"] = results[0].params if results else {}
+            sym = str(payload.get("symbol") or payload.get("symbols", [""])[0])
+            self.repository.finish_quant_backtest_run(
+                run_id, best_metrics, warnings=[],
+                chart=_optimization_chart_payload(results, sym),
+            )
+        except Exception as exc:
+            self.repository.fail_quant_backtest_run(run_id, str(exc))
+
 
 def _parse_date(value: Any) -> date:
     if isinstance(value, date):
@@ -380,3 +519,37 @@ def _build_rule_chain_strategy(repository, payload: dict) -> RuleChainStrategyAd
         chain = rule_repository.load_active_chain(market, timeframe)
     engine = RuleEngine(metadata=metadata, chain_config=chain)
     return RuleChainStrategyAdapter(chain=chain, rule_engine=engine, exit_policy=payload.get("exit_policy") or {})
+
+
+def _chart_payload_for_strategy(result) -> dict[str, Any]:
+    """策略回测的 chart payload（简化版，无规则链叠加层）"""
+    symbols = []
+    for symbol, bars in result.bars_by_symbol.items():
+        symbols.append({
+            "symbol": symbol,
+            "bars": [bar_to_dict(bar) for bar in bars],
+            "signals": [signal_to_dict(s, None) for s in result.signals if s.symbol == symbol],
+            "trades": [trade_to_dict(t) for t in result.trades if t.symbol == symbol],
+            "overlays": [],
+        })
+    return {"symbols": symbols}
+
+
+def _optimization_chart_payload(results: list, symbol: str) -> dict[str, Any]:
+    """参数优化结果的 chart payload"""
+    if not results:
+        return {"symbols": [], "optimization_results": []}
+    return {
+        "symbols": [{"symbol": symbol, "bars": [], "signals": [], "trades": [], "overlays": []}],
+        "optimization_results": [
+            {
+                "params": r.params, "rank": r.rank,
+                "objective_value": r.objective_value,
+                "sharpe": r.metrics.sharpe,
+                "total_return": r.metrics.total_return,
+                "max_drawdown": r.metrics.max_drawdown,
+                "win_rate": r.metrics.win_rate,
+            }
+            for r in results[:50]
+        ],
+    }
