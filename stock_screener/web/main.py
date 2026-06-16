@@ -326,6 +326,7 @@ def run_single_stock_web_job(run_id: str) -> None:
             "final_score": stock_result.get("final_score"),
             "technical_score": stock_result.get("technical_score"),
             "macro_score": stock_result.get("macro_score"),
+            "score_details": stock_result.get("score_details"),
             "close_price": stock_result.get("close_price"),
             "market_cap": stock_result.get("market_cap"),
             "pe_ratio": stock_result.get("pe_ratio"),

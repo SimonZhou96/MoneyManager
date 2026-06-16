@@ -1,94 +1,144 @@
 import React from 'react'
 import type { DimensionBreakdown } from './types'
-import { computeContribution } from './utils'
 
 interface Props {
   ruleDetails: Array<{
     rule_key?: string
     rule_name?: string
+    rule_type?: string
     result?: string
     strategy_category?: string
+    implementation?: string
     details?: Record<string, unknown>
+    reason?: string
   }>
   dimensions: DimensionBreakdown[]
   finalScore: number | null | undefined
+  /** 后端 result_json，包含 score_details / technical_score / macro_score 等 */
+  resultJson: Record<string, unknown>
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-  technical: '技术面', macro: '宏观面', event_hot: '事件热度',
-  capital_risk: '资金风险', llm: 'AI分析',
+const ENTERPRISE_MODULE_WEIGHTS: Record<string, number> = {
+  macro_score: 0.30,
+  industry_score: 0.25,
+  company_score: 0.25,
+  valuation_score: 0.10,
+  trading_score: 0.10,
 }
 
-export function ScoreFormulaPanel({ ruleDetails, dimensions, finalScore }: Props) {
-  // 提取各规则的贡献分，按维度分组
-  const grouped = new Map<string, Array<{ name: string; score: number }>>()
+const ENTERPRISE_MODULE_LABELS: Record<string, string> = {
+  macro_score: '宏观', industry_score: '行业', company_score: '公司',
+  valuation_score: '估值', trading_score: '交易',
+}
 
+/** 从 ruleDetails 找出 EnterprisePotentialAnalysis 的五模块详情 */
+function findEnterpriseDetails(
+  ruleDetails: Props['ruleDetails'],
+): Record<string, unknown> | null {
   for (const r of ruleDetails) {
-    if (r.result !== 'pass') continue
-    const contrib = computeContribution('pass', r.details)
-    if (contrib.score <= 0) continue
-    const cat = r.strategy_category || 'technical'
-    const label = CATEGORY_LABELS[cat] || cat
-    if (!grouped.has(label)) grouped.set(label, [])
-    grouped.get(label)!.push({
-      name: r.rule_name || r.rule_key || '?',
-      score: contrib.score,
-    })
+    const imp = r.implementation || ''
+    if (imp === 'EnterprisePotentialAnalysisStrategizer' && r.details) {
+      return r.details
+    }
   }
+  return null
+}
 
-  const allContribs = [...grouped.values()].flat()
-  const totalContrib = allContribs.reduce((s, c) => s + c.score, 0)
-  const base = 50
-  const computed = Math.min(100, base + totalContrib)
+function _safeNum(v: unknown): number | null {
+  if (v == null) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+export function ScoreFormulaPanel({ ruleDetails, dimensions: _dims, finalScore, resultJson: _rj }: Props) {
+  const enterprise = findEnterpriseDetails(ruleDetails)
+
+  // 扣分项
+  const negative: Array<{ name: string; score: number; reason?: string }> = []
+  for (const r of ruleDetails) {
+    if (r.result !== 'fail') continue
+    const name = r.rule_name || r.rule_key || '?'
+    const ds = r.details || {}
+    const s = _safeNum(ds.score ?? ds.total_score) ?? 0
+    negative.push({ name, score: s, reason: r.reason })
+  }
 
   return (
     <div className="score-formula-panel">
-      {/* 权重说明行 */}
-      <div className="sfp-weights">
-        {dimensions.map(d => (
-          <span
-            key={d.key}
-            className={`sfp-weight-tag${d.contributionType === 'not_included' ? ' sfp-weight-excluded' : ''}`}
-          >
-            {d.label} × {d.weight}%{d.weight === 0 ? '（不纳入）' : ''}
-          </span>
-        ))}
-      </div>
+      <h3 className="screening-subtitle">买入评分计算链路</h3>
 
-      {/* 公式展开 */}
-      <div className="sfp-formula-body">
-        <div className="sfp-formula-line">
-          <span className="sfp-base">基础分 50.0</span>
-          {allContribs.length > 0 && <span className="sfp-op"> + </span>}
-        </div>
-
-        {[...grouped.entries()].map(([cat, items]) => (
-          <div key={cat} className="sfp-group">
-            <span className="sfp-cat-label">{cat}</span>
-            <div className="sfp-items">
-              {items.map((c, i) => (
-                <span key={i} className="sfp-item">
-                  <span className="sfp-item-score">+{c.score.toFixed(1)}</span>
-                  <span className="sfp-item-name">{c.name}</span>
-                </span>
-              ))}
+      {/* ── 一、五模块宏观分解 ── */}
+      {enterprise && (
+        <div className="sfp-section">
+          <div className="sfp-section-title">一、五模块宏观分解（EnterprisePotential）</div>
+          <table className="sfp-table">
+            <thead>
+              <tr>
+                <th>模块</th>
+                <th>评分</th>
+                <th>权重</th>
+                <th>贡献</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(ENTERPRISE_MODULE_WEIGHTS).map(([field, weight]) => {
+                const raw = _safeNum((enterprise as any)[field])
+                const contrib = raw != null ? raw * weight : null
+                return (
+                  <tr key={field}>
+                    <td>{ENTERPRISE_MODULE_LABELS[field] || field}</td>
+                    <td>
+                      {raw != null ? raw.toFixed(1) : <span className="sfp-na">N/A（用50.0补齐）</span>}
+                    </td>
+                    <td>{(weight * 100).toFixed(0)}%</td>
+                    <td>
+                      {contrib != null ? (
+                        <span className={contrib > 0 ? 'sfp-positive' : 'sfp-zero'}>{contrib.toFixed(1)}</span>
+                      ) : <span className="sfp-na">—</span>}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          {enterprise.total_score != null && (
+            <div className="sfp-enterprise-total">
+              加权总分：{Number(enterprise.total_score).toFixed(1)}
+              {Number(enterprise.total_score) < 70 && (
+                <span className="sfp-na"> → 门限70分未通过</span>
+              )}
             </div>
-          </div>
-        ))}
-
-        <div className="sfp-result-line">
-          <span className="sfp-equals">= </span>
-          <span className="sfp-total">{computed.toFixed(1)}</span>
-          <span className="sfp-outof"> / 100</span>
-          {finalScore != null && Math.abs(Number(finalScore) - computed) > 0.5 && (
-            <span className="sfp-note">（后端综合评分 {Number(finalScore).toFixed(1)}）</span>
           )}
         </div>
+      )}
+
+      {/* ── 二、扣分项 ── */}
+      <div className="sfp-section">
+        <div className="sfp-section-title">二、扣分项</div>
+        {negative.length > 0 ? (
+          <ul className="sfp-factor-list">
+            {negative.map((f, i) => (
+              <li key={i} className="sfp-factor-negative">
+                <span className="sfp-factor-name">{f.name}</span>
+                {f.score > 0 && <span className="sfp-factor-score">-{f.score.toFixed(1)}</span>}
+                {f.reason && <span className="sfp-factor-note">（{f.reason}）</span>}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="sfp-empty">无扣分项</p>
+        )}
       </div>
 
-      {allContribs.length === 0 && (
-        <p className="sfp-empty">当前无通过规则贡献额外加分，评分仅含基础分。</p>
-      )}
+      {/* ── 三、最终买入评分 ── */}
+      <div className="sfp-section sfp-final-section">
+        <div className="sfp-section-title">三、最终买入评分</div>
+        <div className="sfp-formula-final">
+          <code className="sfp-code sfp-code-result">
+            {finalScore != null ? finalScore.toFixed(1) : '—'} / 100
+          </code>
+        </div>
+      </div>
     </div>
   )
 }

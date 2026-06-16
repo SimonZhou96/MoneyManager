@@ -12,22 +12,37 @@ def _round(value: float) -> float:
 
 
 def _pair_trade_pnls(trades: Iterable[Trade]) -> List[float]:
-    open_positions = {}
+    open_positions: dict[str, dict] = {}
     pnls: List[float] = []
     for trade in trades:
         key = trade.symbol
         if trade.side == "buy":
-            open_positions[key] = {
-                "quantity": int(trade.quantity),
-                "price": float(trade.price),
-                "fee": float(trade.fee or 0),
-            }
+            qty = int(trade.quantity)
+            price = float(trade.price)
+            fee = float(trade.fee or 0)
+            if key in open_positions:
+                # 加权平均累加，而非覆盖（修复连续买入时 win_rate=0 的 bug）
+                old = open_positions[key]
+                total_qty = old["quantity"] + qty
+                old["price"] = (old["price"] * old["quantity"] + price * qty) / total_qty
+                old["quantity"] = total_qty
+                old["fee"] = old["fee"] + fee
+            else:
+                open_positions[key] = {"quantity": qty, "price": price, "fee": fee}
             continue
         if trade.side == "sell" and key in open_positions:
-            opened = open_positions.pop(key)
-            qty = min(int(trade.quantity), int(opened["quantity"]))
-            gross = (float(trade.price) - float(opened["price"])) * qty
-            pnls.append(gross - float(opened["fee"]) - float(trade.fee or 0))
+            opened = open_positions[key]
+            sell_qty = int(trade.quantity)
+            matched_qty = min(sell_qty, int(opened["quantity"]))
+            gross = (float(trade.price) - float(opened["price"])) * matched_qty
+            buy_fee_share = float(opened["fee"]) * (matched_qty / int(opened["quantity"]))
+            pnls.append(gross - buy_fee_share - float(trade.fee or 0))
+            remaining = int(opened["quantity"]) - matched_qty
+            if remaining <= 0:
+                open_positions.pop(key)
+            else:
+                opened["quantity"] = remaining
+                opened["fee"] = float(opened["fee"]) - buy_fee_share
     return pnls
 
 

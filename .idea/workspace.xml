@@ -7,6 +7,10 @@
     <list default="true" id="0bf7b9ee-c261-4d26-a715-0c09e20aab7a" name="更改" comment="">
       <change beforePath="$PROJECT_DIR$/.claude/worktrees/dynamic-dazzling-charm" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/worktrees/dynamic-dazzling-charm" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.claude/worktrees/p0-kline-fixes" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/worktrees/p0-kline-fixes" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/screeningReport/ScoreFormulaPanel.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/screeningReport/ScoreFormulaPanel.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/main.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/main.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/styles.css" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -114,7 +118,7 @@
       <workItem from="1780308089940" duration="13389000" />
       <workItem from="1780411491520" duration="14870000" />
       <workItem from="1780661937810" duration="6440000" />
-      <workItem from="1781143829969" duration="5409000" />
+      <workItem from="1781143829969" duration="6008000" />
     </task>
     <servers />
   </component>

@@ -4139,115 +4139,108 @@ section { background: transparent; }
   border-radius: 8px;
 }
 
-/* 权重标签行 */
-.sfp-weights {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 14px;
+/* 分区 */
+.sfp-section {
+  margin-top: 14px;
 }
-.sfp-weight-tag {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: 999px;
-  color: var(--cs-text-secondary);
-  background: rgba(216,184,78,0.08);
-  border: 1px solid rgba(216,184,78,0.2);
-}
-.sfp-weight-excluded {
-  color: var(--cs-text-muted);
-  background: transparent;
-  border-color: rgba(107,114,128,0.25);
-  text-decoration: line-through;
+.sfp-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--cs-gold);
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(216,184,78,0.12);
 }
 
-/* 公式主体 */
-.sfp-formula-body {
-  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+/* 表格 */
+.sfp-table {
+  width: 100%;
+  font-size: 13px;
+  border-collapse: collapse;
 }
-.sfp-formula-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 8px;
+.sfp-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cs-text-muted);
+  padding: 4px 8px 6px;
+  border-bottom: 1px solid var(--cs-border);
 }
-.sfp-base {
+.sfp-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.02);
+}
+.sfp-dim-label { color: var(--cs-text-secondary); font-weight: 600; }
+.sfp-dim-raw { font-family: monospace; color: var(--cs-text-primary); }
+.sfp-dim-weight { font-family: monospace; color: var(--cs-text-muted); }
+.sfp-dim-contrib { font-family: monospace; }
+.sfp-positive { color: #22c55e; font-weight: 700; }
+.sfp-zero { color: var(--cs-text-muted); }
+.sfp-na { color: var(--cs-text-muted); font-size: 12px; font-style: italic; }
+.sfp-row-excluded { opacity: 0.55; }
+.sfp-row-inactive { opacity: 0.4; }
+.sfp-row-inactive td { font-size: 12px; }
+.sfp-note-text {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--cs-text-muted);
+  line-height: 1.5;
+}
+
+/* 五模块总分 */
+.sfp-enterprise-total {
+  margin-top: 8px;
+  font-family: monospace;
   font-size: 14px;
   font-weight: 700;
   color: var(--cs-gold);
 }
-.sfp-op {
-  font-size: 14px;
-  color: var(--cs-text-muted);
-}
 
-/* 维度分组 */
-.sfp-group {
-  margin: 6px 0 6px 16px;
-  padding-left: 12px;
-  border-left: 2px solid rgba(216,184,78,0.2);
+/* 因子列表 */
+.sfp-factor-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
-.sfp-cat-label {
-  display: block;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--cs-text-muted);
-  text-transform: uppercase;
-  margin-bottom: 4px;
-}
-.sfp-items {
+.sfp-factor-list li {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-}
-.sfp-item {
-  display: inline-flex;
   align-items: baseline;
-  gap: 3px;
+  gap: 6px;
+  padding: 3px 0;
   font-size: 13px;
 }
-.sfp-item-score {
-  font-weight: 700;
-  color: #22c55e;
+.sfp-factor-positive .sfp-factor-score { color: #22c55e; font-weight: 700; font-family: monospace; }
+.sfp-factor-negative .sfp-factor-score { color: #ef4444; font-weight: 700; font-family: monospace; }
+.sfp-factor-name { color: var(--cs-text-secondary); }
+.sfp-factor-note { font-size: 11px; color: var(--cs-text-muted); }
+
+/* 最终公式 */
+.sfp-final-section { margin-top: 16px; }
+.sfp-formula-final {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  background: rgba(0,0,0,0.2);
+  border-radius: 6px;
 }
-.sfp-item-name {
+.sfp-code {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 12px;
   color: var(--cs-text-secondary);
 }
-
-/* 结果行 */
-.sfp-result-line {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--cs-border);
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-}
-.sfp-equals {
-  font-size: 14px;
-  color: var(--cs-text-muted);
-}
-.sfp-total {
-  font-size: 22px;
+.sfp-code-result {
+  font-size: 16px;
   font-weight: 800;
   color: var(--cs-gold);
-}
-.sfp-outof {
-  font-size: 14px;
-  color: var(--cs-text-muted);
-}
-.sfp-note {
-  font-size: 11px;
-  color: var(--cs-text-muted);
-  margin-left: 8px;
-  font-family: system-ui, sans-serif;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(216,184,78,0.2);
 }
 .sfp-empty {
   font-size: 12px;
   color: var(--cs-text-muted);
-  margin: 4px 0 0;
+  margin: 2px 0 0;
 }
 
 /* ── ScoreBreakdownCards (第二级: 买入评分构成) ── */
