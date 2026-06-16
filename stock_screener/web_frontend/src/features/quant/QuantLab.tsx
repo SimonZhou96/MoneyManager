@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react'
 import { api } from '../../api'
+import { KlineChart } from '../marketAnalysis/components/KlineChart'
+import type { TradeMarker } from '../marketAnalysis/components/KlineChart'
 import type {
   StrategyMeta, StrategyBacktestRequest, OptimizationRequest,
   QuantBacktestStatus, OptimizationResultItem, QuantSymbolChart,
@@ -143,6 +145,17 @@ export function QuantLab() {
   // ── 派生数据 ──
   const metrics = useMemo(() => run?.metrics || {}, [run])
   const selectedChart = useMemo(() => run?.chart?.symbols?.[0] as QuantSymbolChart | undefined, [run])
+  const chartMarkers = useMemo<TradeMarker[]>(() => {
+    if (!selectedChart?.trades) return []
+    return selectedChart.trades
+      .filter(t => t.date)
+      .map(t => ({
+        time: t.date!,
+        side: t.side as 'buy' | 'sell',
+        price: t.price,
+        label: t.side === 'buy' ? 'B' : 'S',
+      }))
+  }, [selectedChart?.trades])
   const optimizationResults = useMemo(() => run?.chart?.optimization_results || [], [run])
   const currentStrategy = useMemo(() => strategies.find(s => s.type === strategyType), [strategies, strategyType])
 
@@ -263,17 +276,31 @@ export function QuantLab() {
 
         {/* ── 中间：图表区 ── */}
         <main className="quant-chart-area">
-          <EquityChart data={run} />
-          {selectedChart && selectedChart.bars.length > 0 && (
-            <TradeList data={selectedChart} />
-          )}
-          {!run && (
+          {selectedChart && selectedChart.bars.length > 0 ? (
+            <>
+              <KlineChart
+                rows={selectedChart.bars as any[]}
+                loading={false}
+                error={''}
+                timeframe={'1d'}
+                symbol={selectedChart.symbol || ''}
+                markers={chartMarkers}
+                showMA={true}
+                showVolume={true}
+                showMACD={false}
+              />
+              <TradeList data={selectedChart} />
+            </>
+          ) : (
             <div className="panel chart-placeholder">
-              <p>配置策略参数后点击「开始回测」查看权益曲线和买卖信号</p>
+              {run && run.status !== 'completed'
+                ? <p>回测运行中... {run.current_stage} ({run.progress_pct}%)</p>
+                : <p>配置策略参数后点击「开始回测」查看 K 线图与买卖信号</p>
+              }
             </div>
           )}
           {/* 进度条 */}
-          {run && (
+          {run && !TERMINAL.has(run.status) && (
             <div className="panel quant-progress-panel">
               <div className="progress-header">
                 <strong>{run.current_stage || run.status}</strong>
@@ -350,21 +377,6 @@ function MetricCard({ label, value, fmt }: { label: string; value?: number; fmt:
     <div className="metric-card">
       <span className="metric-label">{label}</span>
       <span className="metric-value">{display}</span>
-    </div>
-  )
-}
-
-function EquityChart({ data }: { data?: QuantBacktestStatus | null }) {
-  if (!data || data.status !== 'completed') return null
-  const m = data.metrics
-  return (
-    <div className="panel equity-summary">
-      <h2>回测完成</h2>
-      <div className="equity-stats">
-        <span>总收益: <strong className={m.total_return >= 0 ? 'positive' : 'negative'}>{(m.total_return * 100).toFixed(2)}%</strong></span>
-        <span>Sharpe: <strong>{m.sharpe?.toFixed(2) || '-'}</strong></span>
-        <span>胜率: <strong>{(m.win_rate * 100).toFixed(1)}%</strong></span>
-      </div>
     </div>
   )
 }
