@@ -162,15 +162,16 @@ interface ChartRef {
   macdDIF: any
   macdDEA: any
   macdHistogram: any
+  markersPrimitive: any
   indicatorData: CandleLike[] | null
   LineSeries: any
   HistogramSeries: any
 }
 
 function _applyMarkers(chartRef: ChartRef | null, markers: TradeMarker[] | undefined, timeframe: Timeframe) {
-  if (!chartRef?.candleSeries) return
+  if (!chartRef?.markersPrimitive) return
   if (!markers || markers.length === 0) {
-    try { chartRef.candleSeries.setMarkers([]) } catch (_) { /* ignore */ }
+    try { chartRef.markersPrimitive.setMarkers([]) } catch (_) { /* ignore */ }
     return
   }
   const formatted = markers
@@ -187,8 +188,7 @@ function _applyMarkers(chartRef: ChartRef | null, markers: TradeMarker[] | undef
       }
     })
     .filter(m => !!m.time)
-  console.warn(`[KlineChart] applying ${formatted.length} markers:`, formatted.map(m => `${m.time}:${m.text}`).join(', '))
-  try { chartRef.candleSeries.setMarkers(formatted) } catch (e) { console.error('[KlineChart] setMarkers failed:', e) }
+  try { chartRef.markersPrimitive.setMarkers(formatted) } catch (e) { console.error('[KlineChart] setMarkers failed:', e) }
 }
 
 export function KlineChart({ rows, loading, loadingMore, error, diagnostics, timeframe, symbol, markers, showMA, showVolume, showMACD, onNeedOlderData }: Props) {
@@ -224,7 +224,7 @@ export function KlineChart({ rows, loading, loadingMore, error, diagnostics, tim
     let cancelled = false
 
     const initChart = async () => {
-      const { createChart, CandlestickSeries, HistogramSeries, LineSeries } = await import('lightweight-charts')
+      const { createChart, CandlestickSeries, HistogramSeries, LineSeries, createSeriesMarkers } = await import('lightweight-charts')
       if (cancelled) return
 
       // Clean up previous
@@ -280,6 +280,9 @@ export function KlineChart({ rows, loading, loadingMore, error, diagnostics, tim
         color: 'rgba(201,168,76,0.15)',
       })
 
+      // v5 API: markers are a separate primitive, not a method on the series
+      const markersPrimitive = createSeriesMarkers(candleSeries, [])
+
       chartRef.current = {
         chart,
         candleSeries,
@@ -288,6 +291,7 @@ export function KlineChart({ rows, loading, loadingMore, error, diagnostics, tim
         macdDIF: null,
         macdDEA: null,
         macdHistogram: null,
+        markersPrimitive,
         indicatorData: null,
         LineSeries,
         HistogramSeries,
