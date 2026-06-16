@@ -4467,3 +4467,206 @@ section { background: transparent; }
 .diag-count-missing { color: #f59e0b; font-size: 12px; margin-right: 8px; }
 .diag-count-error { color: #ef4444; font-size: 12px; }
 .diagnostic-confidence { color: var(--cs-text-muted); font-size: 12px; margin-left: 8px; }
+
+/* ── Quant Lab 三栏布局 ── */
+.quant-lab-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr 300px;
+  gap: 16px;
+  min-height: calc(100vh - 180px);
+}
+
+.quant-config {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  max-height: calc(100vh - 180px);
+}
+
+.quant-config label {
+  font-size: 12px;
+  color: var(--cs-text-muted, #888);
+  margin-bottom: -4px;
+}
+
+.quant-config input,
+.quant-config select {
+  padding: 6px 10px;
+  border: 1px solid var(--cs-border, #333);
+  border-radius: 6px;
+  background: var(--cs-input-bg, #1a1a2e);
+  color: var(--cs-text, #eee);
+  font-size: 13px;
+}
+
+.quant-config .date-range {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.quant-config .date-range input { flex: 1; }
+.quant-config .date-range span { color: var(--cs-text-muted, #666); }
+
+.quant-config .param-field { display: flex; flex-direction: column; gap: 2px; }
+
+.param-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.param-row label { min-width: 70px; font-size: 12px; color: var(--cs-text-muted, #888); }
+.param-row input { flex: 1; }
+.param-row .unit { font-size: 12px; color: var(--cs-text-muted, #888); min-width: 40px; }
+
+.risk-config {
+  padding: 8px;
+  border: 1px solid var(--cs-border, #333);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.checkbox-label {
+  display: flex !important;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--cs-text, #eee) !important;
+  font-size: 13px !important;
+}
+
+.config-actions { margin-top: 8px; }
+
+.config-actions button,
+.optimize-config button {
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-primary {
+  background: var(--cs-accent, #00d4aa);
+  color: #000;
+}
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-secondary { background: var(--cs-input-bg, #2a2a3e); color: var(--cs-text, #eee); }
+.btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.quant-config details {
+  margin-top: 8px;
+  border: 1px solid var(--cs-border, #333);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.quant-config summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cs-text, #eee);
+}
+
+.optimize-config {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.optimize-config textarea {
+  font-family: monospace;
+  font-size: 12px;
+  padding: 6px;
+  border: 1px solid var(--cs-border, #333);
+  border-radius: 4px;
+  background: var(--cs-input-bg, #1a1a2e);
+  color: var(--cs-text, #eee);
+  resize: vertical;
+}
+
+/* ── 图表区 ── */
+.quant-chart-area {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.equity-summary { text-align: center; }
+
+.equity-stats {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  margin-top: 8px;
+}
+
+/* ── 指标卡 ── */
+.quant-results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  max-height: calc(100vh - 180px);
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.metric-card {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+  border: 1px solid var(--cs-border, #333);
+  border-radius: 8px;
+  background: var(--cs-input-bg, #1a1a2e);
+}
+
+.metric-label { font-size: 11px; color: var(--cs-text-muted, #888); }
+.metric-value { font-size: 18px; font-weight: 700; margin-top: 2px; }
+
+.positive { color: #00d4aa; }
+.negative { color: #ff4757; }
+
+/* ── 优化结果表 ── */
+.optimization-results table {
+  width: 100%;
+  font-size: 12px;
+  border-collapse: collapse;
+}
+
+.optimization-results th,
+.optimization-results td {
+  padding: 4px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--cs-border, #333);
+}
+
+.optimization-results th { color: var(--cs-text-muted, #888); font-weight: 500; }
+.optimization-results tr.best { background: rgba(0, 212, 170, 0.08); }
+
+/* ── 交易明细 ── */
+.trade-table-wrap {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.trade-list table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.trade-list th, .trade-list td { padding: 4px 6px; text-align: left; border-bottom: 1px solid var(--cs-border, #333); }
+.trade-list th { color: var(--cs-text-muted, #888); position: sticky; top: 0; background: var(--cs-panel-bg, #111); }
+
+/* ── 响应式 ── */
+@media (max-width: 1024px) {
+  .quant-lab-layout { grid-template-columns: 1fr; }
+  .metrics-grid { grid-template-columns: repeat(4, 1fr); }
+}
