@@ -167,6 +167,29 @@ interface ChartRef {
   HistogramSeries: any
 }
 
+function _applyMarkers(chartRef: ChartRef | null, markers: TradeMarker[] | undefined, timeframe: Timeframe) {
+  if (!chartRef?.candleSeries) return
+  if (!markers || markers.length === 0) {
+    try { chartRef.candleSeries.setMarkers([]) } catch (_) { /* ignore */ }
+    return
+  }
+  const formatted = markers
+    .map(m => {
+      const side: string = m.side || 'buy'
+      const isBuy = side === 'buy'
+      return {
+        time: toChartTime(String(m.time || ''), timeframe) as any,
+        position: (isBuy ? 'belowBar' : 'aboveBar') as 'belowBar' | 'aboveBar',
+        shape: (m.shape || (isBuy ? 'arrowUp' : 'arrowDown')) as 'arrowUp' | 'arrowDown' | 'circle' | 'square',
+        color: m.color || (isBuy ? '#22c55e' : '#ef4444'),
+        text: m.label || (isBuy ? '买入' : '卖出'),
+        size: 2,
+      }
+    })
+    .filter(m => !!m.time)
+  try { chartRef.candleSeries.setMarkers(formatted) } catch (_) { /* ignore */ }
+}
+
 export function KlineChart({ rows, loading, loadingMore, error, diagnostics, timeframe, symbol, markers, showMA, showVolume, showMACD, onNeedOlderData }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ChartRef | null>(null)
@@ -178,6 +201,8 @@ export function KlineChart({ rows, loading, loadingMore, error, diagnostics, tim
   showMACDRef.current = showMACD
   const onNeedOlderDataRef = useRef(onNeedOlderData)
   onNeedOlderDataRef.current = onNeedOlderData
+  const markersRef = useRef(markers)
+  markersRef.current = markers
   const isUpdatingRef = useRef(false)
   const isInitialRef = useRef(true)
 
@@ -287,13 +312,15 @@ export function KlineChart({ rows, loading, loadingMore, error, diagnostics, tim
         }
       })
 
-      // 异步初始化完成后立即应用已到达的数据
+      // 异步初始化完成后立即应用已到达的数据和 markers
       if (!cancelled && rowsRef.current.length > 0) {
         _applyAll(chartRef.current, rowsRef.current, timeframe, { showMA: showMARef.current, showMACD: showMACDRef.current })
         isInitialRef.current = false
       } else {
         chart.timeScale().fitContent()
       }
+      // 补应用 markers（因为异步 initChart 导致 markers useEffect 先执行时 chart 尚未就绪）
+      _applyMarkers(chartRef.current, markersRef.current, timeframe)
     }
 
     initChart().catch(console.error)
@@ -350,27 +377,7 @@ export function KlineChart({ rows, loading, loadingMore, error, diagnostics, tim
 
   // Overlay trade markers
   useEffect(() => {
-    const ref = chartRef.current
-    if (!ref?.candleSeries) return
-    if (!markers || markers.length === 0) {
-      try { ref.candleSeries.setMarkers([]) } catch (_) { /* ignore */ }
-      return
-    }
-    const formatted = markers
-      .map(m => {
-        const side: string = m.side || 'buy'
-        const isBuy = side === 'buy'
-        return {
-          time: toChartTime(String(m.time || ''), timeframe) as any,
-          position: (isBuy ? 'belowBar' : 'aboveBar') as 'belowBar' | 'aboveBar',
-          shape: (m.shape || (isBuy ? 'arrowUp' : 'arrowDown')) as 'arrowUp' | 'arrowDown' | 'circle' | 'square',
-          color: m.color || (isBuy ? '#22c55e' : '#ef4444'),
-          text: m.label || (isBuy ? '买入' : '卖出'),
-          size: m.label ? 2 : 2,
-        }
-      })
-      .filter(m => !!m.time)
-    try { ref.candleSeries.setMarkers(formatted) } catch (_) { /* ignore */ }
+    _applyMarkers(chartRef.current, markers, timeframe)
   }, [markers, timeframe])
 
   return (
