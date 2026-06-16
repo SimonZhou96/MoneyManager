@@ -146,15 +146,17 @@ export function QuantLab() {
   const metrics = useMemo(() => run?.metrics || {}, [run])
   const selectedChart = useMemo(() => run?.chart?.symbols?.[0] as QuantSymbolChart | undefined, [run])
   const chartMarkers = useMemo<TradeMarker[]>(() => {
-    if (!selectedChart?.trades) return []
-    return selectedChart.trades
+    if (!selectedChart?.trades) { console.warn('[QuantLab] no trades in selectedChart'); return [] }
+    const result = selectedChart.trades
       .filter(t => t.date)
       .map(t => ({
         time: t.date!,
         side: t.side as 'buy' | 'sell',
         price: t.price,
-        label: t.side === 'buy' ? 'B' : 'S',
+        label: `${t.side === 'buy' ? 'B' : 'S'}@${t.price?.toFixed(1)}`,
       }))
+    console.warn(`[QuantLab] chartMarkers: ${result.length} markers from ${selectedChart.trades.length} trades`)
+    return result
   }, [selectedChart?.trades])
   const optimizationResults = useMemo(() => run?.chart?.optimization_results || [], [run])
   const currentStrategy = useMemo(() => strategies.find(s => s.type === strategyType), [strategies, strategyType])

@@ -14,7 +14,7 @@
  *
  * 已犯多次 → 参见 CLAUDE.md fix log: 2026-06-13 / 2026-06-15 / 2026-06-15(2)
  */
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import type { Timeframe } from '../types'
 
 export interface TradeMarker {
@@ -182,12 +182,13 @@ function _applyMarkers(chartRef: ChartRef | null, markers: TradeMarker[] | undef
         position: (isBuy ? 'belowBar' : 'aboveBar') as 'belowBar' | 'aboveBar',
         shape: (m.shape || (isBuy ? 'arrowUp' : 'arrowDown')) as 'arrowUp' | 'arrowDown' | 'circle' | 'square',
         color: m.color || (isBuy ? '#22c55e' : '#ef4444'),
-        text: m.label || (isBuy ? '买入' : '卖出'),
-        size: 2,
+        text: m.label || (isBuy ? 'B' : 'S'),
+        size: 3,
       }
     })
     .filter(m => !!m.time)
-  try { chartRef.candleSeries.setMarkers(formatted) } catch (_) { /* ignore */ }
+  console.warn(`[KlineChart] applying ${formatted.length} markers:`, formatted.map(m => `${m.time}:${m.text}`).join(', '))
+  try { chartRef.candleSeries.setMarkers(formatted) } catch (e) { console.error('[KlineChart] setMarkers failed:', e) }
 }
 
 export function KlineChart({ rows, loading, loadingMore, error, diagnostics, timeframe, symbol, markers, showMA, showVolume, showMACD, onNeedOlderData }: Props) {
@@ -201,10 +202,9 @@ export function KlineChart({ rows, loading, loadingMore, error, diagnostics, tim
   showMACDRef.current = showMACD
   const onNeedOlderDataRef = useRef(onNeedOlderData)
   onNeedOlderDataRef.current = onNeedOlderData
-  const markersRef = useRef(markers)
-  markersRef.current = markers
   const isUpdatingRef = useRef(false)
   const isInitialRef = useRef(true)
+  const [chartReady, setChartReady] = useState(false)
 
   // Dispose chart on unmount
   useEffect(() => {
@@ -312,15 +312,14 @@ export function KlineChart({ rows, loading, loadingMore, error, diagnostics, tim
         }
       })
 
-      // 异步初始化完成后立即应用已到达的数据和 markers
+      // 异步初始化完成后立即应用已到达的数据
       if (!cancelled && rowsRef.current.length > 0) {
         _applyAll(chartRef.current, rowsRef.current, timeframe, { showMA: showMARef.current, showMACD: showMACDRef.current })
         isInitialRef.current = false
       } else {
         chart.timeScale().fitContent()
       }
-      // 补应用 markers（因为异步 initChart 导致 markers useEffect 先执行时 chart 尚未就绪）
-      _applyMarkers(chartRef.current, markersRef.current, timeframe)
+      if (!cancelled) setChartReady(true)
     }
 
     initChart().catch(console.error)
@@ -378,7 +377,7 @@ export function KlineChart({ rows, loading, loadingMore, error, diagnostics, tim
   // Overlay trade markers
   useEffect(() => {
     _applyMarkers(chartRef.current, markers, timeframe)
-  }, [markers, timeframe])
+  }, [markers, timeframe, chartReady])
 
   return (
     <div className="kline-chart-panel">
