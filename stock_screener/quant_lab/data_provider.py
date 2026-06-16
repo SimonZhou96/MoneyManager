@@ -38,6 +38,7 @@ class CachedKlineDataProvider:
         work = df.copy()
         work["date"] = pd.to_datetime(work["date"]).dt.date
         work = work[(work["date"] >= start) & (work["date"] <= end)]
+        work = work.drop_duplicates(subset=["date"]).sort_values("date")
         return [
             Bar(
                 ts=row["date"],
