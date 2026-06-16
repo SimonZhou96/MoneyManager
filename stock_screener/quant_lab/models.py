@@ -97,6 +97,12 @@ class MetricSnapshot:
     average_holding_period: float = 0
     capital_utilization: float = 0
     max_position_weight: float = 0
+    # 新增字段
+    sharpe: float = 0
+    sortino: float = 0
+    calmar: float = 0
+    cagr: float = 0
+    annual_volatility: float = 0
     option_metrics: Dict[str, Any] = field(default_factory=dict)
 
 
