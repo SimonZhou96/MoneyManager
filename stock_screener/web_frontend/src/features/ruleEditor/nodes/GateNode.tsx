@@ -18,7 +18,7 @@ export function GateNode({ data, selected }: Props) {
       className={`gate-node-card ${selected ? 'selected' : ''}`}
       style={{ borderColor: color }}
     >
-      <Handle type="target" position={Position.Top} style={{ background: color, borderColor: color }} />
+      <Handle id="target" type="target" position={Position.Top} style={{ background: color, borderColor: color }} />
       <div className="gate-node-body">
         <span className="gate-symbol" style={{ color }}>{symbol}</span>
         <span className="gate-label" style={{ color }}>{label}</span>
@@ -26,7 +26,7 @@ export function GateNode({ data, selected }: Props) {
       <div className="gate-node-sub" style={{ color: `${color}99` }}>
         {isAnd ? '全部通过' : '任一通过'}
       </div>
-      <Handle type="source" position={Position.Bottom} style={{ background: color, borderColor: color }} />
+      <Handle id="source" type="source" position={Position.Bottom} style={{ background: color, borderColor: color }} />
     </div>
   )
 }

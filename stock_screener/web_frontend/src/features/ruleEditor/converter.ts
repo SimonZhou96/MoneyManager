@@ -152,17 +152,44 @@ function makeGateNode(
 
   const allNodes: Node[] = [gateNode as Node]
   const allEdges: Edge[] = [parentEdge]
+  const childY = y + 100
+  const GAP = 40
 
-  const childCount = children.length
-  const totalWidth = childCount * 180
-  const startX = x - totalWidth / 2 + 90
+  // ── Pass 1: build each child subtree at temp x=0, measure its width ──
+  interface PackedChild {
+    nodes: Node[]
+    edges: Edge[]
+    width: number
+    minX: number
+  }
+  const packed: PackedChild[] = []
+  for (const child of children) {
+    const result = convertSubExpr(child, gateId, 0, childY)
+    const xs = result.nodes.map(n => n.position.x)
+    const minX = Math.min(0, ...xs)
+    const maxX = Math.max(0, ...xs)
+    packed.push({ ...result, width: maxX - minX, minX })
+  }
 
-  for (let i = 0; i < children.length; i++) {
-    const childX = startX + i * 180
-    const childY = y + 100
-    const result = convertSubExpr(children[i], gateId, childX, childY)
-    allNodes.push(...result.nodes)
-    allEdges.push(...result.edges)
+  // ── Pass 2: pack subtrees side by side horizontally ──
+  let cursorX = 0
+  for (const p of packed) {
+    const offsetX = cursorX - p.minX
+    for (const node of p.nodes) {
+      node.position.x += offsetX
+    }
+    cursorX += p.width + GAP
+  }
+
+  // ── Pass 3: center the packed row under the gate's x position ──
+  const totalWidth = cursorX - GAP
+  const centerShift = x - totalWidth / 2
+  for (const p of packed) {
+    for (const node of p.nodes) {
+      node.position.x += centerShift
+    }
+    allNodes.push(...p.nodes)
+    allEdges.push(...p.edges)
   }
 
   return { nodes: allNodes, edges: allEdges }

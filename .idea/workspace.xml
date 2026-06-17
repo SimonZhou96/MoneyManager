@@ -7,8 +7,20 @@
     <list default="true" id="0bf7b9ee-c261-4d26-a715-0c09e20aab7a" name="更改" comment="">
       <change beforePath="$PROJECT_DIR$/.claude/worktrees/dynamic-dazzling-charm" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/worktrees/dynamic-dazzling-charm" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.claude/worktrees/p0-kline-fixes" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/worktrees/p0-kline-fixes" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/screeningReport/ScoreFormulaPanel.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/screeningReport/ScoreFormulaPanel.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/CLAUDE.md" beforeDir="false" afterPath="$PROJECT_DIR$/CLAUDE.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/db.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/db.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/interactive_screening.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/interactive_screening.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/quant_lab/strategies/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/quant_lab/strategies/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/rule_engine.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/rule_engine.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/strategizers.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/strategizers.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/strategy.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/strategy.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/tests/test_e2e_unified_bullish_top20_scoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/tests/test_e2e_unified_bullish_top20_scoring.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/tests/test_unified_bullish_top20_hk02685.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/tests/test_unified_bullish_top20_hk02685.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/ruleEditor/RuleChainEditor.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/ruleEditor/RuleChainEditor.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/ruleEditor/converter.ts" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/ruleEditor/converter.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/ruleEditor/nodes/GateNode.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/ruleEditor/nodes/GateNode.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/ruleEditor/nodes/OutputNode.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/ruleEditor/nodes/OutputNode.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/ruleEditor/nodes/RuleNode.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/ruleEditor/nodes/RuleNode.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/main.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/main.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/styles.css" afterDir="false" />
     </list>
@@ -119,6 +131,7 @@
       <workItem from="1780411491520" duration="14870000" />
       <workItem from="1780661937810" duration="6440000" />
       <workItem from="1781143829969" duration="6008000" />
+      <workItem from="1781662028858" duration="597000" />
     </task>
     <servers />
   </component>

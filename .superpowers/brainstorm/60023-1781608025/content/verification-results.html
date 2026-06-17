@@ -1,0 +1,104 @@
+<h2>验证结果：Bug 1 已确认 + 发现新 Bug</h2>
+<p class="subtitle">Playwright 实操 → 规则链编辑器 → 选择链 → 新建 → 重选</p>
+
+<div class="section">
+  <h3>🔴 Bug 1（已确认）：React Bailout 导致重选不加载</h3>
+  <div class="mockup">
+    <div class="mockup-header">操作步骤与结果</div>
+    <div class="mockup-body">
+      <table style="width:100%;color:#ccc;font-size:13px;border-collapse:collapse">
+        <tr style="border-bottom:1px solid #2a2a40">
+          <th style="padding:6px 10px;text-align:left;color:#c9a84c">步骤</th>
+          <th style="padding:6px 10px;text-align:left;color:#c9a84c">操作</th>
+          <th style="padding:6px 10px;text-align:left;color:#c9a84c">控制台状态</th>
+          <th style="padding:6px 10px;text-align:left;color:#c9a84c">画布</th>
+        </tr>
+        <tr style="border-bottom:1px solid #2a2a40">
+          <td style="padding:6px 10px">1</td>
+          <td style="padding:6px 10px">打开规则链页</td>
+          <td style="padding:6px 10px">默认链加载 → 有 edge warnings</td>
+          <td style="padding:6px 10px;color:#4caf50">✅ 有节点</td>
+        </tr>
+        <tr style="border-bottom:1px solid #2a2a40">
+          <td style="padding:6px 10px">2</td>
+          <td style="padding:6px 10px">选"左一战法+宏观标签+五模块评分"</td>
+          <td style="padding:6px 10px">25 → 27 warnings（新 edge 生成）</td>
+          <td style="padding:6px 10px;color:#4caf50">✅ 有节点</td>
+        </tr>
+        <tr style="border-bottom:1px solid #2a2a40">
+          <td style="padding:6px 10px">3</td>
+          <td style="padding:6px 10px">点击"新建"</td>
+          <td style="padding:6px 10px">27 → 35 warnings（canvas 重置）</td>
+          <td style="padding:6px 10px;color:#ffc107">⚠️ 清空</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 10px">4</td>
+          <td style="padding:6px 10px">重选"左一战法+宏观标签+五模块评分"</td>
+          <td style="padding:6px 10px;color:#ff5252"><strong>35 → 35（无变化！）</strong></td>
+          <td style="padding:6px 10px;color:#ff5252"><strong>❌ 仍为空</strong></td>
+        </tr>
+      </table>
+      <div style="margin-top:12px;padding:8px;background:#2a1515;border-radius:4px;color:#ff5252;font-size:12px">
+        <strong>确认</strong>：第4步的 select 事件调用了 setChainKey("zuoyi_with_macro_enhanced")，但该值与当前 state 相同 → React Object.is 比较 → Bail out → useEffect 不触发 → expressionToFlow 不调用 → 画布不加载
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>🟡 Bug 5（额外发现）：React Flow Edge Handle 错配</h3>
+  <div class="mockup">
+    <div class="mockup-body">
+      <div style="font-family:monospace;font-size:11px;color:#e8a838;margin-bottom:8px">
+        [React Flow]: Couldn't create edge for source handle id: "null", edge id: e1. Help: https://reactflow.dev/error#008
+      </div>
+      <p style="font-size:13px;color:#ccc">
+        所有通过 <code>expressionToFlow()</code> 生成的边都有 <code>sourceHandle: null</code>。
+        React Flow v12 严格要求边必须指定有效的 source handle ID，否则边不会渲染。
+      </p>
+      <p style="font-size:13px;color:#ccc;margin-top:8px">
+        这意味着<strong>即使 Bug 1 修好了，画布上的连接线也不会显示</strong>，节点之间只能看到孤立的方块。
+        这解释了为什么你截图里画布看起来"是空的"——可能节点在，但边没有连接。
+      </p>
+      <div style="margin-top:8px;padding:6px;background:#1a1a2e;border-radius:4px;color:#888;font-size:11px">
+        converter.ts 中 makeRuleNode 创建的节点没有为 source handle 指定 ID → gate 节点的 edge 连接时找不到匹配的 handle → edge 创建失败
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>两 Bug 叠加效果</h3>
+  <div style="display:flex;flex-direction:column;gap:8px;font-size:13px;color:#ccc">
+    <div style="padding:8px;background:#1a2e1a;border-radius:4px;border-left:3px solid #4caf50">
+      <strong>首次选择链</strong>：expressionToFlow 执行 ✅ → 节点创建 ✅ → 边创建 ❌（Bug 5）→ 画布上有节点但无线条
+    </div>
+    <div style="padding:8px;background:#2e1a1a;border-radius:4px;border-left:3px solid #ff5252">
+      <strong>新建后重选</strong>：expressionToFlow 不执行 ❌（Bug 1）→ 节点不创建 ❌ → 边不创建 ❌ → 画布完全空白
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>要不要把两个 Bug 都修了？</h3>
+
+  <div class="options">
+    <div class="option" data-choice="fix-both" onclick="toggleSelect(this)">
+      <div class="letter">A</div>
+      <div class="content">
+        <h3>修 Bug 1 + Bug 5（推荐）</h3>
+        <p>Bug 1: 在 startNewChain 里加 setChainKey('')（1行）</p>
+        <p>Bug 5: 修复 converter.ts 中节点的 handle ID + 边的 source/target handle 匹配（约10行）</p>
+        <p>工作量 ~15分钟，画布完全可用</p>
+      </div>
+    </div>
+    <div class="option" data-choice="fix-bug1-only" onclick="toggleSelect(this)">
+      <div class="letter">B</div>
+      <div class="content">
+        <h3>只修 Bug 1</h3>
+        <p>startNewChain 加 setChainKey('')，重选链时能重新加载</p>
+        <p>但边仍然不渲染，节点之间有 gap</p>
+      </div>
+    </div>
+  </div>
+</div>

@@ -4,6 +4,7 @@ from .base import BaseStrategy, STRATEGY_REGISTRY, _register
 from .ma_cross import MACrossStrategy  # noqa: F401 — triggers @_register
 from .macd import MACDStrategy        # noqa: F401
 from .rsi import RSIStrategy          # noqa: F401
+from .energy_phase import EnergyPhaseStrategy  # noqa: F401
 
 
 def list_strategies() -> list[dict]:

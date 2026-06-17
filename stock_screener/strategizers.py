@@ -17,6 +17,16 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+
+def _coalesce(explicit: Any, defaults: Dict[str, Any], key: str, fallback: Any) -> Any:
+    """解析参数：显式值 > 市场预设中的值 > 默认回退值。"""
+    if explicit is not None:
+        return explicit
+    if key in defaults:
+        return defaults[key]
+    return fallback
+
+
 if __package__:
     from .filters import FilterContext, StockInfo
     from .strategy import (
@@ -26,6 +36,9 @@ if __package__:
         analyze_technical_pattern,
         compute_daily_volume_vs_prior3_and_pct_change,
         get_latest_rsi,
+        analyze_energy_phases,
+        EnergyPhaseAnalysis,
+        get_market_energy_params,
     )
 else:
     from filters import FilterContext, StockInfo
@@ -36,6 +49,9 @@ else:
         analyze_technical_pattern,
         compute_daily_volume_vs_prior3_and_pct_change,
         get_latest_rsi,
+        analyze_energy_phases,
+        EnergyPhaseAnalysis,
+        get_market_energy_params,
     )
 
 
@@ -422,4 +438,123 @@ class RSIOverboughtStrategizer(Strategizer):
             satisfied=satisfied,
             reason=f"RSI({self.period})={rsi:.2f} {'>=' if satisfied else '<'} {self.threshold}",
             details={"rsi": rsi, "period": self.period, "threshold": self.threshold},
+        )
+
+
+class EnergyPhaseClassifier(Strategizer):
+    """六态物理能量相位分类器。
+
+    将价格运动映射为六种物理状态：
+        COMPRESS   — 势能积蓄，低动能 → 观望 (WATCH)
+        RELEASE    — 势能→动能转化 → 看涨买入 (BUY)
+        TRENDING   — 动能持续主导 → 持有 (HOLD)
+        EXHAUSTION — 动能衰竭 → 预警 (WARN)
+        PEAK       — 动能归零高位 → 卖出 (SELL)
+        CRASH      — 空方动能 → 回避 (AVOID)
+
+    当状态为 RELEASE 或 TRENDING 时触发 bullish 看涨信号，
+    自动被 unified_bullish_top20 的技术规则发现并参与 Top20 评选。
+
+    支持 market 参数自动加载市场特定预设（HK 低波动降阈值 / A 高波动升阈值）。
+    通过 params dict 传入的 market 值会触发 get_market_energy_params()，然后用显式参数覆盖。
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str = "EnergyPhaseClassifier",
+        enabled: bool = True,
+        market: str | None = None,
+        ma_period: int = 20,
+        pe_threshold: float = 100.0,
+        ke_threshold: float | None = None,  # None → 市场预设或默认 4.0
+        epr_release_threshold: float = 0.1,
+        ke_decay_exhaustion: float = 0.5,
+        ke_decay_peak: float = 0.8,
+        consistency_window: int = 10,
+        delta_window: int = 5,
+        lookback_pe_days: int = 3,
+        min_rows: int = 30,
+        # ── 状态判定参数（None → 市场预设或硬编码默认值） ──
+        crash_neg_streak: int | None = None,
+        crash_ke_path: float | None = None,
+        peak_pe_threshold: float | None = None,
+        peak_ke_silence: float | None = None,
+        peak_delta_e: float | None = None,
+        release_delta_e: float | None = None,
+        trending_consistency: float | None = None,
+        compress_consistency: float | None = None,
+        compress_ke_path: float | None = None,
+    ):
+        super().__init__(name=name, enabled=enabled)
+
+        # ── 加载市场预设 ──
+        market_defaults = get_market_energy_params(market) if market else {}
+
+        self.ma_period = ma_period
+        self.pe_threshold = pe_threshold
+        self.ke_threshold = _coalesce(ke_threshold, market_defaults, "ke_threshold", 4.0)
+        self.epr_release_threshold = epr_release_threshold
+        self.ke_decay_exhaustion = ke_decay_exhaustion
+        self.ke_decay_peak = ke_decay_peak
+        self.consistency_window = consistency_window
+        self.delta_window = delta_window
+        self.lookback_pe_days = lookback_pe_days
+        self.min_rows = min_rows
+        # 状态判定参数（显式值 > 市场预设 > 默认值）
+        self.crash_neg_streak = _coalesce(crash_neg_streak, market_defaults, "crash_neg_streak", 5)
+        self.crash_ke_path = _coalesce(crash_ke_path, market_defaults, "crash_ke_path", -20.0)
+        self.peak_pe_threshold = _coalesce(peak_pe_threshold, market_defaults, "peak_pe_threshold", 80.0)
+        self.peak_ke_silence = _coalesce(peak_ke_silence, market_defaults, "peak_ke_silence", 1.0)
+        self.peak_delta_e = _coalesce(peak_delta_e, market_defaults, "peak_delta_e", -10.0)
+        self.release_delta_e = _coalesce(release_delta_e, market_defaults, "release_delta_e", 10.0)
+        self.trending_consistency = _coalesce(trending_consistency, market_defaults, "trending_consistency", 0.7)
+        self.compress_consistency = _coalesce(compress_consistency, market_defaults, "compress_consistency", 0.3)
+        self.compress_ke_path = _coalesce(compress_ke_path, market_defaults, "compress_ke_path", 0.0)
+
+    def apply(self, stock: "StockInfo", context: "FilterContext") -> StrategizerOutput:
+        df = stock.kline_df
+        if df is None or df.empty:
+            return StrategizerOutput(
+                name=self.name,
+                satisfied=False,
+                reason="K-line data unavailable for energy phase analysis",
+                details={"kline_available": False},
+            )
+
+        analysis = analyze_energy_phases(
+            df=df,
+            check_date=context.check_date,
+            ma_period=self.ma_period,
+            pe_threshold=self.pe_threshold,
+            ke_threshold=self.ke_threshold,
+            epr_release_threshold=self.epr_release_threshold,
+            ke_decay_exhaustion=self.ke_decay_exhaustion,
+            ke_decay_peak=self.ke_decay_peak,
+            consistency_window=self.consistency_window,
+            delta_window=self.delta_window,
+            lookback_pe_days=self.lookback_pe_days,
+            min_rows=self.min_rows,
+            crash_neg_streak=self.crash_neg_streak,
+            crash_ke_path=self.crash_ke_path,
+            peak_pe_threshold=self.peak_pe_threshold,
+            peak_ke_silence=self.peak_ke_silence,
+            peak_delta_e=self.peak_delta_e,
+            release_delta_e=self.release_delta_e,
+            trending_consistency=self.trending_consistency,
+            compress_consistency=self.compress_consistency,
+            compress_ke_path=self.compress_ke_path,
+        )
+
+        details = {
+            "state": analysis.state,
+            "direction": "bullish" if analysis.satisfied else "unknown",
+        }
+        details.update(analysis.details)
+
+        return StrategizerOutput(
+            name=self.name,
+            satisfied=analysis.satisfied,
+            reason=analysis.reason,
+            details=details,
         )

@@ -10,6 +10,7 @@ from datetime import date
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 
@@ -212,6 +213,79 @@ class TechnicalPatternSignal:
     reason: str
     details: Dict[str, Any] = field(default_factory=dict)
     data_rows: int = 0
+
+
+@dataclass
+class EnergyPhaseAnalysis:
+    """六态物理能量框架分析结果。
+
+    状态：
+        COMPRESS   — 势能积蓄，低动能 → 观望
+        RELEASE    — 势能释放→动能转化 → 看涨买入
+        TRENDING   — 动能持续主导 → 持有/加仓
+        EXHAUSTION — 动能衰减，势能回升 → 预警
+        PEAK       — 动能归零，高位 → 卖出
+        CRASH      — 空方动能持续 → 回避
+        UNKNOWN    — 数据不足或无法分类
+    """
+
+    satisfied: bool  # True when RELEASE or TRENDING
+    state: str  # COMPRESS | RELEASE | TRENDING | EXHAUSTION | PEAK | CRASH | UNKNOWN
+    reason: str
+    details: Dict[str, Any] = field(default_factory=dict)
+    data_rows: int = 0
+
+
+# ── 市场特定能量相位参数预设 ──
+# HK 市场波动率较低（日均 ~1-1.5%），KE（动能 ∝ ret²）天然偏小，
+# 需要降低阈值才能捕获有效信号。A 股波动率较高（日均 ~2-3%），需适当提高。
+# US 市场居中，默认参数基本适用。
+# 各参数含义详见 analyze_energy_phases() 的 docstring。
+MARKET_ENERGY_PARAMS: Dict[str, Dict[str, Any]] = {
+    "HK": {
+        "release_delta_e": 5.0,         # 默认 10.0 → 降低，HK 低波动需要更敏感的加速检测
+        "trending_consistency": 0.6,     # 默认 0.7 → 降低，HK 慢牛趋势更缓和
+        "ke_threshold": 2.5,             # 默认 4.0 → 降低，HK 窄幅震荡的 KE 更低
+        "crash_ke_path": -12.0,          # 默认 -20.0 → 提高（绝对值降低），更早识别 HK 下跌
+        "crash_neg_streak": 4,           # 默认 5 → 减少，更快响应下跌趋势
+        "peak_ke_silence": 0.6,          # 默认 1.0 → 降低，HK 到顶时动能更弱
+        "peak_delta_e": -6.0,            # 默认 -10.0 → 提高，更早检测 HK 顶部能量流失
+        "compress_consistency": 0.35,    # 默认 0.3 → 微调，HK 横盘时方向略高
+    },
+    "US": {
+        # 默认参数对美股适用良好，仅微调
+        "release_delta_e": 8.0,          # 默认 10.0 → 略降低
+        "trending_consistency": 0.65,    # 默认 0.7 → 略降低
+    },
+    "A": {
+        "release_delta_e": 12.0,         # 默认 10.0 → 提高，A 股高波动需要更强信号
+        "trending_consistency": 0.75,    # 默认 0.7 → 提高，过滤 A 股假突破
+        "ke_threshold": 5.0,             # 默认 4.0 → 提高，A 股震荡幅度更大
+        "crash_ke_path": -25.0,          # 默认 -20.0 → 降低，延后 A 股 CRASH 判定
+        "crash_neg_streak": 6,           # 默认 5 → 增加，A 股常见技术性回调
+        "peak_ke_silence": 1.2,          # 默认 1.0 → 提高
+        "peak_delta_e": -12.0,           # 默认 -10.0 → 降低，延后顶部判定
+    },
+}
+
+
+def get_market_energy_params(market: str | None) -> Dict[str, Any]:
+    """获取指定市场的能量相位参数预设。
+
+    Args:
+        market: 市场代码（"HK"/"US"/"A"），None 或未识别时返回空 dict。
+
+    Returns:
+        参数覆盖字典，可直接 ** 传入 analyze_energy_phases() 或 EnergyPhaseClassifier。
+    """
+    if not market:
+        return {}
+    # 标准化：取前两个字符（HK.00700 → HK, US.AAPL → US, SZ.000999 → A）
+    key = market[:2].upper()
+    # SZ/SH → A
+    if key in ("SZ", "SH"):
+        key = "A"
+    return MARKET_ENERGY_PARAMS.get(key, {})
 
 
 TECHNICAL_PATTERN_DEFINITIONS: Dict[str, Dict[str, Any]] = {
@@ -1247,3 +1321,267 @@ def get_latest_rsi(df: pd.DataFrame, period: int = 14, check_date: date | None =
     if pd.isna(last_val):
         return None
     return float(last_val)
+
+
+def analyze_energy_phases(
+    df: pd.DataFrame,
+    check_date: date | None = None,
+    *,
+    ma_period: int = 20,
+    pe_threshold: float = 100.0,
+    ke_threshold: float = 4.0,
+    epr_release_threshold: float = 0.1,
+    ke_decay_exhaustion: float = 0.5,
+    ke_decay_peak: float = 0.8,
+    consistency_window: int = 10,
+    delta_window: int = 5,
+    lookback_pe_days: int = 3,
+    min_rows: int = 30,
+    # ── 新增：状态判定硬编码阈值参数化 ──
+    crash_neg_streak: int = 5,
+    crash_ke_path: float = -20.0,
+    peak_pe_threshold: float = 80.0,
+    peak_ke_silence: float = 1.0,
+    peak_delta_e: float = -10.0,
+    release_delta_e: float = 10.0,
+    trending_consistency: float = 0.7,
+    compress_consistency: float = 0.3,
+    compress_ke_path: float = 0.0,
+) -> EnergyPhaseAnalysis:
+    """六态物理能量框架分析。
+
+    计算价格运动的势能（PE，偏离均线的平方）和动能（KE，有向价格变化平方），
+    并导出 KE_decay（动能衰减率）、KE_consistency（方向持续性）、
+    DeltaE_5（能量转化速率）、EPR（能量配分比）等指标，
+    将股票归类为六种状态之一。
+
+    Args:
+        df: K线 DataFrame，需含 'date' 和 'close' 列。
+        check_date: 截止日期，None 则使用全部数据。
+        ma_period: 移动均线周期（默认 20）。
+        pe_threshold: COMPRESS/CRASH 状态的 PE 阈值（默认 100，对应 ~10% 偏离）。
+        ke_threshold: COMPRESS 状态的 KE 沉寂阈值（默认 4.0，对应 ~2% 日波动）。
+        epr_release_threshold: RELEASE 状态的 EPR 阈值（默认 0.1）。
+        ke_decay_exhaustion: EXHAUSTION 的 KE_decay 阈值（默认 0.5）。
+        ke_decay_peak: PEAK 的 KE_decay 阈值（默认 0.8）。
+        consistency_window: KE_consistency 窗口（默认 10）。
+        delta_window: DeltaE 窗口（默认 5）。
+        lookback_pe_days: PE 上升/下降的回看天数（默认 3）。
+        min_rows: 最小 K 线数量（默认 30）。
+        crash_neg_streak: CRASH 连续负动能天数阈值（默认 5）。
+        crash_ke_path: CRASH 累积动能阈值（默认 -20.0）。
+        peak_pe_threshold: PEAK 的 PE 阈值（默认 80.0，对应 ~9% 偏离）。
+        peak_ke_silence: PEAK 动能沉寂阈值（默认 1.0，对应 ~1% 日波动）。
+        peak_delta_e: PEAK 能量流失阈值（默认 -10.0）。
+        release_delta_e: RELEASE 能量加速阈值（默认 10.0）。
+        trending_consistency: TRENDING 方向一致性阈值（默认 0.7）。
+        compress_consistency: COMPRESS 方向一致性阈值（默认 0.3）。
+        compress_ke_path: COMPRESS 累积动能阈值（默认 0.0）。
+
+    Returns:
+        EnergyPhaseAnalysis with state, satisfied flag, and detailed metrics.
+    """
+    # ── 1. 数据校验 ──
+    is_valid, error_msg = _validate_kline_data(df)
+    if not is_valid:
+        return EnergyPhaseAnalysis(
+            satisfied=False, state="UNKNOWN", reason=error_msg, data_rows=0,
+        )
+    work = _prepare_kline_data(df)
+    if check_date is not None:
+        work = work[work["date"].dt.date <= check_date]
+    n_rows = len(work)
+    if n_rows < min_rows:
+        return EnergyPhaseAnalysis(
+            satisfied=False,
+            state="UNKNOWN",
+            reason=f"K线不足：需要 {min_rows} 根，实际 {n_rows} 根",
+            details={"required_rows": min_rows, "actual_rows": n_rows},
+            data_rows=n_rows,
+        )
+
+    close = work["close"].astype(float)
+
+    # ── 2. 核心指标计算 ──
+    ret_pct = close.pct_change() * 100.0  # 日收益率（百分比）
+
+    # KE_signed: sign(ret) * ret^2（有向动能，平方放大极端波动）
+    ke_signed = np.sign(ret_pct) * (ret_pct ** 2)
+
+    # PE_norm: ((price - SMA20) / SMA20 * 100)^2（距均线的百分比偏离平方）
+    ma = calculate_sma(close, ma_period)
+    pe_raw = (close - ma) / ma * 100.0
+    pe_norm = pe_raw ** 2
+
+    # KE_peak: 滚动窗口最大 KE（用于衰减计算）
+    ke_peak_window = ma_period * 2
+    ke_peak = ke_signed.rolling(window=ke_peak_window, min_periods=ma_period).max()
+
+    # KE_decay: 1 − KE/KE_peak（0=无衰减，1=动能完全耗尽）
+    ke_decay = 1.0 - ke_signed / (ke_peak.replace(0, np.nan))
+
+    # KE_consistency: 正动能比例
+    ke_positive = (ke_signed > 0).astype(float)
+    ke_consistency = ke_positive.rolling(
+        window=consistency_window, min_periods=consistency_window
+    ).mean()
+
+    # DeltaE_5: 5日动能变化总和
+    ke_diff = ke_signed.diff()
+    delta_e = ke_diff.rolling(window=delta_window, min_periods=delta_window).sum()
+
+    # KE_path: N日累积动能
+    ke_path = ke_signed.rolling(
+        window=consistency_window, min_periods=consistency_window
+    ).sum()
+
+    # EPR (Energy Partition Ratio): |KE| / PE（动能占比）
+    epr = ke_signed.abs() / (pe_norm + 1e-10)
+
+    # 连续负动能天数
+    ke_negative_streak = (ke_signed < 0).astype(int)
+    ke_negative_streak = ke_negative_streak.groupby(
+        (ke_signed >= 0).astype(int).cumsum()
+    ).cumsum()
+
+    # PE 升降（回溯 lookback_pe_days 天）
+    pe_rising = pe_norm > pe_norm.shift(lookback_pe_days)
+    pe_falling = pe_norm < pe_norm.shift(lookback_pe_days)
+
+    # ── 3. 填充 NaN ──
+    ke_decay = ke_decay.fillna(0).replace([np.inf, -np.inf], 0)
+    ke_consistency = ke_consistency.fillna(0)
+    delta_e = delta_e.fillna(0)
+    ke_path = ke_path.fillna(0)
+    epr = epr.fillna(0).replace([np.inf, -np.inf], 0)
+    ke_peak = ke_peak.fillna(0)
+    pe_rising = pe_rising.fillna(False)
+    pe_falling = pe_falling.fillna(False)
+
+    # ── 4. 提取最新值 ──
+    def _last(s: pd.Series, default=0.0):
+        v = s.iloc[-1]
+        if pd.isna(v):
+            return default
+        return v
+
+    latest = {
+        "ke_signed": float(_last(ke_signed)),
+        "ke_path": float(_last(ke_path)),
+        "ke_decay": float(max(0, min(1, _last(ke_decay)))),
+        "ke_consistency": float(_last(ke_consistency)),
+        "pe_norm": float(_last(pe_norm)),
+        "pe_raw": float(_last(pe_raw)),
+        "delta_e": float(_last(delta_e)),
+        "epr": float(_last(epr)),
+        "ke_negative_streak": int(_last(ke_negative_streak)),
+        "pe_rising": bool(_last(pe_rising, False)),
+        "pe_falling": bool(_last(pe_falling, False)),
+        "close": float(_last(close)),
+        "ma": float(_last(ma)) if not pd.isna(ma.iloc[-1]) else None,
+    }
+
+    # ── 5. 状态判定（优先级从高到低） ──
+    state = "UNKNOWN"
+    satisfied = False
+
+    # 5a. CRASH: 连续N日负动能 + PE高 + 累积负动能
+    if (
+        latest["ke_negative_streak"] >= crash_neg_streak
+        and latest["pe_norm"] > pe_threshold
+        and latest["ke_path"] < crash_ke_path
+    ):
+        state = "CRASH"
+
+    # 5b. PEAK: 动能几近耗尽 + 高位 + 能量流失
+    elif (
+        latest["ke_decay"] > ke_decay_peak
+        and latest["pe_norm"] > peak_pe_threshold
+        and abs(latest["ke_signed"]) < peak_ke_silence
+        and latest["delta_e"] < peak_delta_e
+    ):
+        state = "PEAK"
+
+    # 5c. EXHAUSTION: 动能衰减中 + 势能扩张
+    elif (
+        latest["ke_decay"] > ke_decay_exhaustion
+        and latest["pe_rising"]
+        and abs(latest["ke_signed"]) > 0.0
+    ):
+        state = "EXHAUSTION"
+
+    # 5d. RELEASE: 动能加速 + 方向向上 + 动能占比突破（底部反弹/突破确认）
+    elif (
+        latest["ke_signed"] > 0.0
+        and latest["delta_e"] > release_delta_e
+        and latest["epr"] > epr_release_threshold
+    ):
+        state = "RELEASE"
+        satisfied = True
+
+    # 5e. TRENDING: 动能方向一致 + 无过度偏离 + 累积动能正向
+    elif (
+        latest["ke_consistency"] > trending_consistency
+        and latest["ke_signed"] > 0.0
+        and latest["pe_norm"] < pe_threshold
+        and latest["ke_path"] > 0.0
+    ):
+        state = "TRENDING"
+        satisfied = True
+
+    # 5f. COMPRESS: 势能高 + 动能沉寂 + 方向不一致 + 累积负动能
+    elif (
+        latest["pe_norm"] > pe_threshold
+        and abs(latest["ke_signed"]) < ke_threshold
+        and latest["ke_consistency"] < compress_consistency
+        and latest["ke_path"] < compress_ke_path
+    ):
+        state = "COMPRESS"
+
+    # ── 6. 构建返回 ──
+    details = {
+        "state": state,
+        "satisfied": satisfied,
+        "direction": "bullish" if satisfied else "unknown",
+        "ke_signed": round(latest["ke_signed"], 4),
+        "pe_norm": round(latest["pe_norm"], 4),
+        "pe_raw": round(latest["pe_raw"], 4),
+        "ke_decay": round(latest["ke_decay"], 4),
+        "ke_consistency": round(latest["ke_consistency"], 4),
+        "delta_e_5": round(latest["delta_e"], 4),
+        "epr": round(latest["epr"], 4),
+        "ke_path": round(latest["ke_path"], 4),
+        "ke_negative_streak": latest["ke_negative_streak"],
+        "pe_rising": latest["pe_rising"],
+        "pe_falling": latest["pe_falling"],
+        "close": latest["close"],
+        f"ma{ma_period}": latest["ma"],
+        "data_rows": n_rows,
+        "ma_period": ma_period,
+        "consistency_window": consistency_window,
+        "delta_window": delta_window,
+        # 状态判定参数（用于回测调参）
+        "crash_neg_streak": crash_neg_streak,
+        "crash_ke_path": crash_ke_path,
+        "peak_pe_threshold": peak_pe_threshold,
+        "peak_ke_silence": peak_ke_silence,
+        "peak_delta_e": peak_delta_e,
+        "release_delta_e": release_delta_e,
+        "trending_consistency": trending_consistency,
+        "compress_consistency": compress_consistency,
+        "compress_ke_path": compress_ke_path,
+    }
+
+    reason = (
+        f"Energy phase: {state}"
+        if state != "UNKNOWN"
+        else "Unable to classify energy phase"
+    )
+
+    return EnergyPhaseAnalysis(
+        satisfied=satisfied,
+        state=state,
+        reason=reason,
+        details=details,
+        data_rows=n_rows,
+    )

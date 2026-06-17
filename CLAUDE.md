@@ -242,3 +242,100 @@ Detailed context lives in the memory directory. Read the relevant files before w
 5. **volumeSeries 去重修复**: `_applyAll()` 中 volumeData 用 `candleTimeSet.has()` 过滤行但未去重——两个同日期 row 都通过检查导致 `setData()` 抛 `"data must be asc ordered by time"`。新增 `volSeen` Set 去重。
 
 6. **记忆沉淀**: 创建 `memory/kline-chart-dedup-rule.md`，记录去重铁律及四个 setData 调用点的去重要求。KlineChart.tsx 文件头添加醒目注释引用该记忆文件。
+
+### 2026-06-16 — EnergyPhaseClassifier 六态能量相位分类器
+
+**Files changed**:
+- `stock_screener/strategy.py` — 新增 `EnergyPhaseAnalysis` dataclass + `analyze_energy_phases()` 函数（~160行）；新增 `import numpy as np`
+- `stock_screener/strategizers.py` — 新增 `EnergyPhaseClassifier` 类；更新双路径 imports
+- `stock_screener/rule_engine.py` — 注册 `EnergyPhaseClassifier` 到 `RuleRegistry.default()` + `KLINE_IMPLEMENTATIONS`；更新双路径 imports
+- `stock_screener/db.py` — `DEFAULT_RULE_METADATA` 新增 `energy_phase_bullish` 条目（display_order=180, direction=bullish, signal_group=bullish）
+- `stock_screener/tests/test_energy_phase_classifier.py` — 新建，16 个测试覆盖六态+边界
+- `stock_screener/tests/test_unified_bullish_top20_hk02685.py` — 技术规则计数 21→22
+- `stock_screener/tests/test_e2e_unified_bullish_top20_scoring.py` — 技术规则计数 21→22
+- `CLAUDE.md` — this entry
+
+**Fixes applied**:
+
+1. **六态能量相位框架**: 基于物理势能/动能隐喻，定义了股票价格运动的六种状态：COMPRESS（势能积蓄，观望）、RELEASE（势能释放→动能转化，买入）、TRENDING（动能持续，持有）、EXHAUSTION（动能衰竭，预警）、PEAK（到顶，卖出）、CRASH（空方动能，回避）。
+
+2. **核心指标计算**: `analyze_energy_phases()` 计算 8 个连续能量指标：
+   - `KE_signed = sign(ret%) × ret%²`（有向动能，平方放大极端波动）
+   - `PE_norm = ((close − MA20) / MA20 × 100)²`（距均线的百分比偏离平方）
+   - `KE_decay = 1 − KE/KE_peak`（动能衰减率）
+   - `KE_consistency`（正动能比例，10日窗口）
+   - `DeltaE_5`（5日能量转化速率）
+   - `KE_path`（10日累积动能）
+   - `EPR = |KE|/PE`（能量配分比）
+   - `ke_negative_streak`（连续负动能天数）
+
+3. **RELEASE 判定**: 移除了原始的 `PE_falling` 要求（快速突破会暂时推高PE，MA来不及跟上），仅需 `KE_signed>0 + DeltaE_5>10 + EPR>0.1`。覆盖底部反弹和突破确认两种场景。
+
+4. **TRENDING 判定**: 用 `KE_path>0` 替代了 `KE_decay<0.5`（稳态上升中 KE_decay 因滚动峰值的比率问题不稳定），配合 `KE_consistency>0.7 + KE_signed>0 + PE_norm<100`。正确识别慢牛。
+
+5. **Auto-discovery**: `energy_phase_bullish` 规则通过 `direction="bullish"` + `strategy_category="technical"` 自动被 `bullish_technical_rule_keys()` 发现，无需修改 unified_bullish_top20 链表达式。当前为第 22 条看涨技术规则。
+
+**⚠️ 后续改动注意事项**:
+- 修改 `analyze_energy_phases()` 的状态判定阈值时，注意优先级顺序（CRASH > PEAK > EXHAUSTION > RELEASE > TRENDING > COMPRESS）
+- 新增 bullish 技术规则时，同步更新 `test_unified_bullish_top20_hk02685.py` 和 `test_e2e_unified_bullish_top20_scoring.py` 中的规则计数断言
+- `EnergyPhaseClassifier` 需要至少 30 根 K 线（默认 min_rows=30），短于 30 天的股票返回 UNKNOWN
+
+6. **记忆沉淀**: 创建 `memory/kline-chart-dedup-rule.md`，记录去重铁律及四个 setData 调用点的去重要求。KlineChart.tsx 文件头添加醒目注释引用该记忆文件。
+
+### 2026-06-16 — 规则链保存 failure: `*` 通配符 timeframe 在 URL 路径中 + UPDATE/DELETE 缺乏兜底
+
+**Files changed**:
+- `stock_screener/db.py` — `update_screening_rule_chain` + `delete_screening_rule_chain`：timeframe 匹配从严格相等改为 `IN (%s, '*') ORDER BY CASE WHEN ... LIMIT 1`（与 SELECT 一致）
+- `stock_screener/web_frontend/src/main.tsx` — `saveChain` + `deleteChain`：URL 路径中 `editor.timeframe === '*'` 时使用页面级 `timeframe` 替代
+- `CLAUDE.md` — this entry
+
+**Root cause**: All chains in DB use `timeframe='*'` (wildcard, meaning "applicable to all timeframes"). When the frontend loads a chain, `editor.timeframe` becomes `'*'`. On save, the URL path becomes `/api/rules/chains/HK/*/unified_bullish_top20`. While `validate_rule_chain_timeframe` accepts `'*'`, the `update_screening_rule_chain`/`delete_screening_rule_chain` methods used strict `WHERE timeframe=%s` — inconsistent with SELECT methods (`get_screening_rule_chain`, `get_active_screening_rule_chain`, `list_screening_rule_chains`) which all use `WHERE timeframe IN (%s, '*')` with CASE WHEN ordering.
+
+**Fixes applied**:
+
+1. **Backend UPDATE/DELETE timeframe fallback** (`db.py:4774-4808`): Both `update_screening_rule_chain` and `delete_screening_rule_chain` now use:
+   ```sql
+   WHERE market=%s AND chain_key=%s AND timeframe IN (%s, '*')
+   ORDER BY CASE WHEN timeframe=%s THEN 0 ELSE 1 END
+   LIMIT 1
+   ```
+   Same priority logic as SELECT. If the request passes `timeframe='1d'` but only a `'*'` wildcard chain exists, the update matches the wildcard. If both `'1d'` and `'*'` chains exist, exact match wins (CASE=0 → first).
+
+2. **Frontend URL normalization** (`main.tsx:1938-1940, 1963`): `saveChain` and `deleteChain` now compute `effectiveTimeframe = editor.timeframe === '*' ? timeframe : editor.timeframe`. The `timeframe` variable is the page-level state (always a concrete value like `'1d'`/`'1wk'`/`'1mo'`). This prevents `*` from appearing in URL paths while the backend fallback ensures correct DB row targeting regardless.
+
+**⚠️ 后续改动注意事项**:
+- 不要在 URL 路径中使用 `*` 作为 timeframe — 前端已标准化处理
+- `update_screening_rule_chain` / `delete_screening_rule_chain` 中的 `ORDER BY ... LIMIT 1` 确保有重复 chain_key（不同 timeframe）时只更新/删除一条
+- 如果需要创建不同 timeframe 的同名 chain，使用 POST（新建）后用不同 timeframe 区分
+
+### 2026-06-17 — EnergyPhaseClassifier 参数化 + 市场预设优化
+
+**Files changed**:
+- `stock_screener/strategy.py` — `analyze_energy_phases()` 新增 9 个状态判定参数；新增 `MARKET_ENERGY_PARAMS` 字典 + `get_market_energy_params()` 函数
+- `stock_screener/strategizers.py` — `EnergyPhaseClassifier` 新增 `market` 参数 + 9 个状态判定参数 + `_coalesce` 解析链（显式值 > 市场预设 > 默认值）
+- `stock_screener/tests/test_energy_phase_classifier.py` — 新增 16 个测试（参数传递、市场预设、边界条件）
+- `stock_screener/tests/backtest_energy_phase.py` — 新建回测脚本，支持多参数集对比
+- `memory/energy-phase-classifier.md` — 更新参数表和 HK/US/A 市场预设文档
+- `CLAUDE.md` — this entry
+
+**改动动机**: HK.800000 回测表现不佳。根因：KE（动能 ∝ ret²）与日收益率平方成正比，HK 低波动市场（日均 ~1-1.5%）的 KE 天然比 A 股（~2-3%）小 4-9 倍。固定阈值对 HK 过严，导致 RELEASE/TRENDING 信号过少。
+
+**Fixes applied**:
+
+1. **9 个硬编码阈值全部参数化**: CRASH(`crash_neg_streak=5`, `crash_ke_path=-20`)、PEAK(`peak_pe_threshold=80`, `peak_ke_silence=1.0`, `peak_delta_e=-10`)、RELEASE(`release_delta_e=10`)、TRENDING(`trending_consistency=0.7`)、COMPRESS(`compress_consistency=0.3`, `compress_ke_path=0.0`) 全部变为函数参数。
+
+2. **市场特定预设 (MARKET_ENERGY_PARAMS)**:
+   - **HK**（低波动）: `release_delta_e=5.0`, `trending_consistency=0.6`, `ke_threshold=2.5`, `crash_ke_path=-12`, `crash_neg_streak=4`, `peak_ke_silence=0.6`, `peak_delta_e=-6` — 降低阈值使低波动环境下也能捕获有效信号
+   - **US**: 默认附近微调 (`release_delta_e=8.0`, `trending_consistency=0.65`)
+   - **A**（高波动）: `release_delta_e=12.0`, `trending_consistency=0.75`, `ke_threshold=5.0`, `crash_ke_path=-25`, `crash_neg_streak=6` — 提高阈值过滤假突破
+
+3. **EnergyPhaseClassifier(market="HK") 自动加载**: 构造时传 `market="HK"` 自动应用 HK 低波动预设，显式参数可覆盖市场预设。
+
+4. **回测脚本**: `tests/backtest_energy_phase.py` 支持 `--code HK.800000 --market HK --compare` 对比 5 组参数集（默认/优化/激进/保守/短周期），输出信号频率、N日胜率、均收益、MAE、盈亏比。
+
+**⚠️ 后续改动注意事项**:
+- 修改 `analyze_energy_phases()` 状态判定逻辑时，确保所有阈值都来自参数名而非硬编码数字
+- 新增市场预设时，添加到 `MARKET_ENERGY_PARAMS` 字典而非修改默认参数
+- `EnergyPhaseClassifier` 需要 `market` 参数时，在 `RuleRegistry.create()` 的 params dict 中传入 `"market": "HK"`
+- 回测时用 `--compare` 对比多组参数，关注 10 日胜率和盈亏比（10 日窗口最稳定）
+- 所有参数变化必须在 details dict 中体现（用于 CSV 报告和 LLM 分析消费）

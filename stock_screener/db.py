@@ -356,6 +356,22 @@ DEFAULT_RULE_METADATA = (
      {"pct_min": -6.5, "pct_max": -6.0}, True, 160, "当日跌幅在指定区间"),
     ("daily_rise_4_45", "当日涨 4%~4.5%", "strategy", "technical", "DailyRise4To45Strategizer",
      {"pct_min": 4.0, "pct_max": 4.5, "direction": "bullish", "signal_group": "bullish"}, True, 170, "当日涨幅在指定区间"),
+    ("energy_phase_bullish", "能量相位看涨", "strategy", "technical", "EnergyPhaseClassifier",
+     {
+         "ma_period": 20,
+         "pe_threshold": 100.0,
+         "ke_threshold": 4.0,
+         "epr_release_threshold": 0.1,
+         "ke_decay_exhaustion": 0.5,
+         "ke_decay_peak": 0.8,
+         "consistency_window": 10,
+         "delta_window": 5,
+         "lookback_pe_days": 3,
+         "min_rows": 30,
+         "direction": "bullish",
+         "signal_group": "bullish",
+     }, True, 180,
+     "六态物理能量相位框架：COMPRESS(势能积蓄)→RELEASE(势能释放)→TRENDING(动能主导)→EXHAUSTION(动能衰竭)→PEAK(到顶)→CRASH(空方动能)。RELEASE或TRENDING时触发看涨信号"),
     ("company_event_hot_sector_link", "公司时事与热点板块关联", "strategy", "macro", "CompanyEventHotSectorStrategizer",
      {}, True, 210, "复用 AI 分析结果，判断公司时事是否与热点板块形成共振"),
     ("company_event_hot_news_link", "公司时事与热点新闻关联", "strategy", "macro", "CompanyEventHotNewsStrategizer",
@@ -437,7 +453,44 @@ TREND_CAPITAL_ACCUMULATION_WATCH_EXPRESSION = {
 }
 
 
-UNIFIED_BULLISH_TOP20_EXPRESSION = {"ref": "ema_breakout"}
+UNIFIED_BULLISH_TOP20_EXPRESSION = {
+    "and": [
+        {
+            "any_enabled": [
+                "zuoyi_bullish_signal",
+                "ema_breakout",
+                "rsi_oversold",
+                "volume_spike_prior3",
+                "daily_rise_4_45",
+                "energy_phase_bullish",
+                "bullish_engulfing",
+                "hammer_reversal",
+                "morning_star",
+                "piercing_line",
+                "three_white_soldiers",
+                "bullish_marubozu",
+                "sma_golden_cross",
+                "ema_golden_cross",
+                "macd_bullish_cross",
+                "bollinger_lower_rebound",
+                "vwap_bullish_reclaim",
+                "atr_up_breakout",
+                "kdj_bullish_cross",
+                "kdj_low_bullish_cross",
+                "rsi_bullish_rebound",
+                "volume_price_breakout",
+            ],
+        },
+        {
+            "all_enabled": [
+                "macro_factor_analysis",
+                "enterprise_potential_analysis",
+                "company_event_hot_sector_link",
+                "company_event_hot_news_link",
+            ],
+        },
+    ],
+}
 
 # ── 市场特定默认规则链 ──
 # A股宏观敏感期：宏观因子是真门禁（ref），必须达标
@@ -4719,6 +4772,8 @@ class MarketDatabase:
             )
 
     def update_screening_rule_chain(self, market: str, timeframe: str, chain_key: str, item: dict) -> bool:
+        """更新规则链；精确 timeframe 优先，通配符 `*` 兜底（与 SELECT 行为一致）。"""
+        timeframe = str(timeframe or "*")
         sql = """
             UPDATE screening_rule_chains
             SET chain_name=%s,
@@ -4726,7 +4781,9 @@ class MarketDatabase:
                 enabled=%s,
                 priority=%s,
                 description=%s
-            WHERE market=%s AND timeframe=%s AND chain_key=%s
+            WHERE market=%s AND chain_key=%s AND timeframe IN (%s, '*')
+            ORDER BY CASE WHEN timeframe=%s THEN 0 ELSE 1 END
+            LIMIT 1
         """
         with self.conn.cursor() as cursor:
             cursor.execute(
@@ -4738,19 +4795,24 @@ class MarketDatabase:
                     int(item.get("priority") or 100),
                     item.get("description"),
                     market,
-                    timeframe,
                     chain_key,
+                    timeframe,
+                    timeframe,
                 ),
             )
             return cursor.rowcount > 0
 
     def delete_screening_rule_chain(self, market: str, timeframe: str, chain_key: str) -> bool:
+        """删除规则链；精确 timeframe 优先，通配符 `*` 兜底（与 SELECT 行为一致）。"""
+        timeframe = str(timeframe or "*")
         sql = """
             DELETE FROM screening_rule_chains
-            WHERE market=%s AND timeframe=%s AND chain_key=%s
+            WHERE market=%s AND chain_key=%s AND timeframe IN (%s, '*')
+            ORDER BY CASE WHEN timeframe=%s THEN 0 ELSE 1 END
+            LIMIT 1
         """
         with self.conn.cursor() as cursor:
-            cursor.execute(sql, (market, timeframe, chain_key))
+            cursor.execute(sql, (market, chain_key, timeframe, timeframe))
             return cursor.rowcount > 0
 
     # ------------------------------------------------------------------

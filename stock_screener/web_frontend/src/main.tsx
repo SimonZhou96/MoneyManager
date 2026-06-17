@@ -1887,6 +1887,7 @@ function Rules() {
   }, [selectedChain?.chain_key, selectedChain?.timeframe])
 
   function startNewChain() {
+    setChainKey('')
     setEditor({
       timeframe,
       chain_key: '',
@@ -1924,6 +1925,8 @@ function Rules() {
     setError('')
     try {
       const expression_json = JSON.parse(editor.expression_text)
+      // 标准化 timeframe：URL 路径中不使用通配符 '*'（后端 UPDATE/DELETE 已兼容兜底）
+      const effectiveTimeframe = editor.timeframe === '*' ? timeframe : editor.timeframe
       const payload = {
         market,
         timeframe: editor.timeframe,
@@ -1936,7 +1939,7 @@ function Rules() {
       }
       const method = (rules?.chains || []).some(item => item.chain_key === editor.chain_key && item.timeframe === editor.timeframe) ? 'PUT' : 'POST'
       const path = method === 'PUT'
-        ? `/api/rules/chains/${market}/${encodeURIComponent(editor.timeframe)}/${editor.chain_key}`
+        ? `/api/rules/chains/${market}/${encodeURIComponent(effectiveTimeframe)}/${editor.chain_key}`
         : '/api/rules/chains'
       await api(path, { method, body: JSON.stringify(payload) })
       setNotice('规则链已保存')
@@ -1959,7 +1962,8 @@ function Rules() {
     setNotice('')
     setError('')
     try {
-      await api(`/api/rules/chains/${market}/${encodeURIComponent(editor.timeframe)}/${editor.chain_key}`, { method: 'DELETE' })
+      const effectiveTimeframe = editor.timeframe === '*' ? timeframe : editor.timeframe
+      await api(`/api/rules/chains/${market}/${encodeURIComponent(effectiveTimeframe)}/${editor.chain_key}`, { method: 'DELETE' })
       setNotice('规则链已删除')
       setChainKey('')
       startNewChain()

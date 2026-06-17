@@ -1,0 +1,140 @@
+<h2>规则链编辑器 — 当前状态</h2>
+<p class="subtitle">前后端已完整实现，以下是现有的功能矩阵</p>
+
+<div class="section">
+  <h3>📐 当前架构三面板布局</h3>
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">🎨 可视化模式（React Flow v12）</div>
+      <div class="mockup-body">
+        <div style="display:grid;grid-template-columns:180px 1fr 220px;height:280px;gap:4px;background:#1a1a2e;border-radius:6px;padding:6px;font-size:10px">
+          <div style="background:#16162a;border-radius:4px;padding:6px;color:#aab">
+            <div class="label" style="font-size:9px">规则侧边栏</div>
+            <div style="display:flex;gap:3px;margin:4px 0"><div style="background:#2a2a40;padding:2px 4px;border-radius:2px">全部</div><div style="background:#1a1a30;padding:2px 4px;border-radius:2px">filter</div><div style="background:#1a1a30;padding:2px 4px;border-radius:2px">strategy</div></div>
+            <div style="margin:2px 0;display:flex;flex-direction:column;gap:2px">
+              <div style="background:#2196f3;color:#fff;padding:2px 4px;border-radius:2px">市值范围</div>
+              <div style="background:#2196f3;color:#fff;padding:2px 4px;border-radius:2px">PE范围</div>
+              <div style="background:#4caf50;color:#fff;padding:2px 4px;border-radius:2px">EMA突破</div>
+              <div style="background:#4caf50;color:#fff;padding:2px 4px;border-radius:2px">RSI超卖</div>
+              <div style="background:#4caf50;color:#fff;padding:2px 4px;border-radius:2px">放量超前三日</div>
+              <div style="background:#4caf50;color:#fff;padding:2px 4px;border-radius:2px;opacity:0.5">能量相位看涨</div>
+              <div style="border:1px dashed #c9a84c;color:#c9a84c;padding:2px 4px;border-radius:2px;text-align:center">+ 拖入画布</div>
+            </div>
+          </div>
+          <div style="background:#0d0d1a;border-radius:4px;position:relative;overflow:hidden">
+            <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">
+              <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+                <div style="background:#ffc107;color:#000;padding:3px 8px;border-radius:3px;font-size:9px">∧ 全部通过</div>
+                <div style="display:flex;gap:12px;align-items:flex-start">
+                  <div style="display:flex;flex-direction:column;align-items:center;gap:6px">
+                    <div style="background:#2196f3;color:#fff;padding:3px 15px;border-radius:3px;font-size:9px">市值范围</div>
+                    <div style="background:#9c27b0;color:#fff;padding:3px 15px;border-radius:3px;font-size:9px">∧ 全部</div>
+                    <div style="display:flex;gap:4px">
+                      <div style="background:#2196f3;color:#fff;padding:2px 4px;border-radius:2px;font-size:8px">PE</div>
+                      <div style="background:#2196f3;color:#fff;padding:2px 4px;border-radius:2px;font-size:8px">盈利</div>
+                      <div style="background:#2196f3;color:#fff;padding:2px 4px;border-radius:2px;font-size:8px">价格</div>
+                    </div>
+                  </div>
+                  <div style="display:flex;flex-direction:column;align-items:center;gap:6px">
+                    <div style="background:#4caf50;color:#fff;padding:3px 15px;border-radius:3px;font-size:9px">左一战法</div>
+                    <div style="background:#ff9800;color:#fff;padding:3px 15px;border-radius:3px;font-size:9px">∨ 任一</div>
+                    <div style="display:flex;gap:4px">
+                      <div style="background:#4caf50;color:#fff;padding:2px 4px;border-radius:2px;font-size:8px">EMA</div>
+                      <div style="background:#4caf50;color:#fff;padding:2px 4px;border-radius:2px;font-size:8px">RSI超</div>
+                    </div>
+                  </div>
+                </div>
+                <div style="background:#ffc107;color:#000;padding:3px 12px;border-radius:12px;font-size:9px">✓ 输出</div>
+              </div>
+            </div>
+            <div style="position:absolute;right:38px;bottom:38px;width:40px;height:30px;border:1px solid #444;border-radius:3px;background:#0d0d1a">
+              <div style="position:absolute;top:10px;left:16px;width:8px;height:8px;border-right:1px solid #555;border-bottom:1px solid #555"></div>
+            </div>
+          </div>
+          <div style="background:#16162a;border-radius:4px;padding:6px;color:#aab;font-size:10px">
+            <div class="label" style="font-size:9px">属性检查器</div>
+            <div style="margin-top:6px;border-left:2px solid #c9a84c;padding-left:6px">
+              <div style="color:#c9a84c">EMA突破</div>
+              <div style="color:#888;margin:4px 0">strategy / technical</div>
+              <div style="color:#666">EMABreakoutStrategizer</div>
+              <div style="color:#4caf50;margin:4px 0">✓ 已启用</div>
+              <div style="margin-top:4px;color:#666">
+                <div>ema_short: 10</div>
+                <div>ema_long: 150</div>
+                <div>direction: bullish</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>✅ 已有功能清单</h3>
+  <div class="split">
+    <div style="flex:1">
+      <h4 style="color:#4caf50">前端</h4>
+      <ul>
+        <li>React Flow v12 拖拽画布（深色主题）</li>
+        <li>24条规则在侧边栏，按分类筛选&搜索</li>
+        <li>从侧边栏拖入新规则到画布</li>
+        <li>规则节点+AND/OR逻辑门+输出节点（共6种）</li>
+        <li>选中节点 → 检查器显示参数/属性</li>
+        <li>AND/OR 门类型切换</li>
+        <li>DSL ↔ 节点/边双向实时转换</li>
+        <li>JSON 编辑模式（CodeMirror）</li>
+        <li>保存/新建/删除链</li>
+        <li>Minimap + 网格吸附 + 缩放控制</li>
+      </ul>
+    </div>
+    <div style="flex:1">
+      <h4 style="color:#2196f3">后端 API</h4>
+      <ul>
+        <li><code>GET /api/rules</code> — 元数据+所有链</li>
+        <li><code>POST /api/rules/chains</code> — 创建新链</li>
+        <li><code>PUT /api/rules/chains/{id}</code> — 更新链</li>
+        <li><code>DELETE /api/rules/chains/{id}</code> — 删除链</li>
+        <li>表达式验证（形状+规则引用）</li>
+        <li>阻止禁用/删除活跃链</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>🤔 关键问题</h3>
+  <p>编辑器已经可以<strong>新建</strong>和<strong>修改</strong>链。但当你打开它编辑一个<strong>已有链</strong>时，当前的流程是怎样的？你觉得哪里不够直观？</p>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>打开链 → 画布已预填充当前 schema</h3>
+      <p>当你从下拉框选一个已有链时，画布自动加载该链的 expression 并渲染为节点/边。你可以直接拖拽修改。这是当前的实际行为。</p>
+    </div>
+  </div>
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>想确认：侧边栏是否显示<strong>全部可用规则</strong>（包括还不在此链中的）？</h3>
+      <p>当前行为：侧边栏始终显示全部规则元数据。你从侧边栏拖入新规则到画布。</p>
+    </div>
+  </div>
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>编辑器有 bug 或功能不完整</h3>
+      <p>比如转换逻辑有误、保存不生效、或者某些表达式类型无法正确渲染。你想修复或完善它。</p>
+    </div>
+  </div>
+  <div class="option" data-choice="d" onclick="toggleSelect(this)">
+    <div class="letter">D</div>
+    <div class="content">
+      <h3>不知道怎么用 / 功能是否可用不清楚</h3>
+      <p>前端界面在，但你可能没用过或者不知道它已经支持编辑。想确认是否真的能用。</p>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,55 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - strong [ref=e6]: MoneyManager
+      - generic [ref=e7]: Stock Screener
+    - navigation [ref=e8]:
+      - button "总览" [ref=e9] [cursor=pointer]
+      - button "个股筛选器" [ref=e10] [cursor=pointer]
+      - button "量化实验室" [ref=e11] [cursor=pointer]
+      - button "规则链" [ref=e12] [cursor=pointer]
+    - generic [ref=e14]: MoneyManager
+  - main [ref=e15]:
+    - generic [ref=e16]:
+      - generic [ref=e17]:
+        - heading "个股筛选器" [level=1] [ref=e18]
+        - paragraph [ref=e19]: 输入股票名称，一键筛选并查看K线与分析报告
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - generic [ref=e22]: 市场
+          - combobox "市场" [ref=e23]:
+            - option "港股" [selected]
+            - option "美股"
+            - option "A股"
+        - generic [ref=e24]:
+          - generic [ref=e25]: 周期
+          - combobox "周期" [ref=e26]:
+            - option "1d" [selected]
+            - option "1wk"
+            - option "1mo"
+            - option "3mo"
+            - option "1m"
+            - option "3m"
+            - option "5m"
+            - option "15m"
+            - option "30m"
+            - option "60m"
+        - generic [ref=e27]:
+          - generic [ref=e28]: 规则链
+          - combobox "规则链" [ref=e29]:
+            - option "宏观多维 + 均线金叉混合链 (默认)" [selected]
+            - option "左一战法+宏观标签+五模块评分 (默认)"
+            - option "左一战法 + EMA10 进场 (默认)"
+            - option "金叉全满足链 (默认)"
+            - option "左一战法与其他策略默认链 (默认)"
+            - option "统一看涨技术规则Top20 (默认)"
+            - option "宏观因子分析链 (默认)"
+            - option "企业潜力分析链 (默认)"
+            - option "默认链 + 宏观复核"
+            - option "趋势主力缩量观察链"
+        - generic [ref=e30]:
+          - generic [ref=e31]:
+            - generic [ref=e32]: 股票名称
+            - textbox "股票名称" [ref=e34]:
+              - /placeholder: 输入股票名称，如：腾讯 / Apple / 茅台
+          - button "开始筛选" [disabled] [ref=e35]

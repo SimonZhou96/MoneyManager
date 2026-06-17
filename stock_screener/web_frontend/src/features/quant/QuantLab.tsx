@@ -22,6 +22,8 @@ export function QuantLab() {
   const [dateRange, setDateRange] = useState({ start: '2025-01-01', end: '2026-01-01' })
   const [initialCash, setInitialCash] = useState(100000)
   const [quantity, setQuantity] = useState(10)
+  const [commissionRate, setCommissionRate] = useState(0.001)
+  const [slippageRate, setSlippageRate] = useState(0.001)
 
   // ── 风控 ──
   const [useRisk, setUseRisk] = useState(false)
@@ -95,7 +97,7 @@ export function QuantLab() {
       strategy: { type: strategyType, params, entry_side: entrySide },
       start: dateRange.start, end: dateRange.end,
       initial_cash: initialCash, quantity,
-      commission_rate: 0.001, slippage_rate: 0.001, max_position_weight: 1.0,
+      commission_rate: commissionRate, slippage_rate: slippageRate, max_position_weight: 1.0,
     }
     if (useRisk) {
       payload.risk = {}
@@ -219,6 +221,20 @@ export function QuantLab() {
           <div className="param-row">
             <label>每笔数量</label>
             <input type="number" value={quantity} min={1} onChange={e => setQuantity(Number(e.target.value))} />
+          </div>
+
+          <div className="param-row">
+            <label>佣金费率</label>
+            <input type="number" value={commissionRate} min={0} max={0.05} step={0.0001}
+              onChange={e => setCommissionRate(Number(e.target.value))} />
+            <span className="unit">{(commissionRate * 100).toFixed(2)}%</span>
+          </div>
+
+          <div className="param-row">
+            <label>滑点费率</label>
+            <input type="number" value={slippageRate} min={0} max={0.05} step={0.0001}
+              onChange={e => setSlippageRate(Number(e.target.value))} />
+            <span className="unit">{(slippageRate * 100).toFixed(2)}%</span>
           </div>
 
           {/* 风控开关 */}

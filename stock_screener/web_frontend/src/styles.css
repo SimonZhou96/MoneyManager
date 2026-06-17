@@ -3836,13 +3836,13 @@ section { background: transparent; }
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 6px 10px;
+  padding: 8px 12px;
   gap: 8px;
 }
 .rule-node-cat { font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .rule-node-key { font-size: 10px; font-family: ui-monospace, monospace; opacity: .7; }
 .rule-node-body {
-  padding: 8px 10px;
+  padding: 8px 12px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -3883,7 +3883,7 @@ section { background: transparent; }
   background: #141920;
   border: 2px solid;
   border-radius: 24px;
-  padding: 10px 20px;
+  padding: 8px 12px;
   transition: box-shadow .2s;
 }
 .output-node-card.selected { box-shadow: 0 0 0 3px rgba(201,168,76,0.35); }
@@ -3896,6 +3896,22 @@ section { background: transparent; }
   font-size: 14px;
 }
 .output-icon { font-size: 18px; }
+
+/* ── Expression validation status bar ── */
+.expr-status {
+  margin-left: auto;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.expr-status-valid   { background: #1a2e1a; color: #4ade80; }
+.expr-status-warning { background: #2e2a1a; color: #fbbf24; }
+.expr-status-error   { background: #2e1a1a; color: #f87171; }
 
 /* ---- Mode toggle bar ---- */
 .rule-editor-mode-bar {

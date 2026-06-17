@@ -16,6 +16,10 @@ from .rule_chain_adapter import RuleChainStrategyAdapter
 from rule_engine import RuleEngine, RuleRepository
 from strategy import calculate_rsi
 
+# ── 统一默认值（之前在两个代码路径中不一致，现已统一） ──
+_DEFAULT_COMMISSION_RATE = 0.001
+_DEFAULT_SLIPPAGE_RATE = 0.001
+
 try:
     from futu import OpenQuoteContext
 except Exception:  # pragma: no cover - optional local dependency
@@ -88,8 +92,8 @@ class QuantLabService:
                 end=_parse_date(payload["end"]),
                 initial_cash=float(payload["initial_cash"]),
                 quantity=int(payload.get("quantity") or 1),
-                commission_rate=float(payload.get("commission_rate") or 0),
-                slippage_rate=float(payload.get("slippage_rate") or 0),
+                commission_rate=float(payload.get("commission_rate", _DEFAULT_COMMISSION_RATE)),
+                slippage_rate=float(payload.get("slippage_rate", _DEFAULT_SLIPPAGE_RATE)),
                 max_position_weight=float(payload.get("max_position_weight") or 1.0),
             )
             self.repository.update_quant_backtest_progress(
@@ -160,8 +164,8 @@ class QuantLabService:
                 end=_parse_date(payload["end"]),
                 initial_cash=float(payload["initial_cash"]),
                 quantity=int(payload.get("quantity") or 10),
-                commission_rate=float(payload.get("commission_rate") or 0.001),
-                slippage_rate=float(payload.get("slippage_rate") or 0.001),
+                commission_rate=float(payload.get("commission_rate", _DEFAULT_COMMISSION_RATE)),
+                slippage_rate=float(payload.get("slippage_rate", _DEFAULT_SLIPPAGE_RATE)),
                 max_position_weight=float(payload.get("max_position_weight") or 1.0),
                 risk_config=risk,
             )

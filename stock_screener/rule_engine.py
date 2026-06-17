@@ -42,6 +42,7 @@ if __package__:
     from .strategizers import (
         DailyPctChangeBandStrategizer,
         EMABreakoutStrategizer,
+        EnergyPhaseClassifier,
         RSIOverboughtStrategizer,
         RSIOversoldStrategizer,
         Strategizer,
@@ -76,6 +77,7 @@ else:
     from strategizers import (
         DailyPctChangeBandStrategizer,
         EMABreakoutStrategizer,
+        EnergyPhaseClassifier,
         RSIOverboughtStrategizer,
         RSIOversoldStrategizer,
         Strategizer,
@@ -363,6 +365,21 @@ class RuleRegistry:
                 threshold=float(params.get("threshold", 70)),
             ),
         )
+        registry.register_strategy(
+            "EnergyPhaseClassifier",
+            lambda params: EnergyPhaseClassifier(
+                ma_period=int(params.get("ma_period", 20)),
+                pe_threshold=float(params.get("pe_threshold", 100.0)),
+                ke_threshold=float(params.get("ke_threshold", 4.0)),
+                epr_release_threshold=float(params.get("epr_release_threshold", 0.1)),
+                ke_decay_exhaustion=float(params.get("ke_decay_exhaustion", 0.5)),
+                ke_decay_peak=float(params.get("ke_decay_peak", 0.8)),
+                consistency_window=int(params.get("consistency_window", 10)),
+                delta_window=int(params.get("delta_window", 5)),
+                lookback_pe_days=int(params.get("lookback_pe_days", 3)),
+                min_rows=int(params.get("min_rows", 30)),
+            ),
+        )
         return registry
 
 
@@ -534,6 +551,7 @@ class RuleEngine:
         "PriceFilter",
         "ZuoYiStrategizer",
         "EMABreakoutStrategizer",
+        "EnergyPhaseClassifier",
         "RSIOversoldStrategizer",
         "RSIOverboughtStrategizer",
         "TodayVolumeExceedsPrior3MaxStrategizer",

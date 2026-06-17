@@ -17,7 +17,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 
-import type { ExpressionNode, AtomicRuleMeta, RuleNodeData } from './types'
+import type { ExpressionNode, AtomicRuleMeta, RuleNodeData, GateNodeData } from './types'
 import { NODE_COLORS } from './types'
 import { expressionToFlow, flowToExpression, setRuleMetaRegistry } from './converter'
 import { RuleNode } from './nodes/RuleNode'
@@ -25,6 +25,79 @@ import { GateNode } from './nodes/GateNode'
 import { OutputNode } from './nodes/OutputNode'
 import { RuleSidebar } from './RuleSidebar'
 import { RuleInspector } from './RuleInspector'
+
+// ── Validation helpers (module-level, no component dependency) ──
+
+type ValidationStatus = 'valid' | 'warning' | 'error'
+
+interface ExpressionValidation {
+  status: ValidationStatus
+  message: string
+}
+
+/** Check if adding edge source→target would create a cycle (walk up from target). */
+function wouldCreateCycle(sourceId: string, targetId: string, edges: Edge[]): boolean {
+  const visited = new Set<string>()
+  const stack = [targetId]
+  while (stack.length > 0) {
+    const current = stack.pop()!
+    if (current === sourceId) return true
+    if (visited.has(current)) continue
+    visited.add(current)
+    for (const e of edges) {
+      if (e.target === current) stack.push(e.source)
+    }
+  }
+  return false
+}
+
+/** Validate the current graph structure and compute the expression. */
+function validateCanvas(
+  nodes: Node[],
+  edges: Edge[],
+  outputNodeId: string,
+): ExpressionValidation {
+  // No output node
+  if (!nodes.find(n => n.id === outputNodeId)) {
+    return { status: 'error', message: '输出节点缺失' }
+  }
+
+  // Orphaned nodes with no incoming edges (not the output itself)
+  const nodesWithIncoming = new Set(edges.map(e => e.target))
+  nodesWithIncoming.add(outputNodeId)
+  const orphans = nodes.filter(n => n.type !== 'outputNode' && !nodesWithIncoming.has(n.id))
+  if (orphans.length > 0) {
+    return { status: 'warning', message: `${orphans.length} 个游离节点` }
+  }
+
+  // Rule nodes must not have outgoing edges
+  const ruleSources = edges.filter(e => {
+    const src = nodes.find(n => n.id === e.source)
+    return src?.type === 'ruleNode'
+  })
+  if (ruleSources.length > 0) {
+    return { status: 'error', message: '规则节点不能有出边' }
+  }
+
+  // Try full expression conversion
+  try {
+    flowToExpression(nodes, edges, outputNodeId)
+  } catch {
+    return { status: 'error', message: '表达式转换失败' }
+  }
+
+  // Warn on empty gate children
+  const gateNodes = nodes.filter(n => n.type === 'gateNode')
+  for (const g of gateNodes) {
+    const childEdges = edges.filter(e => e.source === g.id)
+    if (childEdges.length === 0) {
+      const d = g.data as unknown as GateNodeData
+      return { status: 'warning', message: `门节点 "${d.label}" 下无子节点` }
+    }
+  }
+
+  return { status: 'valid', message: '表达式有效' }
+}
 
 // Register custom node types (stable ref — defined outside component)
 const nodeTypes = {
@@ -81,6 +154,30 @@ export function RuleChainEditor({ rules, expression, onExpressionChange }: Props
     const timer = setTimeout(syncToExpression, 300)
     return () => clearTimeout(timer)
   }, [nodes, edges])
+
+  // Expression validation state (computed after every node/edge change)
+  const validation = useMemo<ExpressionValidation>(
+    () => validateCanvas(nodes, edges, outputNodeId),
+    [nodes, edges, outputNodeId],
+  )
+
+  // Connection validation: prevent invalid edges
+  const isValidConnection = useCallback(
+    (connection: Connection) => {
+      if (connection.source === connection.target) return false
+      const sourceNode = nodes.find(n => n.id === connection.source)
+      const targetNode = nodes.find(n => n.id === connection.target)
+      if (!sourceNode || !targetNode) return false
+      // Rule nodes are leaves — no outgoing edges
+      if (sourceNode.type === 'ruleNode') return false
+      // Output node is root — nothing connects TO it
+      if (targetNode.type === 'outputNode') return false
+      // Cycle detection
+      if (wouldCreateCycle(connection.source, connection.target, edges)) return false
+      return true
+    },
+    [nodes, edges],
+  )
 
   // ---- handlers ----
   const onConnect: OnConnect = useCallback(
@@ -203,6 +300,9 @@ export function RuleChainEditor({ rules, expression, onExpressionChange }: Props
           <button className="secondary-button" onClick={() => addGateNode('any')}>+ OR 门</button>
           <button className="secondary-button" onClick={resetCanvas}>清空画布</button>
           <button className="secondary-button" onClick={syncToExpression}>刷新表达式</button>
+          <span className={`expr-status expr-status-${validation.status}`}>
+            {validation.status === 'error' ? '❌' : validation.status === 'warning' ? '⚠️' : '✅'} {validation.message}
+          </span>
         </div>
         <div className="rule-canvas">
           <ReactFlow
@@ -211,6 +311,7 @@ export function RuleChainEditor({ rules, expression, onExpressionChange }: Props
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            isValidConnection={isValidConnection}
             onDragOver={onDragOver}
             onDrop={onDrop}
             onNodeClick={onNodeClick}
@@ -223,6 +324,7 @@ export function RuleChainEditor({ rules, expression, onExpressionChange }: Props
             multiSelectionKeyCode="Shift"
             snapToGrid
             snapGrid={[20, 20]}
+            minZoom={0.5}
             defaultEdgeOptions={{
               style: { stroke: '#c9a84c', strokeWidth: 2 },
               markerEnd: { type: MarkerType.ArrowClosed, color: '#c9a84c' },

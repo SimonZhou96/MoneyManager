@@ -87,6 +87,22 @@ _RULE_NAME_MAP: Dict[str, str] = {
 }
 
 
+_UNIFIED_BULLISH_TOP20_TREE = [
+    "├─ 第一阶段：21条看涨技术规则（全部股票参与）",
+    "│  ├─ 左一战法-看涨 / EMA突破 / RSI超卖 / 放量超前三日",
+    "│  ├─ 当日涨4%~4.5% / 放量突破",
+    "│  └─ 16项蜡烛图+指标形态（看涨吞没·锤子线反转·早晨之星·曙光初现·",
+    "│     · 红三兵·看涨光头光脚·均线金叉·EMA金叉·MACD金叉·布林下轨反弹·",
+    "│     · VWAP上穿·ATR向上突破·KDJ金叉·低位KDJ金叉·RSI超卖回升）",
+    "├─ 选取：按 total_match_count 降序 → 取 Top20",
+    "└─ 第二阶段：4条宏观规则（仅对Top20执行）",
+    "   ├─ 宏观因子采集",
+    "   ├─ 企业潜力分析(五模块综合评分)",
+    "   ├─ 公司时事×热点板块",
+    "   └─ 公司时事×热点新闻",
+]
+
+
 def _render_expression(expr, metadata_by_key: dict, indent: int = 0) -> List[str]:
     """将 JSON DSL 表达式渲染为缩进文本行"""
     prefix = "  " * indent
@@ -140,10 +156,14 @@ def _query_chains_with_expressions(db: MarketDatabase) -> List[dict]:
             import json
             try: expression = json.loads(expression)
             except Exception: expression = {}
-        tree = _render_expression(expression, {})
+        chain_key = row.get("chain_key", "")
+        if chain_key == "unified_bullish_top20":
+            tree = _UNIFIED_BULLISH_TOP20_TREE
+        else:
+            tree = _render_expression(expression, {})
         result.append({
             "market": row.get("market", ""),
-            "chain_key": row.get("chain_key", ""),
+            "chain_key": chain_key,
             "chain_name": row.get("chain_name", ""),
             "enabled": bool(row.get("enabled")),
             "expression_tree": tree,

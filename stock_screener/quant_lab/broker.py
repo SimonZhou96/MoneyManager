@@ -28,33 +28,68 @@ class SimulatedBroker:
 
     def apply_signal(self, signal: Signal, bar: Bar, quantity: int = 1) -> Tuple[Order, Optional[Trade]]:
         side = "buy" if signal.direction == "buy" else "sell" if signal.direction == "sell" else "hold"
+        if side == "hold":
+            order = Order(
+                order_id=str(uuid.uuid4()),
+                signal_id=signal.signal_id,
+                ts=signal.ts,
+                symbol=signal.symbol,
+                side=side,
+                quantity=0,
+                status="ignored",
+                rejected_reason="hold_signal",
+            )
+            return order, None
+
+        fill_price = self._fill_price(side, bar)
+
+        if side == "buy":
+            actual_qty = self._max_buyable_quantity(fill_price, int(quantity))
+            if actual_qty < 1:
+                order = Order(
+                    order_id=str(uuid.uuid4()),
+                    signal_id=signal.signal_id,
+                    ts=signal.ts,
+                    symbol=signal.symbol,
+                    side=side,
+                    quantity=int(quantity),
+                    status="rejected",
+                    rejected_reason="insufficient_cash",
+                )
+                return order, None
+        else:  # sell
+            current_pos = self.positions.get(signal.symbol, 0)
+            if current_pos <= 0:
+                order = Order(
+                    order_id=str(uuid.uuid4()),
+                    signal_id=signal.signal_id,
+                    ts=signal.ts,
+                    symbol=signal.symbol,
+                    side=side,
+                    quantity=int(quantity),
+                    status="rejected",
+                    rejected_reason="no_position",
+                )
+                return order, None
+            actual_qty = min(int(quantity), current_pos)
+
         order = Order(
             order_id=str(uuid.uuid4()),
             signal_id=signal.signal_id,
             ts=signal.ts,
             symbol=signal.symbol,
             side=side,
-            quantity=int(quantity),
+            quantity=actual_qty,
         )
-        if side == "hold":
-            return Order(**{**order.__dict__, "status": "ignored", "rejected_reason": "hold_signal"}), None
-
-        fill_price = self._fill_price(side, bar)
-        notional = fill_price * int(quantity)
+        notional = fill_price * actual_qty
         fee = notional * self.commission_rate
-
-        if side == "buy":
-            if not self._within_position_limit(notional):
-                return Order(**{**order.__dict__, "status": "rejected", "rejected_reason": "max_position_weight_exceeded"}), None
-            if not self._can_buy(notional + fee):
-                return Order(**{**order.__dict__, "status": "rejected", "rejected_reason": "insufficient_cash"}), None
 
         trade = Trade(
             order_id=order.order_id,
             trade_id=str(uuid.uuid4()),
             symbol=signal.symbol,
             side=side,
-            quantity=int(quantity),
+            quantity=actual_qty,
             price=round(fill_price, 6),
             fee=round(fee, 6),
             slippage=round(abs(fill_price - float(bar.close)), 6),
@@ -120,6 +155,22 @@ class SimulatedBroker:
         if side == "buy":
             return close * (1 + self.slippage_rate)
         return close * (1 - self.slippage_rate)
+
+    def _max_buyable_quantity(self, fill_price: float, requested_qty: int) -> int:
+        """计算实际可买入的最大股数（综合考虑现金和仓位上限）。
+
+        返回 min(requested_qty, cash_permitted, position_limit_permitted)，
+        确保不会买超现金，也不超过单标的最大仓位。
+        """
+        if fill_price <= 0 or self.cash <= 0:
+            return 0
+        # 每买入一股需要的现金（含佣金）
+        per_share_cost = fill_price * (1.0 + self.commission_rate)
+        # 可用现金能买多少股
+        max_by_cash = int(self.cash / per_share_cost)
+        # 仓位上限能买多少股
+        max_by_position = int(self.initial_cash * self.max_position_weight / fill_price)
+        return min(requested_qty, max_by_cash, max_by_position)
 
     def _can_buy(self, required_cash: float) -> bool:
         return self.cash >= required_cash

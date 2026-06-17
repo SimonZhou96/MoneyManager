@@ -1,0 +1,122 @@
+<h2>Bug 分析：选择已有链 → 画布不加载</h2>
+<p class="subtitle">追踪了从下拉框选择到画布渲染的完整数据流，找到了 4 个 Bug</p>
+
+<div class="section">
+  <h3>🔴 Bug 1（主因）：新建链后不重置 chainKey，导致重选同一链时 React 跳过了渲染</h3>
+  <div class="mockup">
+    <div class="mockup-header">Bug 复现路径</div>
+    <div class="mockup-body">
+      <div style="font-family:monospace;font-size:12px;line-height:1.8;color:#ccc">
+        <div>1️⃣ 用户在编辑链 <span style="color:#c9a84c">"左一战法+宏观标签"</span>，画布正常显示</div>
+        <div style="margin:4px 0">   state: chainKey = <span style="color:#4caf50">"zuoyi_with_macro_enhanced"</span></div>
+        <div style="margin:8px 0">2️⃣ 用户点击 <span style="background:#333;padding:2px 6px;border-radius:2px">＋ 新建</span></div>
+        <div style="margin-left:16px;color:#ff5252">❌ startNewChain() 重置了 editor 但<strong>没有</strong>调用 setChainKey('')</div>
+        <div style="margin:4px 0">   state: chainKey 仍然是 <span style="color:#4caf50">"zuoyi_with_macro_enhanced"</span></div>
+        <div style="margin:8px 0">3️⃣ 用户从下拉框再次选择 <span style="color:#c9a84c">"左一战法+宏观标签"</span></div>
+        <div style="margin-left:16px;color:#ff5252">❌ setChainKey("zuoyi_with_macro_enhanced") — 和当前值<strong>相同</strong></div>
+        <div style="margin-left:16px;color:#ff5252">❌ React Object.is 比较 → <strong>Bail out，不触发重渲染</strong></div>
+        <div style="margin:4px 0">   state: chainKey 仍然是 <span style="color:#4caf50">"zuoyi_with_macro_enhanced"</span></div>
+        <div style="margin:8px 0">4️⃣ useEffect([selectedChain?.chain_key]) <strong>不触发</strong>（依赖值未变）</div>
+        <div style="margin:8px 0">5️⃣ setEditor 从不被调用 → visualExpression = 空</div>
+        <div style="margin:8px 0">6️⃣ <span style="color:#ff5252">画布空白</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>对比：deleteChain 正确地先重置了 chainKey</h3>
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header" style="color:#ff5252">❌ startNewChain (line 1889-1899)</div>
+      <div class="mockup-body">
+        <pre style="font-size:11px;color:#ccc">const startNewChain = () => {
+  setEditor({
+    timeframe: '1d',
+    chain_key: '',      // ← 重置了 editor
+    chain_name: '',
+    ...
+  })
+  // ❌ 缺少 setChainKey('') — 下拉框未重置！
+}</pre>
+      </div>
+    </div>
+    <div class="mockup">
+      <div class="mockup-header" style="color:#4caf50">✅ deleteChain (line 1956-1967)</div>
+      <div class="mockup-body">
+        <pre style="font-size:11px;color:#ccc">const deleteChain = async () => {
+  await fetch(...)
+  setChainKey('')        // ✅ 先重置
+  startNewChain()         // ✅ 再清编辑器
+  loadRules()
+}</pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>🟡 Bug 2-4（次要）</h3>
+  <table style="width:100%;font-size:12px;border-collapse:collapse;color:#ccc">
+    <tr style="border-bottom:1px solid #333">
+      <th style="text-align:left;padding:4px 8px;color:#c9a84c">Bug</th>
+      <th style="text-align:left;padding:4px 8px;color:#c9a84c">位置</th>
+      <th style="text-align:left;padding:4px 8px;color:#c9a84c">影响</th>
+    </tr>
+    <tr style="border-bottom:1px solid #2a2a40">
+      <td style="padding:4px 8px">2️⃣ 下拉框 value 只用 chain_key，多周期链可能重复</td>
+      <td style="padding:4px 8px;font-size:10px">main.tsx:1984-1986</td>
+      <td style="padding:4px 8px">同 key 不同周期的链，find() 返回第一个，可能加载<strong>错误的表达式</strong></td>
+    </tr>
+    <tr style="border-bottom:1px solid #2a2a40">
+      <td style="padding:4px 8px">3️⃣ expressionToFlow 异常被静默吞掉</td>
+      <td style="padding:4px 8px;font-size:10px">RuleChainEditor.tsx:65-67</td>
+      <td style="padding:4px 8px">catch 只调 resetCanvas() 无日志，用户看到空白以为是"没加载"</td>
+    </tr>
+    <tr>
+      <td style="padding:4px 8px">4️⃣ loadRules 闭包过时覆盖 chainKey</td>
+      <td style="padding:4px 8px;font-size:10px">main.tsx:1801-1809</td>
+      <td style="padding:4px 8px">API 返回时使用了 fetch 前的 chainKey，可能错误重置为默认链</td>
+    </tr>
+  </table>
+</div>
+
+<div class="section">
+  <h3>🔧 修复方案对比</h3>
+
+  <div class="options">
+    <div class="option" data-choice="a" onclick="toggleSelect(this)">
+      <div class="letter">A</div>
+      <div class="content">
+        <h3>最小修复（只修 Bug 1）</h3>
+        <p>在 <code>startNewChain</code> 中加一行 <code>setChainKey('')</code>，<code>deleteChain</code> 里已有的模式。10秒改完。</p>
+        <div class="pros-cons">
+          <div class="pros"><h4>优点</h4><ul><li>秒修</li><li>零风险</li></ul></div>
+          <div class="cons"><h4>缺点</h4><ul><li>Bug 2-4 仍在</li><li>遇到特殊 case 仍可能出问题</li></ul></div>
+        </div>
+      </div>
+    </div>
+    <div class="option" data-choice="b" onclick="toggleSelect(this)">
+      <div class="letter">B</div>
+      <div class="content">
+        <h3>完整修复（修 Bug 1-4）</h3>
+        <p>修所有4个Bug + 加 console.error 日志用于调试。20分钟。</p>
+        <div class="pros-cons">
+          <div class="pros"><h4>优点</h4><ul><li>覆盖所有已知问题</li><li>加错误日志便于后续排查</li><li>多周期链也可正确处理</li></ul></div>
+          <div class="cons"><h4>缺点</h4><ul><li>改动稍多</li><li>需测试多周期场景</li></ul></div>
+        </div>
+      </div>
+    </div>
+    <div class="option" data-choice="c" onclick="toggleSelect(this)">
+      <div class="letter">C</div>
+      <div class="content">
+        <h3>先确认是否能复现，再决定修哪些</h3>
+        <p>打开浏览器调试 → 按 Bug 1 路径操作 → 看控制台日志 → 确认后再修。</p>
+        <div class="pros-cons">
+          <div class="pros"><h4>优点</h4><ul><li>先验证再动手</li><li>不盲目修</li></ul></div>
+          <div class="cons"><h4>缺点</h4><ul><li>需要启动前端</li><li>多一步操作</li></ul></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
