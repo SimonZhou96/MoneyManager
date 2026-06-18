@@ -10,6 +10,7 @@
 - 策略器：策略信号（如左一战法、EMA 突破、RSI 超买超卖），每个策略器只输出自身是否满足。
 """
 
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date
@@ -638,8 +639,15 @@ class LiquidityNowcastStrategizer(Strategizer):
 class EarningsRevisionMomentumStrategizer(Strategizer):
     """盈利预期修正策略器（个股级）—— 判断公司未来盈利预期是否改善。
 
-    数据源：Tavily（搜索业绩预告/财报/券商观点）+ LLM 结构化。
-    Phase 3 实现 LLM 调用，Phase 1 返回中性桩。
+    数据源：Tavily（搜索业绩预告/财报/券商观点）。
+    Phase 3 实现：Tavily 搜索 -> 关键词打分 -> 输出正向/反向趋势判断。
+
+    搜索 query: "{stock_name} 业绩 预告 2026"
+    关键词打分：
+    - 正面: 上修, 超预期, 订单增长, 产能释放, 价格上涨, 毛利率改善, 亏损收窄, 扭亏
+    - 负面: 下修, 低于预期, 订单减少, 价格下跌, 毛利率承压, 亏损扩大
+
+    若 Tavily 未配置则返回中性结果（score=50, trend=stable），永不崩溃。
     """
 
     def __init__(
@@ -650,13 +658,105 @@ class EarningsRevisionMomentumStrategizer(Strategizer):
         super().__init__(name=name, enabled=enabled)
 
     def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
-        # Phase 1 桩实现
-        return StrategizerOutput(
-            name=self.name,
-            satisfied=False,
-            reason="EarningsRevision 暂未实现（Phase 3）",
-            details={"score": 50.0, "earnings_trend": "stable", "confidence": 0.0},
-        )
+        """搜索个股盈利相关新闻，通过关键词判断盈利预期修正方向。
+
+        Phase 3 实现：
+        1. 构建搜索 query: "{stock.name} 业绩 预告 2026"
+        2. 若已配置 TAVILY_API_KEY，通过 TavilySearchProvider 搜索
+        3. 对搜索结果做关键词打分，判断盈利趋势
+        4. 无论遇到何种异常，返回中性结果（score=50, stable），永不崩溃
+        """
+        try:
+            stock_name = (stock.name or stock.code or "").strip()
+            if not stock_name:
+                return StrategizerOutput(
+                    name=self.name,
+                    satisfied=False,
+                    reason="缺少股票名称，无法搜索盈利资讯",
+                    details={"score": 50.0, "earnings_trend": "stable", "confidence": 0.0},
+                )
+
+            query = f"{stock_name} 业绩 预告 2026"
+
+            # ── Tavily 搜索 ──
+            results: list = []
+            try:
+                from signal_analysis.search_providers import TavilySearchProvider
+
+                api_key = os.getenv("TAVILY_API_KEY", "").strip()
+                if api_key:
+                    client = TavilySearchProvider(api_key=api_key)
+                    results = client.search(query, max_results=5)
+            except Exception:
+                pass
+
+            # ── 关键词打分 ──
+            score = 50.0
+            earnings_trend = "stable"
+            confidence = 0.0
+
+            if results:
+                all_text = " ".join(
+                    (d.title or "") + " " + (d.content or "")
+                    for d in results
+                )
+
+                # 正面关键词（加分）
+                positive_kws = [
+                    "上修", "超预期", "订单增长", "产能释放", "价格上涨",
+                    "毛利率改善", "亏损收窄", "扭亏",
+                ]
+                # 负面关键词（减分）
+                negative_kws = [
+                    "下修", "低于预期", "订单减少", "价格下跌",
+                    "毛利率承压", "亏损扩大",
+                ]
+
+                pos_count = sum(1 for kw in positive_kws if kw in all_text)
+                neg_count = sum(1 for kw in negative_kws if kw in all_text)
+
+                if pos_count > 0 and neg_count == 0:
+                    # 纯正面
+                    score = 65.0 + min(25.0, pos_count * 5.0)
+                    earnings_trend = "improving"
+                    confidence = min(0.8, 0.5 + pos_count * 0.1)
+                elif neg_count > 0 and pos_count == 0:
+                    # 纯负面
+                    score = max(20.0, 50.0 - neg_count * 10.0)
+                    earnings_trend = "deteriorating"
+                    confidence = min(0.8, 0.5 + neg_count * 0.1)
+                elif pos_count > neg_count:
+                    # 正面居多
+                    score = 55.0 + min(15.0, (pos_count - neg_count) * 5.0)
+                    earnings_trend = "improving"
+                    confidence = min(0.7, 0.5 + (pos_count - neg_count) * 0.05)
+                elif neg_count > pos_count:
+                    # 负面居多
+                    score = max(25.0, 50.0 - (neg_count - pos_count) * 10.0)
+                    earnings_trend = "deteriorating"
+                    confidence = min(0.7, 0.5 + (neg_count - pos_count) * 0.05)
+
+                score = max(0.0, min(100.0, score))
+
+            satisfied = score >= 50
+            return StrategizerOutput(
+                name=self.name,
+                satisfied=satisfied,
+                reason=f"盈利预期: {earnings_trend}",
+                details={
+                    "score": score,
+                    "earnings_trend": earnings_trend,
+                    "confidence": confidence,
+                },
+            )
+
+        except Exception:
+            return StrategizerOutput(
+                name=self.name,
+                satisfied=False,
+                reason="盈利预期分析暂不可用",
+                details={"score": 50.0, "earnings_trend": "stable", "confidence": 0.0},
+            )
 
 
 class PolicyEventRiskStrategizer(Strategizer):

@@ -961,5 +961,85 @@ class TestCommodityShockComputation(unittest.TestCase):
         self.assertIn("异常", result.explanation)
 
 
+# ── 政策事件分析测试 ────────────────────────────────────────────
+
+
+class TestPolicyEventComputation(unittest.TestCase):
+    """_compute_policy_event 实现测试。"""
+
+    def setUp(self):
+        self.cache = MarketCache()
+
+    def test_policy_event_returns_result(self):
+        """计算始终返回 PolicyEventResult（不返回 None）。"""
+        result = self.cache._compute_policy_event("HK")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.score, 50.0)
+
+    def test_policy_event_no_tavily_returns_neutral(self):
+        """未配置 Tavily → score=50, direction=neutral。"""
+        result = self.cache._compute_policy_event("HK")
+        self.assertEqual(result.score, 50.0)
+        self.assertEqual(result.direction, "neutral")
+
+    def test_policy_event_mocked_positive_kw(self):
+        """模拟 Tavily 返回含正面关键词 → score > 50。"""
+        from unittest.mock import MagicMock, patch
+        from signal_analysis.models import SearchDocument
+
+        mock_docs = [
+            SearchDocument(
+                title="央行降准0.5个百分点释放长期流动性",
+                url="http://example.com/1",
+                content="央行宣布降准降息，金融稳增长政策加码，利好股市",
+                score=1.0,
+                query="央行 降准 降息 LPR",
+            ),
+        ]
+        mock_client = MagicMock()
+        mock_client.search.return_value = mock_docs
+
+        with patch(
+            "signal_analysis.search_providers.TavilySearchProvider",
+            return_value=mock_client,
+        ), patch("os.getenv", return_value="mock_key"):
+            result = self.cache._compute_policy_event("A")
+
+        self.assertIsNotNone(result)
+        # 降准 + 降息 + 稳增长 = 3 个正面关键词 > 0 负面
+        self.assertGreater(result.score, 50.0)
+        self.assertIn("neutral_positive", result.direction)
+        self.assertIn("金融", result.related_sectors)
+
+    def test_policy_event_mocked_negative_kw(self):
+        """模拟 Tavily 返回含负面关键词 → score < 50。"""
+        from unittest.mock import MagicMock, patch
+        from signal_analysis.models import SearchDocument
+
+        mock_docs = [
+            SearchDocument(
+                title="美联储加息75基点，全球贸易战升级",
+                url="http://example.com/2",
+                content="美联储宣布加息，地缘政治冲突加剧，制裁收紧",
+                score=1.0,
+                query="美联储 利率 关税 政策",
+            ),
+        ]
+        mock_client = MagicMock()
+        mock_client.search.return_value = mock_docs
+
+        with patch(
+            "signal_analysis.search_providers.TavilySearchProvider",
+            return_value=mock_client,
+        ), patch("os.getenv", return_value="mock_key"):
+            result = self.cache._compute_policy_event("US")
+
+        self.assertIsNotNone(result)
+        # 加息 + 贸易战 + 地缘政治 + 制裁 + 收紧 = 5 个负面 > 0 正面
+        self.assertLess(result.score, 50.0)
+        self.assertIn("neutral_negative", result.direction)
+        self.assertTrue(len(result.risk_events) > 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

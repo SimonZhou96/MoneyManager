@@ -10,7 +10,7 @@ Phase 1 实现：
 """
 
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from .models import (
     MarketTemperature,
@@ -29,6 +29,32 @@ except Exception:
     MarketDatabase = None  # type: ignore[assignment]
     MySqlConfig = None  # type: ignore[assignment]
     _MARKET_DB_AVAILABLE = False
+
+
+def _policy_queries_for_market(market: str) -> List[str]:
+    """Build search queries for policy/regulatory/geopolitical event analysis, per market.
+
+    Returns a list of Chinese-language query strings suitable for Tavily/Bing/Baidu search.
+    """
+    if market == "HK":
+        return [
+            "港股 今日 政策",
+            "港股 监管 风险",
+            "央行 降准 降息 LPR",
+        ]
+    if market == "US":
+        return [
+            "美股 今日 政策",
+            "美股 监管 风险",
+            "美联储 利率 关税 政策",
+        ]
+    # A or other markets
+    return [
+        "A股 今日 政策",
+        "A股 监管 风险",
+        "央行 降准 降息 LPR",
+        "产业政策 扶持",
+    ]
 
 
 class MarketCache:
@@ -665,8 +691,105 @@ class MarketCache:
         )
 
     def _compute_policy_event(self, market: str) -> Optional[PolicyEventResult]:
-        """政策事件风险（Phase 3 实现，Phase 1 返回桩）。"""
-        return PolicyEventResult(score=50.0, explanation="政策事件暂未评估（Phase 3 实现）")
+        """Search for policy/regulatory/geopolitical events affecting the market.
+
+        Phase 3 implementation:
+        1. Build market-specific search queries via _policy_queries_for_market()
+        2. Search via Tavily (if TAVILY_API_KEY is configured)
+        3. Score via positive/negative keyword matching on search results
+        4. Extract related sectors and risk events from results
+
+        Falls back to neutral score (50) safely without crashing.
+        """
+        try:
+            queries = _policy_queries_for_market(market)
+
+            # ── Search via Tavily (if configured) ──
+            results: list = []
+            try:
+                import os
+
+                from signal_analysis.search_providers import TavilySearchProvider
+
+                api_key = os.getenv("TAVILY_API_KEY", "").strip()
+                if api_key:
+                    client = TavilySearchProvider(api_key=api_key)
+                    for query in queries[:3]:
+                        try:
+                            docs = client.search(query, max_results=3)
+                            results.extend(docs or [])
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            # ── Keyword scoring ──
+            score = 50.0
+            direction = "neutral"
+            related_sectors: List[str] = []
+            risk_events: List[str] = []
+
+            if results:
+                all_text = " ".join(
+                    (d.title or "") + " " + (d.content or "")
+                    for d in results
+                )
+
+                positive_kws = [
+                    "降准", "降息", "减税", "扶持", "利好", "宽松",
+                    "放水", "LPR下调", "降息降准", "增量政策",
+                    "稳增长", "扩内需", "逆周期",
+                ]
+                negative_kws = [
+                    "加息", "加税", "制裁", "监管加强", "收紧",
+                    "贸易战", "地缘政治", "冲突", "提高印花税",
+                    "去杠杆", "退市", "强监管",
+                ]
+
+                pos_count = sum(1 for kw in positive_kws if kw in all_text)
+                neg_count = sum(1 for kw in negative_kws if kw in all_text)
+
+                if pos_count > neg_count:
+                    score += min(15.0, (pos_count - neg_count) * 5.0)
+                    direction = "neutral_positive"
+                elif neg_count > pos_count:
+                    score -= min(20.0, (neg_count - pos_count) * 5.0)
+                    direction = "neutral_negative"
+
+                score = max(0.0, min(100.0, score))
+
+                # Extract related sectors from search result text
+                sector_kws: Dict[str, List[str]] = {
+                    "金融": ["银行", "保险", "券商", "金融"],
+                    "地产": ["地产", "房地产", "物业"],
+                    "科技": ["科技", "半导体", "AI", "人工智能", "芯片"],
+                    "新能源": ["新能源", "光伏", "风电", "锂电"],
+                    "消费": ["消费", "食品", "零售", "餐饮"],
+                    "医药": ["医药", "医疗", "生物"],
+                    "制造": ["制造", "工业", "装备"],
+                }
+                for sector, kws in sector_kws.items():
+                    if any(kw in all_text for kw in kws):
+                        related_sectors.append(sector)
+
+                # Extract risk events
+                for kw in negative_kws:
+                    if kw in all_text:
+                        risk_events.append(kw)
+
+            return PolicyEventResult(
+                score=score,
+                direction=direction,
+                related_sectors=related_sectors,
+                risk_events=risk_events,
+                explanation="政策事件分析（Phase 3 基础实现）",
+            )
+
+        except Exception:
+            return PolicyEventResult(
+                score=50.0,
+                explanation="政策事件分析暂不可用",
+            )
 
     def _compute_commodity_shock(self, market: str) -> Optional[CommodityShockResult]:
         """用 YFinance 期货数据计算大宗商品冲击。
