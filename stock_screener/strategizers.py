@@ -701,3 +701,49 @@ class CommodityShockStrategizer(Strategizer):
             reason="CommodityShock 由 MarketCache 统一计算，不逐只股票调用",
             details={"delegated": True},
         )
+
+
+# =============================================================================
+# EntryScore 聚合策略器（评分层）— 模块级分数容器
+# 实际聚合逻辑在 scoring/entry_scorer.py 中，这些类满足 RuleRegistry 注册模式
+# =============================================================================
+
+class TrendStructureStrategizer(Strategizer):
+    """趋势结构聚合器 —— 消费 zuoyi/EMA/SMA/MA 相关规则输出。"""
+    def __init__(self, name="TrendStructureStrategizer", enabled=True):
+        super().__init__(name=name, enabled=enabled)
+    def apply(self, stock, context):
+        return StrategizerOutput(name=self.name, satisfied=False,
+            reason="趋势结构分由 EntryScorer 统一计算", details={"module": "trend"})
+
+class MomentumStateStrategizer(Strategizer):
+    """动量状态聚合器 —— 消费 RSI/MACD/KDJ/能量相位相关规则输出。"""
+    def __init__(self, name="MomentumStateStrategizer", enabled=True):
+        super().__init__(name=name, enabled=enabled)
+    def apply(self, stock, context):
+        return StrategizerOutput(name=self.name, satisfied=False,
+            reason="动量状态分由 EntryScorer 统一计算", details={"module": "momentum"})
+
+class VolumeConfirmationStrategizer(Strategizer):
+    """成交确认聚合器 —— 消费放量/量价配合相关规则输出。"""
+    def __init__(self, name="VolumeConfirmationStrategizer", enabled=True):
+        super().__init__(name=name, enabled=enabled)
+    def apply(self, stock, context):
+        return StrategizerOutput(name=self.name, satisfied=False,
+            reason="成交确认分由 EntryScorer 统一计算", details={"module": "volume"})
+
+class BreakoutQualityStrategizer(Strategizer):
+    """突破质量聚合器 —— 消费 ATR突破/新高/形态有效性相关规则输出。"""
+    def __init__(self, name="BreakoutQualityStrategizer", enabled=True):
+        super().__init__(name=name, enabled=enabled)
+    def apply(self, stock, context):
+        return StrategizerOutput(name=self.name, satisfied=False,
+            reason="突破质量分由 EntryScorer 统一计算", details={"module": "breakout"})
+
+class VolatilityRiskStrategizer(Strategizer):
+    """波动风险聚合器 —— 消费布林带宽/回撤/日内振幅相关指标。"""
+    def __init__(self, name="VolatilityRiskStrategizer", enabled=True):
+        super().__init__(name=name, enabled=enabled)
+    def apply(self, stock, context):
+        return StrategizerOutput(name=self.name, satisfied=False,
+            reason="波动风险分由 EntryScorer 统一计算", details={"module": "volatility_risk"})
