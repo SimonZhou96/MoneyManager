@@ -18,7 +18,7 @@ class CreditRiskResult:
     score: float                            # 0-100，越低风险越高
     level: str                              # "low" | "elevated" | "high"
     indicators: Dict[str, float] = field(default_factory=dict)
-    reason: str = ""
+    explanation: str = ""
     data_sources: List[str] = field(default_factory=lambda: ["YFinance"])
 
 
@@ -134,7 +134,7 @@ class MarketTemperature:
                     "rule_type": "strategy",
                     "strategy_category": "macro",
                     "result": "pass" if result.score >= 50 else "fail",
-                    "reason": getattr(result, 'explanation', None) or getattr(result, 'reason', ''),
+                    "reason": result.explanation,
                     "details": {"score": result.score},
                 })
         return details

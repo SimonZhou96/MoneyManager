@@ -39,38 +39,39 @@ DECISION_MAP_HOLDING = {
     (0, 50): "NOT_RECOMMENDED",
 }
 
-# ── 38 条技术规则 → 5 模块映射（key = rule_key，value = 模块内权重） ──
-RULE_TO_MODULE_MAP = {
+# ── 38 条技术规则 → 5 模块映射（每项 = (rule_key, module, weight)） ──
+# 使用 tuple 列表而非 dict，因为 zuoyi_bullish_signal 和 atr_breakout 同时贡献两个模块。
+RULE_TO_MODULE_MAP: list = [
     # 趋势结构 (trend) — 权重 30%
-    "zuoyi_bullish_signal": ("trend", 1.5),
-    "ema_breakout": ("trend", 1.0),
-    "sma_golden_cross": ("trend", 1.0),
-    "ema_golden_cross": ("trend", 1.0),
-    "price_above_ma50": ("trend", 0.5),
-    "price_above_ma200": ("trend", 0.5),
+    ("zuoyi_bullish_signal", "trend", 1.5),
+    ("ema_breakout", "trend", 1.0),
+    ("sma_golden_cross", "trend", 1.0),
+    ("ema_golden_cross", "trend", 1.0),
+    ("price_above_ma50", "trend", 0.5),
+    ("price_above_ma200", "trend", 0.5),
 
     # 动量状态 (momentum) — 权重 20%
-    "energy_phase_bullish": ("momentum", 1.5),
-    "macd_bullish_cross": ("momentum", 1.0),
-    "kdj_bullish_cross": ("momentum", 0.8),
-    "rsi_bullish_rebound": ("momentum", 0.8),
-    "daily_rise_4_45": ("momentum", 0.5),
+    ("energy_phase_bullish", "momentum", 1.5),
+    ("macd_bullish_cross", "momentum", 1.0),
+    ("kdj_bullish_cross", "momentum", 0.8),
+    ("rsi_bullish_rebound", "momentum", 0.8),
+    ("daily_rise_4_45", "momentum", 0.5),
 
     # 成交确认 (volume) — 权重 20%
-    "volume_spike_prior3": ("volume", 1.5),
-    "volume_price_breakout": ("volume", 1.0),
-    "volume_ratio_high": ("volume", 0.8),
+    ("volume_spike_prior3", "volume", 1.5),
+    ("volume_price_breakout", "volume", 1.0),
+    ("volume_ratio_high", "volume", 0.8),
 
     # 突破质量 (breakout) — 权重 20%
-    "zuoyi_bullish_signal": ("breakout", 1.0),  # 同时贡献两个模块（有意为之）
-    "atr_breakout": ("breakout", 1.0),
-    "bollinger_upper_breakout": ("breakout", 0.8),
-    "new_high_breakout": ("breakout", 1.2),
+    ("zuoyi_bullish_signal", "breakout", 1.0),  # 同时贡献两个模块
+    ("atr_breakout", "breakout", 1.0),
+    ("bollinger_upper_breakout", "breakout", 0.8),
+    ("new_high_breakout", "breakout", 1.2),
 
     # 波动风险 (volatility_risk) — 权重 10%
-    "atr_breakout": ("volatility_risk", 0.5),
-    "bollinger_bandwidth_high": ("volatility_risk", 0.5),
-}
+    ("atr_breakout", "volatility_risk", 0.5),  # 同时贡献两个模块
+    ("bollinger_bandwidth_high", "volatility_risk", 0.5),
+]
 
 # ── 波动风险维度：非规则条目（直接计算指标） ──
 VOLATILITY_RISK_METRICS = {
