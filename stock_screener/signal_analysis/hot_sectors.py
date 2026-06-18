@@ -611,3 +611,149 @@ def _dedupe_hot_sectors(items: List[HotSector]) -> List[HotSector]:
         seen.add(item.name)
         result.append(item)
     return result
+
+
+class HotSectorClassifier:
+    """热点分类器：将原始热点从地域标签映射为行业/主题/地域三类。"""
+
+    # ── 行业关键词（40+ Chinese sector names） ──
+    INDUSTRY_NAMES = {
+        # Tech — 科技
+        "半导体", "芯片", "互联网", "软件", "云计算", "大数据", "物联网", "5G",
+        "通信设备", "消费电子", "电子元器件", "计算机设备",
+        "应用软件", "软件开发", "软件应用", "软件基础设施",
+        "科技", "科技硬件", "电子设备", "光电", "数字化解决方案",
+        # Healthcare — 医药
+        "医药", "创新药", "医疗", "生物科技", "制药", "中药", "医疗器械",
+        "医美", "医疗服务", "医疗设备", "生物", "仿制药", "化学制药",
+        "医疗设施", "医疗保健", "生命科学",
+        # Consumer — 消费
+        "消费", "白酒", "食品饮料", "餐饮", "零售", "食品", "家电",
+        "汽车", "新能源车", "汽车零部件", "博彩", "物业管理",
+        "教育", "旅游", "服装制造", "包装食品", "饮料",
+        "消费服务", "传媒", "游戏", "电商", "广告代理",
+        "互动媒体与服务", "媒体娱乐", "个人护理", "烟草",
+        "家居", "家居耐用", "纺织服装", "预制菜",
+        # Finance — 金融
+        "金融", "银行", "券商", "保险", "房地产", "地产",
+        "证券经纪", "信贷服务", "资产管理", "资本市场",
+        "金融服务", "综合金融", "投资资管", "区域银行",
+        "房地产开发商", "房地产开发", "房地产投资", "房地产服务",
+        # Energy — 能源
+        "新能源", "光伏", "锂电", "风电", "储能", "电力", "煤炭", "石油",
+        "电力设备", "电力公用", "电网设备", "光伏设备", "电池",
+        "能源设备与服务", "油气勘探", "油气中游", "油气服务",
+        "油气设备与服务", "核电", "核能", "氢能源",
+        # Industry — 工业
+        "工业", "工业金属", "工业零部件", "通用设备", "专用设备",
+        "自动化设备", "电气设备", "工业机械", "电子零部件", "办公电子",
+        # Materials — 材料
+        "化工", "建材", "原材料", "特种化工", "化工原料",
+        "黄金", "贵金属", "稀土", "钢铁", "有色",
+        "工业金属与矿业", "玻璃纤维", "塑料", "农药化工",
+        # Defense — 国防军工
+        "军工", "航天", "商业航天", "卫星", "国防",
+        "航空航天与国防", "军工电子",
+        # Infrastructure & Transport — 基建交运
+        "高铁", "交通运输", "航运港口", "物流",
+        "电信服务", "电信网络基建", "电信", "基建", "工程建设",
+        "重工基建", "建筑",
+        # Services — 服务
+        "环保", "环保服务", "环保治理", "农业", "商业服务",
+        "支援服务", "IT服务", "IT咨询", "互联网内容",
+        # Other — 其他
+        "自动化", "壳公司",
+    }
+
+    # ── 主题关键词（概念性、事件驱动型主题） ──
+    THEME_KEYWORDS = {
+        "AI", "人工智能", "算力", "机器人", "低空经济", "功率半导体",
+        "量子计算", "元宇宙", "数字人", "信创", "国产替代",
+        "碳中和", "碳达峰", "华为概念", "特斯拉概念", "抖音概念",
+        "固态电池", "钠离子电池", "钙钛矿",
+        "机器视觉", "自动驾驶", "无人驾驶", "脑机接口",
+        "合成生物", "减肥药",
+        "中特估", "央企改革", "国企改革", "混改",
+        "数据要素", "数据资产", "数字经济", "数字中国",
+        "东数西算", "跨境支付", "数字货币", "区块链",
+        "工业母机", "仪器仪表", "传感器",
+        "液冷", "光通信", "CPO", "硅光",
+        "稀土永磁", "超级电容",
+        "冷链", "宠物经济",
+        "直播带货", "网红经济", "新零售",
+        "银发经济", "养老", "生育",
+        "新能源",
+    }
+
+    # ── 地域催化剂关键词（只有匹配时才归为地域热点） ──
+    REGION_CATALYSTS = {
+        "海南自贸", "粤港澳", "长三角", "成渝",
+        "雄安", "京津冀", "上海自贸", "深圳先行",
+        "安徽国资", "重庆国资",
+        "一带一路", "西部开发", "东北振兴",
+        "杭州亚运", "横琴", "前海", "南沙",
+    }
+
+    # ── 省份/城市名（需要额外催化剂才算热点，否则跳过） ──
+    PROVINCE_NAMES = {
+        "安徽", "北京", "重庆", "福建", "甘肃", "广东", "广西", "贵州",
+        "海南", "河北", "河南", "黑龙江", "湖北", "湖南",
+        "江苏", "江西", "吉林", "辽宁", "内蒙古", "宁夏", "青海",
+        "山东", "山西", "陕西", "上海", "四川",
+        "台湾", "天津", "西藏", "香港", "新疆", "澳门", "云南", "浙江",
+        "深圳", "广州", "成都", "武汉", "杭州", "南京",
+        "苏州", "宁波", "厦门", "青岛", "大连", "雄安",
+    }
+
+    def classify(self, raw_hot_sectors: list[str]) -> dict:
+        """将原始热点列表分类为行业/主题/地域三类。
+
+        Args:
+            raw_hot_sectors: 原始热点板块名称列表。
+
+        Returns:
+            {"industry": [...], "theme": [...], "region": [...]}
+            无法分类的条目被静默跳过。
+        """
+        result: dict[str, list[str]] = {"industry": [], "theme": [], "region": []}
+
+        for sector in raw_hot_sectors:
+            if not sector or not sector.strip():
+                continue
+            sector = sector.strip()
+
+            # 1. 行业关键词 → industry 桶
+            if sector in self.INDUSTRY_NAMES:
+                if sector not in result["industry"]:
+                    result["industry"].append(sector)
+                continue
+
+            # 2. 主题关键词 → theme 桶
+            if sector in self.THEME_KEYWORDS:
+                if sector not in result["theme"]:
+                    result["theme"].append(sector)
+                continue
+
+            # 3. 地域催化剂 → region 桶
+            if sector in self.REGION_CATALYSTS:
+                if sector not in result["region"]:
+                    result["region"].append(sector)
+                continue
+
+            # 4. 省份/城市名，无催化剂 → 跳过
+            if sector in self.PROVINCE_NAMES:
+                continue
+
+            # 5. 未知 → 尝试子串映射到行业，否则跳过
+            mapped = self._map_to_industry(sector)
+            if mapped and mapped not in result["industry"]:
+                result["industry"].append(mapped)
+
+        return result
+
+    def _map_to_industry(self, sector: str) -> str | None:
+        """尝试将未知板块名通过子串匹配映射到已知行业。"""
+        for industry in sorted(self.INDUSTRY_NAMES, key=len, reverse=True):
+            if len(industry) >= 2 and industry in sector:
+                return industry
+        return None
