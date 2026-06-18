@@ -346,14 +346,8 @@ DEFAULT_RULE_METADATA = (
      }, True, 115, "当前周期15根K线内左一战法看涨信号"),
     ("ema_breakout", "EMA 突破", "strategy", "technical", "EMABreakoutStrategizer",
      {"ema_short": 10, "ema_long": 150, "direction": "bullish", "signal_group": "bullish"}, True, 120, "EMA 短线向上突破长线"),
-    ("rsi_oversold", "RSI 超卖", "strategy", "technical", "RSIOversoldStrategizer",
-     {"period": 14, "threshold": 30.0, "direction": "bullish", "signal_group": "rebound"}, True, 130, "RSI 低于等于阈值"),
-    ("rsi_overbought", "RSI 超买", "strategy", "technical", "RSIOverboughtStrategizer",
-     {"period": 14, "threshold": 70.0}, True, 140, "RSI 高于等于阈值"),
     ("volume_spike_prior3", "放量超前三日", "strategy", "technical", "TodayVolumeExceedsPrior3MaxStrategizer",
      {"direction": "bullish", "signal_group": "bullish"}, True, 150, "当日成交量大于前三日最大值"),
-    ("daily_drop_6_65", "当日跌 6%~6.5%", "strategy", "technical", "DailyDrop6To65Strategizer",
-     {"pct_min": -6.5, "pct_max": -6.0}, True, 160, "当日跌幅在指定区间"),
     ("daily_rise_4_45", "当日涨 4%~4.5%", "strategy", "technical", "DailyRise4To45Strategizer",
      {"pct_min": 4.0, "pct_max": 4.5, "direction": "bullish", "signal_group": "bullish"}, True, 170, "当日涨幅在指定区间"),
     ("energy_phase_bullish", "能量相位看涨", "strategy", "technical", "EnergyPhaseClassifier",
@@ -379,6 +373,43 @@ DEFAULT_RULE_METADATA = (
     ("market_intel_macro_score_link", "市场情报宏观评分", "strategy", "macro", "MarketIntelMacroScoreStrategizer",
      {"threshold": 60, "refresh_policy": "cache_or_refresh", "technical_weight": 0.6, "macro_weight": 0.4},
      True, 230, "基于公司事件、热点板块与新闻证据生成时间感知宏观评分"),
+
+    # ── 持有层宏观规则（strategy_category=macro，不参与 technical 筛选） ──
+    ("credit_risk_regime", "信用风险环境", "strategy", "macro", "CreditRiskRegimeStrategizer",
+     {"direction": "N/A"}, True, 240, None,
+     "判断市场信用风险是否上升（HYG/LQD/VIX ETF代理）"),
+    ("market_breadth_regime", "市场宽度环境", "strategy", "macro", "MarketBreadthRegimeStrategizer",
+     {"direction": "N/A"}, True, 250, None,
+     "判断指数上涨是否健康扩散到多数股票"),
+    ("liquidity_nowcast", "资金流动性即时报", "strategy", "macro", "LiquidityNowcastStrategizer",
+     {"direction": "N/A"}, True, 260, None,
+     "判断资金环境是否支持继续持有"),
+    ("earnings_revision_momentum", "盈利预期修正", "strategy", "macro", "EarningsRevisionMomentumStrategizer",
+     {"direction": "N/A"}, True, 270, None,
+     "判断公司盈利预期是否改善（Tavily+LLM代理）"),
+    ("policy_event_risk", "政策事件风险", "strategy", "macro", "PolicyEventRiskStrategizer",
+     {"direction": "N/A"}, True, 280, None,
+     "识别政策/监管/地缘事件影响"),
+    ("commodity_shock", "大宗商品冲击", "strategy", "macro", "CommodityShockStrategizer",
+     {"direction": "N/A"}, True, 290, None,
+     "识别大宗商品价格变化对行业影响"),
+
+    # ── EntryScore 聚合器（strategy_category=scoring，不参与 technical 筛选） ──
+    ("trend_structure", "趋势结构", "strategy", "scoring", "TrendStructureStrategizer",
+     {"direction": "N/A"}, True, 300, None,
+     "[评分聚合] 趋势结构（EMA排列/左一/MA位置）"),
+    ("momentum_state", "动量状态", "strategy", "scoring", "MomentumStateStrategizer",
+     {"direction": "N/A"}, True, 310, None,
+     "[评分聚合] 动量状态（RSI/MACD/KDJ/能量相位）"),
+    ("volume_confirmation", "成交确认", "strategy", "scoring", "VolumeConfirmationStrategizer",
+     {"direction": "N/A"}, True, 320, None,
+     "[评分聚合] 成交确认（放量/量价配合）"),
+    ("breakout_quality", "突破质量", "strategy", "scoring", "BreakoutQualityStrategizer",
+     {"direction": "N/A"}, True, 330, None,
+     "[评分聚合] 突破质量（ATR突破/新高/形态有效性）"),
+    ("volatility_risk", "波动风险", "strategy", "scoring", "VolatilityRiskStrategizer",
+     {"direction": "N/A"}, True, 340, None,
+     "[评分聚合] 波动风险（布林带宽/回撤/日内振幅）"),
 ) + _technical_pattern_rule_rows()
 
 
@@ -714,6 +745,7 @@ class MarketDatabase:
             )
             self._ensure_screening_results_task_scope(cursor)
             self._ensure_screening_result_score_columns(cursor)
+            self._migrate_add_scoring_columns(cursor)
 
             # watchlist_cache 表（自选股缓存，Futu 失败时兜底）
             cursor.execute(
@@ -812,6 +844,27 @@ class MarketDatabase:
                     cursor.execute(alter_sql)
                 except Exception:
                     pass
+
+    def _migrate_add_scoring_columns(self, cursor):
+        """新增 entry_score / holding_score 等评分字段到 screening_results 表。"""
+        scoring_columns = [
+            ("entry_score", "DECIMAL(5,2) DEFAULT NULL"),
+            ("entry_decision", "VARCHAR(30) DEFAULT NULL"),
+            ("holding_score", "DECIMAL(5,2) DEFAULT NULL"),
+            ("holding_decision", "VARCHAR(30) DEFAULT NULL"),
+            ("holding_period", "VARCHAR(20) DEFAULT NULL"),
+            ("position_suggestion", "VARCHAR(30) DEFAULT NULL"),
+            ("risk_level", "VARCHAR(20) DEFAULT NULL"),
+            ("score_formula", "TEXT DEFAULT NULL"),
+        ]
+        for col_name, col_def in scoring_columns:
+            try:
+                cursor.execute(f"ALTER TABLE screening_results ADD COLUMN {col_name} {col_def}")
+            except Exception as e:
+                if "Duplicate column" in str(e) or "already exists" in str(e):
+                    pass
+                else:
+                    raise
 
     def init_web_schema(self):
         """初始化 Web、Agent、K 线缓存和 artifact 相关表。"""
