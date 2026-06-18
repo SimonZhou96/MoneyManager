@@ -669,8 +669,121 @@ class MarketCache:
         return PolicyEventResult(score=50.0, explanation="政策事件暂未评估（Phase 3 实现）")
 
     def _compute_commodity_shock(self, market: str) -> Optional[CommodityShockResult]:
-        """大宗商品冲击（Phase 2 实现，Phase 1 返回桩）。"""
-        return CommodityShockResult(score=50.0, explanation="商品冲击暂未计算（Phase 2 实现）")
+        """用 YFinance 期货数据计算大宗商品冲击。
+
+        5 个商品期货的 YFinance 代码：
+        - CL=F: WTI 原油
+        - HG=F: 铜
+        - GC=F: 黄金
+        - NG=F: 天然气
+        - SI=F: 白银
+
+        冲击判定：abs(5d_return) > 5% 记为冲击。
+        严重冲击（magnitude > 10%）每条 -10 分。
+        多个冲击同时出现加额外不确定性扣分。
+        无冲击 → 50 分（中性）；无显著波动（所有 abs(5d) < 2%）→ +5 分。
+
+        商品价格是全球性的，market 参数仅为接口一致性保留。
+        """
+        try:
+            import yfinance as yf
+            from yf_ratelimit import yf_sleep
+
+            futures = {
+                "原油": "CL=F",    # WTI crude
+                "铜": "HG=F",     # Copper
+                "黄金": "GC=F",   # Gold
+                "天然气": "NG=F", # Natural gas
+                "白银": "SI=F",   # Silver
+            }
+
+            impact_map = {
+                "原油": {"up": "航空/化工下游承压", "down": "降低通胀预期"},
+                "铜": {"up": "工业金属/新能源利好", "down": "工业需求走弱信号"},
+                "黄金": {"up": "避险情绪上升", "down": "风险偏好改善"},
+                "天然气": {"up": "能源成本上升", "down": "能源成本缓解"},
+                "白银": {"up": "贵金属/光伏利好", "down": "工业需求减弱"},
+            }
+
+            shocks: Dict[str, Dict[str, Any]] = {}
+            severe_shock_count = 0  # magnitude > 10%
+            any_shock = False
+            max_abs_5d = 0.0
+
+            for name, symbol in futures.items():
+                yf_sleep()
+                ticker = yf.Ticker(symbol)
+                hist = ticker.history(period="1mo")
+
+                if hist is None or hist.empty or len(hist) < 5:
+                    continue
+
+                closes = hist["Close"]
+
+                # 5-day return
+                d5_ret = (float(closes.iloc[-1]) - float(closes.iloc[-5])) / float(closes.iloc[-5])
+
+                # 20-day return
+                if len(closes) >= 20:
+                    d20_ret = (float(closes.iloc[-1]) - float(closes.iloc[-20])) / float(closes.iloc[-20])
+                else:
+                    d20_ret = 0.0
+
+                abs_5d = abs(d5_ret)
+                max_abs_5d = max(max_abs_5d, abs_5d)
+
+                if abs_5d > 0.05:
+                    any_shock = True
+                    direction = "up" if d5_ret > 0 else "down"
+                    impact = impact_map[name][direction]
+
+                    shocks[name] = {
+                        "direction": direction,
+                        "magnitude": round(abs_5d, 4),
+                        "trend_20d": round(d20_ret, 4),
+                        "impact": impact,
+                    }
+
+                    if abs_5d > 0.10:
+                        severe_shock_count += 1
+
+            # ── 评分 ─────────────────────────────────────────────
+            score = 50.0
+            if not any_shock:
+                if max_abs_5d < 0.02:
+                    score += 5  # 无显著波动
+            else:
+                # 严重冲击：每条 -10
+                score -= severe_shock_count * 10
+
+                # 多个冲击同时出现：附加不确定性扣分
+                if len(shocks) >= 2:
+                    score -= 5
+                if len(shocks) >= 4:
+                    score -= 5
+
+            score = max(0.0, min(100.0, score))
+
+            # ── 文本解释 ─────────────────────────────────────────
+            if not shocks:
+                explanation = "大宗商品近5日无明显波动，市场影响中性"
+            else:
+                shock_names = "、".join(shocks.keys())
+                impacts = [s["impact"] for s in shocks.values()]
+                unique_impacts = list(dict.fromkeys(impacts))  # 去重
+                explanation = f"{shock_names}近5日波动较大，{'；'.join(unique_impacts)}"
+
+            return CommodityShockResult(
+                score=score,
+                shocks=shocks,
+                explanation=explanation,
+            )
+
+        except Exception as e:
+            return CommodityShockResult(
+                score=50.0,
+                explanation=f"大宗商品冲击计算异常: {e}",
+            )
 
     # ── 摘要生成 ───────────────────────────────────────────────
 

@@ -830,5 +830,136 @@ class TestLiquidityComputation(unittest.TestCase):
         self.assertIn("异常", result.explanation)
 
 
+# ── 大宗商品冲击计算测试 ────────────────────────────────────────────
+
+
+class TestCommodityShockComputation(unittest.TestCase):
+    """_compute_commodity_shock 实现测试。"""
+
+    def setUp(self):
+        self.cache = MarketCache()
+
+    # ── 辅助方法 ────────────────────────────────────────────────
+
+    def _mock_hist(self, close_prices):
+        """构建 commodity history mock DataFrame。"""
+        import pandas as pd
+        return pd.DataFrame({"Close": close_prices})
+
+    def _patch_tickers(self, ticker_map):
+        """Patch yfinance.Ticker 返回映射好的 mock，并 mock yf_sleep。"""
+        def side_effect(symbol):
+            return ticker_map.get(symbol, MagicMock())
+
+        patcher = patch("yfinance.Ticker", side_effect=side_effect)
+        self.mock_ticker = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher_sleep = patch("yf_ratelimit.yf_sleep")
+        self.mock_sleep = patcher_sleep.start()
+        self.addCleanup(patcher_sleep.stop)
+
+    # ── 测试用例 ────────────────────────────────────────────────
+
+    def test_no_shock_stable_market(self):
+        """所有商品 abs(5d) < 2% → score=55（无显著波动 +5）。"""
+        # 20 个交易日，缓慢上涨趋势，5d < 2%
+        stable = [75.0, 75.3, 75.6, 75.4, 75.8,
+                  76.0, 76.2, 75.9, 76.3, 76.1,
+                  76.4, 76.6, 76.3, 76.7, 76.5,
+                  76.8, 77.0, 76.7, 77.1, 76.9]  # 5d: (76.9 - 76.8)/76.8 = +0.13%
+
+        ticker_map = {}
+        for sym in ["CL=F", "HG=F", "GC=F", "NG=F", "SI=F"]:
+            ticker_map[sym] = MagicMock(
+                history=MagicMock(return_value=self._mock_hist(stable))
+            )
+        self._patch_tickers(ticker_map)
+
+        result = self.cache._compute_commodity_shock("US")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.score, 55.0)
+        self.assertEqual(len(result.shocks), 0)
+        self.assertIn("无明显波动", result.explanation)
+
+    def test_one_severe_shock_penalty(self):
+        """一个商品 abs(5d) > 10% → score=40（50 - 10）。"""
+        # 5 个商品中 4 个稳定，原油剧烈拉升
+        stable = [75.0] * 20
+        # 原油: 前 15 天平稳，后 5 天急涨 ~15%
+        oil = [75.0] * 15 + [76.0, 82.0, 86.0, 87.0, 89.0]
+        # 5d: (89 - 76)/76 = +17.1% > 10%
+
+        ticker_map = {
+            "CL=F": MagicMock(history=MagicMock(return_value=self._mock_hist(oil))),
+        }
+        for sym in ["HG=F", "GC=F", "NG=F", "SI=F"]:
+            ticker_map[sym] = MagicMock(
+                history=MagicMock(return_value=self._mock_hist(stable))
+            )
+        self._patch_tickers(ticker_map)
+
+        result = self.cache._compute_commodity_shock("US")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.score, 40.0)  # 50 - 10
+        self.assertIn("原油", result.shocks)
+        s = result.shocks["原油"]
+        self.assertEqual(s["direction"], "up")
+        self.assertGreater(s["magnitude"], 0.10)
+        self.assertEqual(s["impact"], "航空/化工下游承压")
+
+    def test_multiple_shocks_with_uncertainty_penalty(self):
+        """多个冲击 + 一条严重 → score=35（50 - 10 - 5）。"""
+        stable = [75.0] * 20
+        # 原油: 5d 涨幅 ~6.5%（冲击，不严重）
+        oil = [75.0] * 15 + [76.0, 78.0, 79.0, 80.0, 81.0]
+        # 5d: (81 - 76)/76 = +6.58% > 5%, < 10%
+
+        # 铜: 5d 涨幅 ~15%（严重冲击）
+        copper = [4.0] * 15 + [4.0, 4.2, 4.4, 4.5, 4.6]
+        # 5d: (4.6 - 4.0)/4.0 = +15% > 10%
+
+        ticker_map = {}
+        for sym in ["GC=F", "NG=F", "SI=F"]:
+            ticker_map[sym] = MagicMock(
+                history=MagicMock(return_value=self._mock_hist(stable))
+            )
+        ticker_map["CL=F"] = MagicMock(
+            history=MagicMock(return_value=self._mock_hist(oil))
+        )
+        ticker_map["HG=F"] = MagicMock(
+            history=MagicMock(return_value=self._mock_hist(copper))
+        )
+        self._patch_tickers(ticker_map)
+
+        result = self.cache._compute_commodity_shock("US")
+
+        self.assertIsNotNone(result)
+        # 铜严重(-10) + 多冲击(-5) = 35
+        self.assertEqual(result.score, 35.0)
+        self.assertIn("原油", result.shocks)
+        self.assertIn("铜", result.shocks)
+        self.assertEqual(len(result.shocks), 2)
+        self.assertEqual(result.shocks["铜"]["impact"], "工业金属/新能源利好")
+
+    def test_yfinance_failure_returns_neutral(self):
+        """YFinance 异常 → score=50，不崩溃。"""
+        patcher = patch("yfinance.Ticker", side_effect=RuntimeError("API timeout"))
+        self.mock_ticker = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher_sleep = patch("yf_ratelimit.yf_sleep")
+        self.mock_sleep = patcher_sleep.start()
+        self.addCleanup(patcher_sleep.stop)
+
+        result = self.cache._compute_commodity_shock("US")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.score, 50.0)
+        self.assertIn("异常", result.explanation)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
