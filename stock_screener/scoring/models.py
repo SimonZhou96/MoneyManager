@@ -41,6 +41,7 @@ class LiquidityNowcastResult:
     fund_flow_direction: str = "neutral"    # "inflow" | "neutral" | "outflow"
     metrics: Dict[str, float] = field(default_factory=dict)
     explanation: str = ""
+    data_sources: List[str] = field(default_factory=lambda: ["builtin"])
 
 
 @dataclass

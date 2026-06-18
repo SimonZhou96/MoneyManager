@@ -410,5 +410,425 @@ class TestMarketBreadthComputation(unittest.TestCase):
         self.assertEqual(result.score, 15.0)
 
 
+# ── 流动性计算测试 ────────────────────────────────────────────────
+
+
+class TestLiquidityComputation(unittest.TestCase):
+    """_compute_liquidity 实现的全面测试。"""
+
+    def setUp(self):
+        self.cache = MarketCache()
+
+    # ── A 股 ────────────────────────────────────────────────────
+
+    def _mock_akshare_margin(self, prices_sh, prices_sz, dates):
+        """构建两融余额 mock DataFrame。"""
+        import pandas as pd
+        sh_data = {"日期": dates, "融资融券余额": prices_sh}
+        sz_data = {"日期": dates, "融资融券余额": prices_sz}
+        return pd.DataFrame(sh_data), pd.DataFrame(sz_data)
+
+    def _mock_akshare_buy(self, buys_sh, buys_sz, dates):
+        """构建融资买入额 mock DataFrame。"""
+        import pandas as pd
+        sh_data = {"日期": dates, "融资买入额": buys_sh}
+        sz_data = {"日期": dates, "融资买入额": buys_sz}
+        return pd.DataFrame(sh_data), pd.DataFrame(sz_data)
+
+    def _mock_northbound_summary(self, net_buy_value=5.0, direction="北向"):
+        """构建北向资金 Summary mock DataFrame。"""
+        import pandas as pd
+        return pd.DataFrame({
+            "交易日": ["2026-06-18"],
+            "资金方向": [direction],
+            "成交净买额": [net_buy_value],
+        })
+
+    def _mock_northbound_hist(self, hist_vals):
+        """构建北向历史累计净买额 mock DataFrame。"""
+        import pandas as pd
+        import numpy as np
+        n = len(hist_vals)
+        return pd.DataFrame({
+            "日期": [f"2026-06-{17 - i:02d}" for i in range(n)],
+            "当日成交净买额": [np.nan] * n,
+            "历史累计净买额": hist_vals,
+            "持股市值": [0.0] * n,
+        })
+
+    def _patch_akshare(self, margin_sh, margin_sz, buy_sh, buy_sz,
+                       north_summary=None, north_hist=None):
+        """应用 AKShare mock patches。"""
+        patcher_margin_sh = patch("akshare.macro_china_market_margin_sh", return_value=margin_sh)
+        patcher_margin_sz = patch("akshare.macro_china_market_margin_sz", return_value=margin_sz)
+        patcher_buy_sh = patch("akshare.macro_china_market_margin_sh", return_value=buy_sh)
+        patcher_buy_sz = patch("akshare.macro_china_market_margin_sz", return_value=buy_sz)
+
+        self.mock_margin_sh = patcher_margin_sh.start()
+        self.mock_margin_sz = patcher_margin_sz.start()
+        self.mock_buy_sh = patcher_buy_sh.start()
+        self.mock_buy_sz = patcher_buy_sz.start()
+
+        self.addCleanup(patcher_margin_sh.stop)
+        self.addCleanup(patcher_margin_sz.stop)
+        self.addCleanup(patcher_buy_sh.stop)
+        self.addCleanup(patcher_buy_sz.stop)
+
+        # 北向资金
+        patcher_north_summary = patch(
+            "akshare.stock_hsgt_fund_flow_summary_em",
+            return_value=north_summary if north_summary is not None
+            else pd.DataFrame(),
+        )
+        patcher_north_hist = patch(
+            "akshare.stock_hsgt_hist_em",
+            return_value=north_hist if north_hist is not None
+            else pd.DataFrame(),
+        )
+        self.mock_north_summary = patcher_north_summary.start()
+        self.mock_north_hist = patcher_north_hist.start()
+        self.addCleanup(patcher_north_summary.stop)
+        self.addCleanup(patcher_north_hist.stop)
+
+    def test_liquidity_a_bullish(self):
+        """A 股：两融余额增长>2% + 融资买入额增长>10% → score=85。"""
+        import pandas as pd
+        dates = ["2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17",
+                 "2026-06-18"]
+
+        # 两融余额连续增长（~3% 5日涨幅）
+        sh_margin = [1.45e12, 1.46e12, 1.47e12, 1.48e12, 1.49e12, 1.50e12]
+        sz_margin = [1.40e12, 1.41e12, 1.42e12, 1.43e12, 1.44e12, 1.45e12]
+
+        # 融资买入额持续放量（~15% 5日涨幅）
+        sh_buy = [1.17e11, 1.48e11, 1.49e11, 1.52e11, 1.64e11, 1.70e11]
+        sz_buy = [1.18e11, 1.42e11, 1.49e11, 1.66e11, 1.66e11, 1.75e11]
+
+        margin_sh_df, margin_sz_df = self._mock_akshare_margin(sh_margin, sz_margin, dates)
+        buy_sh_df, buy_sz_df = self._mock_akshare_buy(sh_buy, sz_buy, dates)
+
+        # 北向资金今日净流入
+        north_summary = self._mock_northbound_summary(net_buy_value=8.5)
+
+        patcher_margin_sh = patch("akshare.macro_china_market_margin_sh",
+                                  side_effect=[margin_sh_df, buy_sh_df])
+        patcher_margin_sz = patch("akshare.macro_china_market_margin_sz",
+                                  side_effect=[margin_sz_df, buy_sz_df])
+        patcher_north_summary = patch(
+            "akshare.stock_hsgt_fund_flow_summary_em",
+            return_value=north_summary,
+        )
+        patcher_north_hist = patch(
+            "akshare.stock_hsgt_hist_em",
+            return_value=pd.DataFrame(),
+        )
+
+        self.mock_ms = patcher_margin_sh.start()
+        self.addCleanup(patcher_margin_sh.stop)
+        self.mock_msz = patcher_margin_sz.start()
+        self.addCleanup(patcher_margin_sz.stop)
+        self.mock_ns = patcher_north_summary.start()
+        self.addCleanup(patcher_north_summary.stop)
+        self.mock_nh = patcher_north_hist.start()
+        self.addCleanup(patcher_north_hist.stop)
+
+        result = self.cache._compute_liquidity("A")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.fund_flow_direction, "inflow")
+        # 50 + 15(两融>2%) + 10(北向流入) + 10(融资买入>10%) = 85
+        self.assertEqual(result.score, 85.0)
+        self.assertIn("两融余额", result.explanation)
+        self.assertIn("+15", result.explanation)
+        self.assertIn("北向净买入", result.explanation)
+        self.assertIn("+10", result.explanation)
+        self.assertIn("融资买入额", result.explanation)
+
+    def test_liquidity_a_bearish(self):
+        """A 股：两融余额缩减>2% + 融资买入额缩减>10% → score=30。"""
+        import pandas as pd
+        dates = ["2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17",
+                 "2026-06-18"]
+
+        # 两融余额连续缩减（~-3% 5日）
+        sh_margin = [1.50e12, 1.49e12, 1.48e12, 1.46e12, 1.45e12, 1.44e12]
+        sz_margin = [1.45e12, 1.44e12, 1.43e12, 1.41e12, 1.40e12, 1.38e12]
+
+        # 融资买入额萎缩（~-20% 5日）
+        sh_buy = [1.70e11, 1.64e11, 1.52e11, 1.49e11, 1.48e11, 1.17e11]
+        sz_buy = [1.75e11, 1.66e11, 1.66e11, 1.49e11, 1.42e11, 1.18e11]
+
+        margin_sh_df, margin_sz_df = self._mock_akshare_margin(sh_margin, sz_margin, dates)
+        buy_sh_df, buy_sz_df = self._mock_akshare_buy(sh_buy, sz_buy, dates)
+
+        patcher_margin_sh = patch("akshare.macro_china_market_margin_sh",
+                                  side_effect=[margin_sh_df, buy_sh_df])
+        patcher_margin_sz = patch("akshare.macro_china_market_margin_sz",
+                                  side_effect=[margin_sz_df, buy_sz_df])
+        patcher_north_summary = patch(
+            "akshare.stock_hsgt_fund_flow_summary_em",
+            return_value=self._mock_northbound_summary(net_buy_value=-8.0),
+        )
+        patcher_north_hist = patch(
+            "akshare.stock_hsgt_hist_em",
+            return_value=pd.DataFrame(),
+        )
+
+        self.mock_ms = patcher_margin_sh.start()
+        self.addCleanup(patcher_margin_sh.stop)
+        self.mock_msz = patcher_margin_sz.start()
+        self.addCleanup(patcher_margin_sz.stop)
+        self.mock_ns = patcher_north_summary.start()
+        self.addCleanup(patcher_north_summary.stop)
+        self.mock_nh = patcher_north_hist.start()
+        self.addCleanup(patcher_north_hist.stop)
+
+        result = self.cache._compute_liquidity("A")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.fund_flow_direction, "outflow")
+        # 50 - 10(两融<-2%) - 10(融资买入<-10%) = 30
+        self.assertEqual(result.score, 30.0)
+        self.assertIn("-10", result.explanation)
+
+    def test_liquidity_a_neutral(self):
+        """A 股：两融余额/成交量变化在阈值内 → score=50。"""
+        import pandas as pd
+        dates = ["2026-06-11", "2026-06-12", "2026-06-15", "2026-06-16", "2026-06-17",
+                 "2026-06-18"]
+
+        # 两融余额几乎不变
+        sh_margin = [1.45e12] * 6
+        sz_margin = [1.40e12] * 6
+        # 融资买入额几乎不变
+        sh_buy = [1.40e11] * 6
+        sz_buy = [1.30e11] * 6
+
+        margin_sh_df, margin_sz_df = self._mock_akshare_margin(sh_margin, sz_margin, dates)
+        buy_sh_df, buy_sz_df = self._mock_akshare_buy(sh_buy, sz_buy, dates)
+
+        patcher_margin_sh = patch("akshare.macro_china_market_margin_sh",
+                                  side_effect=[margin_sh_df, buy_sh_df])
+        patcher_margin_sz = patch("akshare.macro_china_market_margin_sz",
+                                  side_effect=[margin_sz_df, buy_sz_df])
+        patcher_north_summary = patch(
+            "akshare.stock_hsgt_fund_flow_summary_em",
+            return_value=self._mock_northbound_summary(net_buy_value=0.0),
+        )
+        patcher_north_hist = patch(
+            "akshare.stock_hsgt_hist_em",
+            return_value=pd.DataFrame(),
+        )
+
+        self.mock_ms = patcher_margin_sh.start()
+        self.addCleanup(patcher_margin_sh.stop)
+        self.mock_msz = patcher_margin_sz.start()
+        self.addCleanup(patcher_margin_sz.stop)
+        self.mock_ns = patcher_north_summary.start()
+        self.addCleanup(patcher_north_summary.stop)
+        self.mock_nh = patcher_north_hist.start()
+        self.addCleanup(patcher_north_hist.stop)
+
+        result = self.cache._compute_liquidity("A")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.score, 50.0)
+        self.assertEqual(result.fund_flow_direction, "neutral")
+
+    # ── HK ──────────────────────────────────────────────────────
+
+    def _mock_southbound_hist(self, net_vals):
+        """构建南向历史净买卖 mock DataFrame。"""
+        import pandas as pd
+        n = len(net_vals)
+        return pd.DataFrame({
+            "日期": [f"2026-06-{17 - i:02d}" for i in range(n)],
+            "当日成交净买额": net_vals,
+        })
+
+    def test_liquidity_hk_bullish(self):
+        """HK：南向净流入 + 恒指上涨 → score=70。"""
+        import pandas as pd
+
+        # 南向近5日净买入合计>20
+        south_hist = self._mock_southbound_hist([15.0, 12.0, 5.0, 8.0, 10.0])
+
+        # 恒指近5日上涨>3%
+        import numpy as np
+        hsi_hist = pd.DataFrame({
+            "Close": [24000.0, 24200.0, 24400.0, 24700.0, 25000.0],
+        })
+
+        patcher_south = patch("akshare.stock_hsgt_hist_em", return_value=south_hist)
+        patcher_vix = patch("yfinance.Ticker")
+
+        self.mock_south = patcher_south.start()
+        self.addCleanup(patcher_south.stop)
+
+        # mock yfinance Ticker for ^HSI
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = hsi_hist
+        patcher_hsi = patch("yfinance.Ticker", return_value=mock_ticker)
+        self.mock_hsi = patcher_hsi.start()
+        self.addCleanup(patcher_hsi.stop)
+
+        # Mock yf_sleep to be a no-op
+        patcher_sleep = patch("yf_ratelimit.yf_sleep")
+        self.mock_sleep = patcher_sleep.start()
+        self.addCleanup(patcher_sleep.stop)
+
+        result = self.cache._compute_liquidity("HK")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.fund_flow_direction, "inflow")
+        # 50 + 10(南向>20) + 10(恒指>3%) = 70
+        self.assertEqual(result.score, 70.0)
+
+    def test_liquidity_hk_bearish(self):
+        """HK：南向净流出 + 恒指下跌 → score=35。"""
+        import pandas as pd
+
+        south_hist = self._mock_southbound_hist([-10.0, -15.0, -8.0, -5.0, -12.0])
+        hsi_hist = pd.DataFrame({
+            "Close": [25000.0, 24800.0, 24500.0, 24200.0, 23800.0],
+        })
+
+        patcher_south = patch("akshare.stock_hsgt_hist_em", return_value=south_hist)
+        self.mock_south = patcher_south.start()
+        self.addCleanup(patcher_south.stop)
+
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = hsi_hist
+        patcher_hsi = patch("yfinance.Ticker", return_value=mock_ticker)
+        self.mock_hsi = patcher_hsi.start()
+        self.addCleanup(patcher_hsi.stop)
+
+        patcher_sleep = patch("yf_ratelimit.yf_sleep")
+        self.mock_sleep = patcher_sleep.start()
+        self.addCleanup(patcher_sleep.stop)
+
+        result = self.cache._compute_liquidity("HK")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.fund_flow_direction, "outflow")
+        # 50 - 5(南向< -20) - 10(恒指< -3%) = 35
+        self.assertEqual(result.score, 35.0)
+
+    # ── US ──────────────────────────────────────────────────────
+
+    def test_liquidity_us_bullish(self):
+        """US：VIX低 + SPY上涨 → score=70。"""
+        import pandas as pd
+
+        vix_hist = pd.DataFrame({
+            "Close": [16.5, 16.0, 15.8, 15.5, 15.0],
+        })
+        spy_hist = pd.DataFrame({
+            "Close": [500.0, 505.0, 510.0, 515.0, 520.0],
+        })
+
+        mock_vix = MagicMock()
+        mock_vix.history.return_value = vix_hist
+
+        mock_spy = MagicMock()
+        mock_spy.history.return_value = spy_hist
+
+        # yfinance.Ticker called twice: ^VIX then SPY
+        ticker_results = {"^VIX": mock_vix, "SPY": mock_spy}
+        def ticker_side_effect(symbol):
+            return ticker_results.get(symbol, MagicMock())
+
+        patcher_ticker = patch("yfinance.Ticker", side_effect=ticker_side_effect)
+        self.mock_ticker = patcher_ticker.start()
+        self.addCleanup(patcher_ticker.stop)
+
+        patcher_sleep = patch("yf_ratelimit.yf_sleep")
+        self.mock_sleep = patcher_sleep.start()
+        self.addCleanup(patcher_sleep.stop)
+
+        result = self.cache._compute_liquidity("US")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.fund_flow_direction, "inflow")
+        # 50 + 10(VIX<18) + 10(SPY>2%) = 70
+        self.assertEqual(result.score, 70.0)
+
+    def test_liquidity_us_bearish(self):
+        """US：VIX高(>25) + VIX飙升(>15%) + SPY下跌(<-2%) → score=30。"""
+        import pandas as pd
+
+        vix_hist = pd.DataFrame({
+            "Close": [22.0, 24.0, 26.0, 28.0, 30.0],
+        })
+        spy_hist = pd.DataFrame({
+            "Close": [520.0, 515.0, 508.0, 502.0, 495.0],
+        })
+
+        mock_vix = MagicMock()
+        mock_vix.history.return_value = vix_hist
+
+        mock_spy = MagicMock()
+        mock_spy.history.return_value = spy_hist
+
+        def ticker_side_effect(symbol):
+            return {"^VIX": mock_vix, "SPY": mock_spy}.get(symbol, MagicMock())
+
+        patcher_ticker = patch("yfinance.Ticker", side_effect=ticker_side_effect)
+        self.mock_ticker = patcher_ticker.start()
+        self.addCleanup(patcher_ticker.stop)
+
+        patcher_sleep = patch("yf_ratelimit.yf_sleep")
+        self.mock_sleep = patcher_sleep.start()
+        self.addCleanup(patcher_sleep.stop)
+
+        result = self.cache._compute_liquidity("US")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.fund_flow_direction, "outflow")
+        # 50 - 10(VIX>25) - 5(VIX飙升>15%) - 5(SPY<-2%) = 30
+        self.assertEqual(result.score, 30.0)
+
+    def test_liquidity_unknown_market(self):
+        """不支持的市场 → score=50，不崩溃。"""
+        result = self.cache._compute_liquidity("JP")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.score, 50.0)
+        self.assertIn("暂无", result.explanation)
+
+    def test_liquidity_akshare_failure(self):
+        """AKShare 异常 → 不崩溃，返回 factor 异常说明 + score=50。"""
+        import pandas as pd
+
+        patcher_margin_sh = patch("akshare.macro_china_market_margin_sh",
+                                  side_effect=RuntimeError("API timeout"))
+        patcher_margin_sz = patch("akshare.macro_china_market_margin_sz",
+                                  side_effect=RuntimeError("API timeout"))
+        patcher_north_summary = patch("akshare.stock_hsgt_fund_flow_summary_em",
+                                      side_effect=RuntimeError("API timeout"))
+
+        self.mock_ms = patcher_margin_sh.start()
+        self.addCleanup(patcher_margin_sh.stop)
+        self.mock_msz = patcher_margin_sz.start()
+        self.addCleanup(patcher_margin_sz.stop)
+        self.mock_ns = patcher_north_summary.start()
+        self.addCleanup(patcher_north_summary.stop)
+
+        # Need buy data too since margin_sh and margin_sz are re-used for buy
+        patcher_buy_sh = patch("akshare.macro_china_market_margin_sh",
+                               side_effect=RuntimeError("API timeout"))
+        patcher_buy_sz = patch("akshare.macro_china_market_margin_sz",
+                               side_effect=RuntimeError("API timeout"))
+        self.mock_bs = patcher_buy_sh.start()
+        self.addCleanup(patcher_buy_sh.stop)
+        self.mock_bsz = patcher_buy_sz.start()
+        self.addCleanup(patcher_buy_sz.stop)
+
+        result = self.cache._compute_liquidity("A")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.score, 50.0)
+        self.assertIn("异常", result.explanation)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -306,8 +306,363 @@ class MarketCache:
             )
 
     def _compute_liquidity(self, market: str) -> Optional[LiquidityNowcastResult]:
-        """流动性即时报（Phase 2 实现，Phase 1 返回桩）。"""
-        return LiquidityNowcastResult(score=50.0, explanation="流动性暂未计算（Phase 2 实现）")
+        """流动性即时报：根据市场类型，从可用数据源计算资金流动性指标。
+
+        A-share: 两融余额变化 + 北向资金 + 成交量（融资买入额代理）
+        HK: 南向资金流向 + 恒指表现
+        US: VIX 情绪指标 + ETF 资金流代理
+
+        Phase 2: 可用数据源实现；不可用的 API 跳过，不阻断整体计算。
+        """
+        try:
+            if market == "A":
+                return self._compute_liquidity_a()
+            elif market == "HK":
+                return self._compute_liquidity_hk()
+            elif market == "US":
+                return self._compute_liquidity_us()
+            return LiquidityNowcastResult(
+                score=50.0,
+                explanation=f"market='{market}' 暂无流动性计算实现",
+            )
+        except Exception as e:
+            return LiquidityNowcastResult(
+                score=50.0,
+                explanation=f"流动性计算异常: {e}",
+            )
+
+    def _compute_liquidity_a(self) -> LiquidityNowcastResult:
+        """A 股流动性：两融余额 + 北向资金 + 成交量（融资买入额代理）。"""
+        import akshare
+        import pandas as pd
+
+        metrics: Dict[str, float] = {}
+        score_delta = 0.0
+        factors: list[str] = []
+
+        # ── 1. 两融余额变化（5 日百分比）────────────────────────────────
+        try:
+            df_sh = akshare.macro_china_market_margin_sh()
+            df_sz = akshare.macro_china_market_margin_sz()
+
+            if not df_sh.empty and not df_sz.empty and "融资融券余额" in df_sh.columns:
+                sh_bal = df_sh[["日期", "融资融券余额"]].copy()
+                sh_bal.columns = ["date", "margin_sh"]
+                sz_bal = df_sz[["日期", "融资融券余额"]].copy()
+                sz_bal.columns = ["date", "margin_sz"]
+
+                merged = pd.merge(sh_bal, sz_bal, on="date", how="outer")
+                merged["total_margin"] = (
+                    merged["margin_sh"].fillna(0) + merged["margin_sz"].fillna(0)
+                )
+                merged = merged.sort_values("date").reset_index(drop=True)
+
+                if len(merged) >= 6:
+                    latest = float(merged["total_margin"].iloc[-1])
+                    prev = float(merged["total_margin"].iloc[-6])  # 5 个交易日前
+                    margin_pct = (latest - prev) / max(prev, 1) * 100
+                    metrics["margin_balance_5d_pct"] = round(margin_pct, 2)
+
+                    if margin_pct > 2.0:
+                        score_delta += 15
+                        factors.append(
+                            f"两融余额{margin_pct:+.2f}%(增量>2%→+15)"
+                        )
+                    elif margin_pct < -2.0:
+                        score_delta -= 10
+                        factors.append(
+                            f"两融余额{margin_pct:+.2f}%(缩减>2%→-10)"
+                        )
+                    else:
+                        factors.append(f"两融余额{margin_pct:+.2f}%(中性)")
+            else:
+                factors.append("两融余额数据不足")
+        except Exception as e:
+            factors.append(f"两融余额异常: {e}")
+
+        # ── 2. 北向资金流向（当日净买卖额方向）───────────────────────────
+        try:
+            df_nb = akshare.stock_hsgt_fund_flow_summary_em()
+            if df_nb is not None and not df_nb.empty:
+                nb_rows = df_nb[df_nb["资金方向"] == "北向"]
+                if not nb_rows.empty:
+                    net_buy = float(nb_rows["成交净买额"].sum())
+                    metrics["northbound_net_buy"] = round(net_buy, 2)
+                    if net_buy > 0 and net_buy < 1e7:  # 正常正值
+                        score_delta += 10
+                        factors.append(f"北向净买入{net_buy:+.2f}亿(+10)")
+                    elif net_buy < -1e5:  # 确实为负
+                        factors.append(f"北向净卖出{net_buy:+.2f}亿(中性)")
+                    else:
+                        # 今日数据尚未更新（盘中），尝试历史累计趋势
+                        try:
+                            df_hist = akshare.stock_hsgt_hist_em(
+                                symbol="北向资金"
+                            )
+                            if (
+                                df_hist is not None
+                                and not df_hist.empty
+                                and "历史累计净买额" in df_hist.columns
+                            ):
+                                hist_vals = df_hist["历史累计净买额"].dropna().tail(5)
+                                if len(hist_vals) >= 2:
+                                    hist_trend = (
+                                        float(hist_vals.iloc[-1])
+                                        - float(hist_vals.iloc[0])
+                                    )
+                                    if hist_trend > 50:
+                                        score_delta += 5
+                                        factors.append(
+                                            f"北向累计趋势向上(+5)"
+                                        )
+                                    elif hist_trend > 0:
+                                        factors.append(f"北向累计趋势偏强(中性)")
+                                    else:
+                                        factors.append(f"北向累计趋势偏弱(中性)")
+                                else:
+                                    factors.append("北向数据暂缺")
+                            else:
+                                factors.append("北向数据暂缺")
+                        except Exception:
+                            factors.append("北向数据暂缺")
+                else:
+                    factors.append("无北向数据")
+            else:
+                factors.append("北向数据接口异常")
+        except Exception as e:
+            factors.append(f"北向资金异常: {e}")
+
+        # ── 3. 成交量变化（融资买入额 5 日百分比作为代理）──────────────────
+        try:
+            df_sh = akshare.macro_china_market_margin_sh()
+            df_sz = akshare.macro_china_market_margin_sz()
+
+            if not df_sh.empty and not df_sz.empty and "融资买入额" in df_sh.columns:
+                buy_sh = df_sh[["日期", "融资买入额"]].copy()
+                buy_sh.columns = ["date", "buy_sh"]
+                buy_sz = df_sz[["日期", "融资买入额"]].copy()
+                buy_sz.columns = ["date", "buy_sz"]
+
+                merged_buy = pd.merge(buy_sh, buy_sz, on="date", how="outer")
+                merged_buy["total_buy"] = (
+                    merged_buy["buy_sh"].fillna(0) + merged_buy["buy_sz"].fillna(0)
+                )
+                merged_buy = merged_buy.sort_values("date").reset_index(drop=True)
+
+                if len(merged_buy) >= 6:
+                    latest_buy = float(merged_buy["total_buy"].iloc[-1])
+                    prev_buy = float(merged_buy["total_buy"].iloc[-6])
+                    volume_pct = (latest_buy - prev_buy) / max(prev_buy, 1) * 100
+                    metrics["volume_5d_pct"] = round(volume_pct, 2)
+
+                    if volume_pct > 10.0:
+                        score_delta += 10
+                        factors.append(f"融资买入额{volume_pct:+.2f}%(增量>10%→+10)")
+                    elif volume_pct < -10.0:
+                        score_delta -= 10
+                        factors.append(f"融资买入额{volume_pct:+.2f}%(缩减>10%→-10)")
+                    else:
+                        factors.append(f"融资买入额{volume_pct:+.2f}%(中性)")
+            else:
+                factors.append("成交量数据不足")
+        except Exception as e:
+            factors.append(f"成交量异常: {e}")
+
+        # ── 4. 行业资金持续流入（API 暂不可用，跳过）──────────────────
+        # stock_sector_fund_flow_rank / stock_sector_fund_flow_hist 暂不可用
+
+        # ── 聚合评分 ──────────────────────────────────────────────
+        score = max(0.0, min(100.0, 50.0 + score_delta))
+        if score >= 55:
+            direction = "inflow"
+        elif score <= 45:
+            direction = "outflow"
+        else:
+            direction = "neutral"
+
+        explanation = "A股流动性: " + "; ".join(factors)
+        return LiquidityNowcastResult(
+            score=score,
+            fund_flow_direction=direction,
+            metrics=metrics,
+            explanation=explanation,
+            data_sources=["AKShare"],
+        )
+
+    def _compute_liquidity_hk(self) -> LiquidityNowcastResult:
+        """港股流动性：南向资金流向 + 恒指表现。"""
+        import akshare
+        import yfinance as yf
+        from yf_ratelimit import yf_sleep
+
+        metrics: Dict[str, float] = {}
+        score_delta = 0.0
+        factors: list[str] = []
+        data_sources: list[str] = []
+
+        # ── 1. 南向资金 5 日净买卖方向 ──────────────────────────────
+        try:
+            df = akshare.stock_hsgt_hist_em(symbol="南向资金")
+            if df is not None and not df.empty and "当日成交净买额" in df.columns:
+                valid = df.dropna(subset=["当日成交净买额"]).tail(5)
+                if len(valid) >= 2:
+                    south_5d_sum = float(valid["当日成交净买额"].astype(float).sum())
+                    metrics["southbound_5d_sum"] = round(south_5d_sum, 2)
+                    data_sources.append("AKShare")
+                    if south_5d_sum > 20:
+                        score_delta += 10
+                        factors.append(
+                            f"南向5日净买入{south_5d_sum:+.2f}亿(净流入+10)"
+                        )
+                    elif south_5d_sum < -20:
+                        score_delta -= 5
+                        factors.append(
+                            f"南向5日净卖出{south_5d_sum:+.2f}亿(净流出-5)"
+                        )
+                    else:
+                        factors.append(
+                            f"南向5日资金{south_5d_sum:+.2f}亿(中性)"
+                        )
+                else:
+                    factors.append("南向数据不足")
+            else:
+                factors.append("无南向数据")
+        except Exception as e:
+            factors.append(f"南向资金异常: {e}")
+
+        # ── 2. 恒指 5 日表现 ──────────────────────────────────────
+        try:
+            yf_sleep()
+            hsi = yf.Ticker("^HSI")
+            hist = hsi.history(period="1mo")
+            if hist is not None and not hist.empty and len(hist) >= 5:
+                recent = hist["Close"].tail(5)
+                hsi_5d_pct = (
+                    (float(recent.iloc[-1]) - float(recent.iloc[0]))
+                    / float(recent.iloc[0])
+                    * 100
+                )
+                metrics["hsi_5d_pct"] = round(hsi_5d_pct, 2)
+                data_sources.append("YFinance")
+                if hsi_5d_pct > 3.0:
+                    score_delta += 10
+                    factors.append(f"恒指5日{hsi_5d_pct:+.2f}%(上涨+10)")
+                elif hsi_5d_pct < -3.0:
+                    score_delta -= 10
+                    factors.append(f"恒指5日{hsi_5d_pct:+.2f}%(下跌-10)")
+                else:
+                    factors.append(f"恒指5日{hsi_5d_pct:+.2f}%(中性)")
+            else:
+                factors.append("恒指数据不足")
+        except Exception as e:
+            factors.append(f"恒指异常: {e}")
+
+        score = max(0.0, min(100.0, 50.0 + score_delta))
+        if score >= 55:
+            direction = "inflow"
+        elif score <= 45:
+            direction = "outflow"
+        else:
+            direction = "neutral"
+
+        explanation = "港股流动性: " + "; ".join(factors)
+        data_sources = list(dict.fromkeys(data_sources)) if data_sources else ["YFinance"]
+        return LiquidityNowcastResult(
+            score=score,
+            fund_flow_direction=direction,
+            metrics=metrics,
+            explanation=explanation,
+            data_sources=data_sources if data_sources else ["YFinance"],
+        )
+
+    def _compute_liquidity_us(self) -> LiquidityNowcastResult:
+        """美股流动性：VIX 情绪指标 + ETF 资金流代理。"""
+        import yfinance as yf
+        from yf_ratelimit import yf_sleep
+
+        metrics: Dict[str, float] = {}
+        score_delta = 0.0
+        factors: list[str] = []
+        data_sources: list[str] = []
+
+        # ── 1. VIX 情绪指标 ────────────────────────────────────────
+        try:
+            yf_sleep()
+            vix = yf.Ticker("^VIX")
+            vix_hist = vix.history(period="1mo")
+            if vix_hist is not None and not vix_hist.empty:
+                vix_last = float(vix_hist["Close"].iloc[-1])
+                metrics["vix"] = round(vix_last, 2)
+                data_sources.append("YFinance")
+
+                # VIX 绝对值
+                if vix_last < 18:
+                    score_delta += 10
+                    factors.append(f"VIX={vix_last:.1f}(低波动+10)")
+                elif vix_last > 25:
+                    score_delta -= 10
+                    factors.append(f"VIX={vix_last:.1f}(恐慌-10)")
+                else:
+                    factors.append(f"VIX={vix_last:.1f}(中性)")
+
+                # VIX 变化方向
+                if len(vix_hist) >= 5:
+                    vix_prev = float(vix_hist["Close"].iloc[-5])
+                    vix_chg = (vix_last - vix_prev) / max(vix_prev, 1) * 100
+                    metrics["vix_5d_chg_pct"] = round(vix_chg, 2)
+                    if vix_chg > 15:
+                        score_delta -= 5
+                        factors.append(f"VIX近日飙升{vix_chg:+.0f}%(-5)")
+            else:
+                factors.append("VIX数据不足")
+        except Exception as e:
+            factors.append(f"VIX异常: {e}")
+
+        # ── 2. SPY 5 日表现（ETF 资金流代理）────────────────────────
+        try:
+            yf_sleep()
+            spy = yf.Ticker("SPY")
+            spy_hist = spy.history(period="1mo")
+            if spy_hist is not None and not spy_hist.empty and len(spy_hist) >= 5:
+                recent = spy_hist["Close"].tail(5)
+                spy_5d_pct = (
+                    (float(recent.iloc[-1]) - float(recent.iloc[0]))
+                    / float(recent.iloc[0])
+                    * 100
+                )
+                metrics["spy_5d_pct"] = round(spy_5d_pct, 2)
+                data_sources.append("YFinance")
+                if spy_5d_pct > 2.0:
+                    score_delta += 10
+                    factors.append(f"SPY 5日{spy_5d_pct:+.2f}%(上涨+10)")
+                elif spy_5d_pct < -2.0:
+                    score_delta -= 5
+                    factors.append(f"SPY 5日{spy_5d_pct:+.2f}%(下跌-5)")
+                else:
+                    factors.append(f"SPY 5日{spy_5d_pct:+.2f}%(中性)")
+            else:
+                factors.append("SPY数据不足")
+        except Exception as e:
+            factors.append(f"SPY异常: {e}")
+
+        score = max(0.0, min(100.0, 50.0 + score_delta))
+        if score >= 55:
+            direction = "inflow"
+        elif score <= 45:
+            direction = "outflow"
+        else:
+            direction = "neutral"
+
+        explanation = "美股流动性: " + "; ".join(factors)
+        # 去重数据来源
+        data_sources = list(dict.fromkeys(data_sources)) if data_sources else ["YFinance"]
+        return LiquidityNowcastResult(
+            score=score,
+            fund_flow_direction=direction,
+            metrics=metrics,
+            explanation=explanation,
+            data_sources=data_sources,
+        )
 
     def _compute_policy_event(self, market: str) -> Optional[PolicyEventResult]:
         """政策事件风险（Phase 3 实现，Phase 1 返回桩）。"""
