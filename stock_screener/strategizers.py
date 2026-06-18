@@ -558,3 +558,146 @@ class EnergyPhaseClassifier(Strategizer):
             reason=analysis.reason,
             details=details,
         )
+
+
+# =============================================================================
+# 持有层宏观规则 Strategizer（6 个）
+# =============================================================================
+
+
+class CreditRiskRegimeStrategizer(Strategizer):
+    """信用风险环境策略器（市场级）—— 评估信用风险是否上升。
+
+    数据源：YFinance（HK/US: HYG/LQD/JNK/IEF/VIX; A: AKShare 信用债）。
+    Phase 1 实现 YFinance ETF 代理方案。
+    """
+
+    def __init__(
+        self,
+        name: str = "CreditRiskRegimeStrategizer",
+        enabled: bool = True,
+    ):
+        super().__init__(name=name, enabled=enabled)
+
+    def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
+        """委托给 MarketCache，此 Strategizer 仅作为 RuleRegistry 注册占位。
+        实际计算在 MarketCache._compute_credit_risk() 中。"""
+        # MarketCache 的结果会通过 MarketTemperature.to_filter_details() 注入
+        return StrategizerOutput(
+            name=self.name,
+            satisfied=False,
+            reason="CreditRiskRegime 由 MarketCache 统一计算，不逐只股票调用",
+            details={"delegated": True},
+        )
+
+
+class MarketBreadthRegimeStrategizer(Strategizer):
+    """市场宽度策略器（市场级）—— 判断指数上涨是否健康扩散。
+
+    Phase 2 实现。数据源：Futu OpenD 全市场个股日 K + AKShare 行业涨跌。
+    """
+
+    def __init__(
+        self,
+        name: str = "MarketBreadthRegimeStrategizer",
+        enabled: bool = True,
+    ):
+        super().__init__(name=name, enabled=enabled)
+
+    def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
+        return StrategizerOutput(
+            name=self.name,
+            satisfied=False,
+            reason="MarketBreadthRegime 由 MarketCache 统一计算，不逐只股票调用",
+            details={"delegated": True},
+        )
+
+
+class LiquidityNowcastStrategizer(Strategizer):
+    """资金流动性即报策略器（市场级）—— 判断资金环境是否支持继续持有。
+
+    Phase 2 实现。数据源：AKShare（A股融资融券/北向资金/ETF资金）+ Futu OpenD（成交额）。
+    """
+
+    def __init__(
+        self,
+        name: str = "LiquidityNowcastStrategizer",
+        enabled: bool = True,
+    ):
+        super().__init__(name=name, enabled=enabled)
+
+    def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
+        return StrategizerOutput(
+            name=self.name,
+            satisfied=False,
+            reason="LiquidityNowcast 由 MarketCache 统一计算，不逐只股票调用",
+            details={"delegated": True},
+        )
+
+
+class EarningsRevisionMomentumStrategizer(Strategizer):
+    """盈利预期修正策略器（个股级）—— 判断公司未来盈利预期是否改善。
+
+    数据源：Tavily（搜索业绩预告/财报/券商观点）+ LLM 结构化。
+    Phase 3 实现 LLM 调用，Phase 1 返回中性桩。
+    """
+
+    def __init__(
+        self,
+        name: str = "EarningsRevisionMomentumStrategizer",
+        enabled: bool = True,
+    ):
+        super().__init__(name=name, enabled=enabled)
+
+    def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
+        # Phase 1 桩实现
+        return StrategizerOutput(
+            name=self.name,
+            satisfied=False,
+            reason="EarningsRevision 暂未实现（Phase 3）",
+            details={"score": 50.0, "earnings_trend": "stable", "confidence": 0.0},
+        )
+
+
+class PolicyEventRiskStrategizer(Strategizer):
+    """政策事件风险策略器（市场级）—— 识别政策/监管/地缘事件影响。
+
+    Phase 3 实现。数据源：Tavily + LLM。
+    """
+
+    def __init__(
+        self,
+        name: str = "PolicyEventRiskStrategizer",
+        enabled: bool = True,
+    ):
+        super().__init__(name=name, enabled=enabled)
+
+    def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
+        return StrategizerOutput(
+            name=self.name,
+            satisfied=False,
+            reason="PolicyEventRisk 由 MarketCache 统一计算，不逐只股票调用",
+            details={"delegated": True},
+        )
+
+
+class CommodityShockStrategizer(Strategizer):
+    """大宗商品冲击策略器（市场级）—— 识别商品价格变化对不同行业的影响。
+
+    Phase 2 实现。数据源：YFinance（WTI原油/铜/黄金/天然气/白银期货）。
+    """
+
+    def __init__(
+        self,
+        name: str = "CommodityShockStrategizer",
+        enabled: bool = True,
+    ):
+        super().__init__(name=name, enabled=enabled)
+
+    def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
+        return StrategizerOutput(
+            name=self.name,
+            satisfied=False,
+            reason="CommodityShock 由 MarketCache 统一计算，不逐只股票调用",
+            details={"delegated": True},
+        )
