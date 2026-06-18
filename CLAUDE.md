@@ -339,3 +339,52 @@ Detailed context lives in the memory directory. Read the relevant files before w
 - `EnergyPhaseClassifier` 需要 `market` 参数时，在 `RuleRegistry.create()` 的 params dict 中传入 `"market": "HK"`
 - 回测时用 `--compare` 对比多组参数，关注 10 日胜率和盈亏比（10 日窗口最稳定）
 - 所有参数变化必须在 details dict 中体现（用于 CSV 报告和 LLM 分析消费）
+
+### 2026-06-18 — unified_bullish_top20 优化：双评分体系 + 6个持有层规则 + 报告重写
+
+**Files changed**:
+- `stock_screener/scoring/` (新建) — `__init__.py`, `models.py`, `constants.py`, `entry_scorer.py`, `holding_scorer.py`, `market_cache.py`
+- `stock_screener/signal_analysis/renderers.py` (新建) — `RetailReportRenderer`
+- `stock_screener/signal_analysis/hot_sectors.py` — 新增 `HotSectorClassifier`
+- `stock_screener/strategizers.py` — 新增 6 个持有层 macro Strategizer + 5 个 EntryScore 聚合器
+- `stock_screener/strategy.py` — 无变更（新规则计算在 market_cache.py 中）
+- `stock_screener/rule_engine.py` — `RuleRegistry` 注册 11 条新规则；`evaluate_macro_rules_for_top20()` 支持 `market_cache` 注入
+- `stock_screener/db.py` — `DEFAULT_RULE_METADATA` 移除 3 条 + 新增 11 条；`_migrate_add_scoring_columns`
+- `stock_screener/api/screen_service.py` — 集成 MarketCache + EntryScorer + HoldingScorer；Top20 排序改为 entry_score
+- `stock_screener/signal_analysis/chain.py` — 切换到 RetailReportRenderer（Feature flag `USE_NEW_RENDERER`）；加载 MarketTemperature
+- `stock_screener/market_intel/providers/base.py` — P2 `MacroDataProvider` ABC 接口预留
+- `stock_screener/market_intel/macro_scoring.py` — `aggregate_rule_scores` 标记 deprecated
+- `stock_screener/market_intel/reporting.py` — `render_multi_stock_report` 标记 deprecated
+- `stock_screener/signal_analysis/models.py` — `UNIFIED_SCORE_WEIGHTS` / `compute_unified_score` 标记 deprecated
+- `stock_screener/tests/` — 新增 6 个测试文件（~150 个新测试）
+- `CLAUDE.md` — this entry
+
+**Fixes applied**:
+
+1. **双评分体系** (`scoring/` 模块): 拆分 `entry_score`（入场信号，5模块加权）和 `holding_score`（持有价值，6维度加权）。RuleEngine 不变，EntryScorer/HoldingScorer 只消费其 filter_details 输出。entry_score 用于 Top20 排序（替代 total_match_count）。Feature flag `USE_NEW_SCORING=0` 可回退。
+
+2. **6 个持有层宏观规则**: 
+   - `CreditRiskRegime`（YFinance HYG/LQD/VIX ETF代理，纯算法）
+   - `MarketBreadth`（stock_kline_cache 表查询全市场 MA50/MA200/52周新高新低）
+   - `LiquidityNowcast`（A股 AKShare 两融+北向 / 港股南向+恒指 / 美股 VIX+SPY）
+   - `EarningsRevisionMomentum`（个股级，Tavily搜索+关键词评分）
+   - `PolicyEventRisk`（市场级，Tavily+LLM结构化）
+   - `CommodityShock`（YFinance 5种大宗商品期货监控）
+   5 个市场级规则通过 `MarketCache` 预计算缓存60分钟，`EarningsRevision` 逐只股票（仅Top20）执行。
+
+3. **报告重写**: `RetailReportRenderer` 10-section 散户友好模板。市场温度计（5项emoji指标）、热点三分类、Top20简表（7列）、个股卡片（买点/持有/风险/观察点）、分类型建议（短线/中线/不追高）、5层风险提示。Feature flag `USE_NEW_RENDERER=0` 回退旧模板。
+
+4. **热点三分类**: `HotSectorClassifier` 分行业（127个中文行业名）/主题（59个概念关键词）/地域（17个政策催化区域）。普通省份名无催化则过滤。
+
+5. **规则去冗**: 移除 `rsi_overbought` / `daily_drop_6_65` / `rsi_oversold` 3条无用/冗余规则。注册 11 条新规则（6 holding + 5 scoring聚合器）。
+
+6. **DB 扩展**: `screening_results` 表新增 8 字段：entry_score, entry_decision, holding_score, holding_decision, holding_period, position_suggestion, risk_level, score_formula。
+
+7. **P2 接口预留**: `market_intel/providers/base.py` 定义 `MacroDataProvider` ABC（`get_credit_spread` / `get_financial_conditions` / `get_analyst_estimates`），供后续 FRED/Tushare Pro 实现。
+
+**⚠️ 后续改动注意事项**:
+- `RULE_TO_MODULE_MAP` 是 list-of-tuples 格式 `[(rule_key, module, weight), ...]`，同一 rule_key 可映射多个模块。不要改回 dict。
+- 新增技术规则如需参与 entry_score，在 `RULE_TO_MODULE_MAP` 中添加 `(rule_key, module, weight)` 条目
+- MarketCache 的市场级规则不逐只股票调用，结果通过 `MarketTemperature.to_filter_details()` 注入
+- 报告和评分的 Feature flag 默认启用，`USE_NEW_SCORING=0` / `USE_NEW_RENDERER=0` 可回退
+- 修改 `scoring/models.py` 中的 dataclass 时，确认 `to_filter_details()` 和 `HoldingScorer._extract_*()` 的字段引用同步更新
