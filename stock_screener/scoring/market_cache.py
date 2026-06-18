@@ -21,6 +21,15 @@ from .models import (
     CommodityShockResult,
 )
 
+try:
+    from db import MarketDatabase, MySqlConfig
+
+    _MARKET_DB_AVAILABLE = True
+except Exception:
+    MarketDatabase = None  # type: ignore[assignment]
+    MySqlConfig = None  # type: ignore[assignment]
+    _MARKET_DB_AVAILABLE = False
+
 
 class MarketCache:
     """市场级规则缓存。"""
@@ -146,8 +155,155 @@ class MarketCache:
             )
 
     def _compute_market_breadth(self, market: str) -> Optional[MarketBreadthResult]:
-        """市场宽度计算（Phase 2 实现，Phase 1 返回桩）。"""
-        return MarketBreadthResult(score=50.0, explanation="市场宽度暂未计算（Phase 2 实现）")
+        """从 stock_kline_cache 表查询全市场 K 线数据，计算市场宽度指标。
+
+        指标：
+        - advance_decline_ratio: 最新一根 K 线上涨/下跌股票数比值
+        - above_ma50_pct:    收盘价站上 MA50 的股票占比
+        - above_ma200_pct:   收盘价站上 MA200 的股票占比
+        - new_high_52w:      收盘价创 52 周（~250 交易日）新高的股票数
+        - new_low_52w:       收盘价创 52 周新低的股票数
+
+        评分模型：基线 50 分，按阈值加减，最终 clamp 0-100。
+        """
+        if not _MARKET_DB_AVAILABLE:
+            return MarketBreadthResult(
+                score=50.0,
+                explanation="MySQL 驱动不可用，市场宽度暂未计算",
+            )
+
+        try:
+            import os
+
+            import pandas as pd
+
+            config = MySqlConfig(
+                host=os.getenv("MYSQL_HOST", "127.0.0.1"),
+                port=int(os.getenv("MYSQL_PORT", "3306")),
+                user=os.getenv("MYSQL_USER", "root"),
+                password=os.getenv("MYSQL_PASSWORD", "123456"),
+                database=os.getenv("MYSQL_DATABASE", "market_data"),
+            )
+            db = MarketDatabase(config)
+            try:
+                # 获取每个股票最近 250 根日 K 线收盘价（约 52 个交易周）
+                # 用 ROW_NUMBER() 窗口函数取 TOP N
+                sql = """
+                    SELECT code, bar_time, close
+                    FROM (
+                        SELECT code, bar_time, close,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY code ORDER BY bar_time DESC
+                               ) AS rn
+                        FROM stock_kline_cache
+                        WHERE market = %s AND timeframe = '1d'
+                    ) ranked
+                    WHERE rn <= 250
+                    ORDER BY code, bar_time ASC
+                """
+                with db.conn.cursor() as cursor:
+                    cursor.execute(sql, (market,))
+                    rows = cursor.fetchall()
+            finally:
+                db.close()
+
+            if not rows:
+                return MarketBreadthResult(
+                    score=50.0,
+                    explanation=f"市场 {market} 暂无缓存 K 线数据",
+                )
+
+            df = pd.DataFrame(rows, columns=["code", "bar_time", "close"])
+            df["close"] = df["close"].astype(float)
+
+            total_stocks = df["code"].nunique()
+
+            advance = 0
+            decline = 0
+            above_ma50 = 0
+            above_ma200 = 0
+            new_high = 0
+            new_low = 0
+
+            for _code, grp in df.groupby("code"):
+                closes = grp["close"].values
+                n = len(closes)
+
+                if n < 2:
+                    continue
+
+                last_close = closes[-1]
+                prev_close = closes[-2]
+
+                # 涨跌比
+                if last_close > prev_close:
+                    advance += 1
+                elif last_close < prev_close:
+                    decline += 1
+
+                # MA50
+                if n >= 50:
+                    ma50 = closes[-50:].mean()
+                    if last_close > ma50:
+                        above_ma50 += 1
+
+                # MA200
+                if n >= 200:
+                    ma200 = closes[-200:].mean()
+                    if last_close > ma200:
+                        above_ma200 += 1
+
+                # 52 周新高 / 新低
+                window = closes[-min(250, n):]
+                if last_close >= window.max():
+                    new_high += 1
+                if last_close <= window.min():
+                    new_low += 1
+
+            # 标准化为比例
+            advance_decline_ratio = advance / max(decline, 1)
+            above_ma50_pct = above_ma50 / max(total_stocks, 1)
+            above_ma200_pct = above_ma200 / max(total_stocks, 1)
+
+            # 评分：基线 50，按阈值加减
+            score = 50.0
+            if above_ma50_pct > 0.60:
+                score += 25
+            elif above_ma50_pct < 0.40:
+                score -= 20
+
+            if above_ma200_pct > 0.55:
+                score += 15
+
+            if advance_decline_ratio > 1.5:
+                score += 10
+
+            if new_high > new_low * 2:
+                score += 10
+            elif new_low > new_high * 2:
+                score -= 15
+
+            score = max(0.0, min(100.0, score))
+
+            return MarketBreadthResult(
+                score=score,
+                above_ma50_pct=above_ma50_pct,
+                above_ma200_pct=above_ma200_pct,
+                advance_decline_ratio=advance_decline_ratio,
+                new_high_52w=new_high,
+                new_low_52w=new_low,
+                explanation=(
+                    f"市场宽度={above_ma50_pct:.0%}站上MA50、"
+                    f"涨跌比={advance_decline_ratio:.2f}、"
+                    f"新高={new_high}只/新低={new_low}只，"
+                    f"综合评分={score:.1f}"
+                ),
+            )
+        except Exception as e:
+            return MarketBreadthResult(
+                score=50.0,
+                explanation=f"市场宽度计算异常: {e}",
+            )
 
     def _compute_liquidity(self, market: str) -> Optional[LiquidityNowcastResult]:
         """流动性即时报（Phase 2 实现，Phase 1 返回桩）。"""
