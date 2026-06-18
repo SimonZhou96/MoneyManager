@@ -84,6 +84,7 @@ def render_single_stock_report(pack: dict, result: dict, report_date: date | Non
     return "\n".join(lines)
 
 
+# DEPRECATED: use signal_analysis.renderers.RetailReportRenderer instead
 def render_multi_stock_report(
     packs: list[dict],
     results: list[dict],

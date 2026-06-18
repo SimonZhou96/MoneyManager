@@ -95,6 +95,7 @@ HOT_SECTOR_MARK_CRITERIA = (
     "观察=暂无明确匹配但可跟踪轮动；无明确关联=当前信息看不出关联；未知=信息不足"
 )
 
+# DEPRECATED: use scoring.constants.ENTRY_WEIGHTS and scoring.constants.HOLDING_WEIGHTS instead
 # 统一评分权重：技术规则决定 Top20 入围，不参与最终评分（0%）；
 # 五模块/事件热点/资金风险/LLM 复核构成最终评分口径。
 UNIFIED_SCORE_WEIGHTS = {
@@ -268,6 +269,7 @@ class UnifiedScoreBreakdown:
         }
 
 
+# DEPRECATED: use scoring.entry_scorer.EntryScorer and scoring.holding_scorer.HoldingScorer instead
 def compute_unified_score(
     result: "SignalAnalysisResult",
     row: Optional["ScreeningSignalRow"] = None,

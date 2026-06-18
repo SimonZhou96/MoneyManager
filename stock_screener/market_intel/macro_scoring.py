@@ -83,6 +83,7 @@ class MacroScoreParser:
         )
 
 
+# DEPRECATED: use scoring.entry_scorer.EntryScorer and scoring.holding_scorer.HoldingScorer instead
 def aggregate_rule_scores(
     rows: Iterable[Dict[str, Any]],
     technical_weight: float = DEFAULT_TECHNICAL_WEIGHT,

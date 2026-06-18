@@ -36,6 +36,8 @@ from .models import (
 )
 from .search_providers import SearchProvider
 
+from signal_analysis.renderers import RetailReportRenderer
+from scoring.market_cache import MarketCache
 
 AI_CSV_COLUMNS = [
     "最终统一评分",
@@ -1327,6 +1329,144 @@ def write_analysis_columns_to_csv(
                 pass
 
 
+# ── Feature flag: switch to new RetailReportRenderer ───────────
+USE_NEW_RENDERER = os.getenv("USE_NEW_RENDERER", "1") == "1"
+
+
+def _build_stock_dict(
+    row: ScreeningSignalRow,
+    result: SignalAnalysisResult,
+) -> dict:
+    """Convert internal objects to stock dict expected by RetailReportRenderer."""
+    unified = compute_unified_score(result, row)
+    entry_score = unified.final_score if unified else 50.0
+    holding_score = (
+        result.reliability_score
+        if result.reliability_score is not None
+        else entry_score
+    )
+
+    # Build one-liner reason from conditions_met
+    conds = (row.conditions_met or "").strip()
+    if conds:
+        parts = [
+            p.split(":", 1)[1].strip() if ":" in p else p
+            for p in conds.split("|")
+            if p.strip()
+        ]
+        one_liner = "；".join(parts[:3]) if parts else "综合信号"
+    elif result.hot_sector_mark in ("重点", "相关"):
+        matched = "；".join(result.matched_hot_sectors or [])
+        one_liner = f"热点板块匹配: {matched}" if matched else "热点方向匹配"
+    elif result.summary:
+        one_liner = result.summary
+    else:
+        one_liner = "综合技术信号与热点方向判断"
+
+    # Build risk text
+    risk_parts: list[str] = []
+    if result.risk_factors:
+        risk_parts.extend(result.risk_factors[:2])
+    risk_level = (row.main_force_risk_level or "").strip()
+    if risk_level:
+        risk_parts.append(f"主力风险: {risk_level}")
+    main_risk = "；".join(risk_parts) if risk_parts else "市场系统性风险或个股不确定性"
+
+    # Build buy reason
+    buy_reason_parts: list[str] = []
+    if conds:
+        buy_reason_parts.append("技术信号命中")
+    if result.hot_sector_mark in ("重点", "相关"):
+        buy_reason_parts.append("热点板块匹配")
+    if result.company_events:
+        buy_reason_parts.append("有公司事件催化")
+    buy_reason = "；".join(buy_reason_parts) if buy_reason_parts else "综合技术信号与热点方向判断"
+
+    # Build hold value
+    hold_value_parts: list[str] = []
+    if result.positive_factors:
+        hold_value_parts.extend(result.positive_factors[:2])
+    if getattr(row, "pe_ratio", "") or getattr(row, "market_cap", ""):
+        hold_value_parts.append("有基本面数据支撑")
+    hold_value = "；".join(hold_value_parts) if hold_value_parts else "企业基本面尚可"
+
+    return {
+        "code": result.code,
+        "name": result.name or row.name or result.code,
+        "sector": row.sector or "",
+        "industry": row.sector or "",
+        "entry_score": entry_score,
+        "holding_score": holding_score,
+        "one_liner": one_liner,
+        "brief_reason": one_liner,
+        "summary": result.summary or one_liner,
+        "main_risk": main_risk,
+        "risk": main_risk,
+        "top_risk": main_risk,
+        "risk_factor": main_risk,
+        "buy_reason": buy_reason,
+        "entry_reason": buy_reason,
+        "positive_factor": buy_reason,
+        "hold_value": hold_value,
+        "holding_reason": hold_value,
+        "enterprise_value": hold_value,
+        "watch_point": "关注后续成交量变化和关键支撑位",
+        "observation": "关注后续成交量变化和关键支撑位",
+        "macro_risk": main_risk,
+        "industry_risk": main_risk,
+        "data_gap": "；".join(result.data_gaps) if result.data_gaps else "",
+    }
+
+
+def _build_hot_sectors(hot_sectors: list[str]) -> dict[str, list[str]]:
+    """Map flat hot sector list to categorized dict for RetailReportRenderer."""
+    if not hot_sectors:
+        return {}
+    return {"industry": list(hot_sectors), "theme": [], "region": []}
+
+
+def _build_data_source_status(context: SignalAnalysisContext) -> list[dict]:
+    """Build data source status list for the report."""
+    check_date_str = (
+        context.check_date.isoformat() if context.check_date else "—"
+    )
+    has_search = (
+        context.search_provider.is_available
+        if hasattr(context.search_provider, "is_available")
+        else False
+    )
+    has_llm = (
+        context.llm_provider.is_available
+        if hasattr(context.llm_provider, "is_available")
+        else False
+    )
+    llm_name = (
+        context.llm_provider.model_name
+        if hasattr(context.llm_provider, "model_name")
+        else "LLM"
+    )
+    return [
+        {
+            "dimension": "技术信号",
+            "source": "Futu OpenD / YFinance / AKShare",
+            "status": "正常",
+            "updated_at": check_date_str,
+        },
+        {
+            "dimension": "公司新闻",
+            "source": "联网搜索",
+            "status": "正常" if has_search else "不可用",
+            "updated_at": check_date_str,
+        },
+        {
+            "dimension": "AI 分析",
+            "source": llm_name,
+            "status": "正常" if has_llm else "不可用",
+            "updated_at": check_date_str,
+        },
+    ]
+
+
 def _render_artifact_report(context: SignalAnalysisContext) -> str:
     if context.evidence_packs:
         report_rows = context.all_rows or context.rows
@@ -1351,9 +1491,40 @@ def _render_artifact_report(context: SignalAnalysisContext) -> str:
             result_row.update(compute_unified_score(context.results_by_code[row.code], row).to_csv_columns())
             results.append(result_row)
         return render_multi_stock_report(packs, results, report_date=context.check_date)
-    return _render_markdown_report(context)
+
+    if USE_NEW_RENDERER:
+        # Pre-compute market temperature for the report
+        market_cache = MarketCache()
+        market_temp = market_cache.get_or_compute(context.market)
+
+        # Build stock list from results
+        report_rows = context.all_rows or context.rows
+        stocks: list[dict] = []
+        for row in report_rows:
+            result = context.results_by_code.get(row.code)
+            if result is None:
+                continue
+            stocks.append(_build_stock_dict(row, result))
+
+        # Sort by entry_score descending
+        stocks.sort(key=lambda s: s.get("entry_score", 0), reverse=True)
+
+        renderer = RetailReportRenderer()
+        renderer_context = {
+            "market": context.market,
+            "market_temp": market_temp,
+            "stocks": stocks,
+            "hot_sectors": _build_hot_sectors(context.hot_sectors),
+            "report_date": context.check_date.isoformat(),
+            "chain_key": context.chain_key or "",
+            "data_sources": _build_data_source_status(context),
+        }
+        return renderer.render(renderer_context)
+
+    return _render_markdown_report(context)  # deprecated, use RetailReportRenderer
 
 
+# deprecated, use RetailReportRenderer
 def _render_markdown_report(context: SignalAnalysisContext) -> str:
     """Render v2 simplified report: market bg → scoring → overview → macro → top5 → risks."""
     from collections import Counter
