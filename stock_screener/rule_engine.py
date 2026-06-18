@@ -210,6 +210,7 @@ class RuleRegistry:
     def __init__(self):
         self._filter_factories: Dict[str, Callable[[dict], Filter]] = {}
         self._strategy_factories: Dict[str, Callable[[dict], Strategizer]] = {}
+        self._entries: List[RuleMetadata] = []
 
     def register_filter(self, implementation: str, factory: Callable[[dict], Filter]) -> "RuleRegistry":
         self._filter_factories[implementation] = factory
@@ -218,6 +219,15 @@ class RuleRegistry:
     def register_strategy(self, implementation: str, factory: Callable[[dict], Strategizer]) -> "RuleRegistry":
         self._strategy_factories[implementation] = factory
         return self
+
+    def register(self, metadata: RuleMetadata) -> "RuleRegistry":
+        """注册一条规则元数据。"""
+        self._entries.append(metadata)
+        return self
+
+    def list_entries(self) -> List[RuleMetadata]:
+        """返回所有已注册的规则元数据。"""
+        return list(self._entries)
 
     def create(self, metadata: RuleMetadata) -> Filter | Strategizer:
         params = dict(metadata.params or {})
@@ -380,6 +390,98 @@ class RuleRegistry:
                 min_rows=int(params.get("min_rows", 30)),
             ),
         )
+
+        # ── 持有层宏观规则（6 个新增） ──────────────────────
+        registry.register(RuleMetadata(
+            market="*", rule_key="credit_risk_regime",
+            rule_name="信用风险环境", rule_type=RULE_TYPE_STRATEGY,
+            implementation="CreditRiskRegimeStrategizer",
+            strategy_category="macro",
+            params={}, enabled=True, display_order=200,
+            description="判断市场信用风险是否上升（HYG/LQD/VIX ETF代理）",
+        ))
+        registry.register(RuleMetadata(
+            market="*", rule_key="market_breadth_regime",
+            rule_name="市场宽度环境", rule_type=RULE_TYPE_STRATEGY,
+            implementation="MarketBreadthRegimeStrategizer",
+            strategy_category="macro",
+            params={}, enabled=True, display_order=210,
+            description="判断指数上涨是否健康扩散到多数股票",
+        ))
+        registry.register(RuleMetadata(
+            market="*", rule_key="liquidity_nowcast",
+            rule_name="资金流动性即时报", rule_type=RULE_TYPE_STRATEGY,
+            implementation="LiquidityNowcastStrategizer",
+            strategy_category="macro",
+            params={}, enabled=True, display_order=220,
+            description="判断资金环境是否支持继续持有",
+        ))
+        registry.register(RuleMetadata(
+            market="*", rule_key="earnings_revision_momentum",
+            rule_name="盈利预期修正", rule_type=RULE_TYPE_STRATEGY,
+            implementation="EarningsRevisionMomentumStrategizer",
+            strategy_category="macro",
+            params={}, enabled=True, display_order=230,
+            description="判断公司未来盈利预期是否改善（Tavily+LLM代理）",
+        ))
+        registry.register(RuleMetadata(
+            market="*", rule_key="policy_event_risk",
+            rule_name="政策事件风险", rule_type=RULE_TYPE_STRATEGY,
+            implementation="PolicyEventRiskStrategizer",
+            strategy_category="macro",
+            params={}, enabled=True, display_order=240,
+            description="识别宏观政策/行业政策/监管事件/地缘事件影响",
+        ))
+        registry.register(RuleMetadata(
+            market="*", rule_key="commodity_shock",
+            rule_name="大宗商品冲击", rule_type=RULE_TYPE_STRATEGY,
+            implementation="CommodityShockStrategizer",
+            strategy_category="macro",
+            params={}, enabled=True, display_order=250,
+            description="识别大宗商品价格变化对资源/周期/制造/消费行业影响",
+        ))
+
+        # ── EntryScore 聚合器（5 个评分层 Strategy） ─────────
+        registry.register(RuleMetadata(
+            market="*", rule_key="trend_structure",
+            rule_name="趋势结构", rule_type=RULE_TYPE_STRATEGY,
+            implementation="TrendStructureStrategizer",
+            strategy_category="scoring",
+            params={}, enabled=True, display_order=300,
+            description="[评分聚合] 趋势结构模块（EMA排列/左一/MA位置）",
+        ))
+        registry.register(RuleMetadata(
+            market="*", rule_key="momentum_state",
+            rule_name="动量状态", rule_type=RULE_TYPE_STRATEGY,
+            implementation="MomentumStateStrategizer",
+            strategy_category="scoring",
+            params={}, enabled=True, display_order=310,
+            description="[评分聚合] 动量状态模块（RSI/MACD/KDJ/能量相位）",
+        ))
+        registry.register(RuleMetadata(
+            market="*", rule_key="volume_confirmation",
+            rule_name="成交确认", rule_type=RULE_TYPE_STRATEGY,
+            implementation="VolumeConfirmationStrategizer",
+            strategy_category="scoring",
+            params={}, enabled=True, display_order=320,
+            description="[评分聚合] 成交确认模块（放量/量价配合）",
+        ))
+        registry.register(RuleMetadata(
+            market="*", rule_key="breakout_quality",
+            rule_name="突破质量", rule_type=RULE_TYPE_STRATEGY,
+            implementation="BreakoutQualityStrategizer",
+            strategy_category="scoring",
+            params={}, enabled=True, display_order=330,
+            description="[评分聚合] 突破质量模块（ATR突破/新高/形态有效性）",
+        ))
+        registry.register(RuleMetadata(
+            market="*", rule_key="volatility_risk",
+            rule_name="波动风险", rule_type=RULE_TYPE_STRATEGY,
+            implementation="VolatilityRiskStrategizer",
+            strategy_category="scoring",
+            params={}, enabled=True, display_order=340,
+            description="[评分聚合] 波动风险模块（布林带宽/回撤/日内振幅）",
+        ))
         return registry
 
 
@@ -729,6 +831,7 @@ class RuleEngine:
         self,
         stock: StockInfo,
         filter_context: FilterContext,
+        market_cache: Optional[Any] = None,
     ) -> StockFilterResult:
         """Evaluate macro rules for Top20 selected stocks only.
 
@@ -737,6 +840,13 @@ class RuleEngine:
         strategy_category='macro' and are excluded from
         evaluate_bullish_technical_rules(). They run after the Top20
         technical selection to provide the final macro scoring layer.
+
+        When market_cache is provided, the 4 pre-computed market-level
+        rules (credit_risk_regime, market_breadth_regime, liquidity_nowcast,
+        policy_event_risk, commodity_shock) from MarketTemperature are
+        injected as FilterOutput objects, so they appear in the caller's
+        filter_details without per-stock re-evaluation. earnings_revision_momentum
+        is stock-level and NOT injected here (handled in Phase 3).
         """
         execution = RuleExecutionContext(
             stock=stock,
@@ -753,6 +863,23 @@ class RuleEngine:
             metadata = self.metadata_by_key.get(rule_key)
             if metadata is not None and metadata.enabled:
                 execution.execute(rule_key)
+
+        # 新增：从 MarketCache 注入市场级规则结果（不逐只调用）
+        if market_cache is not None:
+            try:
+                market_temp = market_cache.get_or_compute(filter_context.market)
+                extra_details = market_temp.to_filter_details()
+                for d in extra_details:
+                    if d.get("rule_key") != "earnings_revision_momentum":
+                        execution.ordered_outputs.append(FilterOutput(
+                            filter_name=d.get("rule_key", d.get("filter_name", "market_rule")),
+                            result=FilterResult.PASS if d.get("result") == "pass" else FilterResult.FAIL,
+                            reason=d.get("reason", ""),
+                            details=d,
+                        ))
+            except Exception:
+                # 市场级规则计算失败不阻塞 Top20 筛选
+                pass
 
         return StockFilterResult(
             stock=stock,
