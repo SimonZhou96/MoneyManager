@@ -137,12 +137,12 @@ class UnifiedBullishTop20HK02685RealDBTest(unittest.TestCase):
 
     # ── 规则过滤 ────────────────────────────────────────────────
 
-    def test_04_bullish_technical_rule_count_is_22(self):
-        """bullish_technical_rule_keys() 应返回 22 条规则（含 energy_phase_bullish）。"""
+    def test_04_bullish_technical_rule_count_is_21(self):
+        """bullish_technical_rule_keys() 应返回 21 条规则（移除 rsi_oversold 后）。"""
         keys = self.engine.bullish_technical_rule_keys()
         self.assertEqual(
-            len(keys), 22,
-            f"预期 22 条，实际 {len(keys)}: {sorted(keys)}",
+            len(keys), 21,
+            f"预期 21 条，实际 {len(keys)}: {sorted(keys)}",
         )
 
     def test_05_macro_rules_not_in_bullish_technical_keys(self):
@@ -198,8 +198,8 @@ class UnifiedBullishTop20HK02685RealDBTest(unittest.TestCase):
 
     # ── 评估结果：规则覆盖 ──────────────────────────────────────
 
-    def test_13_all_22_rules_executed(self):
-        """22 条规则全部被执行，每个 rule_key 在 filter_outputs 中出现恰好一次。"""
+    def test_13_all_21_rules_executed(self):
+        """21 条规则全部被执行，每个 rule_key 在 filter_outputs 中出现恰好一次。"""
         executed = {}
         for o in self.result.filter_outputs:
             details = o.details if isinstance(o.details, dict) else {}
@@ -281,7 +281,7 @@ class UnifiedBullishTop20HK02685RealDBTest(unittest.TestCase):
     # ── 评估结果：详情展示 ──────────────────────────────────────
 
     def test_20_print_all_rule_results(self):
-        """打印所有 22 条规则的执行结果（方便人工核查）。"""
+        """打印所有 21 条规则的执行结果（方便人工核查）。"""
         print(f"\n{'='*80}")
         print(f"📊 HK.02685 ({STOCK_NAME}) 在 unified_bullish_top20 链的评估结果")
         print(f"   日期: {date.today()}")
@@ -432,7 +432,7 @@ class UnifiedBullishTop20MacroRulesForTop20Test(unittest.TestCase):
             overlap, set(),
             f"技术规则评估不应包含宏观规则: {overlap}",
         )
-        self.assertEqual(len(tech_keys), 22, "技术规则应为 22 条（含 energy_phase_bullish）")
+        self.assertEqual(len(tech_keys), 21, "技术规则应为 21 条（移除 rsi_oversold 后）")
 
     def test_24_macro_rules_dont_affect_technical_match_count(self):
         """total_match_count 仍只统计技术规则命中，不受宏观规则影响。"""

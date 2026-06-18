@@ -216,20 +216,20 @@ class E2EUnifiedScoringConsistencyTest(unittest.TestCase):
 
     # ── 2. filter_details 完整性 ─────────────────────────────────
 
-    def test_03_filter_details_has_26_rules(self):
-        """合并后 filter_details 应有 22 技术 + 4 宏观 = 26 条。"""
+    def test_03_filter_details_has_25_rules(self):
+        """合并后 filter_details 应有 21 技术 + 4 宏观 = 25 条。"""
         self.assertEqual(
-            len(self.merged_filter_details), 26,
-            f"期望 26 条规则（22 技术 + 4 宏观），实际 {len(self.merged_filter_details)}",
+            len(self.merged_filter_details), 25,
+            f"期望 25 条规则（21 技术 + 4 宏观），实际 {len(self.merged_filter_details)}",
         )
 
     def test_04_technical_rules_have_strategy_category_technical(self):
-        """前 22 条规则 strategy_category 应为 'technical'（含 energy_phase_bullish）。"""
+        """前 21 条规则 strategy_category 应为 'technical'（移除 rsi_oversold 后）。"""
         tech_items = [
             item for item in self.merged_filter_details
             if item.get("strategy_category") == "technical"
         ]
-        self.assertEqual(len(tech_items), 22)
+        self.assertEqual(len(tech_items), 21)
 
     def test_05_macro_rules_have_strategy_category_macro(self):
         """后 4 条规则 strategy_category 应为 'macro'。"""
