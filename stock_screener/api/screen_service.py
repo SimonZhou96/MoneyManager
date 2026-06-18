@@ -44,6 +44,9 @@ from signal_analysis.service import build_macro_score_scorer, build_market_intel
 from timeframe import parse_timeframe
 from universe import fetch_stock_list_akshare
 from universe_filter import UniverseFilterFactory
+from scoring.market_cache import MarketCache
+from scoring.entry_scorer import EntryScorer
+from scoring.holding_scorer import HoldingScorer
 
 
 UNIFIED_BULLISH_TOP20_CHAIN_KEY = "unified_bullish_top20"
@@ -61,14 +64,14 @@ STRATEGY_NAME_MAP = {
 
 
 def select_unified_bullish_top_candidates(candidates: list[dict], top_n: int = UNIFIED_BULLISH_TOP_N) -> list[dict]:
-    """Pick the strongest bullish technical candidates with deterministic tie-breaking."""
+    """Pick the strongest bullish technical candidates by entry_score with deterministic tie-breaking."""
     eligible = [
         item for item in candidates
         if int(item.get("total_match_count") or item.get("bullish_match_count") or 0) > 0
     ]
     ranked = sorted(
         eligible,
-        key=lambda item: (-int(item.get("total_match_count") or item.get("bullish_match_count") or 0), str(item.get("code") or "")),
+        key=lambda item: (-item.get("entry_score", 0), str(item.get("code") or "")),
     )
     return ranked[:max(0, int(top_n))]
 
@@ -546,7 +549,13 @@ def run_screening_task(
         live_stocks: Dict[str, StockInfo] = {}
         macro_analysis_cache: Dict[str, object] = {}
         macro_warning_cache: Dict[str, list[str]] = {}
-        
+
+        # ── Pre-compute MarketTemperature for scoring ──
+        market_cache = MarketCache()
+        market_temp = market_cache.get_or_compute(market)
+        entry_scorer = EntryScorer()
+        holding_scorer = HoldingScorer()
+
         if verbose:
             print(f"\n{'='*80}")
             print(f"开始逐个处理 {len(stock_infos)} 只股票")
@@ -776,7 +785,23 @@ def run_screening_task(
                 filter_details,
                 **_score_weights_from_filter_details(filter_details),
             )
-            
+
+            # ── Compute EntryScore ──
+            try:
+                entry_bd = entry_scorer.compute(filter_details)
+                entry_score_val = entry_bd.entry_score
+                entry_decision_val = entry_bd.entry_decision
+            except Exception:
+                entry_score_val = 50.0
+                entry_decision_val = "NO_BUY"
+            # Update unified candidate dict for sorting
+            if is_unified_bullish_top20:
+                for cand in unified_candidates:
+                    if cand["code"] == stock.code:
+                        cand["entry_score"] = entry_score_val
+                        break
+
+
             db_record = {
                 "task_id": task_id,
                 "market": market,
@@ -789,6 +814,8 @@ def run_screening_task(
                 "macro_score": score_summary.get("macro_score"),
                 "final_score": score_summary.get("final_score"),
                 "score_details": score_summary,
+                "entry_score": entry_score_val,
+                "entry_decision": entry_decision_val,
                 "sector": stock.sector,
                 "industry": stock.industry,
                 "market_cap": stock.market_cap,
@@ -847,7 +874,7 @@ def run_screening_task(
                 if si is None:
                     continue
 
-                macro_result = rule_engine.evaluate_macro_rules_for_top20(si, context)
+                macro_result = rule_engine.evaluate_macro_rules_for_top20(si, context, market_cache=market_cache)
 
                 # 合并 macro outputs 到 filter_details
                 for o in macro_result.filter_outputs:
@@ -871,6 +898,25 @@ def run_screening_task(
                 record["macro_score"] = score_summary.get("macro_score")
                 record["final_score"] = score_summary.get("final_score")
                 record["score_details"] = score_summary
+
+                # ── Compute HoldingScore for Top20 ──
+                try:
+                    holding_bd = holding_scorer.compute(
+                        record["filter_details"],
+                        market_temp,
+                        None,  # llm_result - optional, Phase 2+ may populate
+                    )
+                    record["holding_score"] = holding_bd.holding_score
+                    record["holding_decision"] = holding_bd.holding_decision
+                    record["holding_period"] = holding_bd.holding_period
+                    record["position_suggestion"] = holding_bd.position_suggestion
+                    record["risk_level"] = holding_bd.risk_level
+                except Exception:
+                    record["holding_score"] = 50.0
+                    record["holding_decision"] = "NOT_RECOMMENDED"
+                    record["holding_period"] = "短线"
+                    record["position_suggestion"] = "轻仓试探"
+                    record["risk_level"] = "medium"
 
                 if verbose:
                     print(f"  ✓ {record['code']} 宏观评分: technical={record.get('technical_score')}, "
