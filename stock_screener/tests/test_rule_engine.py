@@ -7,17 +7,17 @@ from pathlib import Path
 
 import pandas as pd
 
-from stock_screener.filters import AvgDailyVolumeFilter, Filter, FilterContext, FilterResult, StockInfo
-from stock_screener.rule_engine import (
+from filters import AvgDailyVolumeFilter, Filter, FilterContext, FilterResult, StockInfo
+from rule_engine import (
     RuleChainConfig,
     RuleEngine,
     RuleMetadata,
     RuleRegistry,
     RuleRepository,
 )
-from stock_screener.strategizers import Strategizer, StrategizerOutput
+from strategizers import Strategizer, StrategizerOutput
 
-from stock_screener.market_intel.models import IntelItem, MarketIntelBundle, StockIntelBundle
+from market_intel.models import IntelItem, MarketIntelBundle, StockIntelBundle
 
 
 class StaticFilter(Filter):

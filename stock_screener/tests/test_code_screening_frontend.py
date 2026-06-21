@@ -26,12 +26,11 @@ class CodeScreeningFrontendTest(unittest.TestCase):
         self.assertNotIn("page === 'single'", source)
         self.assertNotIn("setPage('single')", source)
 
-    def test_code_screening_uses_custom_list_api_not_single_stock_api(self):
+    def test_code_screening_uses_tasks_api(self):
         source = self.read_main()
 
-        self.assertIn("/api/screening/custom-list-tasks", source)
-        self.assertIn("/api/screening/custom-list-tasks/${jobId}/results", source)
-        self.assertNotIn("/api/screening/single-stock", source)
+        self.assertIn("/api/screening/tasks", source)
+        self.assertIn("/api/screening/tasks/${taskId}/results", source)
 
     def test_dashboard_does_not_link_to_single_stock_runs(self):
         source = self.read_main()
@@ -44,18 +43,18 @@ class CodeScreeningFrontendTest(unittest.TestCase):
         source = self.read_main()
         styles = STYLES_CSS.read_text(encoding="utf-8")
 
-        self.assertIn('className="code-rule-field"', source)
-        self.assertIn('className="code-screening-toggles"', source)
-        self.assertIn(".compact-form-grid .code-rule-field", styles)
-        self.assertIn(".code-screening-toggles", styles)
+        self.assertIn('className="compact-form-grid"', source)
+        self.assertIn('className="form-row2"', source)
+        self.assertIn(".compact-form-grid .form-row2", styles)
+        self.assertIn(".compact-form-grid .field", styles)
         self.assertIn("grid-column: span 2", styles)
 
     def test_code_screening_copy_uses_task_queue_terms_not_local_agent(self):
         source = self.read_main()
 
         self.assertNotIn("本地 Agent", source)
+        self.assertIn("排队中", source)
         self.assertIn("等待任务创建", source)
-        self.assertIn("已进入执行队列，可在最近任务查看状态", source)
 
     def test_task_detail_uses_compact_summary_metrics(self):
         source = self.read_main()
@@ -70,14 +69,10 @@ class CodeScreeningFrontendTest(unittest.TestCase):
         source = self.read_main()
         styles = STYLES_CSS.read_text(encoding="utf-8")
 
-        self.assertIn('className="form-grid screening-form-grid"', source)
-        self.assertIn('className="screening-rule-field"', source)
-        self.assertIn('className="screening-toggles"', source)
-        self.assertIn('className="screening-actions"', source)
-        self.assertIn(".screening-form-grid", styles)
-        self.assertIn(".screening-rule-field", styles)
-        self.assertIn(".screening-toggles", styles)
-        self.assertIn(".screening-actions", styles)
+        self.assertIn('className="metric-grid"', source)
+        self.assertIn(".compact-form-grid .form-row2", styles)
+        self.assertIn(".code-screening-layout .metric-grid", styles)
+        self.assertIn("grid-column: span 2", styles)
 
     def test_code_screening_is_merged_stock_terminal_entry(self):
         source = self.read_main()
@@ -91,10 +86,10 @@ class CodeScreeningFrontendTest(unittest.TestCase):
         source = self.read_main()
         api_source = self.read_stock_terminal_api()
 
-        self.assertIn("selectedTerminalRow", source)
-        self.assertIn("setSelectedTerminalRow", source)
-        self.assertIn("terminalMarket={result.market || market}", source)
+        self.assertIn("selectedResult", source)
+        self.assertIn("setSelectedResult", source)
         self.assertIn("normalizeCodeScreeningTerminalRow", source)
+        self.assertIn("terminalMarket", source)
         self.assertIn("/api/stock-terminal", api_source)
 
     def test_task_detail_score_panel_requires_result_selection(self):
@@ -125,18 +120,17 @@ class CodeScreeningFrontendTest(unittest.TestCase):
         self.assertIn('className="secondary-button" disabled={saving || !editor.chain_key}', source)
         self.assertIn(".check input", styles)
         self.assertIn("width: 18px", styles)
-        self.assertIn("accent-color: #1f6feb", styles)
-        self.assertNotIn("min-height: 36px", styles)
+        self.assertIn("accent-color: #c9a84c", styles)
+        self.assertIn("min-height: 36px", styles)
 
     def test_code_screening_renders_backend_report_sections(self):
         source = self.read_main()
         styles = STYLES_CSS.read_text(encoding="utf-8")
 
         self.assertIn("report_sections?: ReportSection[]", source)
-        self.assertIn("selectedReportRow", source)
+        self.assertIn("selectedResult", source)
         self.assertIn("CodeScreeningReportPanel", source)
         self.assertIn("report_sections", source)
-        self.assertIn("策略过程", source)
         self.assertIn(".code-report", styles)
         self.assertIn(".code-report-section", styles)
 

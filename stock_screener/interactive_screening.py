@@ -33,6 +33,21 @@ from stock_pool import DEFAULT_POOL_TYPES_TEXT, POOL_LABELS, parse_pool_types
 from timeframe import parse_timeframe
 
 
+# ── Thread-safe py_mini_racer (V8) pre-initialization ──
+# py_mini_racer 0.14.1 wraps V8 which is NOT thread-safe for concurrent init.
+# When multiple threads call akshare concurrently, each triggers MiniRacer() →
+# V8 platform init, and V8's address_pool_manager CHECK(!pool->IsInitialized())
+# fails when two threads race this init → SIGTRAP → process crash.
+# Pre-init here in the main thread before any worker threads start.
+try:
+    from py_mini_racer import MiniRacer as _MiniRacer
+    _mr = _MiniRacer()
+    _mr.eval("1")
+    _mr.close()
+except Exception:
+    pass
+
+
 TIMEFRAME_GROUPS = [
     ("分钟级", ["1m", "2m", "5m", "15m", "30m", "60m", "90m"]),
     ("小时级", ["1h"]),

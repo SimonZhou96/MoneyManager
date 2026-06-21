@@ -62,6 +62,71 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     return False
 
 
+def _is_fatal_http_error(exc: Exception) -> bool:
+    """检测不可重试的 HTTP 401/403 错误（会话配额耗尽/权限拒绝）。
+
+    与 429（可重试）不同，401/403 重试不会恢复，应直接降级到备选数据源。
+    """
+    # 1) 从异常消息中匹配
+    msg = str(exc).lower()
+    if "401" in msg or "403" in msg:
+        return True
+    if "unauthorized" in msg or "unable to access" in msg:
+        return True
+    # 2) 从 HTTP response 状态码匹配
+    if hasattr(exc, "response"):
+        resp = getattr(exc, "response", None)
+        if resp is not None and getattr(resp, "status_code", 0) in (401, 403):
+            return True
+    return False
+
+
+def _is_crumb_error(exc: Exception) -> bool:
+    """检测是否为 Yahoo Finance crumb 过期导致的 401（可恢复）。
+
+    与 IP 级封禁（"User is unable to access this feature"）不同，
+    crumb 过期可通过重置 YfData 单例恢复。
+    """
+    msg = str(exc).lower()
+    if "invalid crumb" in msg:
+        return True
+    # 检查 HTTP response body
+    if hasattr(exc, "response"):
+        resp = getattr(exc, "response", None)
+        if resp is not None:
+            try:
+                text = getattr(resp, "text", "") or ""
+                if "invalid crumb" in text.lower():
+                    return True
+            except Exception:
+                pass
+    return False
+
+
+def reset_yf_session() -> bool:
+    """重置 YfData 单例，强制下次调用创建全新的 HTTP 会话。
+
+    Yahoo Finance 在处理大量请求后会主动使 cookie/crumb 失效（401
+    "Invalid Crumb"）。yfinance 库内建的重试（toggling cookie strategy）
+    不足以恢复——需要全新的 session。
+
+    调用此函数后，下一个 yf.Ticker() / yf.Tickers() / yf.download()
+    会自动创建新的 YfData 实例，含新 cookie + crumb。
+
+    Returns:
+        True 如果成功重置；False 如果 yfinance 未安装或重置失败。
+    """
+    try:
+        from yfinance.data import YfData
+        if YfData in YfData._instances:
+            del YfData._instances[YfData]
+            logger.info("YfData singleton reset — next yfinance call gets fresh session")
+            return True
+        return False  # 尚未初始化，无需重置
+    except Exception:
+        return False
+
+
 def retry_on_rate_limit(
     func: F,
     *,

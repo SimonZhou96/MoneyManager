@@ -73,6 +73,19 @@ def main():
 
     _ensure_dotenv()
 
+    # ── Thread-safe py_mini_racer (V8) pre-initialization ──
+    # py_mini_racer 0.14.1 wraps V8 which is NOT thread-safe for concurrent init.
+    # Concurrent MiniRacer() calls across threads race V8 platform init →
+    # address_pool_manager CHECK(!pool->IsInitialized()) fails → SIGTRAP.
+    # Pre-init here in the main thread before the uvicorn thread starts.
+    try:
+        from py_mini_racer import MiniRacer as _MiniRacer
+        _mr = _MiniRacer()
+        _mr.eval("1")
+        _mr.close()
+    except Exception:
+        pass
+
     port = 8000
     host = "127.0.0.1"
 

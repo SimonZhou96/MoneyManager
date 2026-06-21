@@ -71,6 +71,20 @@ from .validation import (
 
 load_dotenv()
 
+# ── Thread-safe py_mini_racer (V8) pre-initialization ──
+# py_mini_racer 0.14.1 wraps V8 which is NOT thread-safe for concurrent init.
+# When multiple threads call akshare concurrently, each triggers MiniRacer() →
+# V8 platform init, and V8's address_pool_manager CHECK(!pool->IsInitialized())
+# fails when two threads race this init → SIGTRAP → process crash.
+# Pre-init here in the main thread before uvicorn's thread pool accepts requests.
+try:
+    from py_mini_racer import MiniRacer as _MiniRacer
+    _mr = _MiniRacer()
+    _mr.eval("1")
+    _mr.close()
+except Exception:
+    pass
+
 app = FastAPI(title="MoneyManager Stock Screener", version="0.1.0")
 app.add_exception_handler(BusinessError, business_error_handler)
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)

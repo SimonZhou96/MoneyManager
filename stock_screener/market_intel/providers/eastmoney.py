@@ -16,7 +16,9 @@ def eastmoney_secu_code(market: str, code: str) -> str:
     market_text = (market or "").upper()
     code_text = (code or "").strip().upper()
     if market_text == "A":
-        suffix = ".SH" if code_text.startswith(("600", "601", "603", "605", "688", "689")) else ".SZ"
+        # A 股交易所: 5/6/9 开头→上交所(.SH), 0/1/2/3 开头→深交所(.SZ)
+        is_sse = code_text.startswith(("5", "6", "9"))
+        suffix = ".SH" if is_sse else ".SZ"
         return f"{code_text}{suffix}"
     if market_text == "HK":
         return f"{str(int(code_text.removesuffix('.HK'))).zfill(4)}.HK"

@@ -125,7 +125,9 @@ class BatchCompanyFetcher(BatchFetcher):
             # 去掉可能已带的前缀 "SZ." / "SH."，避免双后缀
             c = code[3:] if code.upper().startswith(("SZ.", "SH.")) else code
             c = str(c).zfill(6)
-            return f"{c}.{'SS' if c.startswith('6') else 'SZ'}"
+            # A 股交易所分配: 5/6/9 开头→上交所(.SS), 0/1/2/3 开头→深交所(.SZ)
+            is_sse = c.startswith(("5", "6", "9"))
+            return f"{c}.{'SS' if is_sse else 'SZ'}"
         return code
 
     def _fetch_one(self, yf, yf_code: str, code: str) -> CompanySnapshot:
@@ -378,10 +380,14 @@ class EnterprisePotentialService:
         quote_ctx = context.get_cache("futu_quote_ctx")
         verbose = getattr(context, "verbose", False)
         from yf_ratelimit import (
-            yf_sleep, retry_on_rate_limit, per_ticker_sleep, _is_rate_limit_error
+            yf_sleep, retry_on_rate_limit, per_ticker_sleep, _is_rate_limit_error,
+            _is_fatal_http_error, _is_crumb_error, reset_yf_session,
         )
         # 本地别名，避免循环引用
         _is_rate_limit_exc = _is_rate_limit_error
+        _is_fatal_exc = _is_fatal_http_error
+        _is_crumb_exc = _is_crumb_error
+        _reset_yf = reset_yf_session
 
         _CHUNK = 25  # 从 50 降到 25，降低单次请求压力
 
@@ -403,6 +409,7 @@ class EnterprisePotentialService:
             rescued = 0
 
             try:
+                quota_exhausted = False
                 for chunk_idx in range(0, total, _CHUNK):
                     chunk = all_missing[chunk_idx:chunk_idx + _CHUNK]
                     t0 = time.monotonic()
@@ -411,7 +418,9 @@ class EnterprisePotentialService:
                     import yfinance as yf
                     ticker_str = " ".join(ticker_map.values())
 
-                    # yf.Tickers() 重试 3 次应对 429
+                    # yf.Tickers() 重试应对 429；401 crumb 过期则重置 session 后重试
+                    tickers = None
+                    crumb_reset_used = False
                     for retry in range(3):
                         try:
                             tickers = yf.Tickers(ticker_str)
@@ -419,9 +428,44 @@ class EnterprisePotentialService:
                         except Exception as e_:
                             if retry < 2 and _is_rate_limit_exc(e_):
                                 yf_sleep(10.0, 5.0)
-                                import yfinance as yf
+                            elif _is_fatal_exc(e_):
+                                # crumb 过期 → 重置 YfData 单例获取全新 session
+                                if _is_crumb_exc(e_) and not crumb_reset_used:
+                                    _reset_yf()
+                                    crumb_reset_used = True
+                                    yf_sleep(3.0, 1.0)
+                                    print(f"  🔄 [{market}] Yahoo crumb 过期，已重置 session 重试")
+                                    continue
+                                # 真正的配额耗尽（IP 封禁 / "User unable to access"）
+                                quota_exhausted = True
+                                remaining = total - min(chunk_idx + _CHUNK, total)
+                                print(f"  ⚠ [{market}] Yahoo 会话配额耗尽 ({e_})，"
+                                      f"剩余 ~{remaining} 只将降级到 Futu 兜底")
+                                break
                             else:
                                 raise
+
+                    if quota_exhausted:
+                        # 为未处理 chunk 注入空 snapshot 标记，让 Futu 兜底能接住
+                        processed = set(all_missing[:chunk_idx])
+                        for code in all_missing:
+                            if code in processed:
+                                continue
+                            now = datetime.now(timezone.utc).isoformat()
+                            for mod in merged_mods:
+                                if code in merged_missing[mod]:
+                                    ck = f"{_CACHE_PREFIX}:{mod}"
+                                    if mod == "company":
+                                        snap = CompanySnapshot(market=market, code=code,
+                                            provider_status={"yfinance": "error: Yahoo quota exhausted"})
+                                    elif mod == "valuation":
+                                        snap = ValuationSnapshot(market=market, code=code,
+                                            provider_status={"yfinance": "error: Yahoo quota exhausted"})
+                                    else:
+                                        snap = IndustrySnapshot(market=market, code=code,
+                                            provider_status={"yfinance": "error: Yahoo quota exhausted"})
+                                    context.set_cache(f"{ck}:{code}", snap)
+                        break
 
                     chunk_ok = 0
                     for code, yf_code in ticker_map.items():
@@ -504,13 +548,22 @@ class EnterprisePotentialService:
 
                 _gaps = total - ok_count
                 mod_ms = int((time.monotonic() - started) * 1000)
-                parts = [f"{ok_count} ok"]
-                if _gaps > 0:
-                    parts.append(f"{_gaps} gaps")
-                if rescued > 0:
-                    parts.append(f"{rescued} futu兜底")
-                print(f"  ✅ [{market}] company/val/ind: ({', '.join(parts)}) {mod_ms}ms")
-                report.details["merged"] = f"company+valuation+industry: {ok_count} ok"
+                if quota_exhausted:
+                    note = f"{_gaps} 降级(Futu兜底)"
+                    print(f"  ⚠ [{market}] company/val/ind: ({ok_count} ok, {note}) "
+                          f"Yahoo 配额耗尽 {mod_ms}ms")
+                    report.details["merged"] = (
+                        f"company+valuation+industry: {ok_count} ok, "
+                        f"{_gaps} delegated to Futu (Yahoo quota exhausted)"
+                    )
+                else:
+                    parts = [f"{ok_count} ok"]
+                    if _gaps > 0:
+                        parts.append(f"{_gaps} gaps")
+                    if rescued > 0:
+                        parts.append(f"{rescued} futu兜底")
+                    print(f"  ✅ [{market}] company/val/ind: ({', '.join(parts)}) {mod_ms}ms")
+                    report.details["merged"] = f"company+valuation+industry: {ok_count} ok"
 
             except Exception as e:
                 print(f"  ❌ [{market}] company/val/ind: {e}")

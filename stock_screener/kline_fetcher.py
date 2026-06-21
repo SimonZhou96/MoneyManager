@@ -152,7 +152,7 @@ class YFinanceKlineFetcher(KlineFetcherBase):
             if code.upper().startswith("SZ."):
                 return f"{code[3:]}.SZ"
             if code.isdigit() and len(code) == 6:
-                return f"{code}.SS" if code.startswith("6") else f"{code}.SZ"
+                return f"{code}.SS" if code.startswith(("5", "6", "9")) else f"{code}.SZ"
             return code
         # US
         if code.upper().startswith("US."):
@@ -169,11 +169,13 @@ class YFinanceKlineFetcher(KlineFetcherBase):
         try:
             yf_code = self._to_yf_code(stock_code, market)
             period = get_yf_period(timeframe)
-            
+
             # 抑制 yfinance 的警告信息
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                from yf_ratelimit import retry_on_rate_limit
+                from yf_ratelimit import (
+                    retry_on_rate_limit, _is_crumb_error, reset_yf_session,
+                )
 
                 @retry_on_rate_limit
                 def _download():
@@ -186,8 +188,16 @@ class YFinanceKlineFetcher(KlineFetcherBase):
                     )
 
                 self._suppress_yfinance_warnings()
-                data = _download()
-            
+                try:
+                    data = _download()
+                except Exception as dl_exc:
+                    # crumb 过期 → 重置 YfData 单例后重试一次
+                    if _is_crumb_error(dl_exc):
+                        reset_yf_session()
+                        data = _download()
+                    else:
+                        raise
+
             if data is None or data.empty:
                 return None
 
@@ -444,7 +454,7 @@ class FutuKlineFetcher(KlineFetcherBase):
             if code.endswith(".SZ"):
                 return f"SZ.{code[:-3]}"
             if code.isdigit() and len(code) == 6:
-                return f"SH.{code}" if code.startswith("6") else f"SZ.{code}"
+                return f"SH.{code}" if code.startswith(("5", "6", "9")) else f"SZ.{code}"
         return code
 
     def _get_kl_type(self, timeframe: str):
