@@ -71,7 +71,9 @@ class NodeResolver:
                 norm.append(normalize_stock_code(market, c))
             except ValueError:
                 continue
-        rows = self.db.get_stocks_by_codes(market, norm, include_fundamentals=True) if norm else []
+        rows: List[dict] = []
+        if hasattr(self.db, "get_stocks_by_codes"):
+            rows = self.db.get_stocks_by_codes(market, norm, include_fundamentals=True) if norm else []
         by_code = {r["code"]: r for r in rows}
         result = {}
         for c in norm:

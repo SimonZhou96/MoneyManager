@@ -33,6 +33,19 @@ class TopologyService:
         except Exception:
             return None
 
+    def _provider_meta(self) -> tuple[str, str]:
+        """Return (provider_name, model_name) from the injected LLM provider.
+
+        Guards for engine/llm being None and for providers that lack a
+        ``model_name`` property (e.g. FakeLLMProvider in tests).
+        """
+        llm = getattr(self.engine, "llm", None) if self.engine else None
+        if llm is None:
+            return "none", ""
+        provider_name = getattr(llm, "name", "unknown") or "unknown"
+        model_name = getattr(llm, "model_name", "") or ""
+        return provider_name, model_name
+
     # -- 搜索 --
     def search(self, keyword: str, limit: int = 10) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
@@ -70,7 +83,8 @@ class TopologyService:
         if relations is not None:
             cached_map[code] = relations
             try:
-                self.cache.save_relations(code, market, relations, provider="deepseek", model="v4")
+                p_name, m_name = self._provider_meta()
+                self.cache.save_relations(code, market, relations, provider=p_name, model=m_name)
             except Exception:
                 pass
         nodes, edges = self._assemble(code, market, [code], cached_map, existing_set=set(), center_info=center_info)
@@ -110,7 +124,8 @@ class TopologyService:
                 cached_map[src] = rels
                 # 写缓存
                 try:
-                    self.cache.save_relations(src, market, rels, provider="deepseek", model="v4")
+                    p_name, m_name = self._provider_meta()
+                    self.cache.save_relations(src, market, rels, provider=p_name, model=m_name)
                 except Exception:
                     pass
 
