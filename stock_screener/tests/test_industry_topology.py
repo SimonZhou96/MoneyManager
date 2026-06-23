@@ -97,5 +97,79 @@ class TestFormatMarketCap(unittest.TestCase):
         self.assertEqual(format_market_cap(None), "--")
 
 
+import networkx as nx
+from datetime import datetime, timedelta
+from industry_topology.cache import GraphCache
+
+
+def _make_relation(peer_code, direction=Direction.UPSTREAM, relation=RelationType.SUPPLIER,
+                   expires=None, is_empty=False):
+    return CachedRelation(
+        source_code="US.NVDA", source_market="US",
+        peer_code=peer_code, peer_market="A", peer_name=f"公司{peer_code}",
+        relation=relation, direction=direction, evidence="测试",
+        expires_at=expires, is_empty=is_empty,
+    )
+
+
+def _make_db_mock():
+    """Create a real MarketDatabase instance (bypass __init__) with mocked conn."""
+    db = MarketDatabase.__new__(MarketDatabase)
+    db.conn = MagicMock()
+    cursor = MagicMock()
+    db.conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
+    db.conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+    return db, cursor
+
+
+class TestGraphCache(unittest.TestCase):
+    def test_get_relations_hit(self):
+        db, cursor = _make_db_mock()
+        cursor.fetchall.return_value = [
+            ("US.NVDA", "US", "300308", "A", "中际旭创", "supplier", "upstream", "提供光模块", 0,
+             datetime.now(), datetime.now(), datetime.now() + timedelta(days=7), "deepseek", "v4"),
+        ]
+        gc = GraphCache(db)
+        rels = gc.get_relations("US.NVDA", "US")
+        self.assertIsNotNone(rels)
+        self.assertEqual(len(rels), 1)
+        self.assertEqual(rels[0].peer_code, "300308")
+
+    def test_get_relations_expired_returns_none(self):
+        db, cursor = _make_db_mock()
+        cursor.fetchall.return_value = []  # 过期被 WHERE 过滤
+        gc = GraphCache(db)
+        self.assertIsNone(gc.get_relations("US.NVDA", "US"))
+
+    def test_save_relations_replaces_group(self):
+        db, cursor = _make_db_mock()
+        gc = GraphCache(db)
+        rels = [_make_relation("300308"), _make_relation("300394", direction=Direction.DOWNSTREAM, relation=RelationType.CUSTOMER)]
+        gc.save_relations("US.NVDA", "US", rels, provider="deepseek", model="v4", ttl_days=7)
+        # 应先 DELETE WHERE source_code 再 INSERT
+        executed = [c.args[0] for c in cursor.execute.call_args_list if c.args]
+        self.assertTrue(any("DELETE FROM industry_relations" in s and "source_code=%s" in s for s in executed))
+        self.assertTrue(any("INSERT INTO industry_relations" in s for s in executed))
+
+    def test_reachable_within_depth(self):
+        db, _ = _make_db_mock()
+        gc = GraphCache(db)
+        g = nx.DiGraph()
+        g.add_edge("A", "B"); g.add_edge("B", "C"); g.add_edge("C", "D")
+        self.assertEqual(set(gc.reachable_within(g, "A", 1)), {"A", "B"})
+        self.assertEqual(set(gc.reachable_within(g, "A", 3)), {"A", "B", "C", "D"})
+
+    def test_build_graph_carries_attrs(self):
+        db, _ = _make_db_mock()
+        gc = GraphCache(db)
+        cached = {
+            "US.NVDA": [_make_relation("300308"), _make_relation("300394", Direction.DOWNSTREAM, RelationType.CUSTOMER)],
+            "300308": [_make_relation("002156", direction=Direction.UPSTREAM, relation=RelationType.FOUNDRY_PACKAGING)],
+        }
+        g = gc.build_graph(cached)
+        self.assertTrue(g.has_edge("US.NVDA", "300308"))
+        self.assertEqual(g.nodes["US.NVDA"]["source_code"], "US.NVDA")
+
+
 if __name__ == "__main__":
     unittest.main()
