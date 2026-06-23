@@ -212,6 +212,14 @@ class TestRelationEngine(unittest.TestCase):
         rels = eng.infer("US.NVDA", "英伟达", "US", "半导体")
         self.assertEqual(rels[0].relation, RelationType.OTHER)
 
+    def test_invalid_direction_falls_back_to_peer(self):
+        payload = {"items": [
+            {"code": "300308", "name": "中际旭创", "market": "A", "direction": "sideways", "relation": "supplier", "evidence": "提供光模块"},
+        ]}
+        eng = RelationEngine(FakeResolver(), FakeLLMProvider(payload))
+        rels = eng.infer("US.NVDA", "英伟达", "US", "半导体")
+        self.assertEqual(rels[0].direction, Direction.PEER)
+
     def test_dedup_same_source_peer_relation(self):
         payload = {"items": [
             {"code": "300308", "name": "中际旭创", "market": "A", "direction": "upstream", "relation": "supplier", "evidence": "a"},

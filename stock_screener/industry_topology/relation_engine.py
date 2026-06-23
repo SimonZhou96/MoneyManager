@@ -10,12 +10,6 @@ from .models import CachedRelation, Direction, RelationType
 _VALID_RELATIONS = {r.value for r in RelationType if r != RelationType.OTHER}
 _VALID_DIRECTIONS = {d.value for d in Direction}
 
-_RELATION_CN = {
-    "supplier": "供应商", "raw_material": "原材料", "equipment": "设备", "foundry_packaging": "代工封测",
-    "customer": "客户", "odm": "代工", "distributor": "分销", "application": "应用场景",
-    "competitor": "竞品", "substitute": "替代品",
-}
-
 
 class RelationEngineError(Exception):
     pass
