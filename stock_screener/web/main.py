@@ -48,6 +48,7 @@ from .options import router as options_router
 from .quant import router as quant_router
 from .sectors import router as sectors_router
 from .stock_terminal import router as stock_terminal_router
+from .topology import router as topology_router
 from .rate_limit import (
     ARTIFACT_DOWNLOAD_RULE,
     CREATE_TASK_RULE,
@@ -94,6 +95,7 @@ app.include_router(quant_router)
 app.include_router(market_intel_router)
 app.include_router(sectors_router)
 app.include_router(stock_terminal_router)
+app.include_router(topology_router)
 
 SCREENING_RESULT_SCORE_FIELDS = ("technical_score", "macro_score", "final_score", "score_details")
 
@@ -498,6 +500,7 @@ def startup() -> None:
     db = MarketDatabase(mysql_config_from_env())
     try:
         db.init_web_schema()
+        db.init_industry_topology_schema()
         db.init_market_intel_schema()
         db.init_stock_terminal_schema()
         # 初始化核心 schema（stocks/kline 表 + 规则元数据/规则链表）
