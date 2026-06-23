@@ -17,14 +17,15 @@ export function StockSearchInput({ onSelect, selected }: Props) {
   useEffect(() => {
     if (!q.trim()) { setItems([]); return }
     setLoading(true)
+    let cancelled = false
     const t = setTimeout(async () => {
       try {
         const res = await topologyApi.search(q.trim())
-        setItems(res.data)
-        setOpen(true)
-      } catch { setItems([]) } finally { setLoading(false) }
+        if (!cancelled) { setItems(res.data); setOpen(true) }
+      } catch { if (!cancelled) setItems([]) }
+      finally { if (!cancelled) setLoading(false) }
     }, 300)
-    return () => clearTimeout(t)
+    return () => { cancelled = true; clearTimeout(t) }
   }, [q])
 
   useEffect(() => {
