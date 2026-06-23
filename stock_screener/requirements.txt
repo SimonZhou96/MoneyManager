@@ -12,3 +12,4 @@ fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 redis>=5.0.0
 rq>=1.15.0
+networkx>=3.0
