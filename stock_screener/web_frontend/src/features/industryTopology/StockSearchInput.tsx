@@ -5,9 +5,10 @@ import type { SearchResult } from './types'
 interface Props {
   onSelect: (s: SearchResult) => void
   selected?: SearchResult | null
+  onClearSelected?: () => void
 }
 
-export function StockSearchInput({ onSelect, selected }: Props) {
+export function StockSearchInput({ onSelect, selected, onClearSelected }: Props) {
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState<SearchResult[]>([])
@@ -42,7 +43,7 @@ export function StockSearchInput({ onSelect, selected }: Props) {
         className="topo-search-input"
         placeholder="输入股票代码或名称"
         value={selected ? `${selected.name} (${selected.code})` : q}
-        onChange={(e) => { setQ(e.target.value); if (selected) { /* 允许重新搜索 */ } }}
+        onChange={(e) => { setQ(e.target.value); if (selected && onClearSelected) { onClearSelected() } }}
         onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false) }}
       />
       {open && (

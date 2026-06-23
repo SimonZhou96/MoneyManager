@@ -8,6 +8,7 @@ import { MarketAnalysisPage } from './features/marketAnalysis/MarketAnalysisPage
 import { StockTerminalPanel, type StockTerminalRow } from './features/stockTerminal/StockTerminalPanel'
 import { KlineChart } from './features/marketAnalysis/components/KlineChart'
 import { RuleChainEditor } from './features/ruleEditor/RuleChainEditor'
+import { IndustryTopologyPanel } from './features/industryTopology/IndustryTopologyPanel'
 import type { ExpressionNode } from './features/ruleEditor/types'
 import {
   TradingBiasCard, ScoreBreakdownCards, FactorSummary,
@@ -448,6 +449,7 @@ function App() {
           <button className={page === 'quant' ? 'active' : ''} onClick={() => setPage('quant')}>量化实验室</button>
           {/* <button className={page === 'marketAnalysis' ? 'active' : ''} onClick={() => setPage('marketAnalysis')}>大盘分析</button> */}
           <button className={page === 'rules' ? 'active' : ''} onClick={() => setPage('rules')}>规则链</button>
+          <button className={page === 'topology' ? 'active' : ''} onClick={() => setPage('topology')}>产业拓扑</button>
         </nav>
         <div className="sidebar-footer">
           <span>MoneyManager</span>
@@ -463,6 +465,7 @@ function App() {
         {/* 暂时隐藏，等大盘分析完善后再开放 */}
         {/* {page === 'marketAnalysis' && <MarketAnalysisPage />} */}
         {page === 'rules' && <Rules />}
+        {page === 'topology' && <IndustryTopologyPanel />}
         {page === 'task' && <TaskDetail taskId={selectedTaskId} />}
       </main>
     </div>
