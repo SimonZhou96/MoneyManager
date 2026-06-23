@@ -171,5 +171,70 @@ class TestGraphCache(unittest.TestCase):
         self.assertEqual(g.nodes["US.NVDA"]["source_code"], "US.NVDA")
 
 
+from industry_topology.relation_engine import RelationEngine, RelationEngineError
+
+
+class FakeLLMProvider:
+    name = "fake"
+    is_available = True
+    def __init__(self, payload): self.payload = payload
+    def complete_json(self, *, system_prompt, user_prompt, json_schema):
+        return self.payload
+
+
+class FakeResolver:
+    def resolve_many(self, codes, market):
+        return {c: {"code": c, "name": f"公司{c}", "market": market, "sector": "板块", "market_cap": 1e10, "pct_chg": 1.0} for c in codes}
+
+
+class TestRelationEngine(unittest.TestCase):
+    def test_parse_valid_json(self):
+        payload = {"items": [
+            {"code": "300308", "name": "中际旭创", "market": "A", "direction": "upstream", "relation": "supplier", "evidence": "提供光模块"},
+            {"code": "601138", "name": "工业富联", "market": "A", "direction": "downstream", "relation": "odm", "evidence": "AI服务器代工"},
+        ]}
+        eng = RelationEngine(FakeResolver(), FakeLLMProvider(payload))
+        rels = eng.infer("US.NVDA", "英伟达", "US", "半导体")
+        self.assertEqual(len(rels), 2)
+        self.assertEqual(rels[0].peer_code, "300308")
+        self.assertEqual(rels[0].direction.value, "upstream")
+
+    def test_invalid_json_raises(self):
+        eng = RelationEngine(FakeResolver(), FakeLLMProvider({"not_items": []}))
+        with self.assertRaises(RelationEngineError):
+            eng.infer("US.NVDA", "英伟达", "US", "半导体")
+
+    def test_out_of_vocab_relation_falls_back_to_other(self):
+        payload = {"items": [
+            {"code": "300308", "name": "中际旭创", "market": "A", "direction": "upstream", "relation": "mystery_rel", "evidence": "未知"},
+        ]}
+        eng = RelationEngine(FakeResolver(), FakeLLMProvider(payload))
+        rels = eng.infer("US.NVDA", "英伟达", "US", "半导体")
+        self.assertEqual(rels[0].relation, RelationType.OTHER)
+
+    def test_dedup_same_source_peer_relation(self):
+        payload = {"items": [
+            {"code": "300308", "name": "中际旭创", "market": "A", "direction": "upstream", "relation": "supplier", "evidence": "a"},
+            {"code": "300308", "name": "中际旭创", "market": "A", "direction": "upstream", "relation": "supplier", "evidence": "b"},
+        ]}
+        eng = RelationEngine(FakeResolver(), FakeLLMProvider(payload))
+        rels = eng.infer("US.NVDA", "英伟达", "US", "半导体")
+        self.assertEqual(len(rels), 1)
+
+    def test_conflicting_direction_keeps_both(self):
+        payload = {"items": [
+            {"code": "300308", "name": "中际旭创", "market": "A", "direction": "upstream", "relation": "supplier", "evidence": "a"},
+            {"code": "300308", "name": "中际旭创", "market": "A", "direction": "downstream", "relation": "customer", "evidence": "b"},
+        ]}
+        eng = RelationEngine(FakeResolver(), FakeLLMProvider(payload))
+        rels = eng.infer("US.NVDA", "英伟达", "US", "半导体")
+        self.assertEqual(len(rels), 2)
+
+    def test_empty_result_returns_empty_list(self):
+        eng = RelationEngine(FakeResolver(), FakeLLMProvider({"items": []}))
+        rels = eng.infer("US.NVDA", "英伟达", "US", "半导体")
+        self.assertEqual(rels, [])
+
+
 if __name__ == "__main__":
     unittest.main()
