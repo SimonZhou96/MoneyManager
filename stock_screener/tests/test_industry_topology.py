@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from industry_topology.models import (
     RelationType, Direction, TopologyNode, TopologyEdge, CachedRelation,
 )
+from industry_topology.resolver import compute_size_level, format_market_cap, NodeResolver
 
 
 class TestModels(unittest.TestCase):
@@ -67,6 +68,33 @@ class TestSchema(unittest.TestCase):
         self.assertTrue(any("expires_at" in s for s in executed))
         self.assertTrue(any("is_empty" in s for s in executed))
         self.assertTrue(any("UNIQUE KEY" in s and "source_code" in s for s in executed))
+
+
+class TestSizeLevel(unittest.TestCase):
+    # 市值单位：元
+    def test_level1_under_50yi(self):
+        self.assertEqual(compute_size_level(30 * 1e8), 1)   # 30亿
+    def test_level2_50_200yi(self):
+        self.assertEqual(compute_size_level(100 * 1e8), 2)  # 100亿
+    def test_level3_200_1000yi(self):
+        self.assertEqual(compute_size_level(500 * 1e8), 3)  # 500亿
+    def test_level4_1000_3000yi(self):
+        self.assertEqual(compute_size_level(2000 * 1e8), 4) # 2000亿
+    def test_level5_3000yi_1wan(self):
+        self.assertEqual(compute_size_level(5000 * 1e8), 5) # 5000亿
+    def test_level6_over_1wan(self):
+        self.assertEqual(compute_size_level(2 * 1e12), 6)   # 2万亿
+    def test_none_returns_min(self):
+        self.assertEqual(compute_size_level(None), 1)
+
+
+class TestFormatMarketCap(unittest.TestCase):
+    def test_wan_yi(self):
+        self.assertEqual(format_market_cap(2 * 1e12), "2.0万亿")
+    def test_yi(self):
+        self.assertEqual(format_market_cap(850 * 1e8), "850亿")
+    def test_none(self):
+        self.assertEqual(format_market_cap(None), "--")
 
 
 if __name__ == "__main__":
