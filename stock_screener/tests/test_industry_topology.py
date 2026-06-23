@@ -47,5 +47,27 @@ class TestModels(unittest.TestCase):
         self.assertEqual(r.peer_name, "中际旭创")
 
 
+from unittest.mock import MagicMock
+from db import MarketDatabase
+
+
+class TestSchema(unittest.TestCase):
+    def test_init_industry_topology_schema_exists(self):
+        self.assertTrue(hasattr(MarketDatabase, "init_industry_topology_schema"))
+
+    def test_init_industry_topology_schema_executes_create(self):
+        db = MarketDatabase.__new__(MarketDatabase)
+        db.conn = MagicMock()
+        cursor = MagicMock()
+        db.conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
+        db.conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+        db.init_industry_topology_schema()
+        executed = [c.args[0] for c in cursor.execute.call_args_list if c.args]
+        self.assertTrue(any("CREATE TABLE IF NOT EXISTS industry_relations" in s for s in executed))
+        self.assertTrue(any("expires_at" in s for s in executed))
+        self.assertTrue(any("is_empty" in s for s in executed))
+        self.assertTrue(any("UNIQUE KEY" in s and "source_code" in s for s in executed))
+
+
 if __name__ == "__main__":
     unittest.main()
