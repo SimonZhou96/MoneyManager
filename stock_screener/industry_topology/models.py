@@ -21,13 +21,13 @@ class RelationType(str, Enum):
     RAW_MATERIAL = "raw_material"
     EQUIPMENT = "equipment"
     FOUNDRY_PACKAGING = "foundry_packaging"
-    TECHNOLOGY = "technology"
+    COMPONENT = "component"      # 零部件，上游类，提供具体零部件/模组
     # 下游类
     CUSTOMER = "customer"
     ODM = "odm"
     DISTRIBUTOR = "distributor"
     APPLICATION = "application"
-    END_USER = "end_user"
+    SERVICE = "service"          # 服务，上游类，提供研发/运维/外包服务
     # 同业类
     COMPETITOR = "competitor"
     SUBSTITUTE = "substitute"
