@@ -244,5 +244,71 @@ class TestRelationEngine(unittest.TestCase):
         self.assertEqual(rels, [])
 
 
+from industry_topology.service import TopologyService
+
+
+class FakeDB:
+    def __init__(self): self.conn = MagicMock()
+    def search_stocks_by_name(self, market, keyword, limit=10):
+        return [{"code": "US.NVDA", "name": "英伟达", "sector": "半导体", "industry": "半导体"}]
+    def get_stocks_by_codes(self, market, codes, include_fundamentals=True):
+        return [{"code": c, "name": f"公司{c}", "sector": "板块", "industry": "板块", "market_cap": 1e10} for c in codes]
+
+
+class FakeResolver2:
+    def resolve(self, code, market):
+        return {"code": code, "name": f"公司{code}", "market": market, "sector": "板块", "market_cap": 1e10, "pct_chg": 1.5}
+    def resolve_many(self, codes, market):
+        return {c: {"code": c, "name": f"公司{c}", "market": market, "sector": "板块", "market_cap": 1e10, "pct_chg": 1.0} for c in codes}
+
+
+class FakeCache:
+    def __init__(self, hit_map): self.hit_map = hit_map; self.saved = []
+    def get_relations(self, code, market):
+        return self.hit_map.get(code)
+    def save_relations(self, code, market, rels, provider, model, ttl_days=7):
+        self.saved.append((code, rels))
+    def build_graph(self, cached_map): import networkx as nx; g = nx.DiGraph(); [g.add_edge(s, r.peer_code) for s, rels in cached_map.items() for r in rels if not r.is_empty]; return g
+    def reachable_within(self, g, s, d): return list({s} | {r.peer_code for r in self.hit_map.get(s, [])})
+
+
+class TestTopologyService(unittest.TestCase):
+    def test_search(self):
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        res = svc.search("英伟达")
+        self.assertEqual(res[0]["code"], "US.NVDA")
+
+    def test_build_graph_first_time_triggers_llm(self):
+        cache = FakeCache({})
+        eng = RelationEngine(FakeResolver2(), FakeLLMProvider({"items": [
+            {"code": "300308", "name": "中际旭创", "market": "A", "direction": "upstream", "relation": "supplier", "evidence": "光模块"}
+        ]}))
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = cache; svc.engine = eng; svc.resolver = FakeResolver2()
+        result = svc.build_graph("US.NVDA", "US", depth=1)
+        self.assertEqual(result["stats"]["llm_calls"], 1)
+        self.assertGreater(len(result["nodes"]), 1)
+
+    def test_build_graph_cached_zero_llm(self):
+        cache = FakeCache({"US.NVDA": [_make_relation("300308")]})
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = cache; svc.resolver = FakeResolver2()
+        # engine 不该被调用：给一个会抛的 fake
+        svc.engine = RelationEngine(FakeResolver2(), type("Boom",(),{"complete_json": lambda self,**k: (_ for _ in ()).throw(Exception("不该调"))})())
+        result = svc.build_graph("US.NVDA", "US", depth=1)
+        self.assertEqual(result["stats"]["llm_calls"], 0)
+
+    def test_llm_failure_isolated(self):
+        cache = FakeCache({})
+        boom_engine = RelationEngine(FakeResolver2(), type("Boom",(),{"complete_json": lambda self,**k: (_ for _ in ()).throw(Exception("LLM挂"))})())
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = cache; svc.engine = boom_engine; svc.resolver = FakeResolver2()
+        result = svc.build_graph("US.NVDA", "US", depth=1)
+        # 中心节点仍返回，edges 空
+        self.assertEqual(result["stats"].get("error"), "llm_failed")
+        self.assertEqual(len(result["nodes"]), 1)
+        self.assertEqual(result["nodes"][0]["code"], "US.NVDA")
+
+
 if __name__ == "__main__":
     unittest.main()
