@@ -4680,25 +4680,28 @@ section { background: transparent; }
   .metrics-grid { grid-template-columns: repeat(4, 1fr); }
 }
 
-/* ===== Industry Topology ===== */
+/* ===== Industry Topology (dark theme) ===== */
 .industry-topology { display: flex; flex-direction: column; height: 100%; }
-.topo-toolbar { display: flex; gap: 12px; align-items: center; padding: 12px; border-bottom: 1px solid #e5e7eb; }
+.topo-toolbar { display: flex; gap: 12px; align-items: center; padding: 12px; border-bottom: 1px solid #2a3040; background: #141920; }
 .topo-search { position: relative; }
-.topo-search-input { width: 240px; padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 6px; }
-.topo-search-dropdown { position: absolute; top: 100%; left: 0; right: 0; background: #fff; border: 1px solid #d1d5db; border-radius: 6px; max-height: 280px; overflow-y: auto; z-index: 50; margin: 4px 0 0; list-style: none; padding: 0; }
-.topo-search-dropdown li { padding: 8px 12px; cursor: pointer; display: flex; gap: 8px; font-size: 13px; }
-.topo-search-dropdown li:hover { background: #f3f4f6; }
-.topo-search-code { color: #6b7280; }
-.topo-search-sector { color: #9ca3af; margin-left: auto; }
-.topo-node { border: 2px solid; border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; background: #fff; }
+.topo-search-input { width: 240px; padding: 6px 10px; border: 1px solid #2a3040; border-radius: 6px; background: #1a1f2a; color: #e8e0d0; font-size: 13px; }
+.topo-search-input::placeholder { color: #8a8070; }
+.topo-search-input:focus { border-color: #c9a84c; outline: none; box-shadow: 0 0 0 2px rgba(201,168,76,0.15); }
+.topo-search-dropdown { position: absolute; top: 100%; left: 0; right: 0; background: #141920; border: 1px solid #2a3040; border-radius: 6px; max-height: 280px; overflow-y: auto; z-index: 50; margin: 4px 0 0; list-style: none; padding: 0; box-shadow: 0 12px 40px rgba(0,0,0,0.6); }
+.topo-search-dropdown li { padding: 8px 12px; cursor: pointer; display: flex; gap: 8px; font-size: 13px; color: #e8e0d0; }
+.topo-search-dropdown li:hover { background: rgba(201,168,76,0.08); }
+.topo-search-code { color: #8a8070; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.topo-search-sector { color: #8a8070; margin-left: auto; }
+.topo-node { border: 2px solid; border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; background: #141920; }
 .topo-node-top { display: flex; justify-content: space-between; }
-.topo-node-sector { color: #6b7280; font-size: 11px; }
+.topo-node-sector { color: #8a8070; font-size: 11px; }
 .topo-node-pct { font-weight: 600; }
-.topo-node-name { font-weight: 700; font-size: 13px; }
-.topo-node-bottom { display: flex; justify-content: space-between; color: #4b5563; }
-.topo-node-expand { margin-top: 4px; align-self: flex-end; font-size: 11px; padding: 2px 6px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; cursor: pointer; }
-.topo-node-expand:disabled { color: #9ca3af; cursor: default; }
+.topo-node-name { font-weight: 700; font-size: 13px; color: #e8e0d0; }
+.topo-node-bottom { display: flex; justify-content: space-between; color: #c0b8a0; }
+.topo-node-expand { margin-top: 4px; align-self: flex-end; font-size: 11px; padding: 2px 6px; border: 1px solid #2a3040; border-radius: 4px; background: #1a1f2a; color: #c0b8a0; cursor: pointer; }
+.topo-node-expand:hover:not(:disabled) { border-color: #c9a84c; color: #c9a84c; }
+.topo-node-expand:disabled { color: #605850; cursor: default; }
 .topo-node-stale { position: absolute; top: -8px; right: -4px; background: #f59e0b; color: #fff; font-size: 10px; padding: 1px 4px; border-radius: 4px; }
-.topo-empty { padding: 60px; text-align: center; color: #9ca3af; }
-.topo-stats { margin-left: auto; color: #6b7280; font-size: 12px; }
+.topo-empty { padding: 60px; text-align: center; color: #8a8070; }
+.topo-stats { margin-left: auto; color: #8a8070; font-size: 12px; }
 .topo-canvas { flex: 1; }
