@@ -56,7 +56,9 @@ class TopologyService:
     # -- 按需展开 --
     def expand(self, code: str, market: str, depth: int = 2, existing_codes: Optional[List[str]] = None) -> Dict[str, Any]:
         market = normalize_market(market)
-        return self._traverse(code, market, depth, existing_codes=existing_codes or [], is_center=False)
+        result = self._traverse(code, market, depth, existing_codes=existing_codes or [], is_center=False)
+        result.pop("center", None)
+        return result
 
     # -- 刷新 --
     def refresh(self, code: str, market: str) -> Dict[str, Any]:
@@ -71,7 +73,7 @@ class TopologyService:
                 self.cache.save_relations(code, market, relations, provider="deepseek", model="v4")
             except Exception:
                 pass
-        nodes, edges = self._assemble(code, market, [code], cached_map, existing_set=set())
+        nodes, edges = self._assemble(code, market, [code], cached_map, existing_set=set(), center_info=center_info)
         return {"nodes": nodes, "edges": edges, "stats": {"llm_calls": self._llm_calls}}
 
     # -- 内部遍历 --
@@ -123,7 +125,7 @@ class TopologyService:
                 reachable.add(src)
                 reachable.add(r.peer_code)
 
-        nodes, edges = self._assemble(code, market, list(reachable), cached_map, existing_set, is_center=is_center)
+        nodes, edges = self._assemble(code, market, list(reachable), cached_map, existing_set, is_center=is_center, center_info=center_info)
         stats = {"llm_calls": self._llm_calls, "cached_nodes": len(cached_map), "stale_nodes": len(stale_sources), "depth": depth}
         if not cached_map and self._llm_calls == 0:
             stats["error"] = "llm_failed"
@@ -142,9 +144,10 @@ class TopologyService:
         except Exception:
             return None
 
-    def _assemble(self, center_code, market, codes, cached_map, existing_set, is_center=False):
+    def _assemble(self, center_code, market, codes, cached_map, existing_set, is_center=False, center_info=None):
         infos = self.resolver.resolve_many([c for c in codes if c != center_code], market) if codes else {}
-        center_info = self.resolver.resolve(center_code, market)
+        if center_info is None:
+            center_info = self.resolver.resolve(center_code, market)
         infos[center_code] = center_info
         nodes = []
         for c in codes:
