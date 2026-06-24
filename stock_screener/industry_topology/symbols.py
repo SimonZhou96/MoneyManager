@@ -9,8 +9,9 @@ from typing import Any, Dict, Optional, Tuple
 SUPPORTED_QUOTE_MARKETS = {"A", "HK", "US", "JP", "TW", "KR"}
 _A_EXCHANGES = {"SH", "SZ", "BJ"}
 _US_EXCHANGES = {"US", "NYSE", "NASDAQ", "AMEX"}
-_JP_EXCHANGES = {"JP", "TY", "TSE"}
-_KR_EXCHANGES = {"KR", "KS", "KQ"}
+_JP_EXCHANGES = {"JP", "TY", "TSE", "JAPAN", "TOKYO"}
+_KR_EXCHANGES = {"KR", "KS", "KQ", "KOREA", "KRX"}
+_TW_EXCHANGES = {"TW", "TWO", "TAIWAN", "TAIEX"}
 
 
 def normalize_topology_market(market: str) -> str:
@@ -105,9 +106,9 @@ def _normalize_quote_symbol(market: str, code: str) -> Optional[Tuple[str, str, 
         ticker = bare.split(".", 1)[0]
         return "JP", f"JP.{ticker}", exchange if exchange in _JP_EXCHANGES else "JP", {"yfinance": f"{ticker}.T"}
 
-    if market == "TW" or exchange == "TW":
+    if market in _TW_EXCHANGES or exchange in _TW_EXCHANGES:
         ticker = bare.split(".", 1)[0]
-        return "TW", f"TW.{ticker}", "TW", {"yfinance": f"{ticker}.TW"}
+        return "TW", f"TW.{ticker}", exchange if exchange in _TW_EXCHANGES else "TW", {"yfinance": f"{ticker}.TW"}
 
     if market in _KR_EXCHANGES or exchange in _KR_EXCHANGES:
         ticker = bare.split(".", 1)[0].zfill(6) if bare.split(".", 1)[0].isdigit() else bare.split(".", 1)[0]

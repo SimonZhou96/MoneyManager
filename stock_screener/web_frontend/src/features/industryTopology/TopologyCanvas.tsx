@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from 'react'
 import { Circle } from '@antv/g'
 import { Graph } from '@antv/g6'
-import type { TopologyEdgeData, TopologyNodeData, TopologyZone } from './types'
+import type { TopologyEdgeData, TopologyNodeData, TopologyQuoteItem, TopologyZone } from './types'
 
 interface Props {
   rawNodes: TopologyNodeData[]
@@ -10,9 +10,12 @@ interface Props {
   selectedNodeId?: string | null
   selectedEdgeKey?: string | null
   focusNodeId?: string | null
-  showEdgeLabels?: boolean
   onSelectNode?: (node: TopologyNodeData | null) => void
   onSelectEdge?: (edge: TopologyEdgeData | null, edgeKey?: string) => void
+}
+
+export interface TopologyCanvasHandle {
+  applyQuotes: (items: TopologyQuoteItem[]) => void
 }
 
 type G6Graph = InstanceType<typeof Graph>
@@ -26,7 +29,6 @@ interface ViewState {
   selectedNodeId?: string | null
   selectedEdgeKey?: string | null
   focusNodeId?: string | null
-  showEdgeLabels?: boolean
   relatedNodeIds: Set<string>
   relatedEdgeKeys: Set<string>
 }
@@ -69,8 +71,19 @@ export function sizeLevelFromMarketCap(marketCap: number | null | undefined): 1 
   return 6
 }
 
+function nodeRadiusFromMarketCap(marketCap: number | null | undefined): number {
+  if (marketCap === null || marketCap === undefined || !Number.isFinite(marketCap) || marketCap <= 0) return 11
+  const MIN_CAP = 5e9
+  const MAX_CAP = 1e13
+  const R_MIN = 13
+  const R_MAX = 48
+  const cap = Math.min(MAX_CAP, Math.max(MIN_CAP, marketCap))
+  const t = (Math.log10(cap) - Math.log10(MIN_CAP)) / (Math.log10(MAX_CAP) - Math.log10(MIN_CAP))
+  return R_MIN + t * (R_MAX - R_MIN)
+}
+
 function nodeSize(node: TopologyNodeData) {
-  return node.is_center ? 42 : 10 + Math.max(1, node.size_level) * 4
+  return node.is_center ? 42 : nodeRadiusFromMarketCap(node.market_cap)
 }
 
 function shortText(text: string, maxLength: number) {
@@ -96,7 +109,10 @@ function hasMarketCap(node: TopologyNodeData) {
 
 function nodeStyle(node: TopologyNodeData, view: ViewState) {
   const missingMarketCap = !hasMarketCap(node)
-  const fill = missingMarketCap && !node.is_center ? '#64748b' : ZONE_COLOR[node.zone] || ZONE_COLOR.peer
+  const zoneFill = missingMarketCap && !node.is_center ? '#64748b' : ZONE_COLOR[node.zone] || ZONE_COLOR.peer
+  const fill = node.pct_chg !== null && node.pct_chg !== undefined && !node.is_center
+    ? node.pct_chg > 0 ? '#22c55e' : node.pct_chg < 0 ? '#ef4444' : zoneFill
+    : zoneFill
   const stroke = STATUS_RING[node.quote_status || 'pending'] || '#64748b'
   const hasFocus = Boolean(view.focusNodeId || view.selectedNodeId || view.hoveredNodeId || view.selectedEdgeKey || view.hoveredEdgeKey)
   const active = node.is_center || node.id === view.selectedNodeId || node.id === view.hoveredNodeId || node.id === view.focusNodeId || view.relatedNodeIds.has(node.id)
@@ -151,7 +167,7 @@ function edgeStyle(edge: TopologyEdgeData, centerId: string | undefined, view: V
   const touchesCenter = Boolean(centerId && (edge.source === centerId || edge.target === centerId))
   const active = key === view.selectedEdgeKey || key === view.hoveredEdgeKey || view.relatedEdgeKeys.has(key)
   const hasFocus = Boolean(view.focusNodeId || view.selectedNodeId || view.hoveredNodeId || view.selectedEdgeKey || view.hoveredEdgeKey)
-  const showLabel = view.showEdgeLabels || key === view.selectedEdgeKey || key === view.hoveredEdgeKey || (view.zoom > 1.35 && touchesCenter)
+  const showLabel = key === view.selectedEdgeKey || key === view.hoveredEdgeKey || view.relatedEdgeKeys.has(key) || (view.zoom > 1.35 && touchesCenter)
   return {
     stroke,
     lineWidth: active ? 2.5 : 1,
@@ -204,12 +220,12 @@ function toG6Data(nodes: TopologyNodeData[], edges: TopologyEdgeData[], view: Vi
         },
       }
     }),
-    edges: edges.map((edge, index) => {
+    edges: edges.map((edge) => {
       const rendered = visualEdge(edge)
       const key = edgeKey(edge)
       const stroke = edgeStroke(rendered, centerId)
       return {
-        id: `${rendered.source}->${rendered.target}:${edge.relation}:${index}`,
+        id: `${rendered.source}->${rendered.target}:${edge.relation}`,
         source: rendered.source,
         target: rendered.target,
         data: { ...edge, edgeKey: key, visualSource: rendered.source, visualTarget: rendered.target, stroke } as unknown as Record<string, unknown>,
@@ -356,25 +372,26 @@ function startParticle(
   particle.raf = requestAnimationFrame(tick)
 }
 
-export function TopologyCanvas({
+export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function TopologyCanvas({
   rawNodes,
   rawEdges,
   onExpand,
   selectedNodeId,
   selectedEdgeKey,
   focusNodeId,
-  showEdgeLabels,
   onSelectNode,
   onSelectEdge,
-}: Props) {
+}, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const graphRef = useRef<G6Graph | null>(null)
   const initializedRef = useRef(false)
   const previousNodeIdsRef = useRef<Set<string>>(new Set())
+  const previousEdgeIdsRef = useRef<Set<string>>(new Set())
   const particleMapRef = useRef<Map<string, ParticleState>>(new Map())
   const nodeParticleKeysRef = useRef<Set<string>>(new Set())
   const onExpandRef = useRef(onExpand)
   const rawNodesRef = useRef(rawNodes)
+  const rawEdgesRef = useRef(rawEdges)
   const onSelectNodeRef = useRef(onSelectNode)
   const onSelectEdgeRef = useRef(onSelectEdge)
   const [zoom, setZoom] = useState(1)
@@ -382,6 +399,7 @@ export function TopologyCanvas({
   const [hoveredEdgeKey, setHoveredEdgeKey] = useState<string | null>(null)
   onExpandRef.current = onExpand
   rawNodesRef.current = rawNodes
+  rawEdgesRef.current = rawEdges
   onSelectNodeRef.current = onSelectNode
   onSelectEdgeRef.current = onSelectEdge
 
@@ -396,10 +414,55 @@ export function TopologyCanvas({
       selectedNodeId,
       selectedEdgeKey,
       focusNodeId,
-      showEdgeLabels,
       ...related,
     }
-  }, [focusNodeId, hoveredEdgeKey, hoveredNodeId, rawEdges, rawNodes, selectedEdgeKey, selectedNodeId, showEdgeLabels, zoom])
+  }, [focusNodeId, hoveredEdgeKey, hoveredNodeId, rawEdges, rawNodes, selectedEdgeKey, selectedNodeId, zoom])
+
+  const viewRef = useRef(view)
+  viewRef.current = view
+
+  // ---- imperative quote update (bypasses React re-render) ----
+  const applyQuotes = useCallback((items: TopologyQuoteItem[]) => {
+    const graph = graphRef.current
+    if (!graph || !initializedRef.current) return
+
+    const bySymbol = new Map(items.map((item) => [item.symbol, item]))
+    const curView = viewRef.current
+    const updates: Array<{ id: string; data: Record<string, unknown>; style: Record<string, unknown> }> = []
+
+    // Merge quote data into rawNodesRef so tooltips/click handlers see latest
+    rawNodesRef.current = rawNodesRef.current.map((node) => {
+      const quote = bySymbol.get(node.id)
+      if (!quote) return node
+      return {
+        ...node,
+        name: quote.name || node.name,
+        pct_chg: quote.pct_chg,
+        market_cap: quote.market_cap,
+        market_cap_str: quote.market_cap_str || node.market_cap_str,
+        size_level: quote.market_cap === null || quote.market_cap === undefined ? node.size_level : sizeLevelFromMarketCap(quote.market_cap),
+        quote_status: quote.status,
+        quote_updated_at: quote.updated_at,
+        quote_error: quote.error,
+      }
+    })
+
+    for (const node of rawNodesRef.current) {
+      const quote = bySymbol.get(node.id)
+      if (!quote) continue
+      updates.push({
+        id: node.id,
+        data: node as unknown as Record<string, unknown>,
+        style: nodeStyle(node, curView),
+      })
+    }
+
+    if (updates.length > 0) {
+      graph.updateNodeData(updates as never)
+    }
+  }, [])
+
+  useImperativeHandle(ref, () => ({ applyQuotes }), [applyQuotes])
 
   const graphData = useMemo(() => toG6Data(rawNodes, rawEdges, view), [rawEdges, rawNodes, view])
 
@@ -422,13 +485,24 @@ export function TopologyCanvas({
       },
       layout: {
         type: 'd3-force',
-        link: { distance: 150, strength: 0.28 },
-        manyBody: { strength: -360 },
-        collide: { radius: 42, strength: 0.92 },
+        link: { distance: 220, strength: 0.28 },
+        manyBody: { strength: -500 },
+        collide: {
+          radius: (datum: Record<string, unknown>) => {
+            const node = datum?.data as TopologyNodeData | undefined
+            return node ? nodeSize(node) + 14 : 50
+          },
+          strength: 0.75
+        },
         x: { strength: 0.08 },
         y: { strength: 0.08 },
       },
-      behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element', 'hover-activate', 'focus-element'],
+      behaviors: [
+          'drag-canvas',
+          'zoom-canvas',
+          { type: 'drag-element', enable: (event: { targetType?: string }) => event.targetType === 'node' },
+          'hover-activate',
+        ],
       plugins: [
         { type: 'minimap', size: [180, 120], position: 'right-bottom' },
         {
@@ -501,6 +575,7 @@ export function TopologyCanvas({
     })
 
     graph.on('aftertransform', () => {
+      if (graph.destroyed) return
       const nextZoom = graph.getZoom()
       setZoom((prev) => Math.abs(prev - nextZoom) > 0.08 ? nextZoom : prev)
     })
@@ -513,6 +588,7 @@ export function TopologyCanvas({
       graphRef.current = null
       initializedRef.current = false
       previousNodeIdsRef.current = new Set()
+      previousEdgeIdsRef.current = new Set()
     }
   }, [])
 
@@ -520,16 +596,21 @@ export function TopologyCanvas({
     const graph = graphRef.current
     if (!graph) return
 
-    const nextIds = new Set(rawNodes.map((node) => node.id))
-    const previousIds = previousNodeIdsRef.current
-    const hasStructuralChange = rawNodes.length !== previousIds.size || rawNodes.some((node) => !previousIds.has(node.id))
+    const nextNodeIds = new Set(rawNodes.map((node) => node.id))
+    const prevNodeIds = previousNodeIdsRef.current
+    const nextEdgeIds = new Set(rawEdges.map((edge) => `${edge.source}->${edge.target}:${edge.relation}`))
+    const prevEdgeIds = previousEdgeIdsRef.current
+    const nodeStructChange = rawNodes.length !== prevNodeIds.size || rawNodes.some((node) => !prevNodeIds.has(node.id))
+    const edgeStructChange = rawEdges.length !== prevEdgeIds.size || rawEdges.some((edge) => !prevEdgeIds.has(`${edge.source}->${edge.target}:${edge.relation}`))
+    const hasStructuralChange = nodeStructChange || edgeStructChange
 
     if (!initializedRef.current || hasStructuralChange) {
       destroyParticle(graph, particleMapRef.current)
       graph.setData(graphData as never)
       void graph.render()
       initializedRef.current = true
-      previousNodeIdsRef.current = nextIds
+      previousNodeIdsRef.current = nextNodeIds
+      previousEdgeIdsRef.current = nextEdgeIds
       return
     }
 
@@ -546,7 +627,8 @@ export function TopologyCanvas({
       style: edge.style,
     })) as never)
     void graph.draw()
-    previousNodeIdsRef.current = nextIds
+    previousNodeIdsRef.current = nextNodeIds
+    previousEdgeIdsRef.current = nextEdgeIds
   }, [graphData, rawNodes])
 
   // --- 节点选中粒子动画 ---
@@ -593,4 +675,4 @@ export function TopologyCanvas({
       <div className="topo-canvas topo-canvas--g6" ref={containerRef} />
     </div>
   )
-}
+})

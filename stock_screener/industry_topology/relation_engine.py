@@ -15,16 +15,45 @@ class RelationEngineError(Exception):
     pass
 
 
-_SYSTEM_PROMPT = "你是产业分析专家。给定一只股票，推理其产业链上下游及同业公司。严格输出 JSON，不要解释。"
+_SYSTEM_PROMPT = (
+    "你是产业分析专家。给定一只股票，推理其产业链上下游及同业公司。严格输出 JSON，不要解释。\n\n"
+    "market 取值规则（必须严格使用以下大写缩写）：\n"
+    "- A股: \"A\"\n"
+    "- 港股: \"HK\"\n"
+    "- 美股: \"US\"\n"
+    "- 日股: \"JP\"\n"
+    "- 台股: \"TW\"\n"
+    "- 韩股: \"KR\"\n"
+    "不要使用其他写法（如 JAPAN、SZ、SH、NASDAQ 等），只用以上 6 个缩写。\n\n"
+    "code 格式规则（纯代码，去掉交易所后缀/前缀）：\n"
+    "- A股: 6 位数字，如 \"600519\"（不要 .SH / .SZ / SZ. / SH.）\n"
+    "- 港股: 1-5 位数字，如 \"00700\"（不要 .HK / HK.）\n"
+    "- 美股: 大写字母，如 \"AAPL\"（不要 .US / US.）\n"
+    "- 日股: 4 位数字，如 \"6146\"（不要 .T / JP.）\n"
+    "- 台股: 4 位数字，如 \"2330\"（不要 .TW / TW.）\n"
+    "- 韩股: 6 位数字，如 \"005930\"（不要 .KS / .KQ / KR.）\n"
+    "不确定代码的公司坚决不列，宁可少列也不错列。"
+)
 
-_BATCH_SYSTEM_PROMPT = "你是产业分析专家。给定多只股票，分别推理每只股票的产业链上下游及同业公司。严格输出 JSON，不要解释。"
+_BATCH_SYSTEM_PROMPT = (
+    "你是产业分析专家。给定多只股票，分别推理每只股票的产业链上下游及同业公司。严格输出 JSON，不要解释。\n\n"
+    "market 取值规则（必须严格使用以下大写缩写）：\n"
+    "- A股: \"A\"\n"
+    "- 港股: \"HK\"\n"
+    "- 美股: \"US\"\n"
+    "- 日股: \"JP\"\n"
+    "- 台股: \"TW\"\n"
+    "- 韩股: \"KR\"\n"
+    "不要使用其他写法（如 JAPAN、SZ、SH、NASDAQ 等），只用以上 6 个缩写。\n\n"
+    "code 格式规则（纯代码，去掉交易所后缀/前缀），不确定代码的公司坚决不列。"
+)
 
 _ITEM_SCHEMA = {
     "type": "object",
     "properties": {
         "code": {"type": "string"},
         "name": {"type": "string"},
-        "market": {"type": "string"},
+        "market": {"type": "string", "enum": ["A", "HK", "US", "JP", "TW", "KR"]},
         "direction": {"type": "string", "enum": ["upstream", "downstream", "peer"]},
         "relation": {"type": "string"},
         "evidence": {"type": "string"},
@@ -58,6 +87,45 @@ _BATCH_JSON_SCHEMA = {
     },
     "required": ["groups"],
 }
+
+
+_VALID_MARKETS = {"A", "HK", "US", "JP", "TW", "KR"}
+
+# 市场别名 → 规范缩写（LLM 偶发输出旧格式的兜底映射）
+_MARKET_ALIAS_MAP: Dict[str, str] = {
+    "JAPAN": "JP", "TOKYO": "JP", "TSE": "JP", "TY": "JP",
+    "KOREA": "KR", "KRX": "KR", "KS": "KR", "KQ": "KR",
+    "TAIWAN": "TW", "TWO": "TW", "TAIEX": "TW",
+    "SZ": "A", "SH": "A", "SHE": "A", "SHA": "A",
+    "NASDAQ": "US", "NYSE": "US", "AMEX": "US",
+    "HKG": "HK", "HKEX": "HK",
+}
+
+_CODE_SUFFIXES = (".SZ", ".SH", ".HK", ".US", ".T", ".TW", ".KS", ".KQ", ".JP")
+_CODE_PREFIXES = ("SZ.", "SH.", "HK.", "US.", "JP.", "TW.", "KR.")
+
+
+def _normalize_peer_market(raw: str) -> str:
+    """LLM 输出的 market 字符串 → 规范缩写 A/HK/US/JP/TW/KR"""
+    m = raw.strip().upper()
+    if not m:
+        return "A"
+    return _MARKET_ALIAS_MAP.get(m, m)
+
+
+def _normalize_peer_code(code: str) -> str:
+    """去交易所后缀/前缀，返回纯代码。例: '002185.SZ' → '002185', 'US.AAPL' → 'AAPL'"""
+    c = code.strip()
+    upper = c.upper()
+    for sfx in _CODE_SUFFIXES:
+        if upper.endswith(sfx):
+            c = c[:-len(sfx)]
+            break
+    for pfx in _CODE_PREFIXES:
+        if upper.startswith(pfx):
+            c = c[len(pfx):]
+            break
+    return c.strip()
 
 
 class RelationEngine:
@@ -129,9 +197,14 @@ class RelationEngine:
         for it in items:
             if not isinstance(it, dict):
                 continue
-            peer_code = str(it.get("code", "")).strip()
+            raw_code = str(it.get("code", "")).strip()
+            raw_market = str(it.get("market", "")).strip()
+            peer_code = _normalize_peer_code(raw_code)
+            peer_market = _normalize_peer_market(raw_market)
+            # 如果 LLM 输出了不识别的 market（不在 6 个标准缩写中的陌生字符串），跳过
+            if peer_market not in _VALID_MARKETS:
+                continue
             peer_name = str(it.get("name", "")).strip()
-            peer_market = str(it.get("market", "")).strip().upper() or "A"
             direction_raw = str(it.get("direction", "")).strip()
             relation_raw = str(it.get("relation", "")).strip()
             evidence = str(it.get("evidence", "")).strip()
@@ -174,6 +247,8 @@ class RelationEngine:
             f"2. 优先覆盖上游(供应商/原材料/设备/代工封测)与下游(客户/ODM/分销/应用场景)，可含少量同业竞品。\n"
             f"3. 对方须为真实上市公司，给出股票代码与简称；代码不确定时宁可不列。\n"
             f"4. 每条给方向(upstream/downstream/peer)、归一化关系标签、一句话依据。\n"
+            f"5. market 必须用标准缩写: A/HK/US/JP/TW/KR，不要用 JAPAN/SZ/NASDAQ 等。\n"
+            f"6. code 必须是纯代码（去后缀），如台积电写 \"2330\" 不写 \"2330.TW\"，华天科技写 \"002185\" 不写 \"002185.SZ\"。\n"
             f"严格输出 JSON：{{\"items\":[{{\"code\":\"\",\"name\":\"\",\"market\":\"\",\"direction\":\"\",\"relation\":\"\",\"evidence\":\"\"}}]}}"
         )
 
@@ -195,5 +270,6 @@ class RelationEngine:
             f"3. 对方须为真实上市公司，给出股票代码与简称；代码不确定时宁可不列。\n"
             f"4. 每条给方向(upstream/downstream/peer)、归一化关系标签、一句话依据。\n"
             f"5. 每只股票的结果放进独立的 group，source_code/source_market 必须与输入一致。\n"
+            f"6. market 必须用标准缩写: A/HK/US/JP/TW/KR；code 必须是纯代码，台积电写 \"2330\" 不写 \"2330.TW\"。\n"
             f"严格输出 JSON：{{\"groups\":[{{\"source_code\":\"\",\"source_market\":\"\",\"items\":[{{\"code\":\"\",\"name\":\"\",\"market\":\"\",\"direction\":\"\",\"relation\":\"\",\"evidence\":\"\"}}]}}]}}"
         )

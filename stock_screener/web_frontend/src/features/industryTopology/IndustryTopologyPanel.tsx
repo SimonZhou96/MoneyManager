@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { StockSearchInput } from './StockSearchInput'
 import { TopologyCanvas, sizeLevelFromMarketCap } from './TopologyCanvas'
+import type { TopologyCanvasHandle } from './TopologyCanvas'
 import { topologyApi } from './topologyApi'
 import type { SearchResult, TopologyEdgeData, TopologyGraph, TopologyNodeData, TopologyQuoteItem, TopologyStats } from './types'
 
@@ -102,12 +103,13 @@ export function IndustryTopologyPanel() {
   const [relationFilters, setRelationFilters] = useState<Set<RelationFilter>>(() => new Set(['upstream', 'downstream', 'peer']))
   const [graphQuery, setGraphQuery] = useState('')
   const [onlyImportant, setOnlyImportant] = useState(false)
-  const [showEdgeLabels, setShowEdgeLabels] = useState(false)
   const [selectedNode, setSelectedNode] = useState<TopologyNodeData | null>(null)
   const [selectedEdge, setSelectedEdge] = useState<TopologyEdgeData | null>(null)
   const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null)
   const pollAttemptsRef = useRef(0)
   const relationPollAttemptsRef = useRef(0)
+  const canvasRef = useRef<TopologyCanvasHandle>(null)
+  const nodesRef = useRef<TopologyNodeData[]>([])
 
   const symbols = useMemo(() => nodes.map((node) => node.id), [nodes])
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
@@ -142,8 +144,9 @@ export function IndustryTopologyPanel() {
 
   const applyQuoteItems = useCallback((items: TopologyQuoteItem[]) => {
     if (items.length === 0) return
+    // Update nodesRef with latest quote data (for display in sidebar / filters)
     const bySymbol = new Map(items.map((item) => [item.symbol, item]))
-    setNodes((prev) => prev.map((node) => {
+    nodesRef.current = nodesRef.current.map((node) => {
       const quote = bySymbol.get(node.id)
       if (!quote) return node
       return {
@@ -157,7 +160,9 @@ export function IndustryTopologyPanel() {
         quote_updated_at: quote.updated_at,
         quote_error: quote.error,
       }
-    }))
+    })
+    // Push directly into G6 — bypass React render cycle
+    canvasRef.current?.applyQuotes(items)
   }, [])
 
   const startQuoteRefresh = useCallback(async (nextSymbols: string[]) => {
@@ -172,6 +177,7 @@ export function IndustryTopologyPanel() {
 
   const applyGraph = useCallback((graph: TopologyGraph, resetSelection = false) => {
     setNodes(graph.nodes)
+    nodesRef.current = graph.nodes
     setEdges(graph.edges)
     if (resetSelection) {
       setSelectedNode(null)
@@ -207,9 +213,11 @@ export function IndustryTopologyPanel() {
           if (!map.has(node.id)) addedSymbols.push(node.id)
           map.set(node.id, node)
         })
-        return Array.from(map.values()).map((node) => node.id === `${market}:${code}` || (node.code === code && node.market === market)
+        const merged = Array.from(map.values()).map((node) => node.id === `${market}:${code}` || (node.code === code && node.market === market)
           ? { ...node, expanded: true }
           : node)
+        nodesRef.current = merged
+        return merged
       })
       setEdges((prev) => {
         const seen = new Set(prev.map((edge) => `${edge.source}->${edge.target}:${edge.relation}`))
@@ -251,7 +259,7 @@ export function IndustryTopologyPanel() {
 
   useEffect(() => {
     if (symbols.length === 0) return
-    const activeSymbols = () => nodes
+    const activeSymbols = () => nodesRef.current
       .filter((node) => !TERMINAL_QUOTE_STATUSES.has(node.quote_status || 'pending'))
       .map((node) => node.id)
 
@@ -271,7 +279,7 @@ export function IndustryTopologyPanel() {
     }, POLL_INTERVAL_MS)
 
     return () => window.clearInterval(timer)
-  }, [applyQuoteItems, nodes, symbols.length])
+  }, [applyQuoteItems, symbols.length])
 
   useEffect(() => {
     if (!selected || nodes.length === 0 || relationStatus !== 'generating') return
@@ -326,21 +334,26 @@ export function IndustryTopologyPanel() {
             ))}
           </div>
           <label className="topo-check"><input type="checkbox" checked={onlyImportant} onChange={(event) => setOnlyImportant(event.target.checked)} />只看重点</label>
-          <label className="topo-check"><input type="checkbox" checked={showEdgeLabels} onChange={(event) => setShowEdgeLabels(event.target.checked)} />显示边标签</label>
           <span className="topo-filter-summary">显示 {visibleGraph.nodes.length}/{nodes.length} 节点 · {visibleGraph.edges.length}/{edges.length} 关系</span>
         </div>
       ) : null}
       {nodes.length > 0 ? (
         <TopologyCanvas
+          ref={canvasRef}
           rawNodes={visibleGraph.nodes}
           rawEdges={visibleGraph.edges}
           onExpand={onExpand}
           selectedNodeId={selectedNode?.id || null}
           selectedEdgeKey={selectedEdgeKey}
           focusNodeId={visibleGraph.focusNodeId}
-          showEdgeLabels={showEdgeLabels}
           onSelectNode={(node) => {
-            setSelectedNode(node)
+            if (node) {
+              // Pick enriched data from nodesRef so sidebar shows latest quote
+              const enriched = nodesRef.current.find((n) => n.id === node.id)
+              setSelectedNode(enriched || node)
+            } else {
+              setSelectedNode(null)
+            }
             if (node) onSelectEdge(null)
           }}
           onSelectEdge={onSelectEdge}
