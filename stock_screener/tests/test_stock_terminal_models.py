@@ -124,6 +124,21 @@ class StockTerminalModelsTest(unittest.TestCase):
         self.assertEqual(payload["source_status"]["quote"]["status"], "fresh")
         self.assertEqual(payload["source_status"]["kline"]["status"], "empty")
 
+    def test_quote_snapshot_serializes_market_cap(self):
+        quote = QuoteSnapshot(
+            market="US",
+            code="US.TSM",
+            name="台积电",
+            price=439.215,
+            market_cap=1.23e12,
+            fetched_at=datetime(2026, 6, 23, 15, 16, tzinfo=timezone.utc),
+            source="fake",
+        )
+
+        payload = quote.to_dict()
+
+        self.assertEqual(payload["market_cap"], 1.23e12)
+
     def test_series_points_serialize_numbers_and_time(self):
         at = datetime(2026, 5, 25, 9, 31, tzinfo=timezone.utc)
 

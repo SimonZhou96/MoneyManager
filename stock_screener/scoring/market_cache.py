@@ -911,29 +911,39 @@ class MarketCache:
     # ── 摘要生成 ───────────────────────────────────────────────
 
     def _build_summaries(self, temp: MarketTemperature) -> None:
-        """根据 5 个维度结果生成面向报告的摘要文本。"""
+        """根据 5 个维度结果生成面向报告的摘要文本，同时记录各维度数据来源状态。"""
         breadth = temp.market_breadth
         credit = temp.credit_risk
         liquidity = temp.liquidity
+        sources: Dict[str, str] = {}
 
-        # 市场环境
-        if breadth is not None and breadth.score >= 60:
-            temp.temperature_summary = "偏强"
-        elif breadth is not None and breadth.score >= 40:
-            temp.temperature_summary = "中性"
+        # 市场环境（依赖 market_breadth）
+        if breadth is not None:
+            sources["market_breadth"] = "available"
+            if breadth.score >= 60:
+                temp.temperature_summary = "偏强"
+            elif breadth.score >= 40:
+                temp.temperature_summary = "中性"
+            else:
+                temp.temperature_summary = "偏弱"
         else:
+            sources["market_breadth"] = "missing"
             temp.temperature_summary = "偏弱"
 
-        # 赚钱效应
-        if breadth is not None and breadth.above_ma50_pct > 0.55:
-            temp.money_making_summary = "好"
-        elif breadth is not None and breadth.above_ma50_pct > 0.35:
-            temp.money_making_summary = "一般"
+        # 赚钱效应（依赖 market_breadth）
+        if breadth is not None:
+            if breadth.above_ma50_pct > 0.55:
+                temp.money_making_summary = "好"
+            elif breadth.above_ma50_pct > 0.35:
+                temp.money_making_summary = "一般"
+            else:
+                temp.money_making_summary = "差"
         else:
             temp.money_making_summary = "差"
 
-        # 资金环境
+        # 资金环境（依赖 liquidity）
         if liquidity is not None:
+            sources["liquidity"] = "available"
             if liquidity.fund_flow_direction == "inflow":
                 temp.capital_env_summary = "流入"
             elif liquidity.fund_flow_direction == "outflow":
@@ -941,10 +951,12 @@ class MarketCache:
             else:
                 temp.capital_env_summary = "中性"
         else:
+            sources["liquidity"] = "missing"
             temp.capital_env_summary = "中性"
 
-        # 风险偏好
+        # 风险偏好（依赖 credit_risk）
         if credit is not None:
+            sources["credit_risk"] = "available"
             if credit.level == "low":
                 temp.risk_appetite_summary = "高"
             elif credit.level == "elevated":
@@ -952,7 +964,13 @@ class MarketCache:
             else:
                 temp.risk_appetite_summary = "低"
         else:
+            sources["credit_risk"] = "missing"
             temp.risk_appetite_summary = "中"
 
-        # 热点清晰度（Phase 3 接入 HotSectorClassifier 后更新）
-        temp.hot_clarity_summary = "一般"
+        # 热点清晰度 — 由外部 _update_hot_clarity() 设置；
+        # 如果调用方未设置则使用默认值
+        sources["hot_clarity"] = "external" if temp.hot_clarity_summary else "default"
+        if not temp.hot_clarity_summary:
+            temp.hot_clarity_summary = "一般"
+
+        temp.dimension_sources = sources

@@ -25,8 +25,8 @@ HOLDING_WEIGHTS = {
 
 # ── 决策映射 ────────────────────────────────────────────────────
 DECISION_MAP_ENTRY = {
-    (80, 100): "STRONG_BUY",
-    (65, 80): "VALID_BUY",
+    (75, 100): "STRONG_BUY",
+    (65, 75): "VALID_BUY",
     (50, 65): "WEAK_BUY",
     (0, 50): "NO_BUY",
 }
@@ -82,7 +82,7 @@ VOLATILITY_RISK_METRICS = {
 # ── 评分映射参数 ────────────────────────────────────────────────
 # module_score = min(100, BASE_SCORE + raw_weighted * SCALE_FACTOR)
 BASE_SCORE = 50.0
-SCALE_FACTOR = 12.0  # 约 4 条 x1.0 规则命中 → 满分
+SCALE_FACTOR = 15.0  # 约 3 条 x1.0 规则命中 → 95分
 
 
 def resolve_decision(score: float, decision_map: dict) -> str:

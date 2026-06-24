@@ -381,11 +381,16 @@ class AKShareKlineFetcher(KlineFetcherBase):
 # ---------------------------------------------------------------------------
 
 class DatabaseKlineFetcher(KlineFetcherBase):
-    """K 线缓存获取器：优先读取本地 Agent 推送到 MySQL 的缓存。"""
+    """K 线缓存获取器：优先读取本地 Agent 推送到 MySQL 的缓存。
 
-    def __init__(self, db, min_rows: int = 20):
+    新增 freshness 检查：如果缓存中最新的 K 线距今超过
+    max_staleness_days 天，拒绝返回，让链降级到实时数据源。
+    """
+
+    def __init__(self, db, min_rows: int = 20, max_staleness_days: int = 4):
         self.db = db
         self.min_rows = max(1, int(min_rows))
+        self.max_staleness_days = max(1, int(max_staleness_days))
 
     def get_name(self) -> str:
         return "DatabaseKlineCache"
@@ -404,6 +409,30 @@ class DatabaseKlineFetcher(KlineFetcherBase):
             normalized = _normalize_dataframe(df)
             if normalized is None or normalized.empty:
                 return None
+
+            # ── 数据新鲜度检查 ──
+            # 如果缓存中最新 bar 的日期距今超过 max_staleness_days 天，
+            # 说明 Agent 已停止推送或者这只股票的数据更新延迟了。
+            # 此时返回 None，让链降级到 YFinance/AKShare 等实时数据源。
+            from datetime import date, timedelta
+            try:
+                latest_date = normalized["date"].max()
+                if hasattr(latest_date, "date"):
+                    latest_date = latest_date.date()
+                elif hasattr(latest_date, "to_pydatetime"):
+                    latest_date = latest_date.to_pydatetime().date()
+                cutoff = date.today() - timedelta(days=self.max_staleness_days)
+                if latest_date < cutoff:
+                    print(
+                        f"[DatabaseKlineCache] stale cache for {stock_code}: "
+                        f"latest={latest_date} > {self.max_staleness_days}d old, "
+                        f"falling through to live source",
+                        file=sys.stderr,
+                    )
+                    return None
+            except Exception:
+                pass  # 日期解析失败时保守放行
+
             return normalized.tail(max_count).reset_index(drop=True)
         except Exception as e:
             _log_fetch_warning("DatabaseKlineCache", f"fetch code={stock_code} market={market} timeframe={timeframe}", e)

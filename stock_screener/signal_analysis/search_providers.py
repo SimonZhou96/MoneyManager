@@ -187,11 +187,16 @@ class FallbackSearchProvider(SearchProvider):
     def provider_names(self) -> List[str]:
         return [getattr(provider, "name", provider.__class__.__name__) for provider in self.providers]
 
+    def _active_providers(self) -> List[SearchProvider]:
+        """Return providers that are currently available (respects dynamic is_available)."""
+        return [p for p in self.providers if getattr(p, "is_available", False)]
+
     def search(self, query: str, max_results: int) -> List[SearchDocument]:
         self.last_errors = []
         self.last_success_provider = ""
-        total = len(self.providers)
-        for i, provider in enumerate(self.providers):
+        active = self._active_providers()
+        total = len(active)
+        for i, provider in enumerate(active):
             name = getattr(provider, "name", provider.__class__.__name__)
             try:
                 result = provider.search(query, max_results)
@@ -224,13 +229,14 @@ class FallbackSearchProvider(SearchProvider):
             return {}
         self.last_errors = []
         self.last_success_provider = ""
-        total = len(self.providers)
+        active = self._active_providers()
+        total = len(active)
 
         grouped: Dict[str, List[SearchDocument]] = {row.code: [] for row in rows}
         code_set = {row.code for row in rows}
 
         # ── Phase 1: Batch search (fast) ──
-        for i, provider in enumerate(self.providers):
+        for i, provider in enumerate(active):
             name = getattr(provider, "name", provider.__class__.__name__)
             remaining = [r for r in rows if not grouped.get(r.code)]
             if not remaining:
@@ -256,8 +262,9 @@ class FallbackSearchProvider(SearchProvider):
         # ── Phase 2: Per-stock fallback for unmatched stocks ──
         unmatched = [r for r in rows if not grouped.get(r.code)]
         if unmatched:
+            fallback_active = self._active_providers()
             for row in unmatched:
-                for i, provider in enumerate(self.providers):
+                for i, provider in enumerate(fallback_active):
                     name = getattr(provider, "name", provider.__class__.__name__)
                     try:
                         result = provider.search_companies_batch(market, [row], max_results)
@@ -272,9 +279,10 @@ class FallbackSearchProvider(SearchProvider):
 
         # ── Summary ──
         matched = sum(1 for docs in grouped.values() if docs)
+        active_names = [getattr(p, "name", p.__class__.__name__) for p in active]
         if matched:
             print(f"[搜索fallback] ✅ 最终: {matched}/{len(rows)} stocks matched "
-                  f"(tried {', '.join(self.provider_names)})")
+                  f"(tried {', '.join(active_names)})")
         else:
             _log_fallback_exhausted("companies_batch", total)
 
@@ -311,7 +319,11 @@ def _log_fallback_exhausted(mode: str, total: int) -> None:
 
 
 class TavilySearchProvider(SearchProvider):
-    """Tavily-backed search implementation."""
+    """Tavily-backed search implementation.
+
+    Tracks quota exhaustion to avoid hammering the API with
+    guaranteed-to-fail calls after a 429 response.
+    """
 
     name = "tavily"
 
@@ -324,8 +336,37 @@ class TavilySearchProvider(SearchProvider):
         self.api_key = api_key
         self.endpoint = endpoint
         self.timeout_sec = timeout_sec
+        self._quota_exhausted = False
+        self._quota_error_count = 0
+        self._quota_max_errors = 3
+
+    @property
+    def is_available(self) -> bool:
+        """Provider is available only if quota hasn't been exhausted."""
+        if self._quota_exhausted:
+            return False
+        return True
+
+    def _record_quota_error(self) -> None:
+        """Called after a failing 429 response. After consecutive failures
+        exceed the threshold, mark the provider as exhausted so the fallback
+        chain skips it for the rest of the session."""
+        self._quota_error_count += 1
+        if self._quota_error_count >= self._quota_max_errors:
+            self._quota_exhausted = True
+            print(f"[tavily] ⚠️ 连续 {self._quota_error_count} 次 429 错误，"
+                  f"标记为配额耗尽，本次会话跳过 Tavily", file=sys.stderr)
+        else:
+            print(f"[tavily] ⚠️ 429 配额错误 ({self._quota_error_count}/"
+                  f"{self._quota_max_errors})，退避后重试", file=sys.stderr)
+
+    def _reset_quota_errors(self) -> None:
+        """Reset consecutive error counter on a successful call."""
+        self._quota_error_count = 0
 
     def search(self, query: str, max_results: int) -> List[SearchDocument]:
+        if self._quota_exhausted:
+            raise RuntimeError("Tavily quota exhausted, provider skipped")
         if requests is None:
             raise RuntimeError("requests is not installed")
         if not query.strip():
@@ -346,9 +387,22 @@ class TavilySearchProvider(SearchProvider):
                 resp.raise_for_status()
             return resp
 
-        response = self._http_with_retry(_send)
+        try:
+            response = self._http_with_retry(_send)
+        except RuntimeError as exc:
+            msg = str(exc)
+            if "429" in msg:
+                self._record_quota_error()
+                # Backoff after 429 to let quota reset window pass
+                backoff = min(30.0, 5.0 * (2 ** self._quota_error_count))
+                print(f"[tavily] 退避 {backoff:.0f}s 等待配额恢复...", file=sys.stderr)
+                time.sleep(backoff)
+            raise
         if response.status_code >= 400:
+            if response.status_code == 429:
+                self._record_quota_error()
             raise RuntimeError(f"Tavily search failed: HTTP {response.status_code} {response.text[:200]}")
+        self._reset_quota_errors()
         data = response.json() or {}
         results = data.get("results") or []
 
@@ -385,12 +439,20 @@ class TavilySearchProvider(SearchProvider):
     ) -> Dict[str, List[SearchDocument]]:
         if not rows:
             return {}
+        if self._quota_exhausted:
+            raise RuntimeError("Tavily quota exhausted, provider skipped")
         grouped: Dict[str, List[SearchDocument]] = {row.code: [] for row in rows}
         max_chars = _company_search_query_max_chars()
         for query_rows in _split_rows_by_query_budget(market, rows, max_chars):
+            if self._quota_exhausted:
+                break
             query = _build_company_batch_query(market, query_rows, max_chars=max_chars)
             batch_max_results = _company_batch_max_results(max_results, len(query_rows))
-            documents = self.search(query, batch_max_results)
+            try:
+                documents = self.search(query, batch_max_results)
+            except RuntimeError:
+                # Quota likely exhausted; stop processing sub-batches
+                break
             assigned = _assign_documents_to_stocks(documents, query_rows)
             _debug_company_batch_search(market, query_rows, query, batch_max_results, documents, assigned)
             for code, code_documents in assigned.items():

@@ -56,6 +56,15 @@ class StockTerminalService:
                     statuses={"quote": stale_status},
                     data_gaps=["quote"],
                 ).to_dict()
+            if hasattr(self.repository, "save_quote_error"):
+                self.repository.save_quote_error(
+                    market,
+                    code,
+                    str(exc),
+                    source=";".join(getattr(provider, "name", provider.__class__.__name__) for provider in self.providers),
+                    fetched_at=current,
+                    expires_at=current + timedelta(minutes=1),
+                )
             error_status = BlockStatus(status="error", source="", error_message=str(exc))
             return StockTerminalSummary(
                 market=market,

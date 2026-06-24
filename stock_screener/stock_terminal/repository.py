@@ -78,8 +78,22 @@ def _empty_status(source: str = "cache") -> BlockStatus:
     return BlockStatus(status="empty", source=source)
 
 
+def _error_status(payload: dict, source: str, fetched_at: Any, expires_at: Any) -> BlockStatus:
+    return BlockStatus(
+        status="error",
+        source=source or payload.get("source") or "",
+        fetched_at=_parse_dt(payload.get("fetched_at") or fetched_at),
+        expires_at=_parse_dt(payload.get("expires_at") or expires_at),
+        stale=False,
+        error_message=str(payload.get("error") or payload.get("error_message") or "quote provider failed"),
+    )
+
+
 def _quote_from_payload(payload: dict, fallback_fetched_at: Any = None, fallback_source: str = "") -> QuoteSnapshot:
     data = dict(payload or {})
+    data.pop("status", None)
+    data.pop("error", None)
+    data.pop("error_message", None)
     data["fetched_at"] = _parse_dt(data.get("fetched_at") or fallback_fetched_at)
     data["source"] = data.get("source") or fallback_source
     return QuoteSnapshot(**data)
@@ -161,6 +175,20 @@ class InMemoryStockTerminalRepository:
         fetched_at = quote.fetched_at or _now()
         self._quotes[key] = (deepcopy(quote), quote.source, fetched_at, expires_at)
 
+    def save_quote_error(
+        self,
+        market: str,
+        code: str,
+        error_message: str,
+        source: str = "",
+        fetched_at: Optional[datetime] = None,
+        expires_at: Optional[datetime] = None,
+    ) -> None:
+        fetched = fetched_at or _now()
+        expires = expires_at or fetched + timedelta(minutes=1)
+        payload = {"status": "error", "error": str(error_message), "source": source or "", "fetched_at": fetched.isoformat(), "expires_at": expires.isoformat()}
+        self._quotes[(market, code)] = (None, source or "", fetched, expires, payload)
+
     def get_quote(
         self,
         market: str,
@@ -170,6 +198,9 @@ class InMemoryStockTerminalRepository:
         cached = self._quotes.get((market, code))
         if cached is None:
             return None, _empty_status()
+        if len(cached) == 5:
+            _quote, source, fetched_at, expires_at, payload = cached
+            return None, _error_status(payload, source, fetched_at, expires_at)
         quote, source, fetched_at, expires_at = cached
         return deepcopy(quote), _cache_status(source, fetched_at, expires_at, now=now)
 
@@ -271,6 +302,36 @@ class MySqlStockTerminalRepository:
             expires_at,
         )
 
+    def save_quote_error(
+        self,
+        market: str,
+        code: str,
+        error_message: str,
+        source: str = "",
+        fetched_at: Optional[datetime] = None,
+        expires_at: Optional[datetime] = None,
+    ) -> None:
+        fetched = fetched_at or _now()
+        expires = expires_at or fetched + timedelta(minutes=1)
+        payload = {
+            "status": "error",
+            "market": market,
+            "code": code,
+            "error": str(error_message),
+            "source": source or "",
+            "fetched_at": fetched.isoformat(),
+            "expires_at": expires.isoformat(),
+        }
+        self.db.upsert_stock_terminal_json_cache(
+            "stock_quote_cache",
+            market,
+            code,
+            payload,
+            source or "error",
+            fetched,
+            expires,
+        )
+
     def get_quote(
         self,
         market: str,
@@ -281,6 +342,8 @@ class MySqlStockTerminalRepository:
         if not row:
             return None, _empty_status()
         payload = row.get("payload_json") or {}
+        if payload.get("status") == "error":
+            return None, _error_status(payload, row.get("source") or "", row.get("fetched_at"), row.get("expires_at"))
         quote = _quote_from_payload(payload, row.get("fetched_at"), row.get("source") or "")
         status = _cache_status(row.get("source") or quote.source, row.get("fetched_at"), row.get("expires_at"), now=now)
         return quote, status

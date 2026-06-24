@@ -1,0 +1,43 @@
+<h2>产业拓扑布局优化方向</h2>
+<p class="subtitle">当前问题已经确认：节点一多就左右平铺、视觉拥挤；同时缺少“放大看某个节点”的聚焦操作。下面是三种改法，重点看你更在意哪一种工作方式。</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <div class="label">推荐</div>
+      <h3>A. 保留 dagre，增加聚焦模式</h3>
+      <p>默认仍是全图分层布局，但点击节点后自动居中放大，只高亮 1 到 2 度邻居，其余节点降透明。适合先看全局，再钻单点。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul><li>改动最小，延续现在的上下游层次感</li><li>能直接解决“拥挤”和“不能放大”</li><li>对已有展开逻辑最友好</li></ul></div>
+        <div class="cons"><h4>代价</h4><ul><li>当节点极多时，全图模式仍会显得密</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <h3>B. 默认进入局部视图</h3>
+      <p>搜索后先只展示中心节点及 1 度关系，用户点某个节点再“进入该节点视角”，画布重排成新的局部拓扑。适合深挖关系链。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul><li>最不拥挤</li><li>单节点阅读体验最好</li><li>更像分析工具而不是静态总览图</li></ul></div>
+        <div class="cons"><h4>代价</h4><ul><li>全局感会弱一些</li><li>需要额外的返回上一级/面包屑交互</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <h3>C. 改成径向/簇状布局</h3>
+      <p>中心节点在中间，上游、下游、同业分区环绕展开。视觉上更紧凑，也更像“关系图”。适合展示感，但实现变化最大。</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>优点</h4><ul><li>整体更紧凑</li><li>大图时比纯左右平铺更耐看</li></ul></div>
+        <div class="cons"><h4>代价</h4><ul><li>会改变现在的分层阅读习惯</li><li>需要重写布局逻辑和更多调参</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>我现在的判断</h3>
+  <p class="subtitle">从你描述的问题看，A 最像一次高收益、低风险的优化：先把“聚焦单节点”和“局部去拥挤”补上，通常就够用了；如果你实际更偏分析某条链路，再往 B 走会更顺。</p>
+</div>

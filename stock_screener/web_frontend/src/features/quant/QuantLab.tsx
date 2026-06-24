@@ -15,9 +15,10 @@ export function QuantLab() {
   // ── 表单状态 ──
   const [market, setMarket] = useState('HK')
   const [symbol, setSymbol] = useState('HK.00700')
+  const [symbolsText, setSymbolsText] = useState('US.NVDA, US.AMZN, US.META, US.TSLA, US.AVGO, US.AMD, US.NFLX, US.ADBE, US.CRM, US.ORCL, US.UBER, US.DIS, US.INTC, US.CRWD')
   const [strategies, setStrategies] = useState<StrategyMeta[]>([])
   const [strategyType, setStrategyType] = useState('ma_cross')
-  const [params, setParams] = useState<Record<string, number>>({})
+  const [params, setParams] = useState<Record<string, number | string | boolean>>({})
   const [entrySide, setEntrySide] = useState('long')
   const [dateRange, setDateRange] = useState({ start: '2025-01-01', end: '2026-01-01' })
   const [initialCash, setInitialCash] = useState(100000)
@@ -50,7 +51,7 @@ export function QuantLab() {
       setStrategies(list)
       if (list.length > 0) {
         setStrategyType(list[0].type)
-        const defaults: Record<string, number> = {}
+        const defaults: Record<string, number | string | boolean> = {}
         Object.entries(list[0].params).forEach(([k, v]) => { defaults[k] = v.default })
         setParams(defaults)
       }
@@ -62,14 +63,15 @@ export function QuantLab() {
     setStrategyType(type)
     const meta = strategies.find(s => s.type === type)
     if (meta) {
-      const defaults: Record<string, number> = {}
+      const defaults: Record<string, number | string | boolean> = {}
       Object.entries(meta.params).forEach(([k, v]) => { defaults[k] = v.default })
       setParams(defaults)
       if (showOptimize) {
         const space: Record<string, number[]> = {}
         Object.entries(meta.params).forEach(([k, v]) => {
-          const step = v.type === 'int' ? Math.max(1, Math.round((v.max - v.min) / 5)) : (v.max - v.min) / 5
-          space[k] = [v.default, Math.round(v.default + step), Math.round(v.default + step * 2)]
+          if (v.type === 'select') return  // skip enum params
+          const step = v.type === 'int' ? Math.max(1, Math.round((v.max! - v.min!) / 5)) : (v.max! - v.min!) / 5
+          space[k] = [v.default as number, Math.round((v.default as number) + step), Math.round((v.default as number) + step * 2)]
         })
         setParamSpaceText(JSON.stringify(space))
       }
@@ -92,14 +94,18 @@ export function QuantLab() {
   // ── 提交回测 ──
   const submit = async () => {
     setError(''); setRun(null); setRunId(''); setSubmitting(true)
+    const symbols = isPortfolio
+      ? symbolsText.split(',').map(s => s.trim()).filter(Boolean)
+      : [symbol]
+    if (symbols.length === 0) { setError('请至少输入一个标的'); setSubmitting(false); return }
     const payload: StrategyBacktestRequest = {
-      market, symbols: [symbol],
+      market, symbols,
       strategy: { type: strategyType, params, entry_side: entrySide },
       start: dateRange.start, end: dateRange.end,
       initial_cash: initialCash, quantity,
       commission_rate: commissionRate, slippage_rate: slippageRate, max_position_weight: 1.0,
     }
-    if (useRisk) {
+    if (!isPortfolio && useRisk) {
       payload.risk = {}
       if (stopLoss) payload.risk.stop_loss_pct = -Math.abs(stopLoss)
       if (takeProfit) payload.risk.take_profit_pct = takeProfit
@@ -162,6 +168,7 @@ export function QuantLab() {
   }, [selectedChart?.trades])
   const optimizationResults = useMemo(() => run?.chart?.optimization_results || [], [run])
   const currentStrategy = useMemo(() => strategies.find(s => s.type === strategyType), [strategies, strategyType])
+  const isPortfolio = Boolean(currentStrategy?.is_portfolio)
 
   return (
     <section className="quant-lab">
@@ -178,8 +185,19 @@ export function QuantLab() {
             {Object.entries(MARKETS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
 
-          <label>标的代码</label>
-          <input value={symbol} onChange={e => setSymbol(e.target.value)} placeholder="HK.00700" />
+          <label>标的代码{isPortfolio ? '（逗号分隔）' : ''}</label>
+          {isPortfolio ? (
+            <textarea
+              value={symbolsText}
+              onChange={e => setSymbolsText(e.target.value)}
+              placeholder="US.NVDA, US.AMZN, US.META, ..."
+              rows={3}
+              spellCheck={false}
+              style={{ resize: 'vertical', fontFamily: 'monospace', fontSize: '0.85rem' }}
+            />
+          ) : (
+            <input value={symbol} onChange={e => setSymbol(e.target.value)} placeholder="HK.00700" />
+          )}
 
           <label>策略类型</label>
           <select value={strategyType} onChange={e => onStrategyChange(e.target.value)}>
@@ -190,21 +208,45 @@ export function QuantLab() {
           {currentStrategy && Object.entries(currentStrategy.params).map(([key, def]) => (
             <div key={key} className="param-field">
               <label>{def.label || key}</label>
-              <input
-                type="number"
-                value={params[key] ?? def.default}
-                min={def.min} max={def.max}
-                step={def.type === 'int' ? 1 : 0.01}
-                onChange={e => setParams(prev => ({ ...prev, [key]: parseFloat(e.target.value) || 0 }))}
-              />
+              {def.type === 'select' ? (
+                <select
+                  value={String(params[key] ?? def.default)}
+                  onChange={e => setParams(prev => ({ ...prev, [key]: e.target.value }))}
+                >
+                  {(def.options || []).map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+              ) : def.type === 'bool' ? (
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(params[key] ?? def.default)}
+                    onChange={e => setParams(prev => ({ ...prev, [key]: e.target.checked }))}
+                  />
+                  <span>{String(params[key] ?? def.default) === 'true' || params[key] === true ? '开启' : '关闭'}</span>
+                </label>
+              ) : (
+                <input
+                  type="number"
+                  value={params[key] ?? def.default}
+                  min={def.min} max={def.max}
+                  step={def.type === 'int' ? 1 : 0.01}
+                  onChange={e => setParams(prev => ({ ...prev, [key]: parseFloat(e.target.value) || 0 }))}
+                />
+              )}
             </div>
           ))}
 
-          <label>方向</label>
-          <select value={entrySide} onChange={e => setEntrySide(e.target.value)}>
-            <option value="long">仅做多</option>
-            <option value="both">多空双向</option>
-          </select>
+          {!isPortfolio && (
+            <>
+              <label>方向</label>
+              <select value={entrySide} onChange={e => setEntrySide(e.target.value)}>
+                <option value="long">仅做多</option>
+                <option value="both">多空双向</option>
+              </select>
+            </>
+          )}
 
           <label>回测区间</label>
           <div className="date-range">
@@ -218,10 +260,12 @@ export function QuantLab() {
             <input type="number" value={initialCash} min={1000} step={10000} onChange={e => setInitialCash(Number(e.target.value))} />
           </div>
 
-          <div className="param-row">
-            <label>每笔数量</label>
-            <input type="number" value={quantity} min={1} onChange={e => setQuantity(Number(e.target.value))} />
-          </div>
+          {!isPortfolio && (
+            <div className="param-row">
+              <label>每笔数量</label>
+              <input type="number" value={quantity} min={1} onChange={e => setQuantity(Number(e.target.value))} />
+            </div>
+          )}
 
           <div className="param-row">
             <label>佣金费率</label>
@@ -237,12 +281,12 @@ export function QuantLab() {
             <span className="unit">{(slippageRate * 100).toFixed(2)}%</span>
           </div>
 
-          {/* 风控开关 */}
-          <label className="checkbox-label">
+          {/* 风控开关（仅普通策略） */}
+          {!isPortfolio && <label className="checkbox-label">
             <input type="checkbox" checked={useRisk} onChange={e => setUseRisk(e.target.checked)} />
             启用风控
-          </label>
-          {useRisk && (
+          </label>}
+          {!isPortfolio && useRisk && (
             <div className="risk-config">
               <div className="param-row">
                 <label>止损</label>
@@ -268,8 +312,8 @@ export function QuantLab() {
             </button>
           </div>
 
-          {/* 参数优化 */}
-          <details open={showOptimize} onToggle={e => setShowOptimize((e.target as HTMLDetailsElement).open)}>
+          {/* 参数优化（仅普通策略） */}
+          {!isPortfolio && <details open={showOptimize} onToggle={e => setShowOptimize((e.target as HTMLDetailsElement).open)}>
             <summary>参数优化（网格搜索）</summary>
             <div className="optimize-config">
               <label>优化目标</label>
@@ -287,14 +331,16 @@ export function QuantLab() {
                 {submitting && showOptimize ? '优化中...' : '开始优化'}
               </button>
             </div>
-          </details>
+          </details>}
 
           {error && <div className="error">{error}</div>}
         </aside>
 
         {/* ── 中间：图表区 ── */}
         <main className="quant-chart-area">
-          {selectedChart && selectedChart.bars.length > 0 ? (
+          {isPortfolio && selectedChart && selectedChart.bars.length > 0 ? (
+            <PortfolioEquityChart equityCurve={selectedChart.bars as any[]} trades={run?.chart as any} />
+          ) : selectedChart && selectedChart.bars.length > 0 ? (
             <>
               <KlineChart
                 rows={selectedChart.bars as any[]}
@@ -395,6 +441,68 @@ function MetricCard({ label, value, fmt }: { label: string; value?: number; fmt:
     <div className="metric-card">
       <span className="metric-label">{label}</span>
       <span className="metric-value">{display}</span>
+    </div>
+  )
+}
+
+function PortfolioEquityChart({ equityCurve, trades }: { equityCurve: any[]; trades?: any }) {
+  const portfolioTrades = trades?.portfolio_trades || []
+  // 按日期分组显示交易
+  const tradeByDate: Record<string, any[]> = {}
+  portfolioTrades.forEach((t: any) => {
+    const d = typeof t.date === 'string' ? t.date.slice(0, 10) : String(t.date || '')
+    if (!tradeByDate[d]) tradeByDate[d] = []
+    tradeByDate[d].push(t)
+  })
+  const tradeDates = new Set(Object.keys(tradeByDate))
+
+  return (
+    <div className="portfolio-equity-chart">
+      <div className="panel">
+        <h2>组合净值曲线</h2>
+        <div style={{ padding: '1rem', background: '#1a1a2e', borderRadius: '8px', maxHeight: '300px', overflowY: 'auto' }}>
+          <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid #333', color: '#888' }}>
+                <th style={{ textAlign: 'left', padding: '4px 8px' }}>日期</th>
+                <th style={{ textAlign: 'right', padding: '4px 8px' }}>净值</th>
+                <th style={{ textAlign: 'right', padding: '4px 8px' }}>持仓数</th>
+                <th style={{ textAlign: 'left', padding: '4px 8px' }}>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {equityCurve.filter((e: any, i: number) => {
+                const d = String(e.date || '').slice(0, 10)
+                return tradeDates.has(d) || i === 0 || i === equityCurve.length - 1 || i % 6 === 0
+              }).map((e: any, i: number) => {
+                const d = String(e.date || '').slice(0, 10)
+                const dayTrades = tradeByDate[d] || []
+                return (
+                  <tr key={i} style={{ borderBottom: '1px solid #222' }}>
+                    <td style={{ padding: '3px 8px', color: '#aaa' }}>{d}</td>
+                    <td style={{ padding: '3px 8px', textAlign: 'right', fontWeight: 600 }}>
+                      {e.equity?.toFixed(0) || '-'}
+                    </td>
+                    <td style={{ padding: '3px 8px', textAlign: 'right', color: '#888' }}>
+                      {e.positions ?? '-'}
+                    </td>
+                    <td style={{ padding: '3px 8px' }}>
+                      {dayTrades.map((t: any, j: number) => (
+                        <span key={j} style={{
+                          color: t.action === 'buy' ? '#4caf50' : '#f44336',
+                          marginRight: '6px', fontSize: '0.8rem',
+                        }}>
+                          {t.action === 'buy' ? '买' : '卖'}{t.symbol?.replace('US.', '')}
+                        </span>
+                      ))}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   )
 }

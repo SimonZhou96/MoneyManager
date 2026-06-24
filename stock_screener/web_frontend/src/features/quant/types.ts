@@ -3,13 +3,15 @@ export type StrategyMeta = {
   type: string
   name: string
   params: Record<string, StrategyParamDef>
+  is_portfolio?: boolean  // 组合策略标记：前端据此展示多标的输入
 }
 
 export type StrategyParamDef = {
-  type: 'int' | 'float'
-  default: number
-  min: number
-  max: number
+  type: 'int' | 'float' | 'select' | 'bool'
+  default: number | string | boolean
+  min?: number
+  max?: number
+  options?: string[]  // select 类型的可选项
   label: string
 }
 
@@ -17,7 +19,7 @@ export type StrategyParamDef = {
 export type StrategyBacktestRequest = {
   market: string
   symbols: string[]
-  strategy: { type: string; params: Record<string, number>; entry_side: string }
+  strategy: { type: string; params: Record<string, number | string | boolean>; entry_side: string }
   start: string
   end: string
   initial_cash: number

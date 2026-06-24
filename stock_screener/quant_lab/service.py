@@ -138,15 +138,22 @@ class QuantLabService:
                 current_stage="准备数据", log_message="开始加载K线数据",
             )
             payload = row.get("request") or {}
+            strategy_cfg = payload.get("strategy") or {}
+            strategy_type = strategy_cfg.get("type", "")
+
+            # ── 动量轮动组合策略（跨截面，特殊路径） ──
+            if strategy_type == "momentum_rotation":
+                self._run_momentum_rotation_backtest(run_id, payload)
+                return
+
             created_data_provider = self.data_provider is None
             data_provider = self.data_provider or _build_default_data_provider(self.repository, payload)
 
             from .strategies import create_strategy
             from .models import RiskConfig
 
-            strategy_cfg = payload.get("strategy") or {}
             strategy = create_strategy(
-                strategy_cfg["type"],
+                strategy_type,
                 strategy_cfg.get("params") or {},
                 entry_side=strategy_cfg.get("entry_side", "long"),
             )
@@ -171,7 +178,7 @@ class QuantLabService:
             )
             self.repository.update_quant_backtest_progress(
                 run_id, progress_pct=40, current_stage="生成信号",
-                log_message=f"策略类型: {strategy_cfg['type']}, 标的: {request.symbols}",
+                log_message=f"策略类型: {strategy_type}, 标的: {request.symbols}",
             )
             try:
                 runner = BacktestRunner(data_provider=data_provider, strategy=strategy)
@@ -189,6 +196,116 @@ class QuantLabService:
             )
         except Exception as exc:
             self.repository.fail_quant_backtest_run(run_id, str(exc))
+
+    def _run_momentum_rotation_backtest(self, run_id: str, payload: dict) -> None:
+        """运行动量轮动组合回测。"""
+        import numpy as np
+        import pandas as pd
+        from .strategies.momentum_rotation import (
+            MomentumRotationConfig, MomentumRotationRunner,
+        )
+
+        market = str(payload["market"])
+        symbols = list(payload["symbols"])
+        start = _parse_date(payload["start"])
+        end = _parse_date(payload["end"])
+
+        self.repository.update_quant_backtest_progress(
+            run_id, progress_pct=15, current_stage="加载组合数据",
+            log_message=f"加载 {market} 市场 {len(symbols)} 只股票数据",
+        )
+
+        # 加载所有股票的 K 线数据
+        created_data_provider = self.data_provider is None
+        data_provider = self.data_provider or _build_default_data_provider(self.repository, payload)
+
+        data: dict[str, pd.DataFrame] = {}
+        for sym in symbols:
+            bars = data_provider.bars_for(market, sym, start, end)
+            if bars:
+                df = pd.DataFrame([
+                    {"date": b.ts, "open": b.open, "high": b.high,
+                     "low": b.low, "close": b.close, "volume": b.volume}
+                    for b in bars
+                ])
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.sort_values("date").reset_index(drop=True)
+                df["close"] = df["close"].astype(float)
+                data[sym] = df
+
+        if created_data_provider and hasattr(data_provider, "close"):
+            data_provider.close()
+
+        if len(data) < 2:
+            raise ValueError(f"数据不足：仅 {len(data)} 只有效股票，动量轮动至少需要2只")
+
+        # 构建市场等权指数
+        all_dates = sorted(set().union(*[set(df["date"].tolist()) for df in data.values()]))
+        idx_rows = []
+        for d in all_dates:
+            closes = [float(df[df["date"] == d]["close"].iloc[0])
+                      for df in data.values() if not df[df["date"] == d].empty]
+            if closes:
+                idx_rows.append({"date": d, "close": np.mean(closes)})
+        market_index = pd.DataFrame(idx_rows).sort_values("date").reset_index(drop=True)
+
+        # 策略配置
+        raw_strategy = payload.get("strategy") or {}
+        strategy_params = raw_strategy.get("params") or {}
+        config = MomentumRotationConfig(
+            momentum_months=int(strategy_params.get("momentum_months", 6)),
+            skip_months=int(strategy_params.get("skip_months", 1)),
+            top_n=int(strategy_params.get("top_n", 5)),
+            ema_period=int(strategy_params.get("ema_period", 200)),
+            use_market_filter=bool(strategy_params.get("use_market_filter", True)),
+            rebalance_frequency=str(strategy_params.get("rebalance_frequency", "monthly")),
+            consecutive_days=int(strategy_params.get("consecutive_days", 1)),
+        )
+
+        self.repository.update_quant_backtest_progress(
+            run_id, progress_pct=40, current_stage="运行回测",
+            log_message=f"动量轮动: top_{config.top_n}, {config.momentum_months}mo动量, {len(data)}只股票",
+        )
+
+        # 运行回测（使用 as_of_date=end 确保只用已完成月份）
+        runner = MomentumRotationRunner(config)
+        result = runner.run(
+            data, market_index,
+            initial_cash=float(payload.get("initial_cash", 100000)),
+            commission_rate=float(payload.get("commission_rate", _DEFAULT_COMMISSION_RATE)),
+            slippage_rate=float(payload.get("slippage_rate", _DEFAULT_SLIPPAGE_RATE)),
+            as_of_date=end,
+        )
+
+        self.repository.update_quant_backtest_progress(
+            run_id, progress_pct=85, current_stage="计算指标",
+            log_message=f"成交 {result.metrics.get('trade_count', 0)} 笔, "
+                        f"CAGR {result.metrics.get('cagr', 0)*100:.1f}%",
+        )
+
+        # 转换为标准格式
+        metrics = {k: (float(v) if isinstance(v, (np.floating, np.integer)) else v)
+                   for k, v in result.metrics.items()}
+        # 转换 trades 中的 date 对象为字符串（与 equity_curve 保持一致）
+        trades_serializable = []
+        for t in result.trades:
+            td = dict(t)
+            td["date"] = td["date"].isoformat() if hasattr(td["date"], "isoformat") else str(td["date"])
+            trades_serializable.append(td)
+
+        chart = {
+            "symbols": [{
+                "symbol": "组合",
+                "bars": [{"date": e["date"].isoformat() if hasattr(e["date"], "isoformat") else str(e["date"]),
+                          "close": e["equity"]}
+                         for e in result.equity_curve],
+                "signals": [],
+                "trades": [],
+                "overlays": [],
+            }],
+            "portfolio_trades": trades_serializable,
+        }
+        self.repository.finish_quant_backtest_run(run_id, metrics, warnings=[], chart=chart)
 
     # ── 参数优化 ──
 

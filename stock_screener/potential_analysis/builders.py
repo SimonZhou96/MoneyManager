@@ -133,12 +133,35 @@ def _fill_trading_snapshot_from_futu(snap: TradingSnapshot, row) -> TradingSnaps
 
 
 def _snapshot_is_empty(snap: Any) -> bool:
-    """判断 snapshot 是否因为 yfinance 失败而为空（需要 Futu 兜底）"""
+    """判断 snapshot 是否因为 yfinance 失败或关键字段缺失而为空（需要 Futu 兜底）。
+
+    检查三个层面：
+    1. yfinance provider_status 是否为 error（原有逻辑）
+    2. 所有关键字段全部缺失（yfinance 完全没返回数据）
+    3. PE 缺失但其他数据可用 —— yfinance 认识这只股票但缺少财务数据
+       （常见于新上市股票/小盘股，Futu 可能有补充）
+    """
     status = getattr(snap, "provider_status", {})
     yf_status = status.get("yfinance", "")
-    if not yf_status or yf_status == "ok":
-        return False
-    return "error" in str(yf_status).lower() or isinstance(yf_status, str) and yf_status.startswith("error")
+
+    # 原逻辑：yfinance 明确失败
+    if yf_status and yf_status != "ok":
+        if "error" in str(yf_status).lower() or (isinstance(yf_status, str) and yf_status.startswith("error")):
+            return True
+
+    pe = getattr(snap, "pe_trailing", None)
+    mc = getattr(snap, "market_cap", None)
+    price = getattr(snap, "current_price", None)
+
+    # yfinance 返回了 ok 但所有关键字段全空
+    if pe is None and mc is None and price is None:
+        return True
+
+    # yfinance 知道这只股票（有价格/市值）但缺少 PE —— 尝试 Futu 补充
+    if pe is None and (mc is not None or price is not None):
+        return True
+
+    return False
 
 
 def _to_futu_code(code: str, market: str) -> str:

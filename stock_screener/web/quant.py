@@ -94,7 +94,7 @@ def create_paper_account(
 
 class StrategyBacktestRequest(BaseModel):
     market: str
-    symbols: List[str] = Field(min_length=1, max_length=1, description="当前仅支持单只标的")
+    symbols: List[str] = Field(min_length=1, description="标的列表；普通策略1只，组合策略可多只")
     strategy: Dict[str, Any]              # {"type": "ma_cross", "params": {...}, "entry_side": "long"}
     start: date
     end: date

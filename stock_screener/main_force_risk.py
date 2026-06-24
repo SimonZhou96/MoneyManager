@@ -729,8 +729,9 @@ class MainForceRiskAnalyzer:
                 return [], {"status": "insufficient", "message": f"缺少{column}列"}
             data[column] = pd.to_numeric(data[column], errors="coerce")
         data = data.dropna(subset=["open", "high", "low", "close"])
-        if len(data) < 20:
-            return [], {"status": "insufficient", "message": "K线数量不足20根"}
+        if len(data) < 10:
+            return [], {"status": "insufficient", "message": f"K线数量不足10根(当前{len(data)}根)"}
+        low_data_warning = len(data) < 20
 
         latest = data.iloc[-1]
         prev = data.iloc[-2]
@@ -751,7 +752,10 @@ class MainForceRiskAnalyzer:
             "volume_ratio_20d": volume_ratio,
             "high_position_pct_60d": high_position_pct,
             "support_low_20d": support_low,
+            "kline_rows": len(data),
         }
+        if low_data_warning:
+            metrics["warning"] = f"K线仅{len(data)}根(<20)，分析仅供参考"
         signals: List[RiskSignal] = []
 
         if pct is not None and volume_ratio is not None and pct <= -3.0 and volume_ratio >= 1.8:
@@ -937,6 +941,10 @@ class MainForceRiskAnalyzer:
     @staticmethod
     def _level(score: Optional[float], kline_metrics: Dict[str, Any]) -> str:
         if kline_metrics.get("status") != "available" and (score is None or score <= 0):
+            # Distinguish: truly insufficient vs limited but analyzed
+            warning = kline_metrics.get("warning", "")
+            if warning:
+                return "low"  # Analyzed with limited data, treat conservatively
             return "unknown"
         if score is None:
             return "unknown"

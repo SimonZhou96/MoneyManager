@@ -47,6 +47,18 @@ class StockTerminalRepositoryTest(unittest.TestCase):
         self.assertEqual(status.status, "stale")
         self.assertTrue(status.stale)
 
+    def test_quote_error_cache_round_trip(self):
+        repo = InMemoryStockTerminalRepository()
+        now = datetime(2026, 5, 25, 9, 30, tzinfo=timezone.utc)
+
+        repo.save_quote_error("US", "US.AAPL", "provider down", source="fallback", fetched_at=now, expires_at=now + timedelta(minutes=1))
+        cached, status = repo.get_quote("US", "US.AAPL", now=now)
+
+        self.assertIsNone(cached)
+        self.assertEqual(status.status, "error")
+        self.assertEqual(status.error_message, "provider down")
+        self.assertEqual(status.source, "fallback")
+
     def test_kline_minute_and_fund_flow_cache_round_trip(self):
         repo = InMemoryStockTerminalRepository()
         now = datetime(2026, 5, 25, 9, 30, tzinfo=timezone.utc)

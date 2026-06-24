@@ -1,0 +1,46 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - strong [ref=e6]: MoneyManager
+      - generic [ref=e7]: Stock Screener
+    - navigation [ref=e8]:
+      - button "总览" [ref=e9] [cursor=pointer]
+      - button "个股筛选器" [ref=e10] [cursor=pointer]
+      - button "量化实验室" [ref=e11] [cursor=pointer]
+      - button "规则链" [ref=e12] [cursor=pointer]
+      - button "产业拓扑" [ref=e13] [cursor=pointer]
+    - generic [ref=e15]: MoneyManager
+  - main [ref=e16]:
+    - generic [ref=e17]:
+      - generic [ref=e18]:
+        - heading "个股筛选器" [level=1] [ref=e19]
+        - paragraph [ref=e20]: 输入股票名称，一键筛选并查看K线与分析报告
+      - generic [ref=e21]:
+        - generic [ref=e22]:
+          - generic [ref=e23]: 市场
+          - combobox "市场" [ref=e24]:
+            - option "港股" [selected]
+            - option "美股"
+            - option "A股"
+        - generic [ref=e25]:
+          - generic [ref=e26]: 周期
+          - combobox "周期" [ref=e27]:
+            - option "1d" [selected]
+            - option "1wk"
+            - option "1mo"
+            - option "3mo"
+            - option "1m"
+            - option "3m"
+            - option "5m"
+            - option "15m"
+            - option "30m"
+            - option "60m"
+        - generic [ref=e28]:
+          - generic [ref=e29]: 规则链
+          - combobox "规则链" [ref=e30]
+        - generic [ref=e31]:
+          - generic [ref=e32]:
+            - generic [ref=e33]: 股票名称
+            - textbox "股票名称" [ref=e35]:
+              - /placeholder: 输入股票名称，如：腾讯 / Apple / 茅台
+          - button "开始筛选" [disabled] [ref=e36]

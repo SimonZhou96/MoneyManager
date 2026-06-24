@@ -35,7 +35,7 @@ class EastmoneyStockTerminalProvider:
             "https://push2.eastmoney.com/api/qt/stock/get",
             params={
                 "secid": self._secid(market, code),
-                "fields": "f43,f44,f45,f46,f47,f48,f57,f58,f60,f169,f170",
+                "fields": "f43,f44,f45,f46,f47,f48,f57,f58,f60,f116,f169,f170",
             },
             timeout=self.timeout_sec,
         )
@@ -177,6 +177,7 @@ def parse_eastmoney_quote(market: str, code: str, payload: dict) -> QuoteSnapsho
         previous_close=_eastmoney_price(data.get("f60")),
         volume=_eastmoney_number(data.get("f47"), 0.0),
         turnover=_eastmoney_number(data.get("f48"), 0.0),
+        market_cap=_eastmoney_number(data.get("f116")),
         fetched_at=fetched_at,
         source="eastmoney",
     )

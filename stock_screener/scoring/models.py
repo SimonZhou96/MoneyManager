@@ -97,6 +97,9 @@ class MarketTemperature:
     risk_appetite_summary: str = ""         # "高 / 中 / 低"
     hot_clarity_summary: str = ""           # "清晰 / 一般 / 混乱"
 
+    # 各维度数据来源状态（available / missing / error / default）
+    dimension_sources: Dict[str, str] = field(default_factory=dict)
+
     def is_stale(self) -> bool:
         """检查缓存是否过期。"""
         if not self.computed_at:

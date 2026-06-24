@@ -85,6 +85,7 @@ class QuoteSnapshot:
     previous_close: Any = None
     volume: Any = None
     turnover: Any = None
+    market_cap: Any = None
     fetched_at: Optional[datetime] = None
     source: str = ""
 
@@ -102,6 +103,7 @@ class QuoteSnapshot:
             "previous_close": _num(self.previous_close),
             "volume": _num(self.volume),
             "turnover": _num(self.turnover),
+            "market_cap": _num(self.market_cap),
             "fetched_at": _dt(self.fetched_at),
             "source": self.source,
         }

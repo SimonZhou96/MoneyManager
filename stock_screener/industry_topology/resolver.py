@@ -3,9 +3,11 @@
 """节点行情聚合：名称/板块/市值/涨跌幅 + size 计算（不含 LLM）。"""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from web.single_stock import normalize_stock_code
+
+from .symbols import bare_code, normalize_topology_market, symbol_id
 
 # 市值分桶边界（单位：元）
 _SIZE_BUCKETS = [
@@ -46,14 +48,18 @@ class NodeResolver:
     def __init__(self, db: Any):
         self.db = db
 
-    def resolve(self, code: str, market: str) -> Dict[str, Any]:
+    def resolve(self, code: str, market: str, include_quote: bool = False) -> Dict[str, Any]:
         market = _normalize_market(market)
         norm_code = normalize_stock_code(market, code)
         rows: List[dict] = []
         if hasattr(self.db, "get_stocks_by_codes"):
             rows = self.db.get_stocks_by_codes(market, [norm_code], include_fundamentals=True)
+            if not rows:
+                bare = bare_code(market, norm_code)
+                if bare != norm_code:
+                    rows = self.db.get_stocks_by_codes(market, [bare], include_fundamentals=True)
         base = rows[0] if rows else {"code": norm_code, "name": "", "sector": "", "market_cap": None}
-        pct_chg = self._fetch_pct_chg(norm_code, market)
+        pct_chg = self._fetch_pct_chg(norm_code, market) if include_quote else None
         return {
             "code": base.get("code") or norm_code,
             "name": base.get("name") or "",
@@ -61,30 +67,60 @@ class NodeResolver:
             "sector": base.get("sector") or base.get("industry") or "--",
             "market_cap": base.get("market_cap"),
             "pct_chg": pct_chg,
+            "quote_status": "fresh" if pct_chg is not None else "pending",
         }
 
-    def resolve_many(self, codes: List[str], market: str) -> Dict[str, Dict[str, Any]]:
-        market = _normalize_market(market)
-        norm = []
-        for c in codes:
+    def resolve_many(
+        self,
+        stocks: Iterable[Tuple[str, str]] | List[str],
+        market: Optional[str] = None,
+        include_quote: bool = False,
+    ) -> Dict[str, Dict[str, Any]]:
+        grouped: Dict[str, List[str]] = {}
+        if market is not None:
+            market = _normalize_market(market)
+            stock_items = [(market, str(c)) for c in stocks]
+        else:
+            stock_items = [(str(m), str(c)) for m, c in stocks]  # type: ignore[misc]
+
+        normalized_items: List[Tuple[str, str]] = []
+        for raw_market, c in stock_items:
+            item_market = _normalize_market(raw_market)
             try:
-                norm.append(normalize_stock_code(market, c))
+                norm_code = normalize_stock_code(item_market, c)
             except ValueError:
                 continue
-        rows: List[dict] = []
+            normalized_items.append((item_market, norm_code))
+            grouped.setdefault(item_market, []).append(norm_code)
+            bare = bare_code(item_market, norm_code)
+            if bare != norm_code:
+                grouped[item_market].append(bare)
+
+        by_symbol: Dict[str, dict] = {}
         if hasattr(self.db, "get_stocks_by_codes"):
-            rows = self.db.get_stocks_by_codes(market, norm, include_fundamentals=True) if norm else []
-        by_code = {r["code"]: r for r in rows}
+            for item_market, codes in grouped.items():
+                rows = self.db.get_stocks_by_codes(item_market, codes, include_fundamentals=True) if codes else []
+                for row in rows:
+                    key = symbol_id(item_market, bare_code(item_market, row["code"]))
+                    if key not in by_symbol:
+                        by_symbol[key] = row
+
         result = {}
-        for c in norm:
-            base = by_code.get(c, {"code": c, "name": "", "sector": "", "market_cap": None})
-            result[c] = {
+        for item_market, c in normalized_items:
+            symbol = symbol_id(item_market, c)
+            bare_sym = symbol_id(item_market, bare_code(item_market, c))
+            base = by_symbol.get(symbol) or by_symbol.get(bare_sym)
+            if base is None:
+                base = {"code": c, "name": "", "sector": "", "market_cap": None}
+            pct_chg = self._fetch_pct_chg(c, item_market) if include_quote else None
+            result[symbol] = {
                 "code": c,
                 "name": base.get("name") or "",
-                "market": market,
+                "market": item_market,
                 "sector": base.get("sector") or base.get("industry") or "--",
                 "market_cap": base.get("market_cap"),
-                "pct_chg": self._fetch_pct_chg(c, market),
+                "pct_chg": pct_chg,
+                "quote_status": "fresh" if pct_chg is not None else "pending",
             }
         return result
 
@@ -106,5 +142,4 @@ class NodeResolver:
 
 
 def _normalize_market(market: str) -> str:
-    m = (market or "").strip().upper()
-    return m if m in ("HK", "US", "A") else "A"
+    return normalize_topology_market(market)

@@ -3,12 +3,16 @@
 """产业拓扑单元测试。"""
 import unittest
 import sys, os
+from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from industry_topology.models import (
     RelationType, Direction, TopologyNode, TopologyEdge, CachedRelation,
 )
 from industry_topology.resolver import compute_size_level, format_market_cap, NodeResolver
+from industry_topology.symbols import parse_topology_symbol, symbol_id
+from stock_terminal.models import BlockStatus, QuoteSnapshot
+from web.topology import GraphRequest, _quote_from_cache, _quote_status_item, _schedule_relation_generation, _TOPOLOGY_GENERATION_IN_FLIGHT, graph as topology_graph_route
 
 
 class TestModels(unittest.TestCase):
@@ -46,6 +50,77 @@ class TestModels(unittest.TestCase):
             evidence="提供800G光模块", expires_at=None, is_empty=False,
         )
         self.assertEqual(r.peer_name, "中际旭创")
+
+
+class TestTopologyQuoteSymbols(unittest.TestCase):
+    def test_parse_a_share_exchange_symbols(self):
+        cases = {
+            "SH:603290.SH": ("SH:603290.SH", "A", "SH.603290", "SH", "603290.SS"),
+            "SZ:002600.SZ": ("SZ:002600.SZ", "A", "SZ.002600", "SZ", "002600.SZ"),
+            "A:600745.SH": ("A:600745.SH", "A", "SH.600745", "SH", "600745.SS"),
+        }
+        for raw, expected in cases.items():
+            parsed = parse_topology_symbol(raw)
+            self.assertFalse(parsed["skipped"])
+            self.assertEqual(parsed["symbol"], expected[0])
+            self.assertEqual(parsed["market"], expected[1])
+            self.assertEqual(parsed["code"], expected[2])
+            self.assertEqual(parsed["exchange"], expected[3])
+            self.assertEqual(parsed["provider_symbols"]["yfinance"], expected[4])
+
+    def test_parse_global_exchange_symbols(self):
+        cases = {
+            "US:QCOM.US": ("US:QCOM.US", "US", "US.QCOM", "QCOM"),
+            "NYSE:SONY.NYSE": ("NYSE:SONY.NYSE", "US", "US.SONY", "SONY"),
+            "TY:6758.TY": ("TY:6758.TY", "JP", "JP.6758", "6758.T"),
+            "TW:2454.TW": ("TW:2454.TW", "TW", "TW.2454", "2454.TW"),
+            "KS:005930.KS": ("KS:005930.KS", "KR", "KR.005930", "005930.KS"),
+        }
+        for raw, expected in cases.items():
+            parsed = parse_topology_symbol(raw)
+            self.assertFalse(parsed["skipped"])
+            self.assertEqual(parsed["symbol"], expected[0])
+            self.assertEqual(parsed["market"], expected[1])
+            self.assertEqual(parsed["code"], expected[2])
+            self.assertEqual(parsed["provider_symbols"]["yfinance"], expected[3])
+
+    def test_parse_unsupported_market_is_skipped(self):
+        parsed = parse_topology_symbol("LSE:VOD.L")
+
+        self.assertTrue(parsed["skipped"])
+        self.assertEqual(parsed["status"], "skipped")
+        self.assertIn("unsupported", parsed["error"])
+
+
+class TestTopologyQuotePayload(unittest.TestCase):
+    def test_quote_from_cache_returns_name_and_formatted_market_cap(self):
+        parsed = parse_topology_symbol("US:TSM.US")
+        quote = QuoteSnapshot(
+            market="US",
+            code="US.TSM",
+            name="台积电",
+            price=439.215,
+            change_percent=1.2,
+            market_cap=1.23e12,
+            fetched_at=datetime(2026, 6, 23, 15, 16, tzinfo=timezone.utc),
+            source="fake",
+        )
+        status = BlockStatus(status="cached", source="fake", fetched_at=quote.fetched_at)
+
+        item = _quote_from_cache(parsed, quote, status)
+
+        self.assertEqual(item["name"], "台积电")
+        self.assertEqual(item["market_cap"], 1.23e12)
+        self.assertEqual(item["market_cap_str"], "1.2万亿")
+
+    def test_quote_status_item_uses_stable_display_fallbacks(self):
+        parsed = parse_topology_symbol("SZ:300207.SZ")
+
+        item = _quote_status_item(parsed, "pending")
+
+        self.assertEqual(item["name"], "SZ.300207")
+        self.assertIsNone(item["market_cap"])
+        self.assertEqual(item["market_cap_str"], "未知")
 
 
 from unittest.mock import MagicMock
@@ -103,10 +178,10 @@ from industry_topology.cache import GraphCache
 
 
 def _make_relation(peer_code, direction=Direction.UPSTREAM, relation=RelationType.SUPPLIER,
-                   expires=None, is_empty=False):
+                   expires=None, is_empty=False, peer_market="A"):
     return CachedRelation(
         source_code="US.NVDA", source_market="US",
-        peer_code=peer_code, peer_market="A", peer_name=f"公司{peer_code}",
+        peer_code=peer_code, peer_market=peer_market, peer_name=f"公司{peer_code}",
         relation=relation, direction=direction, evidence="测试",
         expires_at=expires, is_empty=is_empty,
     )
@@ -243,6 +318,26 @@ class TestRelationEngine(unittest.TestCase):
         rels = eng.infer("US.NVDA", "英伟达", "US", "半导体")
         self.assertEqual(rels, [])
 
+    def test_infer_batch_parses_multiple_source_groups(self):
+        payload = {"groups": [
+            {"source_code": "US.NVDA", "source_market": "US", "items": [
+                {"code": "TSM", "name": "台积电", "market": "US", "direction": "upstream", "relation": "foundry_packaging", "evidence": "先进制程代工"},
+            ]},
+            {"source_code": "TSM", "source_market": "US", "items": [
+                {"code": "ASML", "name": "ASML", "market": "US", "direction": "upstream", "relation": "equipment", "evidence": "光刻机设备"},
+            ]},
+        ]}
+        eng = RelationEngine(FakeResolver(), FakeLLMProvider(payload))
+
+        result = eng.infer_batch([
+            {"code": "US.NVDA", "market": "US", "name": "NVIDIA", "sector": "Semiconductors"},
+            {"code": "TSM", "market": "US", "name": "Taiwan Semiconductor", "sector": "Semiconductors"},
+        ])
+
+        self.assertEqual(set(result.keys()), {("US", "US.NVDA"), ("US", "TSM")})
+        self.assertEqual(result[("US", "US.NVDA")][0].peer_code, "TSM")
+        self.assertEqual(result[("US", "TSM")][0].peer_code, "ASML")
+
 
 from industry_topology.service import TopologyService
 
@@ -256,10 +351,48 @@ class FakeDB:
 
 
 class FakeResolver2:
-    def resolve(self, code, market):
-        return {"code": code, "name": f"公司{code}", "market": market, "sector": "板块", "market_cap": 1e10, "pct_chg": 1.5}
-    def resolve_many(self, codes, market):
-        return {c: {"code": c, "name": f"公司{c}", "market": market, "sector": "板块", "market_cap": 1e10, "pct_chg": 1.0} for c in codes}
+    def resolve(self, code, market, include_quote=False):
+        return {"code": code, "name": f"公司{code}", "market": market, "sector": "板块", "market_cap": 1e10, "pct_chg": None, "quote_status": "pending"}
+    def resolve_many(self, stocks, market=None, include_quote=False):
+        if market is not None:
+            stocks = [(market, c) for c in stocks]
+        return {
+            (f"{m}:{c}" if market is None else c): {
+                "code": c, "name": f"公司{c}", "market": m, "sector": "板块", "market_cap": 1e10,
+                "pct_chg": None, "quote_status": "pending",
+            }
+            for m, c in stocks
+        }
+
+
+class RecordingResolver(FakeResolver2):
+    def __init__(self):
+        self.resolve_many_inputs = []
+
+    def resolve_many(self, stocks, market=None, include_quote=False):
+        self.resolve_many_inputs.append((stocks, market, include_quote))
+        return super().resolve_many(stocks, market=market, include_quote=include_quote)
+
+
+class AliasAwareResolver(FakeResolver2):
+    def __init__(self):
+        self.resolve_many_inputs = []
+
+    def resolve_many(self, stocks, market=None, include_quote=False):
+        self.resolve_many_inputs.append((stocks, market, include_quote))
+        result = {}
+        for item_market, code in stocks:
+            symbol = symbol_id(item_market, code)
+            result[symbol] = {
+                "code": code,
+                "name": "中芯国际" if code == "SH.688981" else f"公司{code}",
+                "market": item_market,
+                "sector": "半导体",
+                "market_cap": 500 * 1e8,
+                "pct_chg": None,
+                "quote_status": "pending",
+            }
+        return result
 
 
 class FakeCache:
@@ -269,7 +402,7 @@ class FakeCache:
     def save_relations(self, code, market, rels, provider, model, ttl_days=7):
         self.saved.append((code, rels))
     def build_graph(self, cached_map): import networkx as nx; g = nx.DiGraph(); [g.add_edge(s, r.peer_code) for s, rels in cached_map.items() for r in rels if not r.is_empty]; return g
-    def reachable_within(self, g, s, d): return list({s} | {r.peer_code for r in self.hit_map.get(s, [])})
+    def reachable_within(self, g, s, d): import networkx as nx; return list(nx.single_source_shortest_path_length(g, s, cutoff=d).keys())
 
 
 class TestTopologyService(unittest.TestCase):
@@ -285,9 +418,124 @@ class TestTopologyService(unittest.TestCase):
         ]}))
         svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
         svc.cache = cache; svc.engine = eng; svc.resolver = FakeResolver2()
-        result = svc.build_graph("US.NVDA", "US", depth=1)
+        result = svc.build_graph("US.NVDA", "US", depth=1, quote_mode="sync")
         self.assertEqual(result["stats"]["llm_calls"], 1)
         self.assertGreater(len(result["nodes"]), 1)
+
+    def test_build_graph_defer_does_not_call_llm(self):
+        calls = {"count": 0}
+        def fail_if_called(self, **kwargs):
+            calls["count"] += 1
+            raise Exception("不该同步调 LLM")
+
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = FakeCache({})
+        svc.resolver = FakeResolver2()
+        svc.engine = RelationEngine(FakeResolver2(), type("Boom",(),{"complete_json": fail_if_called})())
+
+        result = svc.build_graph("US.NVDA", "US", depth=1, quote_mode="defer")
+
+        self.assertEqual(calls["count"], 0)
+        self.assertEqual(result["stats"]["llm_calls"], 0)
+        self.assertEqual(result["stats"].get("relation_status"), "pending")
+        self.assertEqual(len(result["nodes"]), 1)
+
+    def test_build_graph_defer_empty_cache_returns_center_node(self):
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = FakeCache({})
+        svc.resolver = FakeResolver2()
+        svc.engine = RelationEngine(FakeResolver2(), FakeLLMProvider({"items": []}))
+
+        result = svc.build_graph("US.NVDA", "US", depth=1, quote_mode="defer")
+
+        self.assertEqual(len(result["nodes"]), 1)
+        self.assertEqual(result["nodes"][0]["id"], "US:NVDA")
+        self.assertEqual(result["edges"], [])
+
+    def test_build_graph_auto_empty_cache_marks_generating_without_llm(self):
+        calls = {"count": 0}
+        def fail_if_called(self, **kwargs):
+            calls["count"] += 1
+            raise Exception("自动模式不应同步调 LLM")
+
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = FakeCache({})
+        svc.resolver = FakeResolver2()
+        svc.engine = RelationEngine(FakeResolver2(), type("Boom",(),{"complete_json": fail_if_called})())
+
+        result = svc.build_graph("US.NVDA", "US", depth=1, quote_mode="auto")
+
+        self.assertEqual(calls["count"], 0)
+        self.assertEqual(len(result["nodes"]), 1)
+        self.assertEqual(result["edges"], [])
+        self.assertEqual(result["stats"]["relation_status"], "generating")
+        self.assertEqual(result["stats"]["stale_nodes"], 1)
+        self.assertEqual(result["stats"]["stale_sources"], [{"code": "US.NVDA", "market": "US"}])
+
+    def test_build_graph_auto_partial_cache_returns_cached_edges_and_stale_sources(self):
+        cache = FakeCache({
+            "US.NVDA": [_make_relation("300308")],
+        })
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = cache
+        svc.resolver = FakeResolver2()
+
+        result = svc.build_graph("US.NVDA", "US", depth=2, quote_mode="auto")
+
+        self.assertGreaterEqual(len(result["nodes"]), 2)
+        self.assertEqual(len(result["edges"]), 1)
+        self.assertEqual(result["stats"]["relation_status"], "generating")
+        self.assertEqual(result["stats"]["cached_nodes"], 1)
+        self.assertEqual(result["stats"]["stale_nodes"], 1)
+        self.assertEqual(result["stats"]["stale_sources"], [{"code": "300308", "market": "A"}])
+
+    def test_build_graph_auto_full_cache_does_not_mark_generating(self):
+        cache = FakeCache({
+            "US.NVDA": [_make_relation("300308")],
+            "300308": [],
+        })
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = cache
+        svc.resolver = FakeResolver2()
+
+        result = svc.build_graph("US.NVDA", "US", depth=2, quote_mode="auto")
+
+        self.assertEqual(result["stats"]["relation_status"], "cached")
+        self.assertEqual(result["stats"]["stale_nodes"], 0)
+        self.assertEqual(result["stats"]["stale_sources"], [])
+
+    def test_llm_failure_empty_relations_returns_center_node(self):
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = FakeCache({})
+        svc.resolver = FakeResolver2()
+        svc.engine = RelationEngine(FakeResolver2(), FakeLLMProvider({"items": []}))
+
+        result = svc.build_graph("US.NVDA", "US", depth=1, quote_mode="sync")
+
+        self.assertEqual(result["stats"]["llm_calls"], 1)
+        self.assertEqual(len(result["nodes"]), 1)
+        self.assertEqual(result["nodes"][0]["id"], "US:NVDA")
+        self.assertEqual(result["edges"], [])
+
+    def test_infer_and_cache_batch_saves_empty_relations_for_missing_group(self):
+        payload = {"groups": [
+            {"source_code": "US.NVDA", "source_market": "US", "items": [
+                {"code": "TSM", "name": "台积电", "market": "US", "direction": "upstream", "relation": "foundry_packaging", "evidence": "先进制程代工"},
+            ]},
+        ]}
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider(payload))
+        svc.cache = FakeCache({})
+        svc.resolver = FakeResolver2()
+
+        result = svc.infer_and_cache_batch([
+            {"code": "US.NVDA", "market": "US"},
+            {"code": "TSM", "market": "US"},
+        ])
+
+        self.assertTrue(result)
+        self.assertEqual([item[0] for item in svc.cache.saved], ["US.NVDA", "TSM"])
+        self.assertEqual(len(svc.cache.saved[0][1]), 1)
+        self.assertEqual(svc.cache.saved[1][1], [])
 
     def test_build_graph_cached_zero_llm(self):
         cache = FakeCache({"US.NVDA": [_make_relation("300308")]})
@@ -295,7 +543,7 @@ class TestTopologyService(unittest.TestCase):
         svc.cache = cache; svc.resolver = FakeResolver2()
         # engine 不该被调用：给一个会抛的 fake
         svc.engine = RelationEngine(FakeResolver2(), type("Boom",(),{"complete_json": lambda self,**k: (_ for _ in ()).throw(Exception("不该调"))})())
-        result = svc.build_graph("US.NVDA", "US", depth=1)
+        result = svc.build_graph("US.NVDA", "US", depth=1, quote_mode="sync")
         self.assertEqual(result["stats"]["llm_calls"], 0)
 
     def test_llm_failure_isolated(self):
@@ -303,11 +551,170 @@ class TestTopologyService(unittest.TestCase):
         boom_engine = RelationEngine(FakeResolver2(), type("Boom",(),{"complete_json": lambda self,**k: (_ for _ in ()).throw(Exception("LLM挂"))})())
         svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
         svc.cache = cache; svc.engine = boom_engine; svc.resolver = FakeResolver2()
-        result = svc.build_graph("US.NVDA", "US", depth=1)
+        result = svc.build_graph("US.NVDA", "US", depth=1, quote_mode="sync")
         # 中心节点仍返回，edges 空
         self.assertEqual(result["stats"].get("error"), "llm_failed")
         self.assertEqual(len(result["nodes"]), 1)
         self.assertEqual(result["nodes"][0]["code"], "US.NVDA")
+
+    def test_build_graph_includes_depth_and_zone(self):
+        cache = FakeCache({
+            "US.NVDA": [
+                _make_relation("300308", direction=Direction.UPSTREAM, relation=RelationType.SUPPLIER),
+                _make_relation("600001", direction=Direction.DOWNSTREAM, relation=RelationType.CUSTOMER),
+            ],
+        })
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = cache
+        svc.resolver = FakeResolver2()
+
+        result = svc.build_graph("US.NVDA", "US", depth=1)
+        node_map = {node["code"]: node for node in result["nodes"]}
+
+        self.assertEqual(node_map["US.NVDA"]["depth"], 0)
+        self.assertEqual(node_map["US.NVDA"]["zone"], "center")
+        self.assertEqual(node_map["300308"]["depth"], 1)
+        self.assertEqual(node_map["300308"]["zone"], "upstream")
+        self.assertEqual(node_map["600001"]["depth"], 1)
+        self.assertEqual(node_map["600001"]["zone"], "downstream")
+
+    def test_build_graph_uses_peer_market_and_symbol_ids(self):
+        cache = FakeCache({
+            "01810": [
+                _make_relation("QCOM", peer_market="US"),
+                _make_relation("002600", peer_market="A"),
+                _make_relation("6981", peer_market="JP"),
+            ],
+        })
+        resolver = RecordingResolver()
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = cache
+        svc.resolver = resolver
+
+        result = svc.build_graph("01810", "HK", depth=1)
+        node_map = {node["id"]: node for node in result["nodes"]}
+
+        self.assertIn("HK:01810", node_map)
+        self.assertIn("US:QCOM", node_map)
+        self.assertIn("A:002600", node_map)
+        self.assertIn("JP:6981", node_map)
+        self.assertEqual(node_map["US:QCOM"]["market"], "US")
+        self.assertEqual(node_map["A:002600"]["market"], "A")
+        self.assertEqual(node_map["JP:6981"]["market"], "JP")
+        self.assertEqual(resolver.resolve_many_inputs[0][1], None)
+        self.assertFalse(resolver.resolve_many_inputs[0][2])
+        self.assertCountEqual(
+            resolver.resolve_many_inputs[0][0],
+            [("US", "US.QCOM"), ("A", "SZ.002600"), ("JP", "JP.6981")],
+        )
+
+    def test_exchange_alias_nodes_resolve_with_standard_market_but_keep_display_id(self):
+        cache = FakeCache({
+            "HK.01810": [
+                _make_relation("688981.SH", peer_market="SH"),
+            ],
+        })
+        resolver = AliasAwareResolver()
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = cache
+        svc.resolver = resolver
+
+        result = svc.build_graph("HK.01810", "HK", depth=1)
+        node_map = {node["id"]: node for node in result["nodes"]}
+
+        self.assertIn("SH:688981.SH", node_map)
+        self.assertEqual(node_map["SH:688981.SH"]["name"], "中芯国际")
+        self.assertEqual(node_map["SH:688981.SH"]["sector"], "半导体")
+        self.assertEqual(node_map["SH:688981.SH"]["market_cap_str"], "500亿")
+        self.assertEqual(node_map["SH:688981.SH"]["size_level"], 3)
+        self.assertEqual(resolver.resolve_many_inputs[0][0], [("A", "SH.688981")])
+
+    def test_parse_topology_symbol_normalizes_supported_markets(self):
+        from industry_topology.symbols import parse_topology_symbol
+
+        parsed = parse_topology_symbol("A:002600")
+
+        self.assertEqual(parsed["symbol"], "A:002600")
+        self.assertEqual(parsed["market"], "A")
+        self.assertEqual(parsed["code"], "SZ.002600")
+        self.assertFalse(parsed["skipped"])
+
+    def test_parse_topology_symbol_supports_japan_market(self):
+        from industry_topology.symbols import parse_topology_symbol
+
+        parsed = parse_topology_symbol("JP:6981")
+
+        self.assertEqual(parsed["symbol"], "JP:6981")
+        self.assertFalse(parsed["skipped"])
+        self.assertEqual(parsed["market"], "JP")
+        self.assertEqual(parsed["code"], "JP.6981")
+        self.assertEqual(parsed["provider_symbols"]["yfinance"], "6981.T")
+
+
+class FakeBackgroundTasks:
+    def __init__(self):
+        self.tasks = []
+
+    def add_task(self, func, *args, **kwargs):
+        self.tasks.append((func, args, kwargs))
+
+
+class TestTopologyBackgroundScheduler(unittest.TestCase):
+    def setUp(self):
+        _TOPOLOGY_GENERATION_IN_FLIGHT.clear()
+
+    def tearDown(self):
+        _TOPOLOGY_GENERATION_IN_FLIGHT.clear()
+
+    def test_schedule_relation_generation_deduplicates_in_flight_sources(self):
+        background = FakeBackgroundTasks()
+        stats = {"stale_sources": [{"code": "US.NVDA", "market": "US"}, {"code": "300308", "market": "A"}]}
+
+        first = _schedule_relation_generation(background, stats)
+        second = _schedule_relation_generation(background, stats)
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(len(background.tasks), 1)
+        self.assertEqual(_TOPOLOGY_GENERATION_IN_FLIGHT, {("US", "US.NVDA"), ("A", "300308")})
+
+    def test_schedule_relation_generation_batches_stale_sources_by_five(self):
+        background = FakeBackgroundTasks()
+        stats = {"stale_sources": [{"code": f"S{i}", "market": "US"} for i in range(9)]}
+
+        started = _schedule_relation_generation(background, stats)
+
+        self.assertTrue(started)
+        self.assertEqual(len(background.tasks), 2)
+        self.assertEqual([len(task[1][0]) for task in background.tasks], [5, 4])
+        self.assertEqual(len(_TOPOLOGY_GENERATION_IN_FLIGHT), 9)
+
+    def test_graph_route_marks_background_started_for_generating_response(self):
+        class FakeSvc:
+            def __init__(self):
+                self.quote_mode = None
+
+            def build_graph(self, code, market, depth, quote_mode="auto"):
+                self.quote_mode = quote_mode
+                return {
+                    "nodes": [],
+                    "edges": [],
+                    "stats": {
+                        "llm_calls": 0,
+                        "cached_nodes": 0,
+                        "stale_nodes": 1,
+                        "stale_sources": [{"code": code, "market": market}],
+                        "relation_status": "generating",
+                    },
+                }
+
+        background = FakeBackgroundTasks()
+        svc = FakeSvc()
+        response = topology_graph_route(GraphRequest(code="US.NVDA", market="US", depth=1, quote_mode="defer"), background, svc)
+
+        self.assertEqual(svc.quote_mode, "auto")
+        self.assertTrue(response["data"]["stats"]["background_started"])
+        self.assertEqual(len(background.tasks), 1)
 
 
 if __name__ == "__main__":

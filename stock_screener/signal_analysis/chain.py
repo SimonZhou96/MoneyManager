@@ -21,7 +21,7 @@ from market_intel.reporting import render_multi_stock_report
 from .evidence import apply_evidence_to_result, dedupe_documents, expand_company_documents
 from .llm_providers import LLMProvider
 from .hot_news import ManualHotNewsConfig
-from .hot_sectors import AkshareHotSectorProvider, ManualHotSectorConfig, WebSearchHotSectorProvider
+from .hot_sectors import AkshareHotSectorProvider, HotSectorClassifier, ManualHotSectorConfig, WebSearchHotSectorProvider
 from .models import (
     AnalysisRunResult,
     AnalysisSettings,
@@ -304,6 +304,7 @@ class SearchContextStep(AnalysisStep):
 
         batch_size = _company_search_batch_size()
         stock_rows = [row for row in context.rows if not row.is_etf]
+        total_stock_rows = len(stock_rows)
         for batch in _chunk_rows(stock_rows, batch_size):
             try:
                 batch_documents = context.search_provider.search_companies_batch(
@@ -313,8 +314,9 @@ class SearchContextStep(AnalysisStep):
                 )
             except Exception as exc:
                 codes = [row.code for row in batch]
+                provider_name = _current_company_news_provider(context.search_provider) or "unknown"
                 context.warnings.append(
-                    f"公司事件批量搜索失败: {type(exc).__name__}: {exc}; codes={','.join(codes)}"
+                    f"公司事件批量搜索失败 [{provider_name}]: {type(exc).__name__}: {exc}; codes={','.join(codes)}"
                 )
                 for row in batch:
                     context.company_documents.setdefault(row.code, [])
@@ -336,13 +338,25 @@ class SearchContextStep(AnalysisStep):
                 1 for row in batch if context.company_documents.get(row.code)
             )
             total_docs = sum(len(context.company_documents.get(row.code) or []) for row in batch)
+            provider_name = _current_company_news_provider(context.search_provider) or "unknown"
             context.warnings.append(
-                f"[AI分析] 联网检索结果: 公司事件 batch={len(batch)} matched={matched_count} docs={total_docs}"
+                f"[AI分析] 联网检索结果 [{provider_name}]: 公司事件 batch={len(batch)} matched={matched_count} docs={total_docs}"
             )
             if missing_codes:
                 context.warnings.append(
                     f"公司事件批量搜索未匹配到 {len(missing_codes)} 只股票: {','.join(missing_codes)}"
                 )
+
+        # ── Final coverage summary ──
+        stocks_with_news = sum(
+            1 for row in stock_rows if context.company_documents.get(row.code)
+        )
+        stocks_without_news = total_stock_rows - stocks_with_news
+        if stocks_without_news > 0:
+            context.warnings.append(
+                f"[AI分析] ⚠️ 公司新闻覆盖: {stocks_with_news}/{total_stock_rows} 只有新闻, "
+                f"{stocks_without_news} 只无新闻 (覆盖率 {stocks_with_news*100//total_stock_rows}%)"
+            )
 
         etf_rows = [row for row in context.rows if row.is_etf]
         for batch in _chunk_rows(etf_rows, batch_size):
@@ -521,10 +535,10 @@ class ResolveHotSectorsStep(AnalysisStep):
             return
         limit = max(1, int(os.getenv("SIGNAL_HOT_SECTOR_LIMIT", "10") or "10"))
 
-        # Priority 1: Web search (Tavily) — dynamic discovery, default for all markets
+        # Priority 1: Web search (DeepSeek→Tavily→Bing/Baidu→ZhipuAI), fallback to built-in defaults
         if os.getenv("SIGNAL_ENABLE_WEB_SEARCH_HOT_SECTORS", "1").strip().lower() not in {"0", "false", "no", "off"}:
             try:
-                sectors = WebSearchHotSectorProvider().find_hot_sectors(context.market, limit=limit)
+                sectors = WebSearchHotSectorProvider().find_hot_sectors_or_defaults(context.market, limit=limit)
             except Exception as exc:
                 context.warnings.append(f"WebSearch 热点板块识别失败: {type(exc).__name__}: {exc}")
                 sectors = []
@@ -1419,10 +1433,29 @@ def _build_stock_dict(
 
 
 def _build_hot_sectors(hot_sectors: list[str]) -> dict[str, list[str]]:
-    """Map flat hot sector list to categorized dict for RetailReportRenderer."""
+    """Classify raw hot sector names into industry/theme/region buckets."""
     if not hot_sectors:
         return {}
-    return {"industry": list(hot_sectors), "theme": [], "region": []}
+    classifier = HotSectorClassifier()
+    return classifier.classify(hot_sectors)
+
+
+def _update_hot_clarity(market_temp, hot_sectors: dict[str, list[str]]) -> None:
+    """Update MarketTemperature.hot_clarity_summary based on classified sectors.
+
+    - ≥2 buckets with content → 清晰
+    - 1 bucket with content → 一般
+    - 0 buckets with content → 不清晰
+    """
+    if market_temp is None:
+        return
+    filled_buckets = sum(1 for items in hot_sectors.values() if items)
+    if filled_buckets >= 2:
+        market_temp.hot_clarity_summary = "清晰"
+    elif filled_buckets == 1:
+        market_temp.hot_clarity_summary = "一般"
+    else:
+        market_temp.hot_clarity_summary = "混乱"
 
 
 def _build_data_source_status(context: SignalAnalysisContext) -> list[dict]:
@@ -1509,12 +1542,18 @@ def _render_artifact_report(context: SignalAnalysisContext) -> str:
         # Sort by entry_score descending
         stocks.sort(key=lambda s: s.get("entry_score", 0), reverse=True)
 
+        # Classify hot sectors into industry/theme/region buckets
+        hot_sectors = _build_hot_sectors(context.hot_sectors)
+
+        # Update hot_clarity_summary based on classified sectors
+        _update_hot_clarity(market_temp, hot_sectors)
+
         renderer = RetailReportRenderer()
         renderer_context = {
             "market": context.market,
             "market_temp": market_temp,
             "stocks": stocks,
-            "hot_sectors": _build_hot_sectors(context.hot_sectors),
+            "hot_sectors": hot_sectors,
             "report_date": context.check_date.isoformat(),
             "chain_key": context.chain_key or "",
             "data_sources": _build_data_source_status(context),

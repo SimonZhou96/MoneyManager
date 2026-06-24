@@ -388,3 +388,124 @@ Detailed context lives in the memory directory. Read the relevant files before w
 - MarketCache 的市场级规则不逐只股票调用，结果通过 `MarketTemperature.to_filter_details()` 注入
 - 报告和评分的 Feature flag 默认启用，`USE_NEW_SCORING=0` / `USE_NEW_RENDERER=0` 可回退
 - 修改 `scoring/models.py` 中的 dataclass 时，确认 `to_filter_details()` 和 `HoldingScorer._extract_*()` 的字段引用同步更新
+
+### 2026-06-18 — py_mini_racer 并发初始化 V8 崩溃修复
+
+**Files changed**:
+- `stock_screener/web/main.py` — 添加 py_mini_racer V8 预初始化块（load_dotenv 之后，FastAPI app 创建之前）
+- `stock_screener/interactive_screening.py` — 同上，import 块之后，常量定义之前
+- `stock_screener/desktop.py` — 同上，`_ensure_dotenv()` 之后，uvicorn 启动之前
+- `CLAUDE.md` — this entry
+
+**Root cause**: `py_mini_racer 0.14.1` 封装的 V8 引擎**并发初始化不安全**。`akshare` 的 `bond_zh_hs_daily`/`futures_zh_sina` 等函数首次调用时创建 `MiniRacer()` 实例，触发 `init_mini_racer()` → V8 platform 初始化。当多个 HTTP 请求线程同时首次调用 akshare 时，多线程并发进入 V8 的 `address_pool_manager` 初始化，`CHECK(!pool->IsInitialized())` 断言失败 → SIGTRAP → 进程崩溃。
+
+**Reproduction**: 5 个线程并发调用 `akshare.bond_zh_hs_daily()` 可 100% 复现，exit code 133 (SIGTRAP)。
+
+**Fix**: 在所有入口点（`web/main.py`、`interactive_screening.py`、`desktop.py`）的模块初始化阶段（单线程、任何 worker 线程启动前）预先创建一个 `MiniRacer` 实例。这会触发 `init_mini_racer()` 将 V8 的 `_is_initialized` 标志设为 True，后续所有线程的 `MiniRacer()` 调用都会短路返回，不再触发原生初始化。预 init 包裹在 `try/except` 中，`py_mini_racer` 未安装时静默通过。
+
+**⚠️ 后续改动注意事项**:
+- 新增入口点文件时（如 CLI 工具、cron 脚本），如果其线程可能访问 akshare，必须添加同样的 V8 预 init 块
+- 如果升级 `py_mini_racer`，验证新版本是否已修复此并发缺陷——如已修复可移除预 init
+- `akshare` 的 `futures_zh_sina`/`bond_zh_sina`/`movie_yien`/`video_yien`/`artist_yien` 五个模块使用了 `py_mini_racer`，均在 `akshare/__init__.py` 中被 eager import
+
+### 2026-06-18 — YFinance 401 "Invalid Crumb" 会话恢复修复
+
+**Files changed**:
+- `stock_screener/yf_ratelimit.py` — 新增 `_is_crumb_error()` + `reset_yf_session()` 两个 helper
+- `stock_screener/potential_analysis/service.py` — `prefetch_batch` 401 crumb 错误时先重置 YfData 单例重试，再降级
+- `stock_screener/kline_fetcher.py` — `YFinanceKlineFetcher.fetch()` 401 crumb 错误时重置 YfData 单例重试一次
+- `CLAUDE.md` — this entry
+
+**Root cause**: yfinance 库的 `YfData` 是进程级单例（SingletonMeta），所有 `Ticker`/`Tickers`/`download` 共享同一个 HTTP session、cookie、crumb。在批量处理 ~380 只股票（约 30 次 `Tickers()` 调用 × 每 chunk 25 只的内部 API 调用）后，Yahoo 主动使 cookie/crumb 失效，后续所有请求返回 401 "Invalid Crumb"。yfinance 内建的 cookie-strategy-toggle 重试（basic↔csrf）不足以恢复——需要**全新的 HTTP session**。
+
+**Cascading impact**: 一旦 YfData session 损坏：
+1. `prefetch_batch` → `_is_fatal_http_error` 检测到 401 → 立即设置 `quota_exhausted=True` → 剩余全部股票降级到 Futu 兜底
+2. `YFinanceKlineFetcher` → `yf.download()` 失败 → 返回 None → 降级到 AKShare
+3. 所有后续 yfinance 调用（sector resolver、macro provider 等）全部失败
+
+**Fix**:
+1. `yf_ratelimit.py` 新增：
+   - `_is_crumb_error(exc)` — 区分 "Invalid Crumb"（可恢复）和 "User unable to access"（IP 封禁，不可恢复）
+   - `reset_yf_session()` — 清除 `YfData._instances[YfData]`，强制下次调用创建全新 session + cookie + crumb
+2. `prefetch_batch` retry loop：401 crumb 错误时调用 `reset_yf_session()` 后重试一次（非 crumb 的 401 仍走原降级路径）
+3. `YFinanceKlineFetcher.fetch()`：`_download()` 抛 401 crumb 错误时重置 session 后重试一次
+
+**Verification**: 单例重置后 `yf.Ticker('MSFT').info` 返回 184 字段，currentPrice=378.91，新 crumb 与旧不同。10 个 K-line 诊断测试全部通过。
+
+**⚠️ 后续改动注意事项**:
+- 新增 yfinance 调用点时，考虑用 `try/except` + `_is_crumb_error` + `reset_yf_session` 模式包裹
+- 不要移除 `_is_fatal_http_error`——它仍然正确识别真正的 IP 级封禁（"User is unable to access this feature"）
+- `reset_yf_session()` 是幂等的——单例为空时返回 False 不报错
+- 批处理时间越长（>500 只股票），YfData session 失效概率越高；chunk=25 的当前配置下约每 350-400 只会遇到一次
+
+### 2026-06-22 — 港股报告数据缺失系统性调试：7 个问题根因定位与修复
+
+**调试方法论**: 采用 systematic debugging 四阶段流程（Root Cause → Pattern → Hypothesis → Fix），逐只股票验证数据流。详见 `memory/debugging-methodology-and-known-pitfalls.md`。
+
+**Files changed**:
+- `stock_screener/kline_fetcher.py` — `DatabaseKlineFetcher` 新增 `max_staleness_days=4` 新鲜度门控
+- `stock_screener/signal_analysis/chain.py` — `_build_hot_sectors()` 替换为 `HotSectorClassifier.classify()`；`ResolveHotSectorsStep` 使用 `find_hot_sectors_or_defaults()`
+- `stock_screener/signal_analysis/search_providers.py` — `TavilySearchProvider` 新增 `_quota_exhausted` 跨批次配额管理；`FallbackSearchProvider` 动态 `_active_providers()`
+- `stock_screener/main_force_risk.py` — K 线最低行数 20→10；`_level()` 区分真正 insufficient vs 分析仅供参考
+- `stock_screener/potential_analysis/builders.py` — `_snapshot_is_empty()` 新增字段级完整性检查（PE=None 但有市值/价格 → 触发 Futu 兜底）
+- `stock_screener/scoring/constants.py` — `SCALE_FACTOR` 12→15；`STRONG_BUY` 阈值 80→75
+- `stock_screener/signal_analysis/renderers.py` — 中线组阈值 65→55；强入场阈值 80→75
+- `stock_screener/scoring/market_cache.py` — `_build_summaries()` 记录 `dimension_sources` 数据来源状态
+- `stock_screener/scoring/models.py` — `MarketTemperature` 新增 `dimension_sources` 字段
+- `memory/debugging-methodology-and-known-pitfalls.md` (新建) — 6 个已知 pitfall 模式 + 排查命令
+
+**Fixes applied**:
+
+1. **P0 — DB 缓存新鲜度缺失** (`DatabaseKlineFetcher`): DB 缓存在 fetcher 链中优先级最高，但只检查行数不检查日期新鲜度。HK.00470/00600 等小盘股 DB 缓存停在 2026-06-04（17 天过期），直接挡住 YFinance 的 2026-06-18 新鲜数据。修复：`fetch()` 中检查 `normalized["date"].max()`，超过 `max_staleness_days`（默认 4 天，覆盖周末+节假日）返回 None 触发降级。**这是"数据不足"的首要根因——Issue 1 修复后，Issues 3/4 自然缓解**。
+
+2. **P0 — HotSectorClassifier 从未被调用**: 分类器（127 行业 + 59 主题 + 17 地域）完整实现且有 25 个测试，但 `chain.py:1435` 的 `_build_hot_sectors()` 是临时存根（`return {"industry": [...], "theme": [], "region": []}`）。修复：替换为 `HotSectorClassifier().classify()`，theme/region 桶不再永远为空。`hot_clarity_summary` 从硬编码改为基于分类结果动态计算。
+
+3. **P0 — Tavily API 配额耗尽无跨批次管理**: Tavily 前几批耗尽配额后，后续所有批次仍尝试调用并立即 429 失败。修复：`_quota_exhausted` 标志 + 连续 3 次 429 → `is_available=False` + `FallbackSearchProvider._active_providers()` 动态跳过。
+
+4. **P1 — K 线最低行数 20 过严**: 降低到 10，10-19 行标注 "数据较少，分析仅供参考"。注意：真正根因是 Issue 1（DB 缓存过期），降低阈值只是防御性措施。
+
+5. **P1 — PE 字段级空值被 provider_status 掩盖**: `_snapshot_is_empty()` 只检查 status 是否为 error，不检查字段。爱芯元智 YFinance 返回 ok 但 `trailingPE=None`。修复：增加字段级检查，PE 缺失但有市值/价格 → 触发 Futu 兜底。
+
+6. **P1 — 中线关注阈值不匹配**: holding_score 实际分布 40-55，阈值 65 永远达不到。修复：65→55。
+
+7. **P2 — 入场分分布保守**: `SCALE_FACTOR=12` + `STRONG_BUY≥80` 导致 3-4 条规则命中只能到 65-75。修复：SCALE_FACTOR→15，STRONG_BUY→75。
+
+**⚠️ 后续改动注意事项**:
+- **每次 debug 前必读** `memory/debugging-methodology-and-known-pitfalls.md`，检查是否匹配已知 pitfall 模式
+- 新增数据缓存层时，必须同时添加新鲜度门控（`max_staleness_days`），否则会引入 Pitfall 1
+- 新增功能模块后，确认生产代码路径确实调用了它（`grep -rn "ClassName" --include="*.py" | grep -v test`），避免 Pitfall 2
+- 新增 API provider 时，添加跨请求的配额/错误状态管理（`_quota_exhausted` / `_consecutive_errors`），避免 Pitfall 3
+- 修改评分阈值时，先取实际数据分布验证阈值是否可达（`score_distribution = [s.holding_score for s in stocks]; print(np.percentile(score_distribution, [50, 75, 90])`），避免 Pitfall 4
+- 数据完整性检查要看字段值，不能只看 provider_status，避免 Pitfall 5
+- K 线分析阈值调整前，先排查 DB 缓存是否过期（Pitfall 1 → 6 的因果链）
+- DB 缓存新鲜度默认 4 天（`max_staleness_days=4`），如需调整通过 `DatabaseKlineFetcher(db, max_staleness_days=N)` 传入
+
+### 2026-06-22 — 动量轮动策略：daily/周频调仓 + 连续确认 + 前端 select/bool 参数支持
+
+**Files changed**:
+- `stock_screener/quant_lab/strategies/momentum_rotation.py` — Config 新增 `rebalance_frequency`/`consecutive_days`；`_monthly_snapshots()`→`_rebalance_dates()` 支持 daily/weekly/monthly；Runner 和信号生成器新增 out_of_top_streak/in_top_streak 连续确认追踪
+- `stock_screener/quant_lab/service.py` — `_run_momentum_rotation_backtest()` 传递新参数；**修复 P0 bug：params 嵌套层级错误（见下方）**
+- `stock_screener/tests/backtest_momentum_rotation.py` — 新增 `--frequency`/`--consecutive-days` CLI 参数
+- `stock_screener/web_frontend/src/features/quant/types.ts` — `StrategyParamDef` 新增 `'select'`/`'bool'` 类型，`params` 类型扩到 `number|string|boolean`
+- `stock_screener/web_frontend/src/features/quant/QuantLab.tsx` — 新增 select 下拉/bool checkbox 渲染分支，修复 `Record<string, number>`→`Record<string, number|string|boolean>`
+- `memory/e2e-testing-discipline.md` (新建) — E2E 测试铁律
+- `CLAUDE.md` — this entry
+
+**Fixes applied**:
+
+1. **动量轮动日频/周频调仓**: `_rebalance_dates()` 按 frequency 分组取快照日期。daily 返回全部交易日，weekly 取每周最后交易日，monthly 取月末（原行为）。
+
+2. **连续确认防 whipsaw（方案 C）**: 买卖不再即时触发。`out_of_top_streak[sym]` 追踪持仓股连续不在 TopN 的天数，`in_top_streak[sym]` 追踪候选股连续在 TopN 的天数，达到 `consecutive_days` 阈值才执行。`consecutive_days=1` 等价于旧行为（立即触发）。
+
+3. **P0 — 后端参数嵌套层级错误** (`service.py:253`): 前端发送 `strategy.params.rebalance_frequency`，但后端从 `payload.get("strategy")` 直接读 `.get("rebalance_frequency")`——在 strategy 层级找 params 层级的键，永远找不到，回退到默认值。所有旧参数"正常"仅因为默认值恰好与前端一致。修复：`strategy_params = raw_strategy.get("params") or {}`，从正确的嵌套层级读取。
+
+4. **前端 select 值不更新** (QuantLab.tsx): `params` state 类型为 `Record<string, number>`，select 参数值是 string，TypeScript 类型不匹配导致 React state 更新异常。修复：类型扩到 `Record<string, number | string | boolean>`。
+
+5. **bool 参数渲染为空**: `use_market_filter`（type="bool"）无渲染分支，fallback 到 `<input type="number">`，value 显示为空。修复：新增 checkbox 渲染分支，checked 绑定 bool 值。
+
+**⚠️ 后续改动注意事项**:
+- **E2E 测试铁律**：必须验证 页面输入→HTTP body→后端解析→处理逻辑消费→响应→页面渲染 全链路。DOM 验证不算 E2E。最可靠的验证是**对比测试**——用不同参数发两个请求，确认结果有对应差异。详见 `memory/e2e-testing-discipline.md`
+- 新增策略参数时，确认后端从 `payload["strategy"]["params"]` 读取，不是从 `payload["strategy"]` 直接读
+- 新增非 number 类型的策略参数时，同步更新前端 `types.ts`（type 联合）、`QuantLab.tsx`（渲染分支）、`params` state 类型
+- `_rebalance_dates()` 的 `as_of_date` 参数现在排除的是整日（`df["date"] < ref`），不再是整月。daily 频率下行为正确；monthly 频率下当前不完整月份的所有交易日都被排除（同旧行为）
+- `out_of_top_streak`/`in_top_streak` 在市场破 EMA200 清仓时会 reset，避免空仓期间的 streak 积累

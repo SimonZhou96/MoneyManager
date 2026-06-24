@@ -3,13 +3,15 @@
 """编排：搜索 → 首次拓扑 → 按需展开 → 刷新。故障隔离 + LLM 硬上限。"""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from collections import deque
+from typing import Any, Dict, List, Optional, Tuple
 
 from market import normalize_market
 
 from .cache import GraphCache
 from .relation_engine import RelationEngine, RelationEngineError
 from .resolver import NodeResolver, compute_size_level, format_market_cap
+from .symbols import parse_topology_symbol, symbol_id
 
 _LLM_HARD_LIMIT = 20
 
@@ -62,14 +64,21 @@ class TopologyService:
         return results
 
     # -- 首次拓扑 --
-    def build_graph(self, code: str, market: str, depth: int = 3) -> Dict[str, Any]:
+    def build_graph(self, code: str, market: str, depth: int = 3, quote_mode: str = "defer") -> Dict[str, Any]:
         market = normalize_market(market)
-        return self._traverse(code, market, depth, existing_codes=None, is_center=True)
+        return self._traverse(code, market, depth, existing_codes=None, is_center=True, quote_mode=quote_mode)
 
     # -- 按需展开 --
-    def expand(self, code: str, market: str, depth: int = 2, existing_codes: Optional[List[str]] = None) -> Dict[str, Any]:
+    def expand(
+        self,
+        code: str,
+        market: str,
+        depth: int = 2,
+        existing_codes: Optional[List[str]] = None,
+        quote_mode: str = "defer",
+    ) -> Dict[str, Any]:
         market = normalize_market(market)
-        result = self._traverse(code, market, depth, existing_codes=existing_codes or [], is_center=False)
+        result = self._traverse(code, market, depth, existing_codes=existing_codes or [], is_center=False, quote_mode=quote_mode)
         result.pop("center", None)
         return result
 
@@ -77,7 +86,7 @@ class TopologyService:
     def refresh(self, code: str, market: str) -> Dict[str, Any]:
         market = normalize_market(market)
         # 强制重算：先取行情（中心节点），再重算关系
-        center_info = self.resolver.resolve(code, market)
+        center_info = self.resolver.resolve(code, market, include_quote=True)
         relations = self._infer_with_limit(code, market, center_info.get("name", ""), center_info.get("sector", ""))
         cached_map: Dict[str, List] = {}
         if relations is not None:
@@ -87,13 +96,23 @@ class TopologyService:
                 self.cache.save_relations(code, market, relations, provider=p_name, model=m_name)
             except Exception:
                 pass
-        nodes, edges = self._assemble(code, market, [code], cached_map, existing_set=set(), center_info=center_info)
+        graph = self.cache.build_graph(cached_map) if cached_map else None
+        nodes, edges = self._assemble(code, market, [code], cached_map, existing_set=set(), center_info=center_info, graph=graph)
         return {"nodes": nodes, "edges": edges, "stats": {"llm_calls": self._llm_calls}}
 
     # -- 内部遍历 --
-    def _traverse(self, code: str, market: str, depth: int, existing_codes: Optional[List[str]], is_center: bool) -> Dict[str, Any]:
+    def _traverse(
+        self,
+        code: str,
+        market: str,
+        depth: int,
+        existing_codes: Optional[List[str]],
+        is_center: bool,
+        quote_mode: str = "defer",
+    ) -> Dict[str, Any]:
         existing_set = set(existing_codes) if existing_codes else set()
-        center_info = self.resolver.resolve(code, market)
+        include_quote = quote_mode == "sync"
+        center_info = self.resolver.resolve(code, market, include_quote=include_quote)
         center_name = center_info.get("name", "") or code
         center_sector = center_info.get("sector", "") or "--"
 
@@ -117,20 +136,27 @@ class TopologyService:
                 else:
                     stale_sources.append(r.peer_code)
 
-        # LLM 补算 stale_sources（受硬上限）
-        for src in list(stale_sources):
-            rels = self._infer_with_limit(src, market, center_name if src == code else "", center_sector if src == code else "--")
-            if rels is not None:
-                cached_map[src] = rels
-                # 写缓存
-                try:
-                    p_name, m_name = self._provider_meta()
-                    self.cache.save_relations(src, market, rels, provider=p_name, model=m_name)
-                except Exception:
-                    pass
+        relation_status = "cached" if cached_map else "pending"
+        if quote_mode == "sync":
+            # LLM 补算 stale_sources（受硬上限）
+            for src in list(stale_sources):
+                rels = self._infer_with_limit(src, market, center_name if src == code else "", center_sector if src == code else "--")
+                if rels is not None:
+                    cached_map[src] = rels
+                    # 写缓存
+                    try:
+                        p_name, m_name = self._provider_meta()
+                        self.cache.save_relations(src, market, rels, provider=p_name, model=m_name)
+                    except Exception:
+                        pass
+            relation_status = "fresh" if cached_map else "failed"
+        elif quote_mode == "auto" and stale_sources:
+            relation_status = "generating"
 
         graph = self.cache.build_graph(cached_map)
-        reachable = set(self.cache.reachable_within(graph, code, depth))
+        reachable = {code}
+        if code in graph:
+            reachable.update(self.cache.reachable_within(graph, code, depth))
         # Also include nodes directly from cached_map relations (handles fake/cache
         # implementations where reachable_within doesn't traverse the graph)
         for src, rels in cached_map.items():
@@ -140,11 +166,28 @@ class TopologyService:
                 reachable.add(src)
                 reachable.add(r.peer_code)
 
-        nodes, edges = self._assemble(code, market, list(reachable), cached_map, existing_set, is_center=is_center, center_info=center_info)
-        stats = {"llm_calls": self._llm_calls, "cached_nodes": len(cached_map), "stale_nodes": len(stale_sources), "depth": depth}
-        if not cached_map and self._llm_calls == 0:
+        nodes, edges = self._assemble(
+            code,
+            market,
+            list(reachable),
+            cached_map,
+            existing_set,
+            is_center=is_center,
+            center_info=center_info,
+            graph=graph,
+            include_quote=include_quote,
+        )
+        stats = {
+            "llm_calls": self._llm_calls,
+            "cached_nodes": len(cached_map),
+            "stale_nodes": len(stale_sources),
+            "stale_sources": self._stale_source_payload(stale_sources, market, code, cached_map),
+            "depth": depth,
+            "relation_status": relation_status,
+        }
+        if not cached_map and self._llm_calls == 0 and quote_mode == "sync":
             stats["error"] = "llm_failed"
-        return {"center": self._to_node(center_info, code, market, expanded=True, is_center=True, stale=False),
+        return {"center": self._to_node(center_info, code, market, expanded=True, is_center=True, stale=False, depth=0, zone="center"),
                 "nodes": nodes, "edges": edges, "stats": stats}
 
     def _infer_with_limit(self, code: str, market: str, name: str, sector: str):
@@ -159,17 +202,86 @@ class TopologyService:
         except Exception:
             return None
 
-    def _assemble(self, center_code, market, codes, cached_map, existing_set, is_center=False, center_info=None):
-        infos = self.resolver.resolve_many([c for c in codes if c != center_code], market) if codes else {}
+    def infer_and_cache_batch(self, sources: List[Dict[str, str]]) -> bool:
+        """批量推理多个 source 并写缓存。一次 LLM 调用覆盖整批。
+
+        sources: [{code, market, name?, sector?}] —— name/sector 缺失时用 resolver 补齐。
+        未返回 group 的 source 写入空关系缓存，避免反复 generating。
+        """
+        if not sources or self.engine is None or self._llm_calls >= _LLM_HARD_LIMIT:
+            return False
+
+        enriched: List[Dict[str, str]] = []
+        for s in sources:
+            code = str(s.get("code", "")).strip()
+            market = normalize_market(str(s.get("market", "")))
+            if not code:
+                continue
+            name = str(s.get("name", "") or "")
+            sector = str(s.get("sector", "") or "")
+            if not name or not sector or sector == "--":
+                info = self.resolver.resolve(code, market, include_quote=False)
+                name = name or info.get("name", "") or code
+                sector = sector if (sector and sector != "--") else (info.get("sector", "") or "--")
+            enriched.append({"code": code, "market": market, "name": name, "sector": sector})
+        if not enriched:
+            return False
+
+        try:
+            result = self.engine.infer_batch(enriched)
+            self._llm_calls += 1
+        except Exception:
+            return False
+
+        p_name, m_name = self._provider_meta()
+        for (market, code), rels in result.items():
+            try:
+                self.cache.save_relations(code, market, rels, provider=p_name, model=m_name)
+            except Exception:
+                pass
+        return True
+
+    @staticmethod
+    def _stale_source_payload(stale_sources: List[str], market: str, center_code: str, cached_map: Dict[str, List]) -> List[Dict[str, str]]:
+        node_markets = TopologyService._build_node_markets(center_code, market, cached_map)
+        return [{"code": source, "market": node_markets.get(source, market)} for source in stale_sources]
+
+    def _assemble(self, center_code, market, codes, cached_map, existing_set, is_center=False, center_info=None, graph=None, include_quote=False):
+        node_markets = self._build_node_markets(center_code, market, cached_map)
+        resolve_lookup = {
+            c: self._resolve_identity(node_markets.get(c, market), c)
+            for c in codes
+            if c != center_code
+        }
+        resolve_targets = [(identity[0], identity[1]) for identity in resolve_lookup.values()]
+        infos = self.resolver.resolve_many(resolve_targets, include_quote=include_quote) if resolve_targets else {}
         if center_info is None:
-            center_info = self.resolver.resolve(center_code, market)
-        infos[center_code] = center_info
+            center_info = self.resolver.resolve(center_code, market, include_quote=include_quote)
+        infos[symbol_id(market, center_info.get("code") or center_code)] = center_info
+        node_meta = self._build_node_meta(center_code, cached_map, graph)
         nodes = []
         for c in codes:
-            if c in existing_set and not is_center:
+            item_market = node_markets.get(c, market)
+            symbol = symbol_id(item_market, c)
+            resolve_identity = resolve_lookup.get(c)
+            resolve_symbol = symbol_id(resolve_identity[0], resolve_identity[1]) if resolve_identity else symbol
+            if (c in existing_set or symbol in existing_set) and not is_center:
                 continue
-            info = infos.get(c, {"code": c, "name": "", "market": market, "sector": "--", "market_cap": None, "pct_chg": None})
-            nodes.append(self._to_node(info, c, market, expanded=c in cached_map, is_center=(c == center_code and is_center), stale=False))
+            info = infos.get(resolve_symbol, {"code": c, "name": "", "market": item_market, "sector": "--", "market_cap": None, "pct_chg": None, "quote_status": "pending"})
+            meta = node_meta.get(c, {"depth": 1, "zone": "peer"})
+            nodes.append(
+                self._to_node(
+                    info,
+                    c,
+                    item_market,
+                    display_code=c,
+                    expanded=c in cached_map,
+                    is_center=(c == center_code and is_center),
+                    stale=False,
+                    depth=meta["depth"],
+                    zone=meta["zone"],
+                )
+            )
         edges = []
         for src, rels in cached_map.items():
             for r in rels:
@@ -177,27 +289,82 @@ class TopologyService:
                     continue
                 if r.peer_code not in codes and src not in codes:
                     continue
+                source_market = r.source_market or node_markets.get(src, market)
+                target_market = r.peer_market or node_markets.get(r.peer_code, market)
                 rel_cn = _RELATION_CN.get(r.relation.value, r.relation.value)
                 label = f"{rel_cn}·{r.evidence}" if r.evidence else rel_cn
                 edges.append({
-                    "source": src, "target": r.peer_code,
+                    "source": symbol_id(source_market, src), "target": symbol_id(target_market, r.peer_code),
                     "direction": r.direction.value, "relation": r.relation.value,
                     "label": label[:40], "evidence": r.evidence,
                 })
         return nodes, edges
 
     @staticmethod
-    def _to_node(info, code, market, expanded, is_center, stale):
+    def _to_node(info, code, market, expanded, is_center, stale, depth, zone, display_code=None):
         market_cap = info.get("market_cap")
+        node_market = market
+        node_code = display_code or info.get("code") or code
         return {
-            "code": code, "name": info.get("name", "") or code,
-            "market": info.get("market", market),
-            "sector": info.get("sector", "--") or "--",
+            "id": symbol_id(node_market, node_code),
+            "code": node_code, "name": info.get("name", "") or code,
+            "market": node_market,
+            "sector": info.get("sector", "--") or "板块未知",
             "pct_chg": info.get("pct_chg"),
+            "market_cap": market_cap,
             "market_cap_str": format_market_cap(market_cap),
             "size_level": 6 if is_center else compute_size_level(market_cap),
+            "quote_status": info.get("quote_status", "pending"),
+            "quote_updated_at": info.get("quote_updated_at"),
+            "quote_error": info.get("quote_error", ""),
             "expanded": expanded, "stale": stale, "is_center": is_center,
+            "depth": depth, "zone": zone,
         }
+
+    @staticmethod
+    def _resolve_identity(market: str, code: str) -> tuple[str, str]:
+        parsed = parse_topology_symbol(symbol_id(market, code))
+        if parsed.get("skipped"):
+            return market, code
+        return parsed["market"], parsed["code"]
+
+    @staticmethod
+    def _build_node_markets(center_code: str, market: str, cached_map: Dict[str, List]) -> Dict[str, str]:
+        node_markets: Dict[str, str] = {center_code: market}
+        for src, rels in cached_map.items():
+            for rel in rels:
+                if rel.is_empty:
+                    continue
+                node_markets.setdefault(src, rel.source_market or market)
+                node_markets[rel.peer_code] = rel.peer_market or market
+        return node_markets
+
+    @staticmethod
+    def _build_node_meta(center_code: str, cached_map: Dict[str, List], graph: Any = None) -> Dict[str, Dict[str, Any]]:
+        meta: Dict[str, Dict[str, Any]] = {center_code: {"depth": 0, "zone": "center"}}
+        queue: deque[tuple[str, int, str]] = deque([(center_code, 0, "center")])
+
+        while queue:
+            src, depth, inherited_zone = queue.popleft()
+            for rel in cached_map.get(src, []):
+                if rel.is_empty:
+                    continue
+                next_zone = rel.direction.value if depth == 0 else inherited_zone
+                current = meta.get(rel.peer_code)
+                should_update = (
+                    current is None
+                    or depth + 1 < current["depth"]
+                    or (depth + 1 == current["depth"] and current["zone"] == "peer" and next_zone != "peer")
+                )
+                if should_update:
+                    meta[rel.peer_code] = {"depth": depth + 1, "zone": next_zone}
+                    queue.append((rel.peer_code, depth + 1, next_zone))
+
+        if graph is not None:
+            for node in getattr(graph, "nodes", lambda: [])():
+                meta.setdefault(node, {"depth": 1, "zone": "peer"})
+
+        return meta
 
 
 _RELATION_CN = {

@@ -58,7 +58,7 @@ _TEMP_COLORS = {
 # ═══════════════════════════════════════════════════════════════════
 
 _ENTRY_THRESHOLDS = [
-    (80, "🟢 强入场信号", "技术形态良好，量价配合，可考虑入场"),
+    (75, "🟢 强入场信号", "技术形态良好，量价配合，可考虑入场"),
     (65, "🟡 中等入场信号", "部分指标共振，轻仓试探"),
     (50, "🟠 弱入场信号", "趋势待确认，等待更明确信号"),
     (0, "🔴 不建议入场", "入场条件不满足，观望为主"),
@@ -482,7 +482,7 @@ class RetailReportRenderer:
 
                 if entry >= 65:
                     short_term.append(stock)
-                if holding >= 65:
+                if holding >= 55:
                     mid_term.append(stock)
                 if entry < 50 or holding < 50:
                     avoid.append(stock)

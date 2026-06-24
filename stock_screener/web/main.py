@@ -85,7 +85,6 @@ try:
     _mr.close()
 except Exception:
     pass
-
 app = FastAPI(title="MoneyManager Stock Screener", version="0.1.0")
 app.add_exception_handler(BusinessError, business_error_handler)
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)

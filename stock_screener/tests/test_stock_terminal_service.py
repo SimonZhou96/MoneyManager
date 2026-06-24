@@ -10,6 +10,9 @@ from stock_terminal.providers.eastmoney import (
     parse_eastmoney_minute_rows,
     parse_eastmoney_quote,
 )
+from stock_terminal.providers.factory import build_stock_terminal_providers
+from stock_terminal.providers.futu import FutuStockTerminalProvider
+from stock_terminal.providers.yfinance_provider import YFinanceStockTerminalProvider
 from stock_terminal.repository import InMemoryStockTerminalRepository, MySqlStockTerminalRepository
 from stock_terminal.service import StockTerminalService
 
@@ -190,6 +193,32 @@ class EastmoneyProviderParserTest(unittest.TestCase):
         self.assertTrue(all(call["timeout"] == 1.5 for call in session.calls))
 
 
+class QuoteFallbackProviderTest(unittest.TestCase):
+    def test_provider_factory_orders_futu_yfinance_then_eastmoney(self):
+        providers = build_stock_terminal_providers()
+
+        self.assertEqual([provider.name for provider in providers], ["futu", "yfinance", "eastmoney"])
+
+    def test_futu_symbol_mapping(self):
+        provider = FutuStockTerminalProvider()
+
+        self.assertEqual(provider._futu_code("A", "SH.603290"), "SH.603290")
+        self.assertEqual(provider._futu_code("HK", "HK.01810"), "HK.01810")
+        self.assertEqual(provider._futu_code("US", "US.QCOM"), "US.QCOM")
+
+    def test_yfinance_symbol_mapping(self):
+        provider = YFinanceStockTerminalProvider()
+
+        self.assertEqual(provider._yfinance_symbol("A", "SH.603290"), "603290.SS")
+        self.assertEqual(provider._yfinance_symbol("A", "SZ.002600"), "002600.SZ")
+        self.assertEqual(provider._yfinance_symbol("A", "BJ.430047"), "430047.BJ")
+        self.assertEqual(provider._yfinance_symbol("HK", "HK.01810"), "01810.HK")
+        self.assertEqual(provider._yfinance_symbol("US", "US.QCOM"), "QCOM")
+        self.assertEqual(provider._yfinance_symbol("JP", "JP.6758"), "6758.T")
+        self.assertEqual(provider._yfinance_symbol("TW", "TW.2454"), "2454.TW")
+        self.assertEqual(provider._yfinance_symbol("KR", "KR.005930"), "005930.KS")
+
+
 class StockTerminalServiceTest(unittest.TestCase):
     def test_summary_uses_cached_quote_without_provider_call(self):
         repo = InMemoryStockTerminalRepository()
@@ -218,6 +247,21 @@ class StockTerminalServiceTest(unittest.TestCase):
         self.assertEqual(payload["quote"]["price"], 10.0)
         self.assertEqual(payload["source_status"]["quote"]["status"], "fresh")
         self.assertEqual(provider.quote_calls, [("A", "SH.600519")])
+
+    def test_summary_persists_error_when_all_quote_providers_fail(self):
+        repo = InMemoryStockTerminalRepository()
+        now = datetime(2026, 5, 25, 9, 30, tzinfo=timezone.utc)
+        service = StockTerminalService(repo, [FailingProvider()], now=lambda: now)
+
+        payload = service.get_summary("US", "US.AAPL")
+        cached, status = repo.get_quote("US", "US.AAPL", now=now)
+
+        self.assertIsNone(payload["quote"])
+        self.assertEqual(payload["source_status"]["quote"]["status"], "error")
+        self.assertIn("quote down", payload["source_status"]["quote"]["error_message"])
+        self.assertIsNone(cached)
+        self.assertEqual(status.status, "error")
+        self.assertIn("quote down", status.error_message)
 
     def test_summary_skips_none_quote_provider_and_uses_next_provider(self):
         repo = InMemoryStockTerminalRepository()
