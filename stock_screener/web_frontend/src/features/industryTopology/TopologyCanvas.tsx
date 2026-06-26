@@ -203,22 +203,29 @@ function edgeStyle(edge: TopologyEdgeData, centerId: string | undefined, view: V
   const active = key === view.selectedEdgeKey || key === view.hoveredEdgeKey || view.relatedEdgeKeys.has(key)
   const cyclic = view.highlightCycles && view.cycleEdgeKeys.has(key)
   const hasFocus = Boolean(view.focusNodeId || view.selectedNodeId || view.hoveredNodeId || view.selectedEdgeKey || view.hoveredEdgeKey)
-  const showLabel = view.showEdgeLabels || active || (view.zoom > 1.35 && touchesCenter)
+  const isPinned = view.pinnedEdgeKeys.has(key)
+  const showLabel = isPinned || active || (view.zoom > 1.35 && touchesCenter)
   return {
     stroke: cyclic ? '#f8fafc' : stroke,
-    lineWidth: cyclic ? 3 : active ? 2.5 : 1,
-    strokeOpacity: hasFocus && !active && !cyclic ? 0.03 : active || cyclic ? 0.9 : 0.15,
+    lineWidth: cyclic ? 3 : (active || isPinned) ? 2.5 : 1,
+    strokeOpacity: hasFocus && !active && !cyclic && !isPinned ? 0.03 : (active || cyclic || isPinned) ? 0.9 : 0.15,
     lineDash: cyclic ? [6, 4] : undefined,
     endArrow: false,
-    shadowBlur: cyclic ? 16 : active ? 10 : 0,
-    shadowColor: cyclic ? '#fbbf24' : active ? stroke : 'transparent',
+    shadowBlur: cyclic ? 16 : (active || isPinned) ? 10 : 0,
+    shadowColor: cyclic ? '#fbbf24' : (active || isPinned) ? stroke : 'transparent',
     shadowOffsetX: 0,
     shadowOffsetY: 0,
-    labelText: showLabel ? (cyclic ? `环路 · ${edgeLabel(edge)}` : edgeLabel(edge)) : '',
-    labelFill: '#dbeafe',
+    labelText: showLabel
+      ? (cyclic
+        ? `环路 · ${isPinned ? adaptiveEdgeLabel(edge, 999) : edgeLabel(edge)}`
+        : isPinned
+          ? adaptiveEdgeLabel(edge, 999)
+          : edgeLabel(edge))
+      : '',
+    labelFill: isPinned ? '#fbbf24' : '#dbeafe',
     labelFontSize: 9,
     labelBackground: true,
-    labelBackgroundFill: 'rgba(15, 23, 42, 0.78)',
+    labelBackgroundFill: isPinned ? 'rgba(251, 191, 36, 0.15)' : 'rgba(15, 23, 42, 0.78)',
     labelBackgroundRadius: 4,
     labelPadding: [1, 4, 1, 4],
   }
@@ -629,6 +636,8 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   const [zoom, setZoom] = useState(1)
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
   const [hoveredEdgeKey, setHoveredEdgeKey] = useState<string | null>(null)
+  const [pinnedEdgeKeys, setPinnedEdgeKeys] = useState<Set<string>>(new Set())
+  const pinnedEdgeKeysRef = useRef<Set<string>>(new Set())
   onExpandRef.current = onExpand
   onStartTopologyRef.current = onStartTopology
   onRefreshTopologyRef.current = onRefreshTopology
@@ -637,6 +646,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   rawEdgesRef.current = rawEdges
   onSelectNodeRef.current = onSelectNode
   onSelectEdgeRef.current = onSelectEdge
+  pinnedEdgeKeysRef.current = pinnedEdgeKeys
 
   const view = useMemo<ViewState>(() => {
     const activeNodeId = focusNodeId || selectedNodeId || hoveredNodeId
@@ -651,10 +661,11 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       focusNodeId,
       showEdgeLabels,
       highlightCycles,
+      pinnedEdgeKeys,
       cycleEdgeKeys: detectCycleEdges(rawEdges),
       ...related,
     }
-  }, [focusNodeId, highlightCycles, hoveredEdgeKey, hoveredNodeId, rawEdges, rawNodes, selectedEdgeKey, selectedNodeId, showEdgeLabels, zoom])
+  }, [focusNodeId, highlightCycles, hoveredEdgeKey, hoveredNodeId, rawEdges, rawNodes, selectedEdgeKey, selectedNodeId, showEdgeLabels, zoom, pinnedEdgeKeys])
 
   const viewRef = useRef(view)
   viewRef.current = view
@@ -846,8 +857,21 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     graph.on('edge:click', (event: unknown) => {
       const data = (event as { target?: { data?: { data?: TopologyEdgeData & { edgeKey?: string } } } }).target?.data?.data
       if (!data) return
+      const key = data.edgeKey
+      if (!key) return
+      // Toggle pin
+      setPinnedEdgeKeys((prev) => {
+        const next = new Set(prev)
+        if (next.has(key)) {
+          next.delete(key)
+        } else {
+          next.add(key)
+        }
+        return next
+      })
+      // Existing sidebar behavior preserved
       onSelectNodeRef.current?.(null)
-      onSelectEdgeRef.current?.(data, data.edgeKey)
+      onSelectEdgeRef.current?.(data, key)
     })
 
     graph.on('canvas:click', () => {
