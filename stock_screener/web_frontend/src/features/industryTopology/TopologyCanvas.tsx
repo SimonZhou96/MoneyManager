@@ -49,6 +49,7 @@ interface ViewState {
   cycleEdgeKeys: Set<string>
   showEdgeLabels: boolean
   highlightCycles: boolean
+  pinnedEdgeKeys: Set<string>
 }
 
 const ZONE_COLOR: Record<TopologyZone, string> = {
@@ -162,6 +163,21 @@ function nodeStyle(node: TopologyNodeData, view: ViewState) {
 function edgeLabel(edge: TopologyEdgeData) {
   const text = edge.label || edge.evidence || edge.relation || ''
   return shortText(text, 22)
+}
+
+function distToMaxLen(dist: number): number {
+  if (dist < 120) return 6
+  if (dist < 200) return 12
+  if (dist < 350) return 22
+  if (dist < 550) return 40
+  return 0  // no truncation — show full text
+}
+
+function adaptiveEdgeLabel(edge: TopologyEdgeData, dist: number): string {
+  const fullText = edge.label || edge.evidence || edge.relation || ''
+  const maxLen = distToMaxLen(dist)
+  if (maxLen === 0) return fullText
+  return shortText(fullText, maxLen)
 }
 
 function edgeKey(edge: Pick<TopologyEdgeData, 'source' | 'target' | 'relation'>) {
