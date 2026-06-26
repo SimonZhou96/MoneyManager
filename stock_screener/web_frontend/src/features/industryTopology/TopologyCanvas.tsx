@@ -949,28 +949,29 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     if (!initializedRef.current || hasStructuralChange) {
       destroyParticle(graph, particleMapRef.current)
       graph.setData(graphData as never)
-      void graph.render()
+      void graph.render().then(() => {
+        // Patch tooltip plugin for pin support (must run after async render completes)
+        if (!tooltipPatchedRef.current) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const tp = graph.getPluginInstance('topo-tooltip') as any
+          if (tp) {
+            graph.off('canvas:pointermove', tp.onCanvasMove)
+            graph.off('node:drag', tp.onPointerLeave)
+            graph.on('canvas:pointermove', (e: unknown) => {
+              if (pinnedEdgeKeysRef.current.size > 0) return
+              tp.onCanvasMove(e)
+            })
+            graph.on('node:drag', (e: unknown) => {
+              if (pinnedEdgeKeysRef.current.size > 0) return
+              tp.onPointerLeave(e)
+            })
+          }
+          tooltipPatchedRef.current = true
+        }
+      })
       initializedRef.current = true
       previousNodeIdsRef.current = nextNodeIds
       previousEdgeIdsRef.current = nextEdgeIds
-      // Patch tooltip plugin for pin support (must run after first render)
-      if (!tooltipPatchedRef.current) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const tp = graph.getPluginInstance('topo-tooltip') as any
-        if (tp) {
-          graph.off('canvas:pointermove', tp.onCanvasMove)
-          graph.off('node:drag', tp.onPointerLeave)
-          graph.on('canvas:pointermove', (e: unknown) => {
-            if (pinnedEdgeKeysRef.current.size > 0) return
-            tp.onCanvasMove(e)
-          })
-          graph.on('node:drag', (e: unknown) => {
-            if (pinnedEdgeKeysRef.current.size > 0) return
-            tp.onPointerLeave(e)
-          })
-        }
-        tooltipPatchedRef.current = true
-      }
       return
     }
 
