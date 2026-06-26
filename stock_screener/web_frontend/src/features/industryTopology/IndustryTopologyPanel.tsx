@@ -230,7 +230,6 @@ export function IndustryTopologyPanel() {
   const [relationFilters, setRelationFilters] = useState<Set<RelationFilter>>(() => new Set(['upstream', 'downstream', 'peer']))
   const [graphQuery, setGraphQuery] = useState('')
   const [onlyImportant, setOnlyImportant] = useState(false)
-  const [showEdgeLabels, setShowEdgeLabels] = useState(false)
   const [highlightCycles, setHighlightCycles] = useState(false)
   const [selectedNode, setSelectedNode] = useState<TopologyNodeData | null>(null)
   const [selectedEdge, setSelectedEdge] = useState<TopologyEdgeData | null>(null)
@@ -737,7 +736,6 @@ export function IndustryTopologyPanel() {
             ))}
           </div>
           <label className="topo-check"><input type="checkbox" checked={onlyImportant} onChange={(event) => setOnlyImportant(event.target.checked)} />只看重点</label>
-          <label className="topo-check"><input type="checkbox" checked={showEdgeLabels} onChange={(event) => setShowEdgeLabels(event.target.checked)} />显示关系</label>
           <label className="topo-check"><input type="checkbox" checked={highlightCycles} onChange={(event) => setHighlightCycles(event.target.checked)} />高亮环路</label>
           <span className="topo-filter-summary">显示 {visibleGraph.nodes.length}/{nodes.length} 节点 · {visibleGraph.edges.length}/{edges.length} 关系</span>
         </div>
@@ -755,7 +753,6 @@ export function IndustryTopologyPanel() {
         selectedNodeId={selectedNode?.id || null}
         selectedEdgeKey={selectedEdgeKey}
         focusNodeId={visibleGraph.focusNodeId}
-        showEdgeLabels={showEdgeLabels}
         highlightCycles={highlightCycles}
         onSelectNode={(node) => {
           if (node) {

@@ -15,7 +15,6 @@ interface Props {
   selectedNodeId?: string | null
   selectedEdgeKey?: string | null
   focusNodeId?: string | null
-  showEdgeLabels?: boolean
   highlightCycles?: boolean
   onSelectNode?: (node: TopologyNodeData | null) => void
   onSelectEdge?: (edge: TopologyEdgeData | null, edgeKey?: string) => void
@@ -47,7 +46,6 @@ interface ViewState {
   relatedNodeIds: Set<string>
   relatedEdgeKeys: Set<string>
   cycleEdgeKeys: Set<string>
-  showEdgeLabels: boolean
   highlightCycles: boolean
   pinnedEdgeKeys: Set<string>
 }
@@ -611,7 +609,6 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   selectedNodeId,
   selectedEdgeKey,
   focusNodeId,
-  showEdgeLabels = false,
   highlightCycles = false,
   onSelectNode,
   onSelectEdge,
@@ -659,13 +656,12 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       selectedNodeId,
       selectedEdgeKey,
       focusNodeId,
-      showEdgeLabels,
       highlightCycles,
       pinnedEdgeKeys,
       cycleEdgeKeys: detectCycleEdges(rawEdges),
       ...related,
     }
-  }, [focusNodeId, highlightCycles, hoveredEdgeKey, hoveredNodeId, rawEdges, rawNodes, selectedEdgeKey, selectedNodeId, showEdgeLabels, zoom, pinnedEdgeKeys])
+  }, [focusNodeId, highlightCycles, hoveredEdgeKey, hoveredNodeId, rawEdges, rawNodes, selectedEdgeKey, selectedNodeId, zoom, pinnedEdgeKeys])
 
   const viewRef = useRef(view)
   viewRef.current = view
