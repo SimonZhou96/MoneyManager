@@ -220,12 +220,15 @@ function edgeStyle(edge: TopologyEdgeData, centerId: string | undefined, view: V
           ? adaptiveEdgeLabel(edge, 999)
           : edgeLabel(edge))
       : '',
-    labelFill: isPinned ? '#fbbf24' : '#dbeafe',
-    labelFontSize: 9,
+    labelFill: isPinned ? '#f8fafc' : '#dbeafe',
+    labelFontSize: isPinned ? 11 : 9,
+    labelFontWeight: isPinned ? 600 : 400,
     labelBackground: true,
-    labelBackgroundFill: isPinned ? 'rgba(251, 191, 36, 0.15)' : 'rgba(15, 23, 42, 0.78)',
+    labelBackgroundFill: isPinned ? 'rgba(251, 191, 36, 0.22)' : 'rgba(15, 23, 42, 0.78)',
     labelBackgroundRadius: 4,
-    labelPadding: [1, 4, 1, 4],
+    labelBackgroundStroke: isPinned ? '#fbbf24' : undefined,
+    labelBackgroundLineWidth: isPinned ? 1 : 0,
+    labelPadding: isPinned ? [3, 6, 3, 6] : [1, 4, 1, 4],
   }
 }
 
@@ -874,8 +877,13 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
             data: { ...edge, edgeKey: key } as unknown as Record<string, unknown>,
             style: {
               labelText: adaptiveEdgeLabel(edge, dist),
-              labelFill: '#fbbf24',
-              labelBackgroundFill: 'rgba(251, 191, 36, 0.15)',
+              labelFill: '#f8fafc',
+              labelFontSize: 11,
+              labelFontWeight: 600,
+              labelBackgroundFill: 'rgba(251, 191, 36, 0.22)',
+              labelBackgroundStroke: '#fbbf24',
+              labelBackgroundLineWidth: 1,
+              labelPadding: [3, 6, 3, 6],
             },
           })
         } catch {
