@@ -852,6 +852,38 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       } catch {
         /* position is best-effort only */
       }
+
+      // Adaptive labels for pinned edges after drag
+      const pinnedKeys = pinnedEdgeKeysRef.current
+      if (pinnedKeys.size === 0) return
+
+      const edgeUpdates: Array<{ id: string; data: Record<string, unknown>; style: Record<string, unknown> }> = []
+      for (const edge of rawEdgesRef.current) {
+        const key = edgeKey(edge)
+        if (!pinnedKeys.has(key)) continue
+        try {
+          const srcPos = graph.getElementPosition(edge.source) as [number, number] | null
+          const tgtPos = graph.getElementPosition(edge.target) as [number, number] | null
+          if (!srcPos || !tgtPos) continue
+          const dist = Math.hypot(tgtPos[0] - srcPos[0], tgtPos[1] - srcPos[1])
+          const visual = visualEdge(edge)
+          edgeUpdates.push({
+            id: `${visual.source}->${visual.target}:${edge.relation}`,
+            data: { ...edge, edgeKey: key } as unknown as Record<string, unknown>,
+            style: {
+              labelText: adaptiveEdgeLabel(edge, dist),
+              labelFill: '#fbbf24',
+              labelBackgroundFill: 'rgba(251, 191, 36, 0.15)',
+            },
+          })
+        } catch {
+          /* position query best-effort */
+        }
+      }
+      if (edgeUpdates.length > 0) {
+        graph.updateEdgeData(edgeUpdates as never)
+        void graph.draw()
+      }
     })
 
     graph.on('edge:click', (event: unknown) => {
