@@ -946,6 +946,14 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     } as never)
   }, [canRefreshTopology, canStartTopology, isTopologyBusy])
 
+  // Clear pinned edge labels when topology fundamentally changes (new center / reset)
+  useEffect(() => {
+    const centerId = rawNodes.find((node) => node.is_center)?.id || null
+    if (rawNodes.length === 0 || (centerId !== null && centerId !== centerIdRef.current)) {
+      setPinnedEdgeKeys(new Set())
+    }
+  }, [rawNodes])
+
   useEffect(() => {
     const graph = graphRef.current
     if (!graph) return
