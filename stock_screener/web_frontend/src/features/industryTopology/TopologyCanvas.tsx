@@ -812,7 +812,10 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     graph.on('node:pointerleave', () => setHoveredNodeId(null))
 
     graph.on('edge:pointerenter', (event: unknown) => {
-      const data = (event as { target?: { data?: { data?: TopologyEdgeData & { edgeKey?: string; visualSource?: string; visualTarget?: string; stroke?: string } } } }).target?.data?.data
+      const id = (event as { target?: { id?: string } }).target?.id
+      if (!id || graph.destroyed) return
+      const edgeDatum = graph.getEdgeData(id)
+      const data = edgeDatum?.data as (TopologyEdgeData & { edgeKey?: string; visualSource?: string; visualTarget?: string; stroke?: string }) | undefined
       const key = data?.edgeKey || null
       setHoveredEdgeKey(key)
       if (data && data.visualSource && data.visualTarget && data.stroke && key) {
@@ -825,7 +828,10 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
 
     graph.on('edge:pointerleave', (event: unknown) => {
       setHoveredEdgeKey(null)
-      const data = (event as { target?: { data?: { data?: TopologyEdgeData & { edgeKey?: string } } } }).target?.data?.data
+      const id = (event as { target?: { id?: string } }).target?.id
+      if (!id || graph.destroyed) return
+      const edgeDatum = graph.getEdgeData(id)
+      const data = edgeDatum?.data as (TopologyEdgeData & { edgeKey?: string }) | undefined
       const leavingKey = data?.edgeKey || null
       if (leavingKey && !nodeParticleKeysRef.current.has(leavingKey)) {
         destroyParticle(graph, particleMapRef.current, leavingKey)
@@ -883,7 +889,11 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     })
 
     graph.on('edge:click', (event: unknown) => {
-      const data = (event as { target?: { data?: { data?: TopologyEdgeData & { edgeKey?: string } } } }).target?.data?.data
+      const id = (event as { target?: { id?: string } }).target?.id
+      if (!id || graph.destroyed) return
+      // G6 5.1.1: runtime elements don't expose .data; use graph API to get edge data
+      const edgeDatum = graph.getEdgeData(id)
+      const data = edgeDatum?.data as (TopologyEdgeData & { edgeKey?: string }) | undefined
       if (!data) return
       const key = data.edgeKey
       if (!key) return
