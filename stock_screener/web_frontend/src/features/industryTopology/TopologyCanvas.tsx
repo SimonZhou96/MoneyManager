@@ -784,9 +784,10 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
         {
           type: 'tooltip',
           trigger: 'hover',
-          getContent: (event: unknown, items: Array<{ data?: { data?: TopologyNodeData | TopologyEdgeData } }>) => {
-            const target = (event as { target?: { data?: { data?: TopologyNodeData | RenderedEdgeData } } }).target?.data?.data
-            const item = target || items?.[0]?.data?.data
+          getContent: (event: unknown, items: Array<{ data?: Record<string, unknown>; source?: string; target?: string }>) => {
+            // G6 5.1.1: items[0] = { id, source?, target?, data: actualElementData, style }
+            // The actual node/edge data is at items[0].data (single nesting)
+            const item = items?.[0]?.data as TopologyNodeData | RenderedEdgeData | undefined
             if (!item) return ''
             if ('source' in item && 'target' in item) {
               return edgeTooltip(item as RenderedEdgeData, rawNodesRef.current)
