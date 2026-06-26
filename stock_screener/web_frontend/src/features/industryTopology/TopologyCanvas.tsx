@@ -615,6 +615,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   const centerIdRef = useRef<string | null>(null)
   const particleMapRef = useRef<Map<string, ParticleState>>(new Map())
   const nodeParticleKeysRef = useRef<Set<string>>(new Set())
+  const tooltipPatchedRef = useRef(false)
   const onExpandRef = useRef(onExpand)
   const onStartTopologyRef = useRef(onStartTopology)
   const onRefreshTopologyRef = useRef(onRefreshTopology)
@@ -902,24 +903,6 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
 
     graphRef.current = graph
 
-    // ---- tooltip pin support: prevent auto-hide when edge is pinned ----
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const tooltipPlugin = graph.getPluginInstance('topo-tooltip') as any
-    if (tooltipPlugin) {
-      // Remove G6's unconditional hide handlers
-      graph.off('canvas:pointermove', tooltipPlugin.onCanvasMove)
-      graph.off('node:drag', tooltipPlugin.onPointerLeave)
-      // Add pin-aware handlers
-      graph.on('canvas:pointermove', (event: unknown) => {
-        if (pinnedEdgeKeysRef.current.size > 0) return
-        tooltipPlugin.onCanvasMove(event)
-      })
-      graph.on('node:drag', (event: unknown) => {
-        if (pinnedEdgeKeysRef.current.size > 0) return
-        tooltipPlugin.onPointerLeave(event)
-      })
-    }
-
     return () => {
       destroyParticle(graph, particleMapRef.current)
       graph.destroy()
@@ -970,6 +953,24 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       initializedRef.current = true
       previousNodeIdsRef.current = nextNodeIds
       previousEdgeIdsRef.current = nextEdgeIds
+      // Patch tooltip plugin for pin support (must run after first render)
+      if (!tooltipPatchedRef.current) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const tp = graph.getPluginInstance('topo-tooltip') as any
+        if (tp) {
+          graph.off('canvas:pointermove', tp.onCanvasMove)
+          graph.off('node:drag', tp.onPointerLeave)
+          graph.on('canvas:pointermove', (e: unknown) => {
+            if (pinnedEdgeKeysRef.current.size > 0) return
+            tp.onCanvasMove(e)
+          })
+          graph.on('node:drag', (e: unknown) => {
+            if (pinnedEdgeKeysRef.current.size > 0) return
+            tp.onPointerLeave(e)
+          })
+        }
+        tooltipPatchedRef.current = true
+      }
       return
     }
 
