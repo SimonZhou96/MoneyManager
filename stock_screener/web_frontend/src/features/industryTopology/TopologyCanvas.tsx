@@ -202,7 +202,7 @@ function edgeStyle(edge: TopologyEdgeData, centerId: string | undefined, view: V
   const cyclic = view.highlightCycles && view.cycleEdgeKeys.has(key)
   const hasFocus = Boolean(view.focusNodeId || view.selectedNodeId || view.hoveredNodeId || view.selectedEdgeKey || view.hoveredEdgeKey)
   const isPinned = view.pinnedEdgeKeys.has(key)
-  const showLabel = isPinned || active || (view.zoom > 1.35 && touchesCenter)
+  const showLabel = active || (view.zoom > 1.35 && touchesCenter)
   return {
     stroke: cyclic ? '#f8fafc' : stroke,
     lineWidth: cyclic ? 3 : (active || isPinned) ? 2.5 : 1,
@@ -213,22 +213,13 @@ function edgeStyle(edge: TopologyEdgeData, centerId: string | undefined, view: V
     shadowColor: cyclic ? '#fbbf24' : (active || isPinned) ? stroke : 'transparent',
     shadowOffsetX: 0,
     shadowOffsetY: 0,
-    labelText: showLabel
-      ? (cyclic
-        ? `环路 · ${isPinned ? adaptiveEdgeLabel(edge, 999) : edgeLabel(edge)}`
-        : isPinned
-          ? adaptiveEdgeLabel(edge, 999)
-          : edgeLabel(edge))
-      : '',
-    labelFill: isPinned ? '#f8fafc' : '#dbeafe',
-    labelFontSize: isPinned ? 11 : 9,
-    labelFontWeight: isPinned ? 600 : 400,
+    labelText: showLabel ? (cyclic ? `环路 · ${edgeLabel(edge)}` : edgeLabel(edge)) : '',
+    labelFill: '#dbeafe',
+    labelFontSize: 9,
     labelBackground: true,
-    labelBackgroundFill: isPinned ? 'rgba(251, 191, 36, 0.22)' : 'rgba(15, 23, 42, 0.78)',
+    labelBackgroundFill: 'rgba(15, 23, 42, 0.78)',
     labelBackgroundRadius: 4,
-    labelBackgroundStroke: isPinned ? '#fbbf24' : undefined,
-    labelBackgroundLineWidth: isPinned ? 1 : 0,
-    labelPadding: isPinned ? [3, 6, 3, 6] : [1, 4, 1, 4],
+    labelPadding: [1, 4, 1, 4],
   }
 }
 
@@ -786,6 +777,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
         { type: 'minimap', size: [180, 120], position: 'right-bottom' },
         {
           type: 'tooltip',
+          key: 'topo-tooltip',
           trigger: 'hover',
           getContent: (event: unknown, items: Array<{ data?: Record<string, unknown>; source?: string; target?: string }>) => {
             // G6 5.1.1: items[0] = { id, source?, target?, data: actualElementData, style }
@@ -858,64 +850,31 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
         /* position is best-effort only */
       }
 
-      // Adaptive labels for pinned edges after drag
-      const pinnedKeys = pinnedEdgeKeysRef.current
-      if (pinnedKeys.size === 0) return
-
-      const edgeUpdates: Array<{ id: string; data: Record<string, unknown>; style: Record<string, unknown> }> = []
-      for (const edge of rawEdgesRef.current) {
-        const key = edgeKey(edge)
-        if (!pinnedKeys.has(key)) continue
-        try {
-          const srcPos = graph.getElementPosition(edge.source) as [number, number] | null
-          const tgtPos = graph.getElementPosition(edge.target) as [number, number] | null
-          if (!srcPos || !tgtPos) continue
-          const dist = Math.hypot(tgtPos[0] - srcPos[0], tgtPos[1] - srcPos[1])
-          const visual = visualEdge(edge)
-          edgeUpdates.push({
-            id: `${visual.source}->${visual.target}:${edge.relation}`,
-            data: { ...edge, edgeKey: key } as unknown as Record<string, unknown>,
-            style: {
-              labelText: adaptiveEdgeLabel(edge, dist),
-              labelFill: '#f8fafc',
-              labelFontSize: 11,
-              labelFontWeight: 600,
-              labelBackgroundFill: 'rgba(251, 191, 36, 0.22)',
-              labelBackgroundStroke: '#fbbf24',
-              labelBackgroundLineWidth: 1,
-              labelPadding: [3, 6, 3, 6],
-            },
-          })
-        } catch {
-          /* position query best-effort */
-        }
-      }
-      if (edgeUpdates.length > 0) {
-        graph.updateEdgeData(edgeUpdates as never)
-        void graph.draw()
-      }
     })
 
     graph.on('edge:click', (event: unknown) => {
       const id = (event as { target?: { id?: string } }).target?.id
       if (!id || graph.destroyed) return
-      // G6 5.1.1: runtime elements don't expose .data; use graph API to get edge data
       const edgeDatum = graph.getEdgeData(id)
       const data = edgeDatum?.data as (TopologyEdgeData & { edgeKey?: string }) | undefined
       if (!data) return
       const key = data.edgeKey
       if (!key) return
-      // Toggle pin
+      // Toggle pin: pin makes the hover tooltip sticky; unpin hides it
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const tooltip = graphRef.current?.getPluginInstance('topo-tooltip') as any
       setPinnedEdgeKeys((prev) => {
         const next = new Set(prev)
         if (next.has(key)) {
           next.delete(key)
+          // Unpin: hide tooltip
+          tooltip?.hide()
         } else {
           next.add(key)
+          // Pin: tooltip already visible from hover, pin-aware canvas:pointermove keeps it alive
         }
         return next
       })
-      // Existing sidebar behavior preserved
       onSelectNodeRef.current?.(null)
       onSelectEdgeRef.current?.(data, key)
     })
@@ -923,6 +882,12 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     graph.on('canvas:click', () => {
       onSelectNodeRef.current?.(null)
       onSelectEdgeRef.current?.(null)
+      // Clear all pinned edges and hide tooltip on canvas click
+      if (pinnedEdgeKeysRef.current.size > 0) {
+        setPinnedEdgeKeys(new Set())
+        const tooltip = graphRef.current?.getPluginInstance('topo-tooltip') as any
+        tooltip?.hide()
+      }
     })
 
     graph.on('aftertransform', () => {
@@ -936,6 +901,24 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     })
 
     graphRef.current = graph
+
+    // ---- tooltip pin support: prevent auto-hide when edge is pinned ----
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tooltipPlugin = graph.getPluginInstance('topo-tooltip') as any
+    if (tooltipPlugin) {
+      // Remove G6's unconditional hide handlers
+      graph.off('canvas:pointermove', tooltipPlugin.onCanvasMove)
+      graph.off('node:drag', tooltipPlugin.onPointerLeave)
+      // Add pin-aware handlers
+      graph.on('canvas:pointermove', (event: unknown) => {
+        if (pinnedEdgeKeysRef.current.size > 0) return
+        tooltipPlugin.onCanvasMove(event)
+      })
+      graph.on('node:drag', (event: unknown) => {
+        if (pinnedEdgeKeysRef.current.size > 0) return
+        tooltipPlugin.onPointerLeave(event)
+      })
+    }
 
     return () => {
       destroyParticle(graph, particleMapRef.current)
