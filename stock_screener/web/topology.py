@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import threading
 from typing import Any, Dict, List, Optional
@@ -267,6 +268,7 @@ def quotes(
     _enrich_quote_item_names(items, service)
     _enrich_quote_item_fundamentals(items, service)
     _enrich_quote_item_known_chinese_names(items)
+    _enrich_quote_item_pct_chg_from_klines(items, service)
     return {"ok": True, "data": _quote_batch_payload(items)}
 
 
@@ -296,6 +298,7 @@ def refresh_quotes(
     _enrich_quote_item_names(items, service)
     _enrich_quote_item_fundamentals(items, service)
     _enrich_quote_item_known_chinese_names(items)
+    _enrich_quote_item_pct_chg_from_klines(items, service)
     return {"ok": True, "data": _quote_batch_payload(items)}
 
 
@@ -487,6 +490,58 @@ def _enrich_quote_item_known_chinese_names(items: List[Dict[str, Any]]) -> None:
         candidate = _KNOWN_CHINESE_NAMES.get(str(item.get("code") or "").strip().upper())
         if _should_replace_display_name(item.get("name"), candidate):
             item["name"] = candidate
+
+
+def _enrich_quote_item_pct_chg_from_klines(items: List[Dict[str, Any]], service: StockTerminalService) -> None:
+    if not hasattr(service, "get_klines"):
+        return
+    for item in items:
+        if item.get("pct_chg") is not None:
+            continue
+        market = str(item.get("market") or "").strip()
+        code = str(item.get("code") or "").strip()
+        if not market or not code:
+            continue
+        try:
+            payload = service.get_klines(market, code, "1d", limit=2)
+        except Exception:
+            continue
+        pct_chg = _pct_chg_from_kline_rows(payload)
+        if pct_chg is None:
+            continue
+        item["pct_chg"] = pct_chg
+        item.setdefault("field_sources", {})["pct_chg"] = "kline"
+
+
+def _pct_chg_from_kline_rows(payload: Any) -> Optional[float]:
+    rows = payload.get("rows") if isinstance(payload, dict) else payload
+    if not rows:
+        return None
+    normalized = [row.to_dict() if hasattr(row, "to_dict") else dict(row) for row in rows if row is not None]
+    for row in reversed(normalized):
+        change_rate = _quote_float(row.get("change_rate"))
+        if change_rate is not None:
+            return round(change_rate, 2)
+    closes = [_quote_float(row.get("close")) for row in normalized]
+    closes = [value for value in closes if value is not None]
+    if len(closes) < 2:
+        return None
+    previous_close, latest_close = closes[-2], closes[-1]
+    if previous_close == 0:
+        return None
+    return round((latest_close - previous_close) / previous_close * 100, 2)
+
+
+def _quote_float(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
 
 
 def _quote_batch_payload(items: List[Dict[str, Any]]) -> Dict[str, Any]:

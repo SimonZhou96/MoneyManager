@@ -16,11 +16,13 @@ from stock_terminal.models import BlockStatus, QuoteSnapshot
 from web.topology import (
     GraphRequest,
     QuoteRefreshRequest,
+    _pct_chg_from_kline_rows,
     _quote_from_cache,
     _quote_status_item,
     _schedule_relation_generation,
     _TOPOLOGY_GENERATION_IN_FLIGHT,
     graph as topology_graph_route,
+    quotes as topology_quotes_route,
     refresh_quotes as topology_refresh_quotes_route,
     search_enrich as topology_search_enrich_route,
 )
@@ -162,6 +164,115 @@ class TestTopologyQuotePayload(unittest.TestCase):
         self.assertEqual(item["field_errors"]["price"], "quote_pending")
         self.assertEqual(item["field_errors"]["pct_chg"], "quote_pending")
         self.assertEqual(item["field_errors"]["market_cap"], "quote_pending")
+
+    def test_quotes_fills_missing_pct_chg_from_kline_change_rate(self):
+        fetched_at = datetime(2026, 6, 23, 15, 16, tzinfo=timezone.utc)
+        quote = QuoteSnapshot(
+            market="US",
+            code="US.NVDA",
+            name="NVIDIA",
+            price=439.215,
+            change_percent=None,
+            market_cap=1.23e12,
+            fetched_at=fetched_at,
+            source="fake",
+        )
+        service = FakeQuoteKlineService(
+            quote=quote,
+            status=BlockStatus(status="cached", source="fake", fetched_at=fetched_at),
+            kline_rows=[{"close": 430.0, "change_rate": None}, {"close": 439.215, "change_rate": 2.14}],
+        )
+
+        result = topology_quotes_route("US:NVDA.US", service)
+        item = result["data"]["items"][0]
+
+        self.assertEqual(item["pct_chg"], 2.14)
+        self.assertEqual(item["field_sources"]["pct_chg"], "kline")
+        self.assertNotIn("pct_chg", item["data_gaps"])
+        self.assertNotIn("pct_chg", item["field_errors"])
+
+    def test_pct_chg_from_kline_rows_computes_from_two_closes(self):
+        pct_chg = _pct_chg_from_kline_rows({"rows": [{"close": 100}, {"close": 103.456}]})
+
+        self.assertEqual(pct_chg, 3.46)
+
+    def test_quotes_keeps_provider_missing_field_when_kline_is_insufficient(self):
+        fetched_at = datetime(2026, 6, 23, 15, 16, tzinfo=timezone.utc)
+        quote = QuoteSnapshot(
+            market="US",
+            code="US.NVDA",
+            name="NVIDIA",
+            price=439.215,
+            change_percent=None,
+            market_cap=1.23e12,
+            fetched_at=fetched_at,
+            source="fake",
+        )
+        service = FakeQuoteKlineService(
+            quote=quote,
+            status=BlockStatus(status="cached", source="fake", fetched_at=fetched_at),
+            kline_rows=[{"close": None}],
+        )
+
+        result = topology_quotes_route("US:NVDA.US", service)
+        item = result["data"]["items"][0]
+
+        self.assertIn("pct_chg", item["data_gaps"])
+        self.assertEqual(item["field_errors"]["pct_chg"], "provider_missing_field")
+
+    def test_quotes_recomputes_gaps_after_fundamentals_fill_market_cap(self):
+        fetched_at = datetime(2026, 6, 23, 15, 16, tzinfo=timezone.utc)
+        quote = QuoteSnapshot(
+            market="US",
+            code="US.AMZN",
+            name="Amazon",
+            price=185.0,
+            change_percent=None,
+            market_cap=None,
+            fetched_at=fetched_at,
+            source="fake",
+        )
+        service = FakeQuoteKlineService(
+            quote=quote,
+            status=BlockStatus(status="cached", source="fake", fetched_at=fetched_at),
+            kline_rows=[{"close": 180.0}, {"close": 185.0}],
+            fundamentals=[{"code": "US.AMZN", "name": "Amazon", "sector": "Consumer", "industry": "Retail", "market_cap": 2.1e12}],
+        )
+
+        result = topology_quotes_route("US:AMZN.US", service)
+        item = result["data"]["items"][0]
+
+        self.assertEqual(item["market_cap"], 2.1e12)
+        self.assertEqual(item["pct_chg"], 2.78)
+        self.assertEqual(item["data_gaps"], [])
+        self.assertEqual(item["field_errors"], {})
+
+
+class FakeQuoteRepository:
+    def __init__(self, quote, status, fundamentals=None):
+        self.quote = quote
+        self.status = status
+        self.db = self
+        self.fundamentals = fundamentals or []
+
+    def get_quote(self, market, code, now=None):
+        return self.quote, self.status
+
+    def get_stocks_by_codes(self, market, codes, include_fundamentals=False):
+        code_set = {str(code).upper() for code in codes}
+        return [row for row in self.fundamentals if str(row.get("code") or "").upper() in code_set]
+
+
+class FakeQuoteKlineService:
+    def __init__(self, quote, status, kline_rows, fundamentals=None):
+        self.repository = FakeQuoteRepository(quote, status, fundamentals=fundamentals)
+        self.kline_rows = kline_rows
+
+    def now(self):
+        return datetime(2026, 6, 23, 15, 16, tzinfo=timezone.utc)
+
+    def get_klines(self, market, code, timeframe, limit=500, before=None):
+        return {"rows": self.kline_rows[-limit:]}
 
 
 class TestTopologyServiceMerge(unittest.TestCase):
