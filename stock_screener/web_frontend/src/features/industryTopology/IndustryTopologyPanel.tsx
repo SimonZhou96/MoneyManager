@@ -18,6 +18,8 @@ const POLL_INTERVAL_MS = 2500
 const MAX_POLL_ATTEMPTS = 24
 const RELATION_POLL_INTERVAL_MS = 3500
 const MAX_RELATION_POLL_ATTEMPTS = 24
+const GRAPH_TASK_POLL_INTERVAL_MS = 1500
+const GRAPH_TASK_TERMINAL_STAGES = new Set(['done', 'partial', 'failed', 'cancelled', 'expired'])
 const TERMINAL_QUOTE_STATUSES = new Set(['cached', 'fresh', 'stale', 'failed', 'error', 'skipped'])
 const RELATION_FILTERS = [
   { key: 'upstream', label: '上游' },
@@ -140,6 +142,10 @@ function progressLabel(stage: TopologyTaskStage, quotePollState: QuotePollState,
   return '等待开始拓扑'
 }
 
+function isGraphTaskTerminal(stage: string) {
+  return GRAPH_TASK_TERMINAL_STAGES.has(stage)
+}
+
 function DetailPanel({
   node,
   edge,
@@ -219,6 +225,7 @@ export function IndustryTopologyPanel() {
   const nodesRef = useRef<TopologyNodeData[]>([])
   const renderMetaRef = useRef<Map<string, RenderMeta>>(new Map())
   const taskIdRef = useRef(0)
+  const graphTaskIdRef = useRef<string | null>(null)
 
   const symbols = useMemo(() => nodes.map((node) => node.id), [nodes])
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
@@ -434,58 +441,84 @@ export function IndustryTopologyPanel() {
     void startQuoteRefresh(refreshSymbols)
   }, [mergeIntoExistingNodes, startQuoteRefresh])
 
-  const runSearchEnrich = useCallback(async (taskId: number, graph: TopologyGraph) => {
-    try {
-      const res = await topologyApi.searchEnrich(
-        {
-          market: graph.center.market,
-          code: graph.center.code,
-          name: graph.center.name,
-          sector: graph.center.sector,
-          industry: graph.center.industry,
-        },
-        graph.nodes.map((node) => node.id),
-      )
-      if (taskId !== taskIdRef.current) return
-      mergeIntoExistingNodes(res.data.items, 'search_enrich')
-      setWarnings((current) => Array.from(new Set([...current, ...(res.data.warnings || [])])))
-    } catch {
-      if (taskId !== taskIdRef.current) return
-      setWarnings((current) => Array.from(new Set([...current, 'search_unavailable'])))
-    } finally {
-      if (taskId === taskIdRef.current) {
-        setTaskStage('graph_ready_source_polling')
-      }
-    }
-  }, [mergeIntoExistingNodes])
-
   const startTopology = useCallback(async () => {
     if (!selected) return
     const taskId = taskIdRef.current + 1
     taskIdRef.current = taskId
+    const previousGraphTaskId = graphTaskIdRef.current
+    graphTaskIdRef.current = null
     relationPollAttemptsRef.current = 0
     pollAttemptsRef.current = 0
     setWarnings([])
     setTaskStage('graph_loading')
-    setProgressPct(10)
+    setProgressPct(5)
     setQuotePollState('idle')
     setRelationPollState('idle')
+    if (previousGraphTaskId) {
+      void topologyApi.cancelGraphTask(previousGraphTaskId).catch(() => undefined)
+    }
     try {
-      const res = await topologyApi.graph(selected.code, selected.market, depth, selected.name, 'llm_initial')
+      const created = await topologyApi.createGraphTask(selected.code, selected.market, depth, selected.name, 'llm_initial')
       if (taskId !== taskIdRef.current) return
-      applyGraph(res.data, true, true)
-      setWarnings(Array.from(new Set(res.data.warnings || [])))
-      setStats(formatTopologyStats(res.data.stats, res.data.warnings || []))
-      setTaskStage('graph_ready_search_enriching')
-      setProgressPct(55)
-      await runSearchEnrich(taskId, res.data)
+      graphTaskIdRef.current = created.data.task_id
+      applyGraph(created.data.graph, true, true)
+      setWarnings(Array.from(new Set(created.data.warnings || [])))
+      setStats(created.data.message || formatTopologyStats(created.data.graph.stats, created.data.warnings || []))
+      setProgressPct(created.data.progress_pct)
+
+      const pollGraphTask = async () => {
+        const activeGraphTaskId = graphTaskIdRef.current
+        if (!activeGraphTaskId || taskId !== taskIdRef.current) return
+        try {
+          const res = await topologyApi.getGraphTask(activeGraphTaskId)
+          if (taskId !== taskIdRef.current || graphTaskIdRef.current !== activeGraphTaskId) return
+          const task = res.data
+          if (task.graph) {
+            applyGraph(task.graph, task.stage === 'initial_graph_ready', task.stage === 'initial_graph_ready')
+          }
+          setWarnings(Array.from(new Set(task.warnings || [])))
+          setStats(task.error?.message || task.message || formatTopologyStats(task.graph.stats, task.warnings || []))
+          setProgressPct(task.progress_pct)
+          if (task.stage === 'initial_graph_ready' || task.stage === 'enriching' || task.stage === 'source_polling') {
+            setTaskStage('graph_ready_source_polling')
+          }
+          if (task.stage === 'done') {
+            setTaskStage('done')
+            setRelationPollState('done')
+            setProgressPct(100)
+            return
+          }
+          if (task.stage === 'partial') {
+            setTaskStage('partial')
+            setRelationPollState('timeout')
+            setProgressPct(100)
+            return
+          }
+          if (task.stage === 'failed' || task.stage === 'expired' || task.stage === 'cancelled') {
+            setTaskStage(task.stage === 'cancelled' ? 'partial' : 'failed')
+            setRelationPollState('done')
+            setProgressPct(100)
+            return
+          }
+          if (!isGraphTaskTerminal(task.stage)) {
+            window.setTimeout(pollGraphTask, GRAPH_TASK_POLL_INTERVAL_MS)
+          }
+        } catch (e) {
+          if (taskId !== taskIdRef.current) return
+          setTaskStage('failed')
+          setProgressPct(100)
+          setStats(`拓扑任务失败: ${(e as Error).message}`)
+        }
+      }
+
+      window.setTimeout(pollGraphTask, GRAPH_TASK_POLL_INTERVAL_MS)
     } catch (e) {
       if (taskId !== taskIdRef.current) return
       setTaskStage('failed')
       setProgressPct(100)
       setStats(`拓扑失败: ${(e as Error).message}`)
     }
-  }, [selected, depth, applyGraph, runSearchEnrich])
+  }, [selected, depth, applyGraph])
 
   const onExpand = useCallback(async (code: string, market: string) => {
     if (!selected) return
@@ -581,6 +614,7 @@ export function IndustryTopologyPanel() {
 
   useEffect(() => {
     if (!selected || nodes.length === 0 || relationPollState !== 'polling' || relationStatus !== 'generating') return
+    if (graphTaskIdRef.current) return
     const timer = window.setInterval(async () => {
       if (relationPollAttemptsRef.current >= MAX_RELATION_POLL_ATTEMPTS) {
         setRelationPollState('timeout')
