@@ -130,13 +130,19 @@ class TopologyEnrichmentService:
         queries = []
         if name:
             queries.append(f"{market} {code} {name} stock listed company")
+            queries.append(f"{market} {code} {name} 中文名 股票 产业链")
         queries.append(f"{market} {code} listed company ticker official name")
+        queries.append(f"{market} {code} 中文名 股票")
         return self._search_queries(queries, max_results=4)
 
     def _search_relation_documents(self, *, market: str, code: str, name: str, sector: str) -> tuple[List[SearchDocument], List[str]]:
-        queries = [f"{name or code} {market} {code} industry supply chain suppliers customers"]
+        queries = [
+            f"{name or code} {market} {code} industry supply chain suppliers customers",
+            f"{name or code} {market} {code} 中文名 股票 产业链 上游 下游",
+        ]
         if sector:
             queries.append(f"{name or code} {sector} listed company market cap change percent")
+            queries.append(f"{name or code} {sector} 中文名 股票 产业链")
         return self._search_queries(queries, max_results=6)
 
     def _search_queries(self, queries: List[str], *, max_results: int) -> tuple[List[SearchDocument], List[str]]:
@@ -199,6 +205,7 @@ class TopologyEnrichmentService:
             "name": str(item.get("name") or "").strip(),
             "sector": str(item.get("sector") or "").strip(),
             "industry": str(item.get("industry") or "").strip(),
+            "price": item.get("price"),
             "market_cap": item.get("market_cap"),
             "market_cap_str": str(item.get("market_cap_str") or "").strip(),
             "pct_chg": item.get("pct_chg"),
@@ -210,8 +217,9 @@ class TopologyEnrichmentService:
                 if confidence is not None and field in field_sources
             },
             "data_gaps": [
-                field for field in ("name", "sector", "industry", "market_cap", "pct_chg")
+                field for field in ("name", "sector", "industry", "price", "market_cap", "pct_chg")
                 if item.get(field) in (None, "", "--")
             ],
+            "field_errors": dict(item.get("field_errors") or {}),
             "data_stage": "llm_initial",
         }

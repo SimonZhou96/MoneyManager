@@ -21,6 +21,7 @@ const MAX_RELATION_POLL_ATTEMPTS = 24
 const GRAPH_TASK_POLL_INTERVAL_MS = 1500
 const GRAPH_TASK_TERMINAL_STAGES = new Set(['done', 'partial', 'failed', 'cancelled', 'expired'])
 const TERMINAL_QUOTE_STATUSES = new Set(['cached', 'fresh', 'stale', 'failed', 'error', 'skipped'])
+const NON_RETRY_QUOTE_STATUSES = new Set(['failed', 'error', 'skipped'])
 const RELATION_FILTERS = [
   { key: 'upstream', label: '上游' },
   { key: 'downstream', label: '下游' },
@@ -65,6 +66,16 @@ function sourcePriority(source?: string) {
   if (source === 'resolver' || source === 'resolver_override') return 3
   if (source === 'search_enrich') return 2
   return 1
+}
+
+function containsCjk(value: unknown) {
+  return /[\u3400-\u9fff]/.test(String(value || ''))
+}
+
+function hasCompleteQuoteFields(node: Pick<TopologyNodeData, 'price' | 'pct_chg' | 'market_cap'>) {
+  return node.price !== null && node.price !== undefined
+    && node.pct_chg !== null && node.pct_chg !== undefined
+    && node.market_cap !== null && node.market_cap !== undefined
 }
 
 function stagePriority(stage?: string) {
@@ -118,7 +129,7 @@ function buildProgress(stage: TopologyTaskStage, nodes: TopologyNodeData[], rela
   if (stage === 'graph_ready_search_enriching') return 65
   if (stage === 'graph_ready_source_polling') {
     const total = nodes.length || 1
-    const ready = nodes.filter((node) => TERMINAL_QUOTE_STATUSES.has(node.quote_status || 'pending')).length
+    const ready = nodes.filter((node) => hasCompleteQuoteFields(node) || NON_RETRY_QUOTE_STATUSES.has(node.quote_status || 'pending')).length
     const quoteRatio = ready / total
     const relationRatio = relationPollState === 'done' || relationPollState === 'timeout' ? 1 : 0
     return Math.min(99, Math.round(75 + quoteRatio * 15 + relationRatio * 10))
@@ -181,6 +192,9 @@ function DetailPanel({
       : node?.data_stage === 'source_partial'
         ? '数据源补全中'
         : '未知'
+  const fieldErrors = node?.field_errors
+    ? Object.entries(node.field_errors).map(([field, reason]) => `${field}: ${reason}`).join('，')
+    : ''
   return (
     <aside className="topo-detail-panel">
       <button className="topo-detail-close" onClick={onClose}>×</button>
@@ -190,9 +204,11 @@ function DetailPanel({
       <div className="topo-detail-row"><span>市场</span><strong>{node?.market}</strong></div>
       <div className="topo-detail-row"><span>板块</span><strong>{sector}</strong></div>
       <div className="topo-detail-row"><span>行业</span><strong>{industry}</strong></div>
+      <div className="topo-detail-row"><span>价格</span><strong>{node?.price ?? '--'}</strong></div>
       <div className="topo-detail-row"><span>市值</span><strong>{node?.market_cap_str || '未知'}</strong></div>
       <div className="topo-detail-row"><span>涨跌幅</span><strong>{node?.pct_chg ?? '--'}</strong></div>
       <div className="topo-detail-row"><span>行情状态</span><strong>{node?.quote_status || 'pending'}</strong></div>
+      {fieldErrors ? <div className="topo-detail-row"><span>缺失原因</span><strong>{fieldErrors}</strong></div> : null}
       <div className="topo-detail-row"><span>数据阶段</span><strong>{dataStage}</strong></div>
       <div className="topo-detail-hint">双击画布节点可继续展开该企业关系。</div>
     </aside>
@@ -282,6 +298,7 @@ export function IndustryTopologyPanel() {
         quote_updated_at: patch.quote_updated_at ?? node.quote_updated_at,
         quote_error: patch.quote_error ?? node.quote_error,
         data_gaps: patch.data_gaps ?? node.data_gaps,
+        field_errors: patch.field_errors ?? node.field_errors,
       }
       let changed = false
       FIELD_NAMES.forEach((field) => {
@@ -290,7 +307,15 @@ export function IndustryTopologyPanel() {
         const incomingSource = patch.field_sources?.[field] || fallbackSource
         const incomingRank = sourcePriority(incomingSource)
         const currentRank = meta.fieldRanks[field] ?? sourcePriority(node.field_sources?.[field])
-        if (hasFieldValue(field, nextNode[field]) && incomingRank < currentRank) return
+        if (field === 'name') {
+          const currentHasChinese = containsCjk(nextNode.name)
+          const incomingHasChinese = containsCjk(incoming)
+          if (currentHasChinese && !incomingHasChinese) return
+          if (!incomingHasChinese && hasFieldValue(field, nextNode[field]) && incomingRank < currentRank) return
+        } else if (hasFieldValue(field, nextNode[field]) && incomingRank < currentRank) {
+          return
+        }
+        if ((nextNode as unknown as Record<string, unknown>)[field] === incoming) return
         ;(nextNode as unknown as Record<string, unknown>)[field] = incoming
         nextNode.field_sources = { ...(nextNode.field_sources || {}), [field]: incomingSource }
         if (patch.field_confidence?.[field] !== undefined) {
@@ -299,6 +324,13 @@ export function IndustryTopologyPanel() {
         meta.fieldRanks[field] = incomingRank
         changed = true
       })
+      if (patch.price !== undefined && patch.price !== node.price) {
+        nextNode.price = patch.price
+        if (patch.field_sources?.price) {
+          nextNode.field_sources = { ...(nextNode.field_sources || {}), price: patch.field_sources.price }
+        }
+        changed = true
+      }
       if (hasFieldValue('market_cap', patch.market_cap)) {
         nextNode.market_cap_str = patch.market_cap_str || nextNode.market_cap_str
         if (!meta.hasRenderedSize) {
@@ -311,7 +343,12 @@ export function IndustryTopologyPanel() {
         changed = true
       }
       renderMetaRef.current.set(node.id, meta)
-      if (!changed && nextNode.quote_status === node.quote_status && nextNode.quote_updated_at === node.quote_updated_at && nextNode.quote_error === node.quote_error) {
+      const metaChanged = nextNode.quote_status !== node.quote_status
+        || nextNode.quote_updated_at !== node.quote_updated_at
+        || nextNode.quote_error !== node.quote_error
+        || nextNode.data_gaps !== node.data_gaps
+        || nextNode.field_errors !== node.field_errors
+      if (!changed && !metaChanged) {
         return node
       }
       changedNodes.push(nextNode)
@@ -330,6 +367,7 @@ export function IndustryTopologyPanel() {
       name: item.name,
       sector: item.sector,
       industry: item.industry,
+      price: item.price,
       pct_chg: item.pct_chg,
       market_cap: item.market_cap,
       market_cap_str: item.market_cap_str,
@@ -340,6 +378,7 @@ export function IndustryTopologyPanel() {
       field_confidence: item.field_confidence,
       data_stage: item.data_stage,
       data_gaps: item.data_gaps,
+      field_errors: item.field_errors,
     })), 'resolver')
   }, [mergeIntoExistingNodes])
 
@@ -378,6 +417,7 @@ export function IndustryTopologyPanel() {
         name: incoming.name,
         sector: incoming.sector,
         industry: incoming.industry,
+        price: incoming.price,
         pct_chg: incoming.pct_chg,
         market_cap: incoming.market_cap,
         market_cap_str: incoming.market_cap_str,
@@ -388,6 +428,7 @@ export function IndustryTopologyPanel() {
         field_confidence: incoming.field_confidence,
         data_stage: incoming.data_stage,
         data_gaps: incoming.data_gaps,
+        field_errors: incoming.field_errors,
       }
       const meta = renderMetaRef.current.get(prev.id) || buildRenderMeta(prev)
       renderMetaRef.current.set(prev.id, meta)
@@ -427,6 +468,7 @@ export function IndustryTopologyPanel() {
       name: node.name,
       sector: node.sector,
       industry: node.industry,
+      price: node.price,
       pct_chg: node.pct_chg,
       market_cap: node.market_cap,
       market_cap_str: node.market_cap_str,
@@ -437,6 +479,7 @@ export function IndustryTopologyPanel() {
       field_confidence: node.field_confidence,
       data_stage: node.data_stage,
       data_gaps: node.data_gaps,
+      field_errors: node.field_errors,
     })), 'llm_graph')
     void startQuoteRefresh(refreshSymbols)
   }, [mergeIntoExistingNodes, startQuoteRefresh])
@@ -585,7 +628,7 @@ export function IndustryTopologyPanel() {
   useEffect(() => {
     if (quotePollState !== 'polling' || symbols.length === 0) return
     const activeSymbols = () => nodesRef.current
-      .filter((node) => !TERMINAL_QUOTE_STATUSES.has(node.quote_status || 'pending'))
+      .filter((node) => !hasCompleteQuoteFields(node) && !NON_RETRY_QUOTE_STATUSES.has(node.quote_status || 'pending'))
       .map((node) => node.id)
 
     const timer = window.setInterval(async () => {

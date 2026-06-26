@@ -23,6 +23,7 @@ export interface TopologyNodeData {
   market: Market
   sector: string
   industry?: string
+  price?: number | null
   pct_chg: number | null
   market_cap?: number | null
   market_cap_str: string
@@ -34,6 +35,7 @@ export interface TopologyNodeData {
   field_confidence?: Record<string, number>
   data_stage?: TopologyDataStage
   data_gaps?: string[]
+  field_errors?: Record<string, string>
   expanded: boolean
   stale: boolean
   is_center: boolean
@@ -94,6 +96,7 @@ export interface TopologyNodePatch {
   name?: string
   sector?: string
   industry?: string
+  price?: number | null
   pct_chg?: number | null
   market_cap?: number | null
   market_cap_str?: string
@@ -104,6 +107,7 @@ export interface TopologyNodePatch {
   field_confidence?: Record<string, number>
   data_stage?: TopologyDataStage
   data_gaps?: string[]
+  field_errors?: Record<string, string>
 }
 
 export interface TopologySearchEnrichResult {
@@ -141,6 +145,7 @@ export interface TopologyQuoteItem {
   field_confidence?: Record<string, number>
   data_stage?: TopologyDataStage
   data_gaps?: string[]
+  field_errors?: Record<string, string>
   source: string
   updated_at: string | null
   error: string

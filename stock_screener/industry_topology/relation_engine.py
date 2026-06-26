@@ -24,12 +24,16 @@ _CENTER_SYSTEM_PROMPT = (
     "你是证券标的识别助手。你的任务是把输入股票规范化为唯一上市公司标识。"
     "严格输出 JSON，不允许解释性文本。"
     "不允许编造交易所、股票代码、中文名。有歧义或置信度不足时必须返回 unresolved。"
+    "展示名规则：name 优先返回中文常用名；aliases 可保留英文官方名、英文简称或股票简称；无可靠中文名时才用英文名，"
+    "不得为了中文化而编造。"
 )
 
 _GRAPH_SYSTEM_PROMPT = (
     "你是产业链分析与证券信息抽取助手。给定一只股票，返回上下游及同业关系，并尽量补全节点字段。"
     "严格输出 JSON，不允许解释性文本。优先保证代码和关系真实，不追求数量，宁可少返回也不能错返回。"
     "对数字字段宁缺毋滥，不允许根据经验臆造实时数字。"
+    "展示名规则：name 优先返回中文常用名；aliases 可保留英文官方名、英文简称或股票简称；无可靠中文名时才用英文名，"
+    "不得为了中文化而编造。"
 )
 
 _BATCH_SYSTEM_PROMPT = (
@@ -43,6 +47,8 @@ _BATCH_SYSTEM_PROMPT = (
     "- 韩股: \"KR\"\n"
     "不要使用其他写法（如 JAPAN、SZ、SH、NASDAQ 等），只用以上 6 个缩写。\n\n"
     "code 格式规则（纯代码，去掉交易所后缀/前缀），不确定代码的公司坚决不列。"
+    "展示名规则：name 优先返回中文常用名；aliases 可保留英文官方名、英文简称或股票简称；无可靠中文名时才用英文名，"
+    "不得为了中文化而编造。"
 )
 
 _CENTER_SCHEMA = {
@@ -69,6 +75,7 @@ _ITEM_SCHEMA = {
     "properties": {
         "code": {"type": "string"},
         "name": {"type": "string"},
+        "aliases": {"type": "array", "items": {"type": "string"}},
         "market": {"type": "string", "enum": ["A", "HK", "US", "JP", "TW", "KR"]},
         "direction": {"type": "string", "enum": ["upstream", "downstream", "peer"]},
         "relation": {"type": "string"},
@@ -415,8 +422,10 @@ class RelationEngine:
             f"8. 若不确定 market_cap 或 pct_chg，必须返回 null；不允许根据经验臆造实时数字。\n"
             f"9. confidence 范围是 0 到 1；field_sources 用字段名到来源类型的映射，例如 llm_search。\n"
             f"10. center 中只允许返回当前中心股票本身，不允许替换成其他标的。\n"
+            f"11. name 优先返回中文常用名；aliases 可保留英文官方名、英文简称或股票简称；无可靠中文名时才返回英文名，"
+            f"不得为了中文化而编造。\n"
             f"严格输出 JSON：{{\"center\":{{\"resolved\":true,\"market\":\"\",\"code\":\"\",\"name\":\"\",\"aliases\":[],\"sector\":\"\",\"industry\":\"\",\"reason\":\"\",\"confidence\":0}},"
-            f"\"items\":[{{\"code\":\"\",\"name\":\"\",\"market\":\"\",\"direction\":\"\",\"relation\":\"\",\"evidence\":\"\",\"sector\":\"\",\"industry\":\"\",\"market_cap\":null,\"market_cap_str\":\"\",\"pct_chg\":null,\"confidence\":0,\"field_sources\":{{\"name\":\"llm_search\"}}}}],"
+            f"\"items\":[{{\"code\":\"\",\"name\":\"\",\"aliases\":[],\"market\":\"\",\"direction\":\"\",\"relation\":\"\",\"evidence\":\"\",\"sector\":\"\",\"industry\":\"\",\"market_cap\":null,\"market_cap_str\":\"\",\"pct_chg\":null,\"confidence\":0,\"field_sources\":{{\"name\":\"llm_search\"}}}}],"
             f"\"warnings\":[\"\"]}}"
         )
 
@@ -441,6 +450,8 @@ class RelationEngine:
             "2. 若无法高置信确认代码，不得猜测，直接返回 resolved=false。\n"
             "3. market 只能是 A/HK/US/JP/TW/KR。\n"
             "4. code 必须是纯代码，不带交易所后缀。\n"
+            "5. name 优先返回中文常用名；aliases 可保留英文官方名、英文简称或股票简称；无可靠中文名时才返回英文名，"
+            "不得为了中文化而编造。\n"
             "严格输出 JSON："
             "{\"resolved\":true,\"market\":\"\",\"code\":\"\",\"name\":\"\",\"aliases\":[],\"sector\":\"\",\"industry\":\"\",\"reason\":\"\",\"confidence\":0}"
         )
@@ -468,7 +479,9 @@ class RelationEngine:
             f"6. market 必须用标准缩写: A/HK/US/JP/TW/KR；code 必须是纯代码，台积电写 \"2330\" 不写 \"2330.TW\"。\n"
             f"7. 请根据你的知识（截至{ today }）给出每家公司的市值（market_cap，单位：人民币元）和市值字符串（market_cap_str，如'2.8万亿'、'5000亿'、'80亿'），"
             f"不确定时可以不填。\n"
-            f"严格输出 JSON：{{\"groups\":[{{\"source_code\":\"\",\"source_market\":\"\",\"items\":[{{\"code\":\"\",\"name\":\"\",\"market\":\"\",\"direction\":\"\",\"relation\":\"\",\"evidence\":\"\",\"market_cap\":0,\"market_cap_str\":\"\"}}]}}]}}"
+            f"8. name 优先返回中文常用名；aliases 可保留英文官方名、英文简称或股票简称；无可靠中文名时才返回英文名，"
+            f"不得为了中文化而编造。\n"
+            f"严格输出 JSON：{{\"groups\":[{{\"source_code\":\"\",\"source_market\":\"\",\"items\":[{{\"code\":\"\",\"name\":\"\",\"aliases\":[],\"market\":\"\",\"direction\":\"\",\"relation\":\"\",\"evidence\":\"\",\"market_cap\":0,\"market_cap_str\":\"\"}}]}}]}}"
         )
 
     @staticmethod

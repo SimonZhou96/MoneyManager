@@ -486,6 +486,7 @@ class TopologyService:
             "market": node_market,
             "sector": info.get("sector", "--") or "板块未知",
             "industry": info.get("industry", "") or "",
+            "price": info.get("price"),
             "pct_chg": info.get("pct_chg"),
             "market_cap": market_cap,
             "market_cap_str": format_market_cap(market_cap),
@@ -496,6 +497,7 @@ class TopologyService:
             "field_sources": info.get("field_sources", {}),
             "field_confidence": info.get("field_confidence", {}),
             "data_gaps": info.get("data_gaps", []),
+            "field_errors": info.get("field_errors", {}),
             "data_stage": data_stage or info.get("data_stage", "cached"),
             "expanded": expanded, "stale": stale, "is_center": is_center,
             "depth": depth, "zone": zone,
@@ -544,9 +546,19 @@ class TopologyService:
             source_value = source_info.get(field) if source_info else None
             llm_value = llm_info.get(field) if llm_info else None
             use_llm = prefer_llm and TopologyService._has_value(llm_value, field)
+            if field == "name":
+                source_has_chinese = TopologyService._contains_cjk(source_value)
+                llm_has_chinese = TopologyService._contains_cjk(llm_value)
+                if source_has_chinese and not llm_has_chinese:
+                    use_llm = False
+                elif llm_has_chinese and not source_has_chinese:
+                    use_llm = True
             if not use_llm and TopologyService._has_value(source_value, field):
                 result[field] = source_value
-                field_sources[field] = "resolver_override" if TopologyService._has_value(llm_value, field) else "resolver"
+                if field == "name" and TopologyService._contains_cjk(source_value) and not TopologyService._contains_cjk(llm_value):
+                    field_sources[field] = field_sources.get(field, "llm_search")
+                else:
+                    field_sources[field] = "resolver_override" if TopologyService._has_value(llm_value, field) else "resolver"
                 field_confidence.pop(field, None)
             elif TopologyService._has_value(llm_value, field):
                 result[field] = llm_value
@@ -559,8 +571,12 @@ class TopologyService:
                 field_confidence.pop(field, None)
         result["field_sources"] = field_sources
         result["field_confidence"] = field_confidence
-        result["data_gaps"] = [field for field in ("name", "sector", "industry", "market_cap", "pct_chg") if not TopologyService._has_value(result.get(field), field)]
+        result["data_gaps"] = [field for field in ("name", "sector", "industry", "price", "market_cap", "pct_chg") if not TopologyService._has_value(result.get(field), field)]
         return result
+
+    @staticmethod
+    def _contains_cjk(value: Any) -> bool:
+        return any("\u3400" <= char <= "\u9fff" for char in str(value or ""))
 
     @staticmethod
     def _has_value(value: Any, field: str) -> bool:

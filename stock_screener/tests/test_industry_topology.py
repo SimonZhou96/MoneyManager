@@ -10,15 +10,18 @@ from industry_topology.models import (
     RelationType, Direction, TopologyNode, TopologyEdge, CachedRelation,
 )
 from industry_topology.resolver import compute_size_level, format_market_cap, NodeResolver
+from industry_topology.service import TopologyService
 from industry_topology.symbols import parse_topology_symbol, symbol_id
 from stock_terminal.models import BlockStatus, QuoteSnapshot
 from web.topology import (
     GraphRequest,
+    QuoteRefreshRequest,
     _quote_from_cache,
     _quote_status_item,
     _schedule_relation_generation,
     _TOPOLOGY_GENERATION_IN_FLIGHT,
     graph as topology_graph_route,
+    refresh_quotes as topology_refresh_quotes_route,
     search_enrich as topology_search_enrich_route,
 )
 from web.topology_tasks import TopologyTaskRegistry, TopologyTaskRunner
@@ -119,8 +122,34 @@ class TestTopologyQuotePayload(unittest.TestCase):
         item = _quote_from_cache(parsed, quote, status)
 
         self.assertEqual(item["name"], "台积电")
+        self.assertEqual(item["price"], 439.215)
+        self.assertEqual(item["pct_chg"], 1.2)
         self.assertEqual(item["market_cap"], 1.23e12)
         self.assertEqual(item["market_cap_str"], "1.2万亿")
+        self.assertEqual(item["data_gaps"], [])
+        self.assertEqual(item["field_errors"], {})
+
+    def test_quote_from_cache_explains_missing_quote_fields(self):
+        parsed = parse_topology_symbol("US:NVDA.US")
+        quote = QuoteSnapshot(
+            market="US",
+            code="US.NVDA",
+            name="NVIDIA",
+            price=439.215,
+            change_percent=None,
+            market_cap=None,
+            fetched_at=datetime(2026, 6, 23, 15, 16, tzinfo=timezone.utc),
+            source="fake",
+        )
+        status = BlockStatus(status="cached", source="fake", fetched_at=quote.fetched_at)
+
+        item = _quote_from_cache(parsed, quote, status)
+
+        self.assertEqual(item["price"], 439.215)
+        self.assertIn("pct_chg", item["data_gaps"])
+        self.assertIn("market_cap", item["data_gaps"])
+        self.assertEqual(item["field_errors"]["pct_chg"], "provider_missing_field")
+        self.assertEqual(item["field_errors"]["market_cap"], "provider_missing_field")
 
     def test_quote_status_item_uses_stable_display_fallbacks(self):
         parsed = parse_topology_symbol("SZ:300207.SZ")
@@ -130,6 +159,31 @@ class TestTopologyQuotePayload(unittest.TestCase):
         self.assertEqual(item["name"], "SZ.300207")
         self.assertIsNone(item["market_cap"])
         self.assertEqual(item["market_cap_str"], "未知")
+        self.assertEqual(item["field_errors"]["price"], "quote_pending")
+        self.assertEqual(item["field_errors"]["pct_chg"], "quote_pending")
+        self.assertEqual(item["field_errors"]["market_cap"], "quote_pending")
+
+
+class TestTopologyServiceMerge(unittest.TestCase):
+    def test_merge_node_info_preserves_existing_chinese_name(self):
+        merged = TopologyService._merge_node_info(
+            {"name": "英伟达", "field_sources": {"name": "llm_search"}},
+            {"name": "NVIDIA", "field_sources": {"name": "resolver"}},
+            prefer_llm=False,
+        )
+
+        self.assertEqual(merged["name"], "英伟达")
+        self.assertEqual(merged["field_sources"]["name"], "llm_search")
+
+    def test_merge_node_info_allows_llm_chinese_name_over_resolver_english(self):
+        merged = TopologyService._merge_node_info(
+            {"name": "NVIDIA", "field_sources": {"name": "resolver"}},
+            {"name": "英伟达", "field_sources": {"name": "llm_search"}, "confidence": 0.9},
+            prefer_llm=False,
+        )
+
+        self.assertEqual(merged["name"], "英伟达")
+        self.assertEqual(merged["field_sources"]["name"], "llm_search")
 
 
 class FakeTaskService:
@@ -389,6 +443,24 @@ class TestRelationEngine(unittest.TestCase):
         self.assertIn("confidence", prompt)
         self.assertIn("不允许根据经验臆造实时数字", prompt)
         self.assertIn("若不确定 market_cap 或 pct_chg，必须返回 null", prompt)
+
+    def test_user_prompts_require_chinese_display_names(self):
+        graph_prompt = RelationEngine._user_prompt("NVIDIA", "US", "NVDA", "Semiconductors")
+        center_prompt = RelationEngine._center_user_prompt(
+            request_market="US",
+            request_code="NVDA",
+            request_name="NVIDIA",
+            request_sector="Semiconductors",
+            search_documents=[],
+        )
+        batch_prompt = RelationEngine._batch_user_prompt([
+            {"code": "NVDA", "market": "US", "name": "NVIDIA", "sector": "Semiconductors"}
+        ])
+
+        for prompt in (graph_prompt, center_prompt, batch_prompt):
+            self.assertIn("name 优先返回中文常用名", prompt)
+            self.assertIn("aliases", prompt)
+            self.assertIn("不得为了中文化而编造", prompt)
 
     def test_parse_valid_json(self):
         payload = {"items": [
@@ -1173,6 +1245,52 @@ class TestTopologyRoutes(unittest.TestCase):
                 "symbols": ["US:NVDA", "A:300308"],
             },
         )
+
+    def test_refresh_quotes_skips_cached_complete_quote(self):
+        service = MagicMock()
+        fetched_at = datetime(2026, 6, 23, 15, 16, tzinfo=timezone.utc)
+        quote = QuoteSnapshot(
+            market="US",
+            code="US.NVDA",
+            name="NVIDIA",
+            price=439.215,
+            change_percent=1.2,
+            market_cap=1.23e12,
+            fetched_at=fetched_at,
+            source="fake",
+        )
+        service.repository.get_quote.return_value = (quote, BlockStatus(status="cached", source="fake", fetched_at=fetched_at))
+        service.now.return_value = fetched_at
+        background = FakeBackgroundTasks()
+
+        result = topology_refresh_quotes_route(QuoteRefreshRequest(symbols=["US:NVDA"], force=False), background, service)
+
+        self.assertEqual(background.tasks, [])
+        self.assertEqual(result["data"]["items"][0]["status"], "cached")
+        self.assertEqual(result["data"]["items"][0]["data_gaps"], [])
+
+    def test_refresh_quotes_requeues_cached_quote_with_missing_key_field(self):
+        service = MagicMock()
+        fetched_at = datetime(2026, 6, 23, 15, 16, tzinfo=timezone.utc)
+        quote = QuoteSnapshot(
+            market="US",
+            code="US.NVDA",
+            name="NVIDIA",
+            price=439.215,
+            change_percent=None,
+            market_cap=1.23e12,
+            fetched_at=fetched_at,
+            source="fake",
+        )
+        service.repository.get_quote.return_value = (quote, BlockStatus(status="cached", source="fake", fetched_at=fetched_at))
+        service.now.return_value = fetched_at
+        background = FakeBackgroundTasks()
+
+        result = topology_refresh_quotes_route(QuoteRefreshRequest(symbols=["US:NVDA"], force=False), background, service)
+
+        self.assertEqual(len(background.tasks), 1)
+        self.assertEqual(result["data"]["items"][0]["status"], "queued")
+        self.assertEqual(result["data"]["items"][0]["field_errors"]["pct_chg"], "quote_pending")
 
     def test_schedule_relation_generation_batches_stale_sources_by_five(self):
         background = FakeBackgroundTasks()

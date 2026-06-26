@@ -288,7 +288,7 @@ def refresh_quotes(
             items.append(_quote_status_item(parsed, "skipped", error=parsed.get("error", "unsupported market")))
             continue
         quote, status = service.repository.get_quote(parsed["market"], parsed["code"], now=service.now())
-        if quote is not None and status.status == "cached" and not req.force:
+        if quote is not None and status.status == "cached" and not req.force and _quote_has_complete_key_fields(quote):
             items.append(_quote_from_cache(parsed, quote, status))
             continue
         background_tasks.add_task(service.get_summary, parsed["market"], parsed["code"])
@@ -296,7 +296,7 @@ def refresh_quotes(
     _enrich_quote_item_names(items, service)
     _enrich_quote_item_fundamentals(items, service)
     _enrich_quote_item_known_chinese_names(items)
-    return {"ok": True, "data": {"items": items}}
+    return {"ok": True, "data": _quote_batch_payload(items)}
 
 
 def _split_symbols(symbols: str) -> List[str]:
@@ -318,19 +318,27 @@ def _quote_cache_item(raw_symbol: str, service: StockTerminalService) -> Dict[st
 def _quote_from_cache(parsed: Dict[str, Any], quote: Any, status: Any) -> Dict[str, Any]:
     item = _quote_status_item(parsed, status.status or "cached")
     quote_payload = quote.to_dict() if hasattr(quote, "to_dict") else {}
+    price = quote_payload.get("price")
+    pct_chg = quote_payload.get("change_percent")
     market_cap = quote_payload.get("market_cap")
+    fields = {"price": price, "pct_chg": pct_chg, "market_cap": market_cap}
+    data_gaps = [field for field, value in fields.items() if value is None]
+    field_errors = {field: "provider_missing_field" for field in data_gaps}
     item.update({
         "name": _quote_display_name(parsed, getattr(quote, "name", "")),
-        "price": quote_payload.get("price"),
-        "pct_chg": quote_payload.get("change_percent"),
+        "price": price,
+        "pct_chg": pct_chg,
         "market_cap": market_cap,
         "market_cap_str": _quote_market_cap_text(market_cap),
         "field_sources": {
             "name": "resolver",
-            "pct_chg": "resolver",
+            **({"price": "resolver"} if price is not None else {}),
+            **({"pct_chg": "resolver"} if pct_chg is not None else {}),
             **({"market_cap": "resolver"} if market_cap is not None else {}),
         },
-        "data_stage": "source_partial" if market_cap is None else "source_verified",
+        "data_gaps": data_gaps,
+        "field_errors": field_errors,
+        "data_stage": "source_partial" if data_gaps else "source_verified",
         "source": getattr(status, "source", "") or getattr(quote, "source", "") or "未知",
         "updated_at": status.to_dict().get("fetched_at") if hasattr(status, "to_dict") else "未知",
         "error": getattr(status, "error_message", "") or "无",
@@ -339,6 +347,7 @@ def _quote_from_cache(parsed: Dict[str, Any], quote: Any, status: Any) -> Dict[s
 
 
 def _quote_status_item(parsed: Dict[str, Any], status: str, error: str = "", source: str = "", updated_at: Optional[str] = None) -> Dict[str, Any]:
+    field_reason = _quote_field_error_reason(status)
     return {
         "symbol": parsed["symbol"],
         "market": parsed["market"],
@@ -352,11 +361,34 @@ def _quote_status_item(parsed: Dict[str, Any], status: str, error: str = "", sou
         "market_cap": None,
         "market_cap_str": "未知",
         "field_sources": {},
+        "data_gaps": ["price", "pct_chg", "market_cap"],
+        "field_errors": {
+            "price": field_reason,
+            "pct_chg": field_reason,
+            "market_cap": field_reason,
+        },
         "data_stage": "source_partial",
         "source": source or "未知",
         "updated_at": updated_at or "未知",
         "error": error or "无",
     }
+
+
+def _quote_has_complete_key_fields(quote: Any) -> bool:
+    quote_payload = quote.to_dict() if hasattr(quote, "to_dict") else {}
+    return (
+        quote_payload.get("price") is not None
+        and quote_payload.get("change_percent") is not None
+        and quote_payload.get("market_cap") is not None
+    )
+
+
+def _quote_field_error_reason(status: str) -> str:
+    if status == "skipped":
+        return "unsupported_market"
+    if status in {"failed", "error"}:
+        return "quote_error"
+    return "quote_pending"
 
 
 def _quote_display_name(parsed: Dict[str, Any], name: str = "") -> str:
@@ -458,6 +490,8 @@ def _enrich_quote_item_known_chinese_names(items: List[Dict[str, Any]]) -> None:
 
 
 def _quote_batch_payload(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    for item in items:
+        _refresh_quote_field_gaps(item)
     ready_statuses = {"cached", "fresh", "stale"}
     failed_statuses = {"failed", "error", "skipped"}
     return {
@@ -466,3 +500,24 @@ def _quote_batch_payload(items: List[Dict[str, Any]]) -> Dict[str, Any]:
         "pending": sum(1 for item in items if item.get("status") in {"pending", "queued"}),
         "failed": sum(1 for item in items if item.get("status") in failed_statuses),
     }
+
+
+def _refresh_quote_field_gaps(item: Dict[str, Any]) -> None:
+    field_values = {
+        "price": item.get("price"),
+        "pct_chg": item.get("pct_chg"),
+        "market_cap": item.get("market_cap"),
+    }
+    gaps = [field for field, value in field_values.items() if value is None]
+    status = str(item.get("status") or "")
+    if status == "skipped":
+        reason = "unsupported_market"
+    elif status in {"failed", "error"}:
+        reason = "quote_error"
+    elif status in {"pending", "queued"}:
+        reason = "quote_pending"
+    else:
+        reason = "provider_missing_field"
+    existing_errors = dict(item.get("field_errors") or {})
+    item["data_gaps"] = gaps
+    item["field_errors"] = {field: existing_errors.get(field) or reason for field in gaps}
