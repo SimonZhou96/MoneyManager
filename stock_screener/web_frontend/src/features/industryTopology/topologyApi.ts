@@ -1,5 +1,12 @@
 import { api } from '../../api'
-import type { ExpandResult, SearchResult, TopologyGraph, TopologyQuoteBatch, TopologySearchEnrichResult } from './types'
+import type {
+  ExpandResult,
+  SearchResult,
+  TopologyGraph,
+  TopologyGraphTask,
+  TopologyQuoteBatch,
+  TopologySearchEnrichResult,
+} from './types'
 
 export const topologyApi = {
   search: (q: string, limit = 10) =>
@@ -8,6 +15,17 @@ export const topologyApi = {
     api<{ ok: true; data: TopologyGraph }>('/api/topology/graph', {
       method: 'POST',
       body: JSON.stringify({ code, market, depth, center_name: centerName, quote_mode: quoteMode }),
+    }),
+  createGraphTask: (code: string, market: string, depth: number, centerName = '', quoteMode = 'llm_initial') =>
+    api<{ ok: true; data: TopologyGraphTask }>('/api/topology/graph/tasks', {
+      method: 'POST',
+      body: JSON.stringify({ code, market, depth, center_name: centerName, quote_mode: quoteMode }),
+    }),
+  getGraphTask: (taskId: string) =>
+    api<{ ok: true; data: TopologyGraphTask }>(`/api/topology/graph/tasks/${encodeURIComponent(taskId)}`),
+  cancelGraphTask: (taskId: string) =>
+    api<{ ok: true; data: TopologyGraphTask }>(`/api/topology/graph/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'DELETE',
     }),
   searchEnrich: (center: { market: string; code: string; name?: string; sector?: string; industry?: string }, symbols: string[]) =>
     api<{ ok: true; data: TopologySearchEnrichResult }>('/api/topology/graph/search-enrich', {

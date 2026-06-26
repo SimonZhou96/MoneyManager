@@ -4,6 +4,17 @@ export type TopologyZone = Direction | 'center'
 export type QuoteStatus = 'pending' | 'queued' | 'cached' | 'fresh' | 'stale' | 'failed' | 'error' | 'skipped'
 export type TopologyDataStage = 'llm_initial' | 'source_partial' | 'source_verified' | string
 export type TopologyTaskStage = 'idle' | 'graph_loading' | 'graph_ready_search_enriching' | 'graph_ready_source_polling' | 'done' | 'partial' | 'failed'
+export type TopologyGraphTaskStage =
+  | 'queued'
+  | 'initial_graph_running'
+  | 'initial_graph_ready'
+  | 'enriching'
+  | 'source_polling'
+  | 'done'
+  | 'partial'
+  | 'failed'
+  | 'cancelled'
+  | 'expired'
 
 export interface TopologyNodeData {
   id: string
@@ -57,6 +68,22 @@ export interface TopologyGraph {
   edges: TopologyEdgeData[]
   stats: TopologyStats
   warnings?: string[]
+}
+
+export interface TopologyGraphTaskError {
+  code: string
+  message: string
+}
+
+export interface TopologyGraphTask {
+  task_id: string
+  stage: TopologyGraphTaskStage
+  progress_pct: number
+  graph: TopologyGraph
+  message: string
+  warnings: string[]
+  error?: TopologyGraphTaskError | null
+  updated_at: string
 }
 
 export interface TopologyNodePatch {
