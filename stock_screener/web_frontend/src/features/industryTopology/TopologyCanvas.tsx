@@ -473,7 +473,6 @@ function edgeTooltip(edge: RenderedEdgeData, nodes: TopologyNodeData[]) {
       <div class="topo-g6-tip-row"><span>方向</span><strong>${edge.direction}</strong></div>
       <div class="topo-g6-tip-row"><span>关系</span><strong>${edge.relation}</strong></div>
       ${evidence}
-      <div class="topo-g6-tip-hint">点击边固定查看关系详情</div>
     </div>
   `
 }

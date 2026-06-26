@@ -4862,6 +4862,8 @@ section { background: transparent; }
 .topo-g6-tip-row strong { color: #e8e0d0; font-weight: 700; text-align: right; }
 .topo-g6-tip-evidence { margin-top: 8px; padding: 8px; border-radius: 8px; background: rgba(96, 165, 250, 0.1); color: #cbd5e1; line-height: 1.5; }
 .topo-g6-tip-hint { margin-top: 8px; color: #8a8070; font-size: 11px; }
+/* Pinned edge labels — amber-tinted via inline style in edgeStyle() (labelFill: #fbbf24, labelBackgroundFill: rgba(251,191,36,0.15)).
+   G6 renders edge labels as SVG elements with inline styles; no additional CSS selectors needed. */
 .topo-detail-panel {
   position: absolute;
   z-index: 20;
