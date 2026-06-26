@@ -10,6 +10,8 @@ interface Props {
   selectedNodeId?: string | null
   selectedEdgeKey?: string | null
   focusNodeId?: string | null
+  showEdgeLabels?: boolean
+  highlightCycles?: boolean
   onSelectNode?: (node: TopologyNodeData | null) => void
   onSelectEdge?: (edge: TopologyEdgeData | null, edgeKey?: string) => void
 }
@@ -31,6 +33,9 @@ interface ViewState {
   focusNodeId?: string | null
   relatedNodeIds: Set<string>
   relatedEdgeKeys: Set<string>
+  cycleEdgeKeys: Set<string>
+  showEdgeLabels: boolean
+  highlightCycles: boolean
 }
 
 const ZONE_COLOR: Record<TopologyZone, string> = {
@@ -166,18 +171,20 @@ function edgeStyle(edge: TopologyEdgeData, centerId: string | undefined, view: V
   const stroke = edgeStroke(edge, centerId)
   const touchesCenter = Boolean(centerId && (edge.source === centerId || edge.target === centerId))
   const active = key === view.selectedEdgeKey || key === view.hoveredEdgeKey || view.relatedEdgeKeys.has(key)
+  const cyclic = view.highlightCycles && view.cycleEdgeKeys.has(key)
   const hasFocus = Boolean(view.focusNodeId || view.selectedNodeId || view.hoveredNodeId || view.selectedEdgeKey || view.hoveredEdgeKey)
-  const showLabel = key === view.selectedEdgeKey || key === view.hoveredEdgeKey || view.relatedEdgeKeys.has(key) || (view.zoom > 1.35 && touchesCenter)
+  const showLabel = view.showEdgeLabels || active || (view.zoom > 1.35 && touchesCenter)
   return {
-    stroke,
-    lineWidth: active ? 2.5 : 1,
-    strokeOpacity: hasFocus && !active ? 0.03 : active ? 0.9 : 0.15,
+    stroke: cyclic ? '#f8fafc' : stroke,
+    lineWidth: cyclic ? 3 : active ? 2.5 : 1,
+    strokeOpacity: hasFocus && !active && !cyclic ? 0.03 : active || cyclic ? 0.9 : 0.15,
+    lineDash: cyclic ? [6, 4] : undefined,
     endArrow: false,
-    shadowBlur: active ? 10 : 0,
-    shadowColor: active ? stroke : 'transparent',
+    shadowBlur: cyclic ? 16 : active ? 10 : 0,
+    shadowColor: cyclic ? '#fbbf24' : active ? stroke : 'transparent',
     shadowOffsetX: 0,
     shadowOffsetY: 0,
-    labelText: showLabel ? edgeLabel(edge) : '',
+    labelText: showLabel ? (cyclic ? `环路 · ${edgeLabel(edge)}` : edgeLabel(edge)) : '',
     labelFill: '#dbeafe',
     labelFontSize: 9,
     labelBackground: true,
@@ -187,35 +194,197 @@ function edgeStyle(edge: TopologyEdgeData, centerId: string | undefined, view: V
   }
 }
 
-function initialPosition(node: TopologyNodeData, index: number, total: number) {
-  if (node.is_center) return { x: 0, y: 0 }
-  const angleBase = node.zone === 'upstream'
-    ? Math.PI
-    : node.zone === 'downstream'
-      ? 0
-      : Math.PI / 2
-  const spread = node.zone === 'peer' ? Math.PI * 1.4 : Math.PI * 0.65
-  const ratio = total <= 1 ? 0.5 : index / Math.max(1, total - 1)
-  const angle = angleBase - spread / 2 + spread * ratio
-  const radius = 180 + node.depth * 110 + (index % 5) * 22
-  return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius }
+// ─── Phase 1: Ring-Sectored Deterministic Layout ───
+// Replaces initialPosition() + d3-force with a deterministic placement where
+// position encodes zone (upstream=top, downstream=bottom, peers=sides).
+// No force simulation; positions are stable, predictable, and zone-loyal.
+
+const R_BASE = 240
+const R_STEP = 140
+const PEER_X = 280
+const PEER_Y_GAP = 64
+
+interface Sector {
+  start: number  // radians
+  end: number    // radians
 }
 
-function toG6Data(nodes: TopologyNodeData[], edges: TopologyEdgeData[], view: ViewState) {
-  const zoneCounts = new Map<TopologyZone, number>()
-  nodes.forEach((node) => zoneCounts.set(node.zone, (zoneCounts.get(node.zone) || 0) + 1))
-  const zoneIndex = new Map<TopologyZone, number>()
+function ringSectoredLayout(
+  nodes: TopologyNodeData[],
+  existingPositions?: Map<string, { x: number; y: number }>,
+): Map<string, { x: number; y: number }> {
+  const positions = new Map<string, { x: number; y: number }>()
+
+  // 1. Preserve existing positions (expand: keep stable layout)
+  if (existingPositions) {
+    for (const node of nodes) {
+      const existing = existingPositions.get(node.id)
+      if (existing) positions.set(node.id, { ...existing })
+    }
+  }
+
+  // 2. Center node → fixed at origin
+  const center = nodes.find((node) => node.is_center)
+  if (center) positions.set(center.id, { x: 0, y: 0 })
+
+  // 3. Collect unplaced nodes, group by zone
+  const unplaced: Record<'upstream' | 'downstream' | 'peer', TopologyNodeData[]> = { upstream: [], downstream: [], peer: [] }
+  for (const node of nodes) {
+    if (positions.has(node.id) || node.is_center) continue
+    const zone = node.zone === 'upstream' || node.zone === 'downstream' ? node.zone : 'peer'
+    unplaced[zone].push(node)
+  }
+
+  // 4. Upstream → top sector (15° – 165°)
+  if (unplaced.upstream.length > 0) {
+    placeInSector(unplaced.upstream, positions, { start: Math.PI * 0.08, end: Math.PI * 0.92 })
+  }
+
+  // 5. Downstream → bottom sector (195° – 345°)
+  if (unplaced.downstream.length > 0) {
+    placeInSector(unplaced.downstream, positions, { start: Math.PI * 1.08, end: Math.PI * 1.92 })
+  }
+
+  // 6. Peers → left / right columns
+  if (unplaced.peer.length > 0) {
+    placePeers(unplaced.peer, positions)
+  }
+
+  return positions
+}
+
+/** Sort within zone+depth: largest market_cap → center of sector. */
+function placeInSector(
+  nodes: TopologyNodeData[],
+  positions: Map<string, { x: number; y: number }>,
+  sector: Sector,
+) {
+  // Group by depth; sort each depth by market_cap descending
+  const byDepth = new Map<number, TopologyNodeData[]>()
+  for (const node of nodes) {
+    const depth = node.depth || 1
+    const group = byDepth.get(depth) || []
+    group.push(node)
+    byDepth.set(depth, group)
+  }
+
+  const sortedDepths = Array.from(byDepth.keys()).sort((a, b) => a - b)
+  const spread = sector.end - sector.start
+
+  for (const depth of sortedDepths) {
+    const group = byDepth.get(depth)!
+    // Sort largest market_cap first → they anchor the sector center
+    group.sort((a, b) => (b.market_cap ?? 0) - (a.market_cap ?? 0))
+    const radius = R_BASE + (depth - 1) * R_STEP
+    const centerAngle = (sector.start + sector.end) / 2
+    const angleStep = group.length <= 1 ? 0 : spread / Math.max(2, group.length)
+
+    group.forEach((node, i) => {
+      const rank = i === 0 ? 0 : (Math.ceil(i / 2) * (i % 2 === 1 ? -1 : 1))
+      const angle = centerAngle + rank * angleStep
+      positions.set(node.id, {
+        x: Math.cos(angle) * radius,
+        y: -Math.sin(angle) * radius,  // screen Y goes down, negate for math angles
+      })
+    })
+  }
+}
+
+/** Peers in two vertical columns, sorted by market_cap, center-aligned vertically. */
+function placePeers(
+  nodes: TopologyNodeData[],
+  positions: Map<string, { x: number; y: number }>,
+) {
+  nodes.sort((a, b) => (b.market_cap ?? 0) - (a.market_cap ?? 0))
+
+  const half = Math.ceil(nodes.length / 2)
+  const leftNodes = nodes.slice(0, half)
+  const rightNodes = nodes.slice(half)
+
+  for (const side of [
+    { nodes: leftNodes, x: -PEER_X },
+    { nodes: rightNodes, x: PEER_X },
+  ]) {
+    const count = side.nodes.length
+    const totalHeight = (count - 1) * PEER_Y_GAP
+    const startY = -totalHeight / 2
+
+    side.nodes.forEach((node, i) => {
+      positions.set(node.id, { x: side.x, y: startY + i * PEER_Y_GAP })
+    })
+  }
+}
+
+function detectCycleEdges(edges: TopologyEdgeData[]) {
+  const adjacency = new Map<string, string[]>()
+  for (const edge of edges) {
+    if (!adjacency.has(edge.source)) adjacency.set(edge.source, [])
+    if (!adjacency.has(edge.target)) adjacency.set(edge.target, [])
+    adjacency.get(edge.source)!.push(edge.target)
+  }
+
+  const indexByNode = new Map<string, number>()
+  const lowlink = new Map<string, number>()
+  const stack: string[] = []
+  const onStack = new Set<string>()
+  const cyclicNodes = new Set<string>()
+  let index = 0
+
+  const visit = (node: string) => {
+    indexByNode.set(node, index)
+    lowlink.set(node, index)
+    index += 1
+    stack.push(node)
+    onStack.add(node)
+
+    for (const next of adjacency.get(node) || []) {
+      if (!indexByNode.has(next)) {
+        visit(next)
+        lowlink.set(node, Math.min(lowlink.get(node)!, lowlink.get(next)!))
+      } else if (onStack.has(next)) {
+        lowlink.set(node, Math.min(lowlink.get(node)!, indexByNode.get(next)!))
+      }
+    }
+
+    if (lowlink.get(node) !== indexByNode.get(node)) return
+    const component: string[] = []
+    let cur: string | undefined
+    do {
+      cur = stack.pop()
+      if (!cur) break
+      onStack.delete(cur)
+      component.push(cur)
+    } while (cur !== node)
+
+    if (component.length > 1) component.forEach((item) => cyclicNodes.add(item))
+  }
+
+  for (const node of adjacency.keys()) {
+    if (!indexByNode.has(node)) visit(node)
+  }
+
+  return new Set(edges
+    .filter((edge) => edge.source === edge.target || (cyclicNodes.has(edge.source) && cyclicNodes.has(edge.target)))
+    .map(edgeKey))
+}
+
+function toG6Data(
+  nodes: TopologyNodeData[],
+  edges: TopologyEdgeData[],
+  view: ViewState,
+  positions: Map<string, { x: number; y: number }>,
+) {
   const centerId = nodes.find((node) => node.is_center)?.id
 
   return {
     nodes: nodes.map((node) => {
-      const index = zoneIndex.get(node.zone) || 0
-      zoneIndex.set(node.zone, index + 1)
+      const pos = positions.get(node.id) || { x: 0, y: 0 }
       return {
         id: node.id,
         data: node as unknown as Record<string, unknown>,
         style: {
-          ...initialPosition(node, index, zoneCounts.get(node.zone) || nodes.length),
+          x: pos.x,
+          y: pos.y,
           ...nodeStyle(node, view),
         },
       }
@@ -379,6 +548,8 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   selectedNodeId,
   selectedEdgeKey,
   focusNodeId,
+  showEdgeLabels = false,
+  highlightCycles = false,
   onSelectNode,
   onSelectEdge,
 }, ref) {
@@ -387,6 +558,8 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   const initializedRef = useRef(false)
   const previousNodeIdsRef = useRef<Set<string>>(new Set())
   const previousEdgeIdsRef = useRef<Set<string>>(new Set())
+  const positionsRef = useRef<Map<string, { x: number; y: number }>>(new Map())
+  const centerIdRef = useRef<string | null>(null)
   const particleMapRef = useRef<Map<string, ParticleState>>(new Map())
   const nodeParticleKeysRef = useRef<Set<string>>(new Set())
   const onExpandRef = useRef(onExpand)
@@ -414,9 +587,12 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       selectedNodeId,
       selectedEdgeKey,
       focusNodeId,
+      showEdgeLabels,
+      highlightCycles,
+      cycleEdgeKeys: detectCycleEdges(rawEdges),
       ...related,
     }
-  }, [focusNodeId, hoveredEdgeKey, hoveredNodeId, rawEdges, rawNodes, selectedEdgeKey, selectedNodeId, zoom])
+  }, [focusNodeId, highlightCycles, hoveredEdgeKey, hoveredNodeId, rawEdges, rawNodes, selectedEdgeKey, selectedNodeId, showEdgeLabels, zoom])
 
   const viewRef = useRef(view)
   viewRef.current = view
@@ -464,7 +640,18 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
 
   useImperativeHandle(ref, () => ({ applyQuotes }), [applyQuotes])
 
-  const graphData = useMemo(() => toG6Data(rawNodes, rawEdges, view), [rawEdges, rawNodes, view])
+  const layoutPositions = useMemo(() => {
+    const centerId = rawNodes.find((node) => node.is_center)?.id || null
+    if (centerId !== centerIdRef.current) {
+      positionsRef.current = new Map()
+      centerIdRef.current = centerId
+    }
+    const next = ringSectoredLayout(rawNodes, positionsRef.current)
+    positionsRef.current = next
+    return next
+  }, [rawNodes])
+
+  const graphData = useMemo(() => toG6Data(rawNodes, rawEdges, view, layoutPositions), [layoutPositions, rawEdges, rawNodes, view])
 
   useEffect(() => {
     const container = containerRef.current
@@ -482,20 +669,6 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       edge: {
         type: 'line',
         style: ((datum: GraphDatum) => datum.style || {}) as never,
-      },
-      layout: {
-        type: 'd3-force',
-        link: { distance: 220, strength: 0.28 },
-        manyBody: { strength: -500 },
-        collide: {
-          radius: (datum: Record<string, unknown>) => {
-            const node = datum?.data as TopologyNodeData | undefined
-            return node ? nodeSize(node) + 14 : 50
-          },
-          strength: 0.75
-        },
-        x: { strength: 0.08 },
-        y: { strength: 0.08 },
       },
       behaviors: [
           'drag-canvas',
@@ -562,6 +735,17 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       onSelectNodeRef.current?.(node)
     })
 
+    graph.on('node:dragend', (event: unknown) => {
+      const id = (event as { target?: { id?: string } }).target?.id
+      if (!id || graph.destroyed) return
+      try {
+        const [x, y] = graph.getElementPosition(id) as [number, number]
+        positionsRef.current.set(id, { x, y })
+      } catch {
+        /* position is best-effort only */
+      }
+    })
+
     graph.on('edge:click', (event: unknown) => {
       const data = (event as { target?: { data?: { data?: TopologyEdgeData & { edgeKey?: string } } } }).target?.data?.data
       if (!data) return
@@ -576,8 +760,12 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
 
     graph.on('aftertransform', () => {
       if (graph.destroyed) return
-      const nextZoom = graph.getZoom()
-      setZoom((prev) => Math.abs(prev - nextZoom) > 0.08 ? nextZoom : prev)
+      try {
+        const nextZoom = graph.getZoom()
+        setZoom((prev) => Math.abs(prev - nextZoom) > 0.08 ? nextZoom : prev)
+      } catch {
+        /* G6 may emit transform before the viewport controller is fully ready. */
+      }
     })
 
     graphRef.current = graph

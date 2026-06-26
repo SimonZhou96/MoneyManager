@@ -71,3 +71,5 @@ class CachedRelation:
     evidence: str
     expires_at: Optional[datetime]
     is_empty: bool
+    peer_market_cap: Optional[float] = None
+    peer_market_cap_str: str = ""

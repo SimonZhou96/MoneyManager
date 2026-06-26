@@ -18,6 +18,7 @@ import {
   ruleMarkersFromDetails,
   type DimensionBreakdown, type RuleMarker,
 } from './features/screeningReport'
+import type { DiagItem } from './features/screeningReport/EnhancedDataDiagnostics'
 import './styles.css'
 
 type User = { id: number; username: string; role: string }
@@ -1240,7 +1241,7 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
   const bias = scoreToBias(resultJson.final_score as number | null | undefined)
 
   const diagItems = useMemo(() => {
-    const items: Array<{ key: string; label: string; status: string; detail: string }> = []
+    const items: DiagItem[] = []
     items.push({
       key: 'stock', label: '股票识别',
       status: selectedStock ? 'computed' : 'missing',

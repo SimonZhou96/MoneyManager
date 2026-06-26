@@ -48,7 +48,7 @@ class NodeResolver:
     def __init__(self, db: Any):
         self.db = db
 
-    def resolve(self, code: str, market: str, include_quote: bool = False) -> Dict[str, Any]:
+    def resolve(self, code: str, market: str, include_quote: bool = False, fallback_name: str = "") -> Dict[str, Any]:
         market = _normalize_market(market)
         norm_code = normalize_stock_code(market, code)
         rows: List[dict] = []
@@ -59,10 +59,11 @@ class NodeResolver:
                 if bare != norm_code:
                     rows = self.db.get_stocks_by_codes(market, [bare], include_fundamentals=True)
         base = rows[0] if rows else {"code": norm_code, "name": "", "sector": "", "market_cap": None}
+        name = base.get("name") or fallback_name or ""
         pct_chg = self._fetch_pct_chg(norm_code, market) if include_quote else None
         return {
             "code": base.get("code") or norm_code,
-            "name": base.get("name") or "",
+            "name": name,
             "market": market,
             "sector": base.get("sector") or base.get("industry") or "--",
             "market_cap": base.get("market_cap"),

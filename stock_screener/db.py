@@ -6108,9 +6108,31 @@ class MarketDatabase:
                     expires_at DATETIME NOT NULL,
                     llm_provider VARCHAR(32) NOT NULL DEFAULT '',
                     llm_model VARCHAR(64) NOT NULL DEFAULT '',
+                    peer_market_cap DOUBLE NULL,
+                    peer_market_cap_str VARCHAR(64) NOT NULL DEFAULT '',
                     UNIQUE KEY uk_source_peer_relation (source_code, peer_code, relation),
                     KEY idx_source_code (source_code),
                     KEY idx_expires (expires_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            topology_alters = [
+                (
+                    "peer_market_cap",
+                    "ALTER TABLE industry_relations ADD COLUMN peer_market_cap DOUBLE NULL AFTER llm_model",
+                ),
+                (
+                    "peer_market_cap_str",
+                    "ALTER TABLE industry_relations ADD COLUMN peer_market_cap_str VARCHAR(64) NOT NULL DEFAULT '' AFTER peer_market_cap",
+                ),
+            ]
+            for column, alter_sql in topology_alters:
+                try:
+                    cursor.execute(f"SELECT `{column}` FROM industry_relations LIMIT 1")
+                except Exception:
+                    try:
+                        cursor.execute(alter_sql)
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"Failed to add industry_relations.{column}; schema is incompatible with industry topology SQL"
+                        ) from exc

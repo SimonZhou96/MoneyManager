@@ -91,6 +91,7 @@ class GraphRequest(BaseModel):
     market: str
     depth: int = 3
     quote_mode: str = "auto"
+    center_name: str = ""
 
 
 class ExistingNode(BaseModel):

@@ -64,9 +64,9 @@ class TopologyService:
         return results
 
     # -- 首次拓扑 --
-    def build_graph(self, code: str, market: str, depth: int = 3, quote_mode: str = "defer") -> Dict[str, Any]:
+    def build_graph(self, code: str, market: str, depth: int = 3, quote_mode: str = "defer", center_name: str = "") -> Dict[str, Any]:
         market = normalize_market(market)
-        return self._traverse(code, market, depth, existing_codes=None, is_center=True, quote_mode=quote_mode)
+        return self._traverse(code, market, depth, existing_codes=None, is_center=True, quote_mode=quote_mode, center_name=center_name)
 
     # -- 按需展开 --
     def expand(
@@ -109,10 +109,11 @@ class TopologyService:
         existing_codes: Optional[List[str]],
         is_center: bool,
         quote_mode: str = "defer",
+        center_name: str = "",
     ) -> Dict[str, Any]:
         existing_set = set(existing_codes) if existing_codes else set()
         include_quote = quote_mode == "sync"
-        center_info = self.resolver.resolve(code, market, include_quote=include_quote)
+        center_info = self.resolver.resolve(code, market, include_quote=include_quote, fallback_name=center_name)
         center_name = center_info.get("name", "") or code
         center_sector = center_info.get("sector", "") or "--"
 
@@ -248,6 +249,19 @@ class TopologyService:
 
     def _assemble(self, center_code, market, codes, cached_map, existing_set, is_center=False, center_info=None, graph=None, include_quote=False):
         node_markets = self._build_node_markets(center_code, market, cached_map)
+        # 从 LLM 缓存中提取 peer_name 和 peer_market_cap 作为回退
+        peer_name_map: Dict[str, str] = {}
+        peer_market_cap_map: Dict[str, Optional[float]] = {}
+        peer_market_cap_str_map: Dict[str, str] = {}
+        for src, rels in cached_map.items():
+            for r in rels:
+                if r.is_empty:
+                    continue
+                if r.peer_name and r.peer_code not in peer_name_map:
+                    peer_name_map[r.peer_code] = r.peer_name
+                if r.peer_market_cap is not None and r.peer_code not in peer_market_cap_map:
+                    peer_market_cap_map[r.peer_code] = r.peer_market_cap
+                    peer_market_cap_str_map[r.peer_code] = r.peer_market_cap_str
         resolve_lookup = {
             c: self._resolve_identity(node_markets.get(c, market), c)
             for c in codes
@@ -268,6 +282,11 @@ class TopologyService:
             if (c in existing_set or symbol in existing_set) and not is_center:
                 continue
             info = infos.get(resolve_symbol, {"code": c, "name": "", "market": item_market, "sector": "--", "market_cap": None, "pct_chg": None, "quote_status": "pending"})
+            # LLM 回退：name 为空时用 peer_name，market_cap 为空时用 peer_market_cap
+            if not info.get("name") and c in peer_name_map:
+                info = {**info, "name": peer_name_map[c]}
+            if info.get("market_cap") is None and c in peer_market_cap_map:
+                info = {**info, "market_cap": peer_market_cap_map[c]}
             meta = node_meta.get(c, {"depth": 1, "zone": "peer"})
             nodes.append(
                 self._to_node(

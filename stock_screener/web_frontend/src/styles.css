@@ -4681,10 +4681,12 @@ section { background: transparent; }
 }
 
 /* ===== Industry Topology (dark theme) ===== */
-.industry-topology { display: flex; flex-direction: column; height: 100%; }
-.topo-toolbar { display: flex; gap: 12px; align-items: center; padding: 12px; border-bottom: 1px solid #2a3040; background: #141920; }
-.topo-search { position: relative; }
-.topo-search-input { width: 240px; padding: 6px 10px; border: 1px solid #2a3040; border-radius: 6px; background: #1a1f2a; color: #e8e0d0; font-size: 13px; }
+.industry-topology { display: flex; flex-direction: column; height: 100%; min-width: 0; }
+.topo-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px; border-bottom: 1px solid #2a3040; background: #141920; }
+.topo-toolbar button { white-space: nowrap; }
+.topo-toolbar label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.topo-search { position: relative; flex: 1 1 240px; min-width: 180px; max-width: 360px; }
+.topo-search-input { width: 100%; padding: 6px 10px; border: 1px solid #2a3040; border-radius: 6px; background: #1a1f2a; color: #e8e0d0; font-size: 13px; }
 .topo-search-input::placeholder { color: #8a8070; }
 .topo-search-input:focus { border-color: #c9a84c; outline: none; box-shadow: 0 0 0 2px rgba(201,168,76,0.15); }
 .topo-search-dropdown { position: absolute; top: 100%; left: 0; right: 0; background: #141920; border: 1px solid #2a3040; border-radius: 6px; max-height: 280px; overflow-y: auto; z-index: 50; margin: 4px 0 0; list-style: none; padding: 0; box-shadow: 0 12px 40px rgba(0,0,0,0.6); }
@@ -4693,9 +4695,10 @@ section { background: transparent; }
 .topo-search-code { color: #8a8070; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .topo-search-sector { color: #8a8070; margin-left: auto; }
 .topo-empty { padding: 60px; text-align: center; color: #8a8070; }
-.topo-stats { margin-left: auto; color: #8a8070; font-size: 12px; }
+.topo-stats { margin-left: auto; min-width: 180px; color: #8a8070; font-size: 12px; }
 .topo-filterbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
@@ -4703,7 +4706,8 @@ section { background: transparent; }
   background: rgba(8, 13, 20, 0.96);
 }
 .topo-graph-search {
-  width: 220px;
+  width: min(220px, 100%);
+  flex: 1 1 180px;
   padding: 6px 10px;
   border: 1px solid #2a3040;
   border-radius: 999px;
@@ -4818,7 +4822,8 @@ section { background: transparent; }
 .topo-detail-hint { margin-top: 12px; color: #8a8070; font-size: 11px; }
 
 @media (max-width: 1100px) {
-  .topo-filterbar { flex-wrap: wrap; }
+  .topo-toolbar { align-items: flex-start; }
+  .topo-stats { margin-left: 0; flex: 1 1 100%; }
   .topo-filter-summary { margin-left: 0; }
   .topo-detail-panel { left: 16px; right: 16px; top: auto; bottom: 16px; width: auto; max-height: 42vh; }
 }

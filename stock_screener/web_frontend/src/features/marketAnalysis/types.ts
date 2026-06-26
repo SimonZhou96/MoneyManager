@@ -1,6 +1,6 @@
 export type MarketCode = 'HK' | 'US' | 'A'
 
-export type Timeframe = '1m' | '5m' | '15m' | '30m' | '60m' | '1d' | '1wk'
+export type Timeframe = '1m' | '5m' | '15m' | '30m' | '60m' | '1d' | '1wk' | '1mo'
 
 export interface HotSector {
   name: string

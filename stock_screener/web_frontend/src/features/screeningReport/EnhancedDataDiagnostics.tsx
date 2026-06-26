@@ -1,9 +1,9 @@
 import React, { useMemo } from 'react'
 import { computeDataCompleteness } from './utils'
 
-type DataStatus = 'computed' | 'not_computed' | 'missing' | 'error'
+export type DataStatus = 'computed' | 'not_computed' | 'missing' | 'error'
 
-interface DiagItem {
+export interface DiagItem {
   key: string
   label: string
   status: DataStatus

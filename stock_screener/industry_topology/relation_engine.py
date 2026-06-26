@@ -3,6 +3,7 @@
 """LLM 产业链关系推理 + 解析校验。不含行情。"""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
 from .models import CachedRelation, Direction, RelationType
@@ -57,6 +58,8 @@ _ITEM_SCHEMA = {
         "direction": {"type": "string", "enum": ["upstream", "downstream", "peer"]},
         "relation": {"type": "string"},
         "evidence": {"type": "string"},
+        "market_cap": {"type": "number"},
+        "market_cap_str": {"type": "string"},
     },
     "required": ["code", "name", "market", "direction", "relation", "evidence"],
 }
@@ -103,6 +106,16 @@ _MARKET_ALIAS_MAP: Dict[str, str] = {
 
 _CODE_SUFFIXES = (".SZ", ".SH", ".HK", ".US", ".T", ".TW", ".KS", ".KQ", ".JP")
 _CODE_PREFIXES = ("SZ.", "SH.", "HK.", "US.", "JP.", "TW.", "KR.")
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    """安全转为 float，失败返回 None。"""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _normalize_peer_market(raw: str) -> str:
@@ -212,6 +225,9 @@ class RelationEngine:
                 continue
             direction = Direction(direction_raw) if direction_raw in _VALID_DIRECTIONS else Direction.PEER
             relation = RelationType(relation_raw) if relation_raw in _VALID_RELATIONS else RelationType.OTHER
+            # 提取市值（可选字段，LLM 可能不返回）
+            peer_market_cap = _safe_float(it.get("market_cap"))
+            peer_market_cap_str = str(it.get("market_cap_str", "")).strip()
             # 去重：(peer_code, relation)
             key = (peer_code, relation.value)
             if key in seen:
@@ -222,6 +238,7 @@ class RelationEngine:
                 peer_code=peer_code, peer_market=peer_market, peer_name=peer_name,
                 relation=relation, direction=direction, evidence=evidence,
                 expires_at=None, is_empty=False,
+                peer_market_cap=peer_market_cap, peer_market_cap_str=peer_market_cap_str,
             ))
         return relations
 
@@ -239,7 +256,9 @@ class RelationEngine:
 
     @staticmethod
     def _user_prompt(name: str, market: str, code: str, sector: str) -> str:
+        today = datetime.now().strftime("%Y-%m-%d")
         return (
+            f"当前日期：{today}\n"
             f"公司：{name}（{market}市场，代码{code}）\n"
             f"所属板块：{sector}\n\n"
             f"任务：列出最多 50 家与该公司有明确产业关系的上市公司，要求：\n"
@@ -249,11 +268,14 @@ class RelationEngine:
             f"4. 每条给方向(upstream/downstream/peer)、归一化关系标签、一句话依据。\n"
             f"5. market 必须用标准缩写: A/HK/US/JP/TW/KR，不要用 JAPAN/SZ/NASDAQ 等。\n"
             f"6. code 必须是纯代码（去后缀），如台积电写 \"2330\" 不写 \"2330.TW\"，华天科技写 \"002185\" 不写 \"002185.SZ\"。\n"
-            f"严格输出 JSON：{{\"items\":[{{\"code\":\"\",\"name\":\"\",\"market\":\"\",\"direction\":\"\",\"relation\":\"\",\"evidence\":\"\"}}]}}"
+            f"7. 请根据你的知识（截至{ today }）给出每家公司的市值（market_cap，单位：人民币元）和市值字符串（market_cap_str，如'2.8万亿'、'5000亿'、'80亿'），"
+            f"不确定时可以不填。\n"
+            f"严格输出 JSON：{{\"items\":[{{\"code\":\"\",\"name\":\"\",\"market\":\"\",\"direction\":\"\",\"relation\":\"\",\"evidence\":\"\",\"market_cap\":0,\"market_cap_str\":\"\"}}]}}"
         )
 
     @staticmethod
     def _batch_user_prompt(sources: List[Dict[str, str]]) -> str:
+        today = datetime.now().strftime("%Y-%m-%d")
         lines = []
         for i, s in enumerate(sources, 1):
             name = s.get("name", "") or ""
@@ -262,6 +284,7 @@ class RelationEngine:
             sector = s.get("sector", "") or ""
             lines.append(f"{i}. 公司：{name}（{market}市场，代码{code}） 所属板块：{sector}")
         return (
+            f"当前日期：{today}\n"
             f"下面给出 {len(sources)} 只股票，请分别列出每只股票最多 50 家有明确产业关系的上市公司。\n"
             + "\n".join(lines)
             + "\n\n要求：\n"
@@ -271,5 +294,7 @@ class RelationEngine:
             f"4. 每条给方向(upstream/downstream/peer)、归一化关系标签、一句话依据。\n"
             f"5. 每只股票的结果放进独立的 group，source_code/source_market 必须与输入一致。\n"
             f"6. market 必须用标准缩写: A/HK/US/JP/TW/KR；code 必须是纯代码，台积电写 \"2330\" 不写 \"2330.TW\"。\n"
-            f"严格输出 JSON：{{\"groups\":[{{\"source_code\":\"\",\"source_market\":\"\",\"items\":[{{\"code\":\"\",\"name\":\"\",\"market\":\"\",\"direction\":\"\",\"relation\":\"\",\"evidence\":\"\"}}]}}]}}"
+            f"7. 请根据你的知识（截至{ today }）给出每家公司的市值（market_cap，单位：人民币元）和市值字符串（market_cap_str，如'2.8万亿'、'5000亿'、'80亿'），"
+            f"不确定时可以不填。\n"
+            f"严格输出 JSON：{{\"groups\":[{{\"source_code\":\"\",\"source_market\":\"\",\"items\":[{{\"code\":\"\",\"name\":\"\",\"market\":\"\",\"direction\":\"\",\"relation\":\"\",\"evidence\":\"\",\"market_cap\":0,\"market_cap_str\":\"\"}}]}}]}}"
         )

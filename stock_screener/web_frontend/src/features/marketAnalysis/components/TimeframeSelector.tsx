@@ -9,6 +9,7 @@ const LABELS: Record<Timeframe, string> = {
   '60m': '60分',
   '1d': '日线',
   '1wk': '周线',
+  '1mo': '月线',
 }
 
 interface Props {

@@ -229,7 +229,7 @@ export function QuantLab() {
               ) : (
                 <input
                   type="number"
-                  value={params[key] ?? def.default}
+                  value={String(params[key] ?? def.default)}
                   min={def.min} max={def.max}
                   step={def.type === 'int' ? 1 : 0.01}
                   onChange={e => setParams(prev => ({ ...prev, [key]: parseFloat(e.target.value) || 0 }))}

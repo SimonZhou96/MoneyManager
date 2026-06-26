@@ -509,3 +509,34 @@ Detailed context lives in the memory directory. Read the relevant files before w
 - 新增非 number 类型的策略参数时，同步更新前端 `types.ts`（type 联合）、`QuantLab.tsx`（渲染分支）、`params` state 类型
 - `_rebalance_dates()` 的 `as_of_date` 参数现在排除的是整日（`df["date"] < ref`），不再是整月。daily 频率下行为正确；monthly 频率下当前不完整月份的所有交易日都被排除（同旧行为）
 - `out_of_top_streak`/`in_top_streak` 在市场破 EMA200 清仓时会 reset，避免空仓期间的 streak 积累
+
+### 2026-06-26 — 产业拓扑 US.NVDA E2E 验收：schema 迁移 + 画布交互 + quote 刷新节流
+
+**Files changed**:
+- `stock_screener/db.py` — `industry_relations` 新增 `peer_market_cap` / `peer_market_cap_str` 建表字段和幂等旧库迁移
+- `stock_screener/sql/industry_topology.sql` — 同步新增两个市值缓存字段
+- `stock_screener/web_frontend/src/features/industryTopology/TopologyCanvas.tsx` — G6 `aftertransform` zoom 读取防御式处理
+- `stock_screener/web_frontend/src/features/industryTopology/IndustryTopologyPanel.tsx` — graph 轮询合并既有 quote 状态，仅对初始/新增节点触发行情刷新
+- `stock_screener/web_frontend/src/styles.css` — 产业拓扑工具栏/过滤栏窄视口响应式修复
+
+**Root cause**:
+1. 关系缓存代码已读写 `peer_market_cap_str`，但旧库 `industry_relations` 没有该列，且 `CREATE TABLE IF NOT EXISTS` 不会迁移旧表，导致 `/api/topology/graph` 对 US.NVDA 直接 500。
+2. G6 v5 在画布初始化/transform 阶段可能先触发 `aftertransform`，此时 `graph.getZoom()` 内部 viewport 尚未就绪，控制台报 `Cannot read properties of undefined (reading 'getZoom')`。
+3. 关系状态为 `generating` 时，前端每次 `/graph` 轮询都会再次 `quotes/refresh` 全量节点；同时 `/graph` 返回的 pending 节点覆盖已缓存 quote，详情面板持续显示 pending。
+4. 窄视口下 `.topo-toolbar` 不换行，按钮和状态文本撑宽页面，内置浏览器验收出现横向裁切。
+
+**Fixes applied**:
+- 建表 SQL 和 Python init schema 同步新增 `peer_market_cap` / `peer_market_cap_str`，并用 `SELECT column` 探测 + `ALTER TABLE` 做幂等旧库迁移。
+- `aftertransform` 中用 `try/catch` 包住 `graph.getZoom()`，避免 G6 早期 transform 事件污染控制台。
+- `applyGraph()` 合并 `nodesRef.current` 中 terminal quote 状态；行情刷新只针对 reset 初始图或新增节点，避免 relation polling 引发刷新风暴。
+- 拓扑容器增加 `min-width:0`，工具栏/过滤栏 `flex-wrap`，输入框自适应，按钮保持横排。
+
+**Verification**:
+- `npm run build` 通过；`python3 -m py_compile db.py industry_topology/*.py web/topology.py` 通过。
+- `POST /api/topology/graph {"code":"US.NVDA","market":"US","depth":3}` 返回 23 nodes / 33 edges。
+- 内置浏览器 E2E：点击“产业拓扑”→搜索 US.NVDA→选择 NVIDIA→开始拓扑→画布非空→节点详情可打开；控制台无新 error/warning。
+
+**⚠️ 后续改动注意事项**:
+- 修改 `industry_relations` 字段时必须同时更新 `sql/industry_topology.sql` 和 `MarketDatabase.init_industry_topology_schema()`，并考虑旧库 ALTER。
+- 关系轮询期间不要全量刷新行情；只刷新新节点或显式 force refresh。
+- 图谱接口当前 graph payload 里的 quote 字段仍可能是 pending，前端依赖 `/quotes` 批量接口补齐；如要服务端直接返回 cached quote，需要在 `TopologyService` 聚合层处理。

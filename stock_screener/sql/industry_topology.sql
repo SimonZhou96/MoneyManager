@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS industry_relations (
     expires_at DATETIME NOT NULL,
     llm_provider VARCHAR(32) NOT NULL DEFAULT '',
     llm_model VARCHAR(64) NOT NULL DEFAULT '',
+    peer_market_cap DOUBLE NULL,
+    peer_market_cap_str VARCHAR(64) NOT NULL DEFAULT '',
     UNIQUE KEY uk_source_peer_relation (source_code, peer_code, relation),
     KEY idx_source_code (source_code),
     KEY idx_expires (expires_at)

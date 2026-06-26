@@ -14,6 +14,7 @@ import {
   type Edge,
   type OnConnect,
   type ReactFlowInstance,
+  type IsValidConnection,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 
@@ -162,9 +163,9 @@ export function RuleChainEditor({ rules, expression, onExpressionChange }: Props
   )
 
   // Connection validation: prevent invalid edges
-  const isValidConnection = useCallback(
-    (connection: Connection) => {
-      if (connection.source === connection.target) return false
+  const isValidConnection = useCallback<IsValidConnection<Edge>>(
+    (connection) => {
+      if (!connection.source || !connection.target || connection.source === connection.target) return false
       const sourceNode = nodes.find(n => n.id === connection.source)
       const targetNode = nodes.find(n => n.id === connection.target)
       if (!sourceNode || !targetNode) return false

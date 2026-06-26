@@ -21,7 +21,8 @@ class GraphCache:
         """命中返回列表（0 LLM）；过期/无返回 None。"""
         sql = (
             "SELECT source_code, source_market, peer_code, peer_market, peer_name, "
-            "relation, direction, evidence, is_empty, created_at, updated_at, expires_at "
+            "relation, direction, evidence, is_empty, created_at, updated_at, expires_at, "
+            "peer_market_cap, peer_market_cap_str "
             "FROM industry_relations WHERE source_code=%s AND source_market=%s AND expires_at > NOW()"
         )
         with self.db.conn.cursor() as cursor:
@@ -51,10 +52,12 @@ class GraphCache:
                 cursor.execute(
                     "INSERT INTO industry_relations "
                     "(source_code, source_market, peer_code, peer_market, peer_name, "
-                    "relation, direction, evidence, is_empty, expires_at, llm_provider, llm_model) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "relation, direction, evidence, is_empty, expires_at, llm_provider, llm_model, "
+                    "peer_market_cap, peer_market_cap_str) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     [source_code, market, r.peer_code, r.peer_market, r.peer_name,
-                     r.relation.value, r.direction.value, r.evidence, 0, expires, provider, model],
+                     r.relation.value, r.direction.value, r.evidence, 0, expires, provider, model,
+                     r.peer_market_cap, r.peer_market_cap_str],
                 )
 
     def build_graph(self, cached_map: Dict[str, List[CachedRelation]]) -> nx.DiGraph:
@@ -88,4 +91,16 @@ class GraphCache:
             direction=Direction(row[6]) if row[6] in Direction._value2member_map_ else Direction.PEER,
             evidence=row[7] or "", is_empty=bool(row[8]),
             expires_at=row[11],
+            peer_market_cap=_safe_row_float(row[12]) if len(row) > 12 else None,
+            peer_market_cap_str=str(row[13] or "") if len(row) > 13 else "",
         )
+
+
+def _safe_row_float(value: Any) -> Optional[float]:
+    """安全地将 DB 行值转为 float。"""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

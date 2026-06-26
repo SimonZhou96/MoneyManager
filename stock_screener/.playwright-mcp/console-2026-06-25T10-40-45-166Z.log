@@ -1,0 +1,31 @@
+[13553818ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ http://localhost:5173/node_modules/.vite/deps/chunk-5LUJUZZY.js?v=7eb70b05:21550
+[13560502ms] TypeError: Cannot read properties of undefined (reading 'getZoom')
+    at _Graph.getZoom (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=7eb70b05:64510:34)
+    at _Graph.<anonymous> (http://localhost:5173/src/features/industryTopology/TopologyCanvas.tsx:502:30)
+    at doEmit (http://localhost:5173/node_modules/.vite/deps/chunk-42AHECME.js?v=7eb70b05:1240:20)
+    at EventEmitter2.emit (http://localhost:5173/node_modules/.vite/deps/chunk-42AHECME.js?v=7eb70b05:1243:7)
+    at emit (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=7eb70b05:60811:11)
+    at ViewportController.<anonymous> (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=7eb70b05:63266:9)
+    at Generator.next (<anonymous>)
+    at http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=7eb70b05:63114:67
+    at new Promise (<anonymous>)
+    at __awaiter26 (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=7eb70b05:63096:10)
+[13687021ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687025ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687032ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687032ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687037ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687037ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687049ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687054ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687054ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687065ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687065ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687069ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687074ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687079ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687083ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687085ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687087ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687090ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
+[13687098ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/topology/graph:0
