@@ -678,6 +678,63 @@ class TestTopologyService(unittest.TestCase):
         self.assertEqual(node_map["A:300308"]["pct_chg"], 1.8)
         self.assertEqual(node_map["A:300308"]["field_sources"]["market_cap"], "llm_search")
 
+    def test_build_initial_graph_only_does_not_infer_stale_sources(self):
+        cache = FakeCache({})
+        llm = SequenceLLMProvider([
+            {
+                "resolved": True,
+                "market": "US",
+                "code": "NVDA",
+                "name": "英伟达",
+                "aliases": ["NVIDIA"],
+                "sector": "AI芯片",
+                "industry": "半导体",
+                "reason": "resolved",
+                "confidence": 0.9,
+            },
+            {
+                "center": {
+                    "resolved": True,
+                    "market": "US",
+                    "code": "NVDA",
+                    "name": "英伟达",
+                    "aliases": ["NVIDIA"],
+                    "sector": "AI芯片",
+                    "industry": "半导体",
+                    "reason": "resolved",
+                    "confidence": 0.9,
+                },
+                "items": [
+                    {
+                        "code": "TSM",
+                        "name": "台积电",
+                        "market": "US",
+                        "direction": "upstream",
+                        "relation": "foundry_packaging",
+                        "evidence": "先进制程代工",
+                        "sector": "晶圆代工",
+                        "industry": "半导体",
+                    }
+                ],
+                "warnings": [],
+            },
+        ])
+        svc = TopologyService(FakeDB(), llm_provider=llm)
+        svc.cache = cache
+        svc.resolver = FakeResolver2()
+        svc.engine = RelationEngine(FakeResolver2(), llm)
+        svc.enricher = TopologyEnrichmentService(svc.engine, FakeSearchProvider())
+
+        result = svc.build_initial_graph_only("NVDA", "US", depth=3, center_name="NVIDIA")
+
+        self.assertEqual(result["stats"]["data_stage"], "llm_initial")
+        self.assertEqual(result["stats"]["relation_status"], "initial_ready")
+        self.assertEqual(result["stats"]["llm_calls"], 1)
+        self.assertEqual(llm.calls, 2)
+        self.assertEqual([item[0] for item in cache.saved], ["NVDA"])
+        self.assertGreaterEqual(len(result["nodes"]), 2)
+        self.assertTrue(any(node["id"] == "US:TSM" for node in result["nodes"]))
+
     def test_build_graph_llm_initial_fails_when_initial_snapshot_missing(self):
         svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
         svc.cache = FakeCache({})

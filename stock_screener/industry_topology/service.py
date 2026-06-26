@@ -102,6 +102,87 @@ class TopologyService:
         market = normalize_market(market)
         return self._traverse(code, market, depth, existing_codes=None, is_center=True, quote_mode=quote_mode, center_name=center_name)
 
+    def build_initial_graph_only(self, code: str, market: str, depth: int = 3, center_name: str = "") -> Dict[str, Any]:
+        market = normalize_market(market)
+        center_info = self._resolver_resolve(code, market, include_quote=False, fallback_name=center_name)
+        resolved_code = center_info.get("code") or code
+        center_name_value = center_info.get("name", "") or center_name or resolved_code
+        center_sector = center_info.get("sector", "") or "--"
+        initial = self._build_initial_snapshot(
+            resolved_code,
+            market,
+            center_name=center_name_value,
+            center_sector=center_sector,
+        )
+        if not initial:
+            raise RuntimeError("LLM 首屏拓扑生成失败")
+        center_payload = initial.get("center") if isinstance(initial.get("center"), dict) else {}
+        initial_relations = list(initial.get("relations") or [])
+        if not initial_relations:
+            raise RuntimeError("LLM 首屏拓扑未返回任何关系节点")
+
+        llm_node_data = self._llm_node_data_from_relations(initial_relations)
+        llm_node_data[symbol_id(market, resolved_code)] = center_payload
+        center_info = self._merge_node_info(center_info, center_payload, prefer_llm=True)
+        cached_map = {resolved_code: initial_relations}
+        try:
+            p_name, m_name = self._provider_meta()
+            self.cache.save_relations(resolved_code, market, initial_relations, provider=p_name, model=m_name)
+        except Exception:
+            pass
+
+        graph = self.cache.build_graph(cached_map)
+        reachable = {resolved_code}
+        if resolved_code in graph:
+            reachable.update(self.cache.reachable_within(graph, resolved_code, depth))
+        for src, rels in cached_map.items():
+            for rel in rels:
+                if rel.is_empty:
+                    continue
+                reachable.add(src)
+                reachable.add(rel.peer_code)
+
+        nodes, edges = self._assemble(
+            resolved_code,
+            market,
+            list(reachable),
+            cached_map,
+            existing_set=set(),
+            is_center=True,
+            center_info=center_info,
+            graph=graph,
+            include_quote=False,
+            llm_node_data=llm_node_data,
+            prefer_llm=True,
+            data_stage="llm_initial",
+        )
+        stats = {
+            "llm_calls": self._llm_calls,
+            "cached_nodes": len(cached_map),
+            "stale_nodes": 0,
+            "stale_sources": [],
+            "depth": depth,
+            "relation_status": "initial_ready",
+            "data_stage": "llm_initial",
+        }
+        return {
+            "center": self._to_node(
+                center_info,
+                resolved_code,
+                market,
+                expanded=True,
+                is_center=True,
+                stale=False,
+                depth=0,
+                zone="center",
+                data_stage="llm_initial",
+            ),
+            "nodes": nodes,
+            "edges": edges,
+            "stats": stats,
+            "warnings": list(initial.get("warnings") or []),
+        }
+
     # -- 按需展开 --
     def expand(
         self,
