@@ -4,7 +4,7 @@ import re
 import threading
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from industry_topology.resolver import format_market_cap
@@ -17,12 +17,14 @@ from stock_name_resolver import StockNameResolver
 
 from .auth import get_db
 from .config import mysql_config_from_env
+from .topology_tasks import TopologyTaskRegistry, TopologyTaskRunner, task_to_payload
 from db import MarketDatabase
 
 router = APIRouter(prefix="/api/topology", tags=["topology"])
 _TOPOLOGY_GENERATION_IN_FLIGHT: set[tuple[str, str]] = set()
 _TOPOLOGY_GENERATION_LOCK = threading.Lock()
 _TOPOLOGY_BATCH_SIZE = 5
+_TOPOLOGY_TASKS = TopologyTaskRegistry()
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 _KNOWN_CHINESE_NAMES = {
     "US.TSM": "台积电",
@@ -149,6 +151,41 @@ def graph(req: GraphRequest, background_tasks: BackgroundTasks, svc: TopologySer
     data = svc.build_graph(req.code, req.market, req.depth, quote_mode=_graph_quote_mode(req.quote_mode), center_name=req.center_name)
     if data.get("stats", {}).get("relation_status") == "generating":
         data["stats"]["background_started"] = _schedule_relation_generation(background_tasks, data["stats"])
+    return {"ok": True, "data": data}
+
+
+@router.post("/graph/tasks")
+def create_graph_task(req: GraphRequest, background_tasks: BackgroundTasks):
+    task = _TOPOLOGY_TASKS.create_task(
+        code=req.code,
+        market=req.market,
+        depth=req.depth,
+        center_name=req.center_name,
+        quote_mode=_graph_quote_mode(req.quote_mode),
+    )
+
+    def service_factory() -> TopologyService:
+        db = MarketDatabase(mysql_config_from_env())
+        return TopologyService(db)
+
+    background_tasks.add_task(TopologyTaskRunner(_TOPOLOGY_TASKS, service_factory).run, task.task_id)
+    return {"ok": True, "data": task_to_payload(task)}
+
+
+@router.get("/graph/tasks/{task_id}")
+def get_graph_task(task_id: str):
+    data = _TOPOLOGY_TASKS.get_snapshot(task_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail={"ok": False, "error": "task_not_found"})
+    return {"ok": True, "data": data}
+
+
+@router.delete("/graph/tasks/{task_id}")
+def cancel_graph_task(task_id: str):
+    cancelled = _TOPOLOGY_TASKS.cancel(task_id)
+    if not cancelled:
+        raise HTTPException(status_code=404, detail={"ok": False, "error": "task_not_found"})
+    data = _TOPOLOGY_TASKS.get_snapshot(task_id)
     return {"ok": True, "data": data}
 
 

@@ -21,6 +21,7 @@ from web.topology import (
     graph as topology_graph_route,
     search_enrich as topology_search_enrich_route,
 )
+from web.topology_tasks import TopologyTaskRegistry, TopologyTaskRunner
 
 
 class TestModels(unittest.TestCase):
@@ -129,6 +130,81 @@ class TestTopologyQuotePayload(unittest.TestCase):
         self.assertEqual(item["name"], "SZ.300207")
         self.assertIsNone(item["market_cap"])
         self.assertEqual(item["market_cap_str"], "未知")
+
+
+class FakeTaskService:
+    def __init__(self, graph=None, enrich=None, error=None):
+        self.graph = graph or {
+            "center": {"id": "US:NVDA", "code": "NVDA", "market": "US", "name": "NVIDIA", "data_stage": "llm_initial"},
+            "nodes": [
+                {"id": "US:NVDA", "code": "NVDA", "market": "US", "name": "NVIDIA", "is_center": True, "data_stage": "llm_initial"},
+                {"id": "US:TSM", "code": "TSM", "market": "US", "name": "TSMC", "is_center": False, "data_stage": "llm_initial"},
+            ],
+            "edges": [{"source": "US:NVDA", "target": "US:TSM", "direction": "upstream", "relation": "foundry_packaging", "label": "代工"}],
+            "stats": {"relation_status": "initial_ready", "data_stage": "llm_initial"},
+            "warnings": [],
+        }
+        self.enrich = enrich or {"items": [], "warnings": []}
+        self.error = error
+
+    def build_initial_graph_only(self, code, market, depth=3, center_name=""):
+        if self.error:
+            raise self.error
+        return self.graph
+
+    def search_enrich(self, *, center, symbols):
+        return self.enrich
+
+
+class TestTopologyTaskRegistry(unittest.TestCase):
+    def test_create_task_returns_center_skeleton(self):
+        registry = TopologyTaskRegistry(ttl_seconds=60)
+
+        task = registry.create_task(code="NVDA", market="US", depth=3, center_name="NVIDIA", quote_mode="llm_initial")
+
+        self.assertTrue(task.task_id.startswith("topo_"))
+        self.assertEqual(task.stage, "queued")
+        self.assertEqual(task.progress_pct, 5)
+        self.assertEqual(task.graph["center"]["id"], "US:NVDA")
+        self.assertEqual(task.graph["nodes"][0]["data_stage"], "skeleton")
+
+    def test_runner_reaches_done_with_initial_graph(self):
+        registry = TopologyTaskRegistry(ttl_seconds=60)
+        task = registry.create_task(code="NVDA", market="US", depth=3, center_name="NVIDIA", quote_mode="llm_initial")
+        runner = TopologyTaskRunner(registry, lambda: FakeTaskService())
+
+        runner.run(task.task_id)
+        snapshot = registry.get_snapshot(task.task_id)
+
+        self.assertEqual(snapshot["stage"], "done")
+        self.assertEqual(snapshot["progress_pct"], 100)
+        self.assertEqual(len(snapshot["graph"]["nodes"]), 2)
+        self.assertEqual(snapshot["graph"]["stats"]["relation_status"], "initial_ready")
+
+    def test_runner_failure_preserves_skeleton(self):
+        registry = TopologyTaskRegistry(ttl_seconds=60)
+        task = registry.create_task(code="NVDA", market="US", depth=3, center_name="NVIDIA", quote_mode="llm_initial")
+        runner = TopologyTaskRunner(registry, lambda: FakeTaskService(error=RuntimeError("boom")))
+
+        runner.run(task.task_id)
+        snapshot = registry.get_snapshot(task.task_id)
+
+        self.assertEqual(snapshot["stage"], "failed")
+        self.assertEqual(snapshot["error"]["code"], "initial_graph_failed")
+        self.assertEqual(snapshot["graph"]["nodes"][0]["data_stage"], "skeleton")
+
+    def test_cancel_prevents_runner_updates(self):
+        registry = TopologyTaskRegistry(ttl_seconds=60)
+        task = registry.create_task(code="NVDA", market="US", depth=3, center_name="NVIDIA", quote_mode="llm_initial")
+        registry.cancel(task.task_id)
+        runner = TopologyTaskRunner(registry, lambda: FakeTaskService())
+
+        runner.run(task.task_id)
+        snapshot = registry.get_snapshot(task.task_id)
+
+        self.assertEqual(snapshot["stage"], "cancelled")
+        self.assertEqual(snapshot["progress_pct"], 100)
+        self.assertEqual(snapshot["graph"]["nodes"][0]["data_stage"], "skeleton")
 
 
 from unittest.mock import MagicMock
