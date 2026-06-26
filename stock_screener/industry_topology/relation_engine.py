@@ -1,39 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""LLM 产业链关系推理 + 解析校验。不含行情。"""
+"""LLM 产业链关系推理 + 首屏字段抽取。"""
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+import logging
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 from .models import CachedRelation, Direction, RelationType
+from signal_analysis.models import SearchDocument
 
 _VALID_RELATIONS = {r.value for r in RelationType if r != RelationType.OTHER}
 _VALID_DIRECTIONS = {d.value for d in Direction}
+logger = logging.getLogger(__name__)
 
 
 class RelationEngineError(Exception):
     pass
 
 
-_SYSTEM_PROMPT = (
-    "你是产业分析专家。给定一只股票，推理其产业链上下游及同业公司。严格输出 JSON，不要解释。\n\n"
-    "market 取值规则（必须严格使用以下大写缩写）：\n"
-    "- A股: \"A\"\n"
-    "- 港股: \"HK\"\n"
-    "- 美股: \"US\"\n"
-    "- 日股: \"JP\"\n"
-    "- 台股: \"TW\"\n"
-    "- 韩股: \"KR\"\n"
-    "不要使用其他写法（如 JAPAN、SZ、SH、NASDAQ 等），只用以上 6 个缩写。\n\n"
-    "code 格式规则（纯代码，去掉交易所后缀/前缀）：\n"
-    "- A股: 6 位数字，如 \"600519\"（不要 .SH / .SZ / SZ. / SH.）\n"
-    "- 港股: 1-5 位数字，如 \"00700\"（不要 .HK / HK.）\n"
-    "- 美股: 大写字母，如 \"AAPL\"（不要 .US / US.）\n"
-    "- 日股: 4 位数字，如 \"6146\"（不要 .T / JP.）\n"
-    "- 台股: 4 位数字，如 \"2330\"（不要 .TW / TW.）\n"
-    "- 韩股: 6 位数字，如 \"005930\"（不要 .KS / .KQ / KR.）\n"
-    "不确定代码的公司坚决不列，宁可少列也不错列。"
+_CENTER_SYSTEM_PROMPT = (
+    "你是证券标的识别助手。你的任务是把输入股票规范化为唯一上市公司标识。"
+    "严格输出 JSON，不允许解释性文本。"
+    "不允许编造交易所、股票代码、中文名。有歧义或置信度不足时必须返回 unresolved。"
+)
+
+_GRAPH_SYSTEM_PROMPT = (
+    "你是产业链分析与证券信息抽取助手。给定一只股票，返回上下游及同业关系，并尽量补全节点字段。"
+    "严格输出 JSON，不允许解释性文本。优先保证代码和关系真实，不追求数量，宁可少返回也不能错返回。"
+    "对数字字段宁缺毋滥，不允许根据经验臆造实时数字。"
 )
 
 _BATCH_SYSTEM_PROMPT = (
@@ -49,6 +45,25 @@ _BATCH_SYSTEM_PROMPT = (
     "code 格式规则（纯代码，去掉交易所后缀/前缀），不确定代码的公司坚决不列。"
 )
 
+_CENTER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "resolved": {"type": "boolean"},
+        "market": {"type": "string", "enum": ["A", "HK", "US", "JP", "TW", "KR"]},
+        "code": {"type": "string"},
+        "name": {"type": "string"},
+        "aliases": {"type": "array", "items": {"type": "string"}},
+        "sector": {"type": "string"},
+        "industry": {"type": "string"},
+        "market_cap": {"type": "number"},
+        "pct_chg": {"type": "number"},
+        "field_sources": {"type": "object", "additionalProperties": {"type": "string"}},
+        "reason": {"type": "string"},
+        "confidence": {"type": "number"},
+    },
+    "required": ["resolved", "market", "code", "name", "aliases", "sector", "industry", "reason"],
+}
+
 _ITEM_SCHEMA = {
     "type": "object",
     "properties": {
@@ -58,8 +73,13 @@ _ITEM_SCHEMA = {
         "direction": {"type": "string", "enum": ["upstream", "downstream", "peer"]},
         "relation": {"type": "string"},
         "evidence": {"type": "string"},
+        "sector": {"type": "string"},
+        "industry": {"type": "string"},
         "market_cap": {"type": "number"},
         "market_cap_str": {"type": "string"},
+        "pct_chg": {"type": "number"},
+        "confidence": {"type": "number"},
+        "field_sources": {"type": "object", "additionalProperties": {"type": "string"}},
     },
     "required": ["code", "name", "market", "direction", "relation", "evidence"],
 }
@@ -70,6 +90,32 @@ _JSON_SCHEMA = {
         "items": {"type": "array", "items": _ITEM_SCHEMA},
     },
     "required": ["items"],
+}
+
+_CENTER_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "resolved": {"type": "boolean"},
+        "market": {"type": "string", "enum": ["A", "HK", "US", "JP", "TW", "KR"]},
+        "code": {"type": "string"},
+        "name": {"type": "string"},
+        "aliases": {"type": "array", "items": {"type": "string"}},
+        "sector": {"type": "string"},
+        "industry": {"type": "string"},
+        "reason": {"type": "string"},
+        "confidence": {"type": "number"},
+    },
+    "required": ["resolved", "market", "code", "name", "aliases", "sector", "industry", "reason"],
+}
+
+_GRAPH_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "center": _CENTER_SCHEMA,
+        "items": {"type": "array", "items": _ITEM_SCHEMA},
+        "warnings": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["center", "items", "warnings"],
 }
 
 _BATCH_JSON_SCHEMA = {
@@ -147,16 +193,104 @@ class RelationEngine:
         self.llm = llm_provider
 
     def infer(self, code: str, name: str, market: str, sector: str) -> List[CachedRelation]:
-        user_prompt = self._user_prompt(name, market, code, sector)
-        payload = self._call_llm(user_prompt, _SYSTEM_PROMPT, _JSON_SCHEMA)
-        items = self._extract_items(payload)
-        if items is None:
-            # 重试一次
-            payload = self._call_llm(user_prompt, _SYSTEM_PROMPT, _JSON_SCHEMA)
-            items = self._extract_items(payload)
+        graph = self.infer_graph(code=code, name=name, market=market, sector=sector)
+        items = graph.get("items") if isinstance(graph, dict) else None
         if items is None:
             raise RelationEngineError("LLM 返回非预期 JSON 结构")
         return self._parse_items(items, code, market)
+
+    def resolve_center(
+        self,
+        *,
+        request_market: str,
+        request_code: str,
+        request_name: str = "",
+        request_sector: str = "",
+        search_documents: Optional[List[SearchDocument]] = None,
+    ) -> Dict[str, Any]:
+        started_at = time.perf_counter()
+        success = False
+        try:
+            user_prompt = self._center_user_prompt(
+                request_market=request_market,
+                request_code=request_code,
+                request_name=request_name,
+                request_sector=request_sector,
+                search_documents=search_documents or [],
+            )
+            payload = self._call_llm(user_prompt, _CENTER_SYSTEM_PROMPT, _CENTER_JSON_SCHEMA)
+            if not isinstance(payload, dict):
+                payload = self._call_llm(user_prompt, _CENTER_SYSTEM_PROMPT, _CENTER_JSON_SCHEMA)
+            if not isinstance(payload, dict):
+                raise RelationEngineError("LLM 返回非预期 center JSON 结构")
+            result = self._normalize_center_payload(payload)
+            success = bool(result.get("resolved"))
+            return result
+        finally:
+            logger.info(
+                "industry_topology_llm stage=resolve_center market=%s code=%s name=%s duration_ms=%d success=%s item_count=%d warning_count=%d provider=%s search_used=%s",
+                request_market,
+                request_code,
+                request_name,
+                int((time.perf_counter() - started_at) * 1000),
+                success,
+                1 if success else 0,
+                0,
+                getattr(self.llm, "name", "unknown"),
+                bool(search_documents),
+            )
+
+    def infer_graph(
+        self,
+        *,
+        code: str,
+        name: str,
+        market: str,
+        sector: str,
+        search_documents: Optional[List[SearchDocument]] = None,
+        center_payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        started_at = time.perf_counter()
+        success = False
+        item_count = 0
+        warning_count = 0
+        try:
+            user_prompt = self._user_prompt(name, market, code, sector, search_documents=search_documents or [])
+            payload = self._call_llm(user_prompt, _GRAPH_SYSTEM_PROMPT, _GRAPH_JSON_SCHEMA)
+            if not isinstance(payload, dict):
+                payload = self._call_llm(user_prompt, _GRAPH_SYSTEM_PROMPT, _GRAPH_JSON_SCHEMA)
+            items = self._extract_items(payload)
+            if items is None:
+                raise RelationEngineError("LLM 返回非预期 JSON 结构")
+            raw_center = payload.get("center") if isinstance(payload, dict) else None
+            center = self._normalize_center_payload(raw_center if isinstance(raw_center, dict) else (center_payload or {}))
+            if center_payload:
+                center = {
+                    **self._normalize_center_payload(center_payload),
+                    **{k: v for k, v in center.items() if v not in (None, "", [], {})},
+                }
+            warnings = self._extract_warnings(payload)
+            success = True
+            item_count = len(items)
+            warning_count = len(warnings)
+            return {
+                "center": center,
+                "items": items,
+                "warnings": warnings,
+            }
+        finally:
+            logger.info(
+                "industry_topology_llm stage=infer_graph market=%s code=%s name=%s duration_ms=%d success=%s item_count=%d warning_count=%d provider=%s search_used=%s",
+                market,
+                code,
+                name,
+                int((time.perf_counter() - started_at) * 1000),
+                success,
+                item_count,
+                warning_count,
+                getattr(self.llm, "name", "unknown"),
+                bool(search_documents),
+            )
 
     def infer_batch(self, sources: List[Dict[str, str]]) -> Dict[Tuple[str, str], List[CachedRelation]]:
         """一次 LLM 调用推理多个 source 的产业关系。
@@ -228,6 +362,11 @@ class RelationEngine:
             # 提取市值（可选字段，LLM 可能不返回）
             peer_market_cap = _safe_float(it.get("market_cap"))
             peer_market_cap_str = str(it.get("market_cap_str", "")).strip()
+            peer_sector = str(it.get("sector", "")).strip()
+            peer_industry = str(it.get("industry", "")).strip()
+            peer_pct_chg = _safe_float(it.get("pct_chg"))
+            confidence = _safe_float(it.get("confidence"))
+            field_sources = self._normalize_field_sources(it.get("field_sources"))
             # 去重：(peer_code, relation)
             key = (peer_code, relation.value)
             if key in seen:
@@ -239,6 +378,8 @@ class RelationEngine:
                 relation=relation, direction=direction, evidence=evidence,
                 expires_at=None, is_empty=False,
                 peer_market_cap=peer_market_cap, peer_market_cap_str=peer_market_cap_str,
+                peer_sector=peer_sector, peer_industry=peer_industry, peer_pct_chg=peer_pct_chg,
+                confidence=confidence, field_sources=field_sources,
             ))
         return relations
 
@@ -255,22 +396,53 @@ class RelationEngine:
         return None
 
     @staticmethod
-    def _user_prompt(name: str, market: str, code: str, sector: str) -> str:
+    def _user_prompt(name: str, market: str, code: str, sector: str, search_documents: Optional[List[SearchDocument]] = None) -> str:
         today = datetime.now().strftime("%Y-%m-%d")
+        search_context = RelationEngine._search_context(search_documents or [])
         return (
             f"当前日期：{today}\n"
             f"公司：{name}（{market}市场，代码{code}）\n"
             f"所属板块：{sector}\n\n"
-            f"任务：列出最多 50 家与该公司有明确产业关系的上市公司，要求：\n"
+            f"搜索摘要（可为空）：\n{search_context}\n\n"
+            f"任务：列出最多 20 家与该公司有明确产业关系的上市公司，要求：\n"
             f"1. 关系必须真实、可溯源（凭产业链事实，不要编造公司）。\n"
             f"2. 优先覆盖上游(供应商/原材料/设备/代工封测)与下游(客户/ODM/分销/应用场景)，可含少量同业竞品。\n"
             f"3. 对方须为真实上市公司，给出股票代码与简称；代码不确定时宁可不列。\n"
             f"4. 每条给方向(upstream/downstream/peer)、归一化关系标签、一句话依据。\n"
             f"5. market 必须用标准缩写: A/HK/US/JP/TW/KR，不要用 JAPAN/SZ/NASDAQ 等。\n"
             f"6. code 必须是纯代码（去后缀），如台积电写 \"2330\" 不写 \"2330.TW\"，华天科技写 \"002185\" 不写 \"002185.SZ\"。\n"
-            f"7. 请根据你的知识（截至{ today }）给出每家公司的市值（market_cap，单位：人民币元）和市值字符串（market_cap_str，如'2.8万亿'、'5000亿'、'80亿'），"
-            f"不确定时可以不填。\n"
-            f"严格输出 JSON：{{\"items\":[{{\"code\":\"\",\"name\":\"\",\"market\":\"\",\"direction\":\"\",\"relation\":\"\",\"evidence\":\"\",\"market_cap\":0,\"market_cap_str\":\"\"}}]}}"
+            f"7. 每个节点尽量补全 sector(股票节点所属板块)、industry(股票节点所属行业)、market_cap(股票当前市值)、pct_chg(股票当天涨跌幅)、confidence、field_sources。\n"
+            f"8. 若不确定 market_cap 或 pct_chg，必须返回 null；不允许根据经验臆造实时数字。\n"
+            f"9. confidence 范围是 0 到 1；field_sources 用字段名到来源类型的映射，例如 llm_search。\n"
+            f"10. center 中只允许返回当前中心股票本身，不允许替换成其他标的。\n"
+            f"严格输出 JSON：{{\"center\":{{\"resolved\":true,\"market\":\"\",\"code\":\"\",\"name\":\"\",\"aliases\":[],\"sector\":\"\",\"industry\":\"\",\"reason\":\"\",\"confidence\":0}},"
+            f"\"items\":[{{\"code\":\"\",\"name\":\"\",\"market\":\"\",\"direction\":\"\",\"relation\":\"\",\"evidence\":\"\",\"sector\":\"\",\"industry\":\"\",\"market_cap\":null,\"market_cap_str\":\"\",\"pct_chg\":null,\"confidence\":0,\"field_sources\":{{\"name\":\"llm_search\"}}}}],"
+            f"\"warnings\":[\"\"]}}"
+        )
+
+    @staticmethod
+    def _center_user_prompt(
+        *,
+        request_market: str,
+        request_code: str,
+        request_name: str,
+        request_sector: str,
+        search_documents: List[SearchDocument],
+    ) -> str:
+        today = datetime.now().strftime("%Y-%m-%d")
+        search_context = RelationEngine._search_context(search_documents)
+        return (
+            f"当前日期：{today}\n"
+            f"输入 market={request_market}, code={request_code}, name={request_name}, sector={request_sector}\n"
+            f"搜索摘要（可为空）：\n{search_context}\n\n"
+            "任务：根据输入和搜索摘要，确认唯一中心股票身份。\n"
+            "约束：\n"
+            "1. 只能返回一个中心标的。\n"
+            "2. 若无法高置信确认代码，不得猜测，直接返回 resolved=false。\n"
+            "3. market 只能是 A/HK/US/JP/TW/KR。\n"
+            "4. code 必须是纯代码，不带交易所后缀。\n"
+            "严格输出 JSON："
+            "{\"resolved\":true,\"market\":\"\",\"code\":\"\",\"name\":\"\",\"aliases\":[],\"sector\":\"\",\"industry\":\"\",\"reason\":\"\",\"confidence\":0}"
         )
 
     @staticmethod
@@ -298,3 +470,70 @@ class RelationEngine:
             f"不确定时可以不填。\n"
             f"严格输出 JSON：{{\"groups\":[{{\"source_code\":\"\",\"source_market\":\"\",\"items\":[{{\"code\":\"\",\"name\":\"\",\"market\":\"\",\"direction\":\"\",\"relation\":\"\",\"evidence\":\"\",\"market_cap\":0,\"market_cap_str\":\"\"}}]}}]}}"
         )
+
+    @staticmethod
+    def _search_context(search_documents: List[SearchDocument]) -> str:
+        if not search_documents:
+            return "无可用搜索结果"
+        lines = []
+        for index, doc in enumerate(search_documents[:6], 1):
+            title = str(getattr(doc, "title", "") or "").strip()
+            url = str(getattr(doc, "url", "") or "").strip()
+            content = str(getattr(doc, "content", "") or "").strip().replace("\n", " ")
+            lines.append(f"{index}. 标题: {title}\n   URL: {url}\n   摘要: {content[:240]}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _extract_warnings(payload: Any) -> List[str]:
+        warnings = payload.get("warnings") if isinstance(payload, dict) else None
+        if not isinstance(warnings, list):
+            return []
+        return [str(item).strip() for item in warnings if str(item).strip()]
+
+    @staticmethod
+    def _normalize_center_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {
+                "resolved": False,
+                "market": "",
+                "code": "",
+                "name": "",
+                "aliases": [],
+                "sector": "",
+                "industry": "",
+                "reason": "",
+                "confidence": None,
+                "field_sources": {},
+            }
+        aliases = payload.get("aliases")
+        return {
+            "resolved": bool(payload.get("resolved")),
+            "market": _normalize_peer_market(str(payload.get("market", "")).strip()) if payload.get("market") else "",
+            "code": _normalize_peer_code(str(payload.get("code", "")).strip()),
+            "name": str(payload.get("name", "")).strip(),
+            "aliases": [str(item).strip() for item in aliases] if isinstance(aliases, list) else [],
+            "sector": str(payload.get("sector", "")).strip(),
+            "industry": str(payload.get("industry", "")).strip(),
+            "market_cap": _safe_float(payload.get("market_cap")),
+            "pct_chg": _safe_float(payload.get("pct_chg")),
+            "reason": str(payload.get("reason", "")).strip(),
+            "confidence": _safe_float(payload.get("confidence")),
+            "field_sources": {
+                "name": "llm_search",
+                "sector": "llm_search",
+                "industry": "llm_search",
+                **RelationEngine._normalize_field_sources(payload.get("field_sources")),
+            },
+        }
+
+    @staticmethod
+    def _normalize_field_sources(payload: Any) -> Dict[str, str]:
+        if not isinstance(payload, dict):
+            return {}
+        result: Dict[str, str] = {}
+        for key, value in payload.items():
+            text_key = str(key or "").strip()
+            text_value = str(value or "").strip()
+            if text_key and text_value:
+                result[text_key] = text_value
+        return result

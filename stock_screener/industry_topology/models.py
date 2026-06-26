@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Dict, Optional
 
 
 class Direction(str, Enum):
@@ -73,3 +73,8 @@ class CachedRelation:
     is_empty: bool
     peer_market_cap: Optional[float] = None
     peer_market_cap_str: str = ""
+    peer_sector: str = ""
+    peer_industry: str = ""
+    peer_pct_chg: Optional[float] = None
+    confidence: Optional[float] = None
+    field_sources: Dict[str, str] | None = None

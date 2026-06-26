@@ -9,7 +9,7 @@ import json
 import os
 import re
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .models import ScreeningSignalRow, SearchDocument, SignalAnalysisResult
 
@@ -406,7 +406,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             self.chat_completions_url,
             headers=headers,
             json=payload,
-            timeout=self.timeout_sec,
+            timeout=(10, self.timeout_sec),
         )
         if response.status_code >= 400 and "response_format" in payload:
             payload = dict(payload)
@@ -415,7 +415,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
                 self.chat_completions_url,
                 headers=headers,
                 json=payload,
-                timeout=self.timeout_sec,
+                timeout=(10, self.timeout_sec),
             )
         if response.status_code >= 400:
             raise RuntimeError(f"LLM analysis failed: HTTP {response.status_code} {response.text[:300]}")
@@ -452,7 +452,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             self.chat_completions_url,
             headers=headers,
             json=payload,
-            timeout=self.timeout_sec,
+            timeout=(10, self.timeout_sec),
         )
         if "response_format" in payload and _should_retry_chat_json_object(response):
             payload = dict(payload)
@@ -461,7 +461,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
                 self.chat_completions_url,
                 headers=headers,
                 json=payload,
-                timeout=self.timeout_sec,
+                timeout=(10, self.timeout_sec),
             )
         if response.status_code >= 400:
             raise RuntimeError(f"LLM JSON completion failed: HTTP {response.status_code} {response.text[:300]}")

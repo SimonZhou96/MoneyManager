@@ -3,7 +3,16 @@ import { StockSearchInput } from './StockSearchInput'
 import { TopologyCanvas, sizeLevelFromMarketCap } from './TopologyCanvas'
 import type { TopologyCanvasHandle } from './TopologyCanvas'
 import { topologyApi } from './topologyApi'
-import type { SearchResult, TopologyEdgeData, TopologyGraph, TopologyNodeData, TopologyQuoteItem, TopologyStats } from './types'
+import type {
+  SearchResult,
+  TopologyEdgeData,
+  TopologyGraph,
+  TopologyNodeData,
+  TopologyNodePatch,
+  TopologyQuoteItem,
+  TopologyStats,
+  TopologyTaskStage,
+} from './types'
 
 const POLL_INTERVAL_MS = 2500
 const MAX_POLL_ATTEMPTS = 24
@@ -15,8 +24,17 @@ const RELATION_FILTERS = [
   { key: 'downstream', label: '下游' },
   { key: 'peer', label: '同业' },
 ] as const
+const FIELD_NAMES = ['name', 'sector', 'industry', 'market_cap', 'pct_chg'] as const
 
 type RelationFilter = typeof RELATION_FILTERS[number]['key']
+type QuotePollState = 'idle' | 'polling' | 'done' | 'timeout'
+type RelationPollState = 'idle' | 'polling' | 'done' | 'timeout'
+type RankedField = typeof FIELD_NAMES[number]
+
+type RenderMeta = {
+  hasRenderedSize: boolean
+  fieldRanks: Partial<Record<RankedField, number>>
+}
 
 function edgeKey(edge: TopologyEdgeData) {
   return `${edge.source}->${edge.target}:${edge.relation}`
@@ -32,7 +50,29 @@ function nodeMatchesQuery(node: TopologyNodeData, query: string) {
   return [node.name, node.code, node.id, node.market, node.sector].some((field) => normalizeText(field).includes(keyword))
 }
 
-function formatTopologyStats(stats: TopologyStats) {
+function hasFieldValue(field: RankedField, value: unknown) {
+  if (value === null || value === undefined) return false
+  if (field === 'name' || field === 'sector' || field === 'industry') {
+    return String(value).trim() !== '' && String(value).trim() !== '--' && String(value).trim() !== '板块未知'
+  }
+  return true
+}
+
+function sourcePriority(source?: string) {
+  if (!source) return 0
+  if (source === 'resolver' || source === 'resolver_override') return 3
+  if (source === 'search_enrich') return 2
+  return 1
+}
+
+function stagePriority(stage?: string) {
+  if (stage === 'source_verified') return 3
+  if (stage === 'source_partial') return 2
+  if (stage === 'llm_initial') return 1
+  return 0
+}
+
+function formatTopologyStats(stats: TopologyStats, warnings: string[]) {
   const statusText = stats.relation_status === 'generating'
     ? '生成中'
     : stats.relation_status === 'cached'
@@ -45,28 +85,59 @@ function formatTopologyStats(stats: TopologyStats) {
   const backgroundText = stats.relation_status === 'generating'
     ? stats.background_started ? '后台已启动' : '后台生成中'
     : ''
-  return [`关系 ${statusText}`, `LLM调用 ${stats.llm_calls}`, `缓存 ${stats.cached_nodes ?? 0}`, `stale ${stats.stale_nodes ?? 0}`, backgroundText]
+  const stageText = stats.data_stage === 'llm_initial'
+    ? '首屏 AI'
+    : stats.data_stage === 'source_verified'
+      ? '数据源已校正'
+      : stats.data_stage === 'source_partial'
+        ? '数据源补全中'
+        : ''
+  const warningText = warnings.length > 0 ? `告警 ${warnings.join(',')}` : ''
+  return [`关系 ${statusText}`, stageText, `LLM调用 ${stats.llm_calls}`, `缓存 ${stats.cached_nodes ?? 0}`, `stale ${stats.stale_nodes ?? 0}`, backgroundText, warningText]
     .filter(Boolean)
     .join(' | ')
 }
 
-function mergeQuoteState(nextNodes: TopologyNodeData[], previousNodes: TopologyNodeData[]) {
-  const previousById = new Map(previousNodes.map((node) => [node.id, node]))
-  return nextNodes.map((node) => {
-    const prev = previousById.get(node.id)
-    if (!prev || !TERMINAL_QUOTE_STATUSES.has(prev.quote_status || 'pending')) return node
-    return {
-      ...node,
-      name: prev.name || node.name,
-      pct_chg: prev.pct_chg,
-      market_cap: prev.market_cap,
-      market_cap_str: prev.market_cap_str || node.market_cap_str,
-      size_level: prev.size_level,
-      quote_status: prev.quote_status,
-      quote_updated_at: prev.quote_updated_at,
-      quote_error: prev.quote_error,
+function buildRenderMeta(node: TopologyNodeData): RenderMeta {
+  const fieldRanks: Partial<Record<RankedField, number>> = {}
+  FIELD_NAMES.forEach((field) => {
+    if (hasFieldValue(field, node[field])) {
+      fieldRanks[field] = sourcePriority(node.field_sources?.[field])
     }
   })
+  return {
+    hasRenderedSize: node.market_cap !== null && node.market_cap !== undefined,
+    fieldRanks,
+  }
+}
+
+function buildProgress(stage: TopologyTaskStage, nodes: TopologyNodeData[], relationPollState: RelationPollState) {
+  if (stage === 'graph_loading') return 10
+  if (stage === 'graph_ready_search_enriching') return 65
+  if (stage === 'graph_ready_source_polling') {
+    const total = nodes.length || 1
+    const ready = nodes.filter((node) => TERMINAL_QUOTE_STATUSES.has(node.quote_status || 'pending')).length
+    const quoteRatio = ready / total
+    const relationRatio = relationPollState === 'done' || relationPollState === 'timeout' ? 1 : 0
+    return Math.min(99, Math.round(75 + quoteRatio * 15 + relationRatio * 10))
+  }
+  if (stage === 'done' || stage === 'partial' || stage === 'failed') return 100
+  return 0
+}
+
+function progressLabel(stage: TopologyTaskStage, quotePollState: QuotePollState, relationPollState: RelationPollState) {
+  if (stage === 'graph_loading') return 'LLM 首屏拓扑生成中'
+  if (stage === 'graph_ready_search_enriching') return 'Search 补强中'
+  if (stage === 'graph_ready_source_polling') {
+    if (quotePollState === 'polling' && relationPollState === 'polling') return '数据源行情与关系校正中'
+    if (quotePollState === 'polling') return '数据源行情校正中'
+    if (relationPollState === 'polling') return '关系状态校正中'
+    return '数据源校正收尾中'
+  }
+  if (stage === 'partial') return '数据源部分完成，保留首屏结果'
+  if (stage === 'failed') return '首屏拓扑生成失败'
+  if (stage === 'done') return '数据源已校正'
+  return '等待开始拓扑'
 }
 
 function DetailPanel({
@@ -96,6 +167,14 @@ function DetailPanel({
     )
   }
   const sector = node?.sector && node.sector !== '--' ? node.sector : '板块未知'
+  const industry = node?.industry?.trim() || '行业未知'
+  const dataStage = node?.data_stage === 'llm_initial'
+    ? 'AI 初始结果'
+    : node?.data_stage === 'source_verified'
+      ? '数据源已校正'
+      : node?.data_stage === 'source_partial'
+        ? '数据源补全中'
+        : '未知'
   return (
     <aside className="topo-detail-panel">
       <button className="topo-detail-close" onClick={onClose}>×</button>
@@ -104,9 +183,11 @@ function DetailPanel({
       <div className="topo-detail-row"><span>代码</span><strong>{node?.id}</strong></div>
       <div className="topo-detail-row"><span>市场</span><strong>{node?.market}</strong></div>
       <div className="topo-detail-row"><span>板块</span><strong>{sector}</strong></div>
+      <div className="topo-detail-row"><span>行业</span><strong>{industry}</strong></div>
       <div className="topo-detail-row"><span>市值</span><strong>{node?.market_cap_str || '未知'}</strong></div>
       <div className="topo-detail-row"><span>涨跌幅</span><strong>{node?.pct_chg ?? '--'}</strong></div>
       <div className="topo-detail-row"><span>行情状态</span><strong>{node?.quote_status || 'pending'}</strong></div>
+      <div className="topo-detail-row"><span>数据阶段</span><strong>{dataStage}</strong></div>
       <div className="topo-detail-hint">双击画布节点可继续展开该企业关系。</div>
     </aside>
   )
@@ -118,7 +199,12 @@ export function IndustryTopologyPanel() {
   const [nodes, setNodes] = useState<TopologyNodeData[]>([])
   const [edges, setEdges] = useState<TopologyEdgeData[]>([])
   const [stats, setStats] = useState<string>('')
+  const [warnings, setWarnings] = useState<string[]>([])
   const [relationStatus, setRelationStatus] = useState<TopologyStats['relation_status']>()
+  const [taskStage, setTaskStage] = useState<TopologyTaskStage>('idle')
+  const [progressPct, setProgressPct] = useState(0)
+  const [quotePollState, setQuotePollState] = useState<QuotePollState>('idle')
+  const [relationPollState, setRelationPollState] = useState<RelationPollState>('idle')
   const [relationFilters, setRelationFilters] = useState<Set<RelationFilter>>(() => new Set(['upstream', 'downstream', 'peer']))
   const [graphQuery, setGraphQuery] = useState('')
   const [onlyImportant, setOnlyImportant] = useState(false)
@@ -131,9 +217,12 @@ export function IndustryTopologyPanel() {
   const relationPollAttemptsRef = useRef(0)
   const canvasRef = useRef<TopologyCanvasHandle>(null)
   const nodesRef = useRef<TopologyNodeData[]>([])
+  const renderMetaRef = useRef<Map<string, RenderMeta>>(new Map())
+  const taskIdRef = useRef(0)
 
   const symbols = useMemo(() => nodes.map((node) => node.id), [nodes])
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
+  const isBusy = taskStage === 'graph_loading' || taskStage === 'graph_ready_search_enriching' || taskStage === 'graph_ready_source_polling'
 
   const visibleGraph = useMemo(() => {
     const center = nodes.find((node) => node.is_center)
@@ -163,89 +252,260 @@ export function IndustryTopologyPanel() {
     target: nodeById.get(selectedEdge.target),
   } : {}, [nodeById, selectedEdge])
 
-  const applyQuoteItems = useCallback((items: TopologyQuoteItem[]) => {
-    if (items.length === 0) return
-    // Update nodesRef with latest quote data (for display in sidebar / filters)
-    const bySymbol = new Map(items.map((item) => [item.symbol, item]))
-    nodesRef.current = nodesRef.current.map((node) => {
-      const quote = bySymbol.get(node.id)
-      if (!quote) return node
-      return {
-        ...node,
-        name: quote.name || node.name,
-        pct_chg: quote.pct_chg,
-        market_cap: quote.market_cap,
-        market_cap_str: quote.market_cap_str || node.market_cap_str,
-        size_level: quote.market_cap === null || quote.market_cap === undefined ? node.size_level : sizeLevelFromMarketCap(quote.market_cap),
-        quote_status: quote.status,
-        quote_updated_at: quote.updated_at,
-        quote_error: quote.error,
-      }
-    })
-    // Push directly into G6 — bypass React render cycle
-    canvasRef.current?.applyQuotes(items)
+  const commitNodeState = useCallback((nextNodes: TopologyNodeData[], changedNodes: TopologyNodeData[]) => {
+    nodesRef.current = nextNodes
+    setNodes(nextNodes)
+    if (changedNodes.length > 0) {
+      canvasRef.current?.applyNodePatches(changedNodes.map((node) => ({ ...node })))
+    }
+    setSelectedNode((current) => current ? nextNodes.find((node) => node.id === current.id) || current : current)
   }, [])
 
+  const mergeIntoExistingNodes = useCallback((patches: TopologyNodePatch[], fallbackSource: string) => {
+    if (patches.length === 0 || nodesRef.current.length === 0) return
+    const patchMap = new Map(patches.map((patch) => [patch.id, patch]))
+    const changedNodes: TopologyNodeData[] = []
+    const mergedNodes = nodesRef.current.map((node) => {
+      const patch = patchMap.get(node.id)
+      if (!patch) return node
+      const meta = renderMetaRef.current.get(node.id) || buildRenderMeta(node)
+      const nextNode: TopologyNodeData = {
+        ...node,
+        quote_status: patch.quote_status ?? node.quote_status,
+        quote_updated_at: patch.quote_updated_at ?? node.quote_updated_at,
+        quote_error: patch.quote_error ?? node.quote_error,
+        data_gaps: patch.data_gaps ?? node.data_gaps,
+      }
+      let changed = false
+      FIELD_NAMES.forEach((field) => {
+        const incoming = patch[field]
+        if (!hasFieldValue(field, incoming)) return
+        const incomingSource = patch.field_sources?.[field] || fallbackSource
+        const incomingRank = sourcePriority(incomingSource)
+        const currentRank = meta.fieldRanks[field] ?? sourcePriority(node.field_sources?.[field])
+        if (hasFieldValue(field, nextNode[field]) && incomingRank < currentRank) return
+        ;(nextNode as unknown as Record<string, unknown>)[field] = incoming
+        nextNode.field_sources = { ...(nextNode.field_sources || {}), [field]: incomingSource }
+        if (patch.field_confidence?.[field] !== undefined) {
+          nextNode.field_confidence = { ...(nextNode.field_confidence || {}), [field]: patch.field_confidence[field] }
+        }
+        meta.fieldRanks[field] = incomingRank
+        changed = true
+      })
+      if (hasFieldValue('market_cap', patch.market_cap)) {
+        nextNode.market_cap_str = patch.market_cap_str || nextNode.market_cap_str
+        if (!meta.hasRenderedSize) {
+          nextNode.size_level = sizeLevelFromMarketCap(patch.market_cap)
+          meta.hasRenderedSize = true
+        }
+      }
+      if (patch.data_stage && stagePriority(patch.data_stage) >= stagePriority(nextNode.data_stage)) {
+        nextNode.data_stage = patch.data_stage
+        changed = true
+      }
+      renderMetaRef.current.set(node.id, meta)
+      if (!changed && nextNode.quote_status === node.quote_status && nextNode.quote_updated_at === node.quote_updated_at && nextNode.quote_error === node.quote_error) {
+        return node
+      }
+      changedNodes.push(nextNode)
+      return nextNode
+    })
+    commitNodeState(mergedNodes, changedNodes)
+  }, [commitNodeState])
+
+  const applyQuoteItems = useCallback((items: TopologyQuoteItem[]) => {
+    if (items.length === 0) return
+    mergeIntoExistingNodes(items.map((item) => ({
+      id: item.symbol,
+      symbol: item.symbol,
+      market: item.market,
+      code: item.code,
+      name: item.name,
+      sector: item.sector,
+      industry: item.industry,
+      pct_chg: item.pct_chg,
+      market_cap: item.market_cap,
+      market_cap_str: item.market_cap_str,
+      quote_status: item.status,
+      quote_updated_at: item.updated_at,
+      quote_error: item.error,
+      field_sources: item.field_sources,
+      field_confidence: item.field_confidence,
+      data_stage: item.data_stage,
+      data_gaps: item.data_gaps,
+    })), 'resolver')
+  }, [mergeIntoExistingNodes])
+
   const startQuoteRefresh = useCallback(async (nextSymbols: string[]) => {
-    if (nextSymbols.length === 0) return
+    if (nextSymbols.length === 0) {
+      setQuotePollState('done')
+      return
+    }
     pollAttemptsRef.current = 0
+    setQuotePollState('polling')
     try {
-      await topologyApi.refreshQuotes(nextSymbols)
+      const res = await topologyApi.refreshQuotes(nextSymbols)
+      applyQuoteItems(res.data.items as TopologyQuoteItem[])
     } catch {
       // 行情刷新失败不影响拓扑首屏
     }
-  }, [])
+  }, [applyQuoteItems])
 
-  const applyGraph = useCallback((graph: TopologyGraph, resetSelection = false) => {
-    const previousNodes = nodesRef.current
+  const applyGraph = useCallback((graph: TopologyGraph, resetSelection = false, replaceAll = false) => {
+    const previousNodes = replaceAll ? [] : nodesRef.current
     const previousIds = new Set(previousNodes.map((node) => node.id))
-    const mergedNodes = mergeQuoteState(graph.nodes, previousNodes)
-    setNodes(mergedNodes)
-    nodesRef.current = mergedNodes
+    if (replaceAll) {
+      renderMetaRef.current.clear()
+    }
+    const nextNodes = graph.nodes.map((incoming) => {
+      const prev = previousNodes.find((node) => node.id === incoming.id)
+      if (!prev) {
+        renderMetaRef.current.set(incoming.id, buildRenderMeta(incoming))
+        return incoming
+      }
+      const patch: TopologyNodePatch = {
+        id: incoming.id,
+        symbol: incoming.id,
+        market: incoming.market,
+        code: incoming.code,
+        name: incoming.name,
+        sector: incoming.sector,
+        industry: incoming.industry,
+        pct_chg: incoming.pct_chg,
+        market_cap: incoming.market_cap,
+        market_cap_str: incoming.market_cap_str,
+        quote_status: incoming.quote_status,
+        quote_updated_at: incoming.quote_updated_at,
+        quote_error: incoming.quote_error,
+        field_sources: incoming.field_sources,
+        field_confidence: incoming.field_confidence,
+        data_stage: incoming.data_stage,
+        data_gaps: incoming.data_gaps,
+      }
+      const meta = renderMetaRef.current.get(prev.id) || buildRenderMeta(prev)
+      renderMetaRef.current.set(prev.id, meta)
+      const merged = {
+        ...prev,
+        expanded: incoming.expanded,
+        stale: incoming.stale,
+        depth: incoming.depth,
+        zone: incoming.zone,
+        is_center: incoming.is_center,
+      }
+      return merged
+    })
+    nodesRef.current = nextNodes
+    setNodes(nextNodes)
     setEdges(graph.edges)
     if (resetSelection) {
       setSelectedNode(null)
       setSelectedEdge(null)
       setSelectedEdgeKey(null)
     }
-    setStats(formatTopologyStats(graph.stats))
+    setWarnings((current) => Array.from(new Set([...(graph.warnings || []), ...current])))
+    setStats(formatTopologyStats(graph.stats, graph.warnings || []))
     setRelationStatus(graph.stats.relation_status)
-    const refreshSymbols = mergedNodes
-      .filter((node) => resetSelection || !previousIds.has(node.id))
+    setRelationPollState(graph.stats.relation_status === 'generating' ? 'polling' : 'done')
+    const refreshSymbols = nextNodes
+      .filter((node) => replaceAll || !previousIds.has(node.id))
       .map((node) => node.id)
+    if (replaceAll) {
+      nextNodes.forEach((node) => renderMetaRef.current.set(node.id, buildRenderMeta(node)))
+    }
+    mergeIntoExistingNodes(graph.nodes.map((node) => ({
+      id: node.id,
+      symbol: node.id,
+      market: node.market,
+      code: node.code,
+      name: node.name,
+      sector: node.sector,
+      industry: node.industry,
+      pct_chg: node.pct_chg,
+      market_cap: node.market_cap,
+      market_cap_str: node.market_cap_str,
+      quote_status: node.quote_status,
+      quote_updated_at: node.quote_updated_at,
+      quote_error: node.quote_error,
+      field_sources: node.field_sources,
+      field_confidence: node.field_confidence,
+      data_stage: node.data_stage,
+      data_gaps: node.data_gaps,
+    })), 'llm_graph')
     void startQuoteRefresh(refreshSymbols)
-  }, [startQuoteRefresh])
+  }, [mergeIntoExistingNodes, startQuoteRefresh])
+
+  const runSearchEnrich = useCallback(async (taskId: number, graph: TopologyGraph) => {
+    try {
+      const res = await topologyApi.searchEnrich(
+        {
+          market: graph.center.market,
+          code: graph.center.code,
+          name: graph.center.name,
+          sector: graph.center.sector,
+          industry: graph.center.industry,
+        },
+        graph.nodes.map((node) => node.id),
+      )
+      if (taskId !== taskIdRef.current) return
+      mergeIntoExistingNodes(res.data.items, 'search_enrich')
+      setWarnings((current) => Array.from(new Set([...current, ...(res.data.warnings || [])])))
+    } catch {
+      if (taskId !== taskIdRef.current) return
+      setWarnings((current) => Array.from(new Set([...current, 'search_unavailable'])))
+    } finally {
+      if (taskId === taskIdRef.current) {
+        setTaskStage('graph_ready_source_polling')
+      }
+    }
+  }, [mergeIntoExistingNodes])
 
   const startTopology = useCallback(async () => {
     if (!selected) return
+    const taskId = taskIdRef.current + 1
+    taskIdRef.current = taskId
+    relationPollAttemptsRef.current = 0
+    pollAttemptsRef.current = 0
+    setWarnings([])
+    setTaskStage('graph_loading')
+    setProgressPct(10)
+    setQuotePollState('idle')
+    setRelationPollState('idle')
     try {
-      relationPollAttemptsRef.current = 0
-      const res = await topologyApi.graph(selected.code, selected.market, depth)
-      applyGraph(res.data, true)
+      const res = await topologyApi.graph(selected.code, selected.market, depth, selected.name, 'llm_initial')
+      if (taskId !== taskIdRef.current) return
+      applyGraph(res.data, true, true)
+      setWarnings(Array.from(new Set(res.data.warnings || [])))
+      setStats(formatTopologyStats(res.data.stats, res.data.warnings || []))
+      setTaskStage('graph_ready_search_enriching')
+      setProgressPct(55)
+      await runSearchEnrich(taskId, res.data)
     } catch (e) {
+      if (taskId !== taskIdRef.current) return
+      setTaskStage('failed')
+      setProgressPct(100)
       setStats(`拓扑失败: ${(e as Error).message}`)
     }
-  }, [selected, depth, applyGraph])
+  }, [selected, depth, applyGraph, runSearchEnrich])
 
   const onExpand = useCallback(async (code: string, market: string) => {
     if (!selected) return
-    const existing = nodes.map((node) => node.id)
+    const existing = nodesRef.current.map((node) => node.id)
     try {
       const res = await topologyApi.expand(code, market, depth, existing)
       const data = res.data
-      const addedSymbols: string[] = []
-      setNodes((prev) => {
-        const map = new Map(prev.map((node) => [node.id, node]))
-        data.nodes.forEach((node) => {
-          if (!map.has(node.id)) addedSymbols.push(node.id)
-          map.set(node.id, node)
-        })
-        const merged = Array.from(map.values()).map((node) => node.id === `${market}:${code}` || (node.code === code && node.market === market)
-          ? { ...node, expanded: true }
-          : node)
-        nodesRef.current = merged
-        return merged
+      const existingIds = new Set(nodesRef.current.map((node) => node.id))
+      const mergedNodes = [...nodesRef.current]
+      data.nodes.forEach((node) => {
+        if (!existingIds.has(node.id)) {
+          mergedNodes.push(node)
+          renderMetaRef.current.set(node.id, buildRenderMeta(node))
+        }
       })
+      const normalizedNodes = mergedNodes.map((node) => node.id === `${market}:${code}` || (node.code === code && node.market === market)
+        ? { ...node, expanded: true }
+        : node)
+      nodesRef.current = normalizedNodes
+      setNodes(normalizedNodes)
       setEdges((prev) => {
         const seen = new Set(prev.map((edge) => `${edge.source}->${edge.target}:${edge.relation}`))
         const merged = [...prev]
@@ -255,20 +515,25 @@ export function IndustryTopologyPanel() {
         })
         return merged
       })
-      setStats(formatTopologyStats(data.stats))
+      setStats(formatTopologyStats(data.stats, warnings))
       setRelationStatus(data.stats.relation_status)
-      if (data.stats.relation_status === 'generating') relationPollAttemptsRef.current = 0
+      setRelationPollState(data.stats.relation_status === 'generating' ? 'polling' : relationPollState)
+      const addedSymbols = data.nodes.filter((node) => !existingIds.has(node.id)).map((node) => node.id)
       void startQuoteRefresh(addedSymbols)
-    } catch { /* toast 可后续加 */ }
-  }, [selected, nodes, depth, startQuoteRefresh])
+    } catch {
+      // 后续可以补 toast
+    }
+  }, [selected, depth, startQuoteRefresh, warnings, relationPollState])
 
   const onRefresh = useCallback(async () => {
-    if (!selected) return
+    if (!selected || isBusy) return
     try {
       await topologyApi.refresh(selected.code, selected.market)
       await startTopology()
-    } catch { /* */ }
-  }, [selected, startTopology])
+    } catch {
+      // noop
+    }
+  }, [selected, isBusy, startTopology])
 
   const toggleRelation = useCallback((key: RelationFilter) => {
     setRelationFilters((prev) => {
@@ -285,14 +550,20 @@ export function IndustryTopologyPanel() {
   }, [])
 
   useEffect(() => {
-    if (symbols.length === 0) return
+    if (quotePollState !== 'polling' || symbols.length === 0) return
     const activeSymbols = () => nodesRef.current
       .filter((node) => !TERMINAL_QUOTE_STATUSES.has(node.quote_status || 'pending'))
       .map((node) => node.id)
 
     const timer = window.setInterval(async () => {
       const pending = activeSymbols()
-      if (pending.length === 0 || pollAttemptsRef.current >= MAX_POLL_ATTEMPTS) {
+      if (pending.length === 0) {
+        setQuotePollState('done')
+        window.clearInterval(timer)
+        return
+      }
+      if (pollAttemptsRef.current >= MAX_POLL_ATTEMPTS) {
+        setQuotePollState('timeout')
         window.clearInterval(timer)
         return
       }
@@ -301,48 +572,76 @@ export function IndustryTopologyPanel() {
         const res = await topologyApi.quotes(pending)
         applyQuoteItems(res.data.items)
       } catch {
-        // 轮询失败时等待下一轮，不重置拓扑图
+        // 轮询失败时等待下一轮
       }
     }, POLL_INTERVAL_MS)
 
     return () => window.clearInterval(timer)
-  }, [applyQuoteItems, symbols.length])
+  }, [applyQuoteItems, quotePollState, symbols.length])
 
   useEffect(() => {
-    if (!selected || nodes.length === 0 || relationStatus !== 'generating') return
+    if (!selected || nodes.length === 0 || relationPollState !== 'polling' || relationStatus !== 'generating') return
     const timer = window.setInterval(async () => {
       if (relationPollAttemptsRef.current >= MAX_RELATION_POLL_ATTEMPTS) {
+        setRelationPollState('timeout')
         window.clearInterval(timer)
         return
       }
       relationPollAttemptsRef.current += 1
       try {
-        const res = await topologyApi.graph(selected.code, selected.market, depth)
+        const res = await topologyApi.graph(selected.code, selected.market, depth, selected.name, 'auto')
         applyGraph(res.data)
         if (res.data.stats.relation_status !== 'generating') {
+          setRelationPollState('done')
           window.clearInterval(timer)
         }
       } catch {
-        // 关系轮询失败时等待下一轮，不清空已有缓存图
+        // 关系轮询失败时等待下一轮
       }
     }, RELATION_POLL_INTERVAL_MS)
 
     return () => window.clearInterval(timer)
-  }, [applyGraph, depth, nodes.length, relationStatus, selected])
+  }, [applyGraph, depth, nodes.length, relationPollState, relationStatus, selected])
+
+  useEffect(() => {
+    if (taskStage === 'graph_ready_search_enriching' || taskStage === 'graph_ready_source_polling') {
+      setProgressPct(buildProgress(taskStage, nodes, relationPollState))
+    }
+  }, [taskStage, nodes, relationPollState])
+
+  useEffect(() => {
+    if (taskStage !== 'graph_ready_source_polling') return
+    const quotesDone = quotePollState === 'done' || quotePollState === 'timeout'
+    const relationsDone = relationPollState === 'done' || relationPollState === 'timeout'
+    if (!quotesDone || !relationsDone) return
+    const isPartial = quotePollState === 'timeout' || relationPollState === 'timeout'
+    setTaskStage(isPartial ? 'partial' : 'done')
+    setProgressPct(100)
+  }, [taskStage, quotePollState, relationPollState])
 
   return (
     <div className="industry-topology">
       <div className="topo-toolbar">
         <StockSearchInput onSelect={setSelected} selected={selected} onClearSelected={() => setSelected(null)} />
         <label>深度
-          <select value={depth} onChange={(e) => setDepth(Number(e.target.value))}>
+          <select value={depth} onChange={(e) => setDepth(Number(e.target.value))} disabled={isBusy}>
             {[1, 2, 3, 4, 5].map((item) => <option key={item} value={item}>{item}度</option>)}
           </select>
         </label>
-        <button onClick={startTopology} disabled={!selected}>开始拓扑</button>
-        <button onClick={onRefresh} disabled={!selected}>刷新关系</button>
         <span className="topo-stats">{stats}</span>
       </div>
+      {taskStage !== 'idle' ? (
+        <div className="topo-progress">
+          <div className={`progress-track ${taskStage === 'failed' ? 'failed' : taskStage === 'done' ? 'completed' : ''}`}>
+            <span style={{ width: `${progressPct}%` }} />
+          </div>
+          <div className="topo-progress-meta">
+            <strong>{progressLabel(taskStage, quotePollState, relationPollState)}</strong>
+            <span>{progressPct}%</span>
+          </div>
+          {warnings.length > 0 ? <div className="topo-progress-warning">warnings: {warnings.join(', ')}</div> : null}
+        </div>
+      ) : null}
       {nodes.length > 0 ? (
         <div className="topo-filterbar">
           <input
@@ -366,30 +665,32 @@ export function IndustryTopologyPanel() {
           <span className="topo-filter-summary">显示 {visibleGraph.nodes.length}/{nodes.length} 节点 · {visibleGraph.edges.length}/{edges.length} 关系</span>
         </div>
       ) : null}
-      {nodes.length > 0 ? (
-        <TopologyCanvas
-          ref={canvasRef}
-          rawNodes={visibleGraph.nodes}
-          rawEdges={visibleGraph.edges}
-          onExpand={onExpand}
-          selectedNodeId={selectedNode?.id || null}
-          selectedEdgeKey={selectedEdgeKey}
-          focusNodeId={visibleGraph.focusNodeId}
-          showEdgeLabels={showEdgeLabels}
-          highlightCycles={highlightCycles}
-          onSelectNode={(node) => {
-            if (node) {
-              // Pick enriched data from nodesRef so sidebar shows latest quote
-              const enriched = nodesRef.current.find((n) => n.id === node.id)
-              setSelectedNode(enriched || node)
-            } else {
-              setSelectedNode(null)
-            }
-            if (node) onSelectEdge(null)
-          }}
-          onSelectEdge={onSelectEdge}
-        />
-      ) : <div className="topo-empty">选择股票后点击&quot;开始拓扑&quot;</div>}
+      <TopologyCanvas
+        ref={canvasRef}
+        rawNodes={visibleGraph.nodes}
+        rawEdges={visibleGraph.edges}
+        onExpand={onExpand}
+        onStartTopology={startTopology}
+        onRefreshTopology={onRefresh}
+        canStartTopology={Boolean(selected) && !isBusy}
+        canRefreshTopology={Boolean(selected) && !isBusy}
+        isTopologyBusy={isBusy}
+        selectedNodeId={selectedNode?.id || null}
+        selectedEdgeKey={selectedEdgeKey}
+        focusNodeId={visibleGraph.focusNodeId}
+        showEdgeLabels={showEdgeLabels}
+        highlightCycles={highlightCycles}
+        onSelectNode={(node) => {
+          if (node) {
+            const enriched = nodesRef.current.find((item) => item.id === node.id)
+            setSelectedNode(enriched || node)
+          } else {
+            setSelectedNode(null)
+          }
+          if (node) onSelectEdge(null)
+        }}
+        onSelectEdge={onSelectEdge}
+      />
       <DetailPanel node={selectedNode} edge={selectedEdge} edgeNodes={edgeNodes} onClose={() => { setSelectedNode(null); onSelectEdge(null) }} />
     </div>
   )

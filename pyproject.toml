@@ -11,4 +11,10 @@ dependencies = [
     "networkx>=3.0",
     "fastapi>=0.138.0",
     "py-mini-racer>=0.6.0",
+    "booktype>=1.5",
+    "rq>=2.10.0",
+    "ipykernel>=7.3.0",
+    "web-py>=0.76",
+    "requests==2.34.1",
+    "optional>=0.0.1",
 ]

@@ -12,7 +12,15 @@ from industry_topology.models import (
 from industry_topology.resolver import compute_size_level, format_market_cap, NodeResolver
 from industry_topology.symbols import parse_topology_symbol, symbol_id
 from stock_terminal.models import BlockStatus, QuoteSnapshot
-from web.topology import GraphRequest, _quote_from_cache, _quote_status_item, _schedule_relation_generation, _TOPOLOGY_GENERATION_IN_FLIGHT, graph as topology_graph_route
+from web.topology import (
+    GraphRequest,
+    _quote_from_cache,
+    _quote_status_item,
+    _schedule_relation_generation,
+    _TOPOLOGY_GENERATION_IN_FLIGHT,
+    graph as topology_graph_route,
+    search_enrich as topology_search_enrich_route,
+)
 
 
 class TestModels(unittest.TestCase):
@@ -143,6 +151,7 @@ class TestSchema(unittest.TestCase):
         self.assertTrue(any("expires_at" in s for s in executed))
         self.assertTrue(any("is_empty" in s for s in executed))
         self.assertTrue(any("UNIQUE KEY" in s and "source_code" in s for s in executed))
+        self.assertTrue(any("MODIFY COLUMN direction VARCHAR(16) NOT NULL" in s for s in executed))
 
 
 class TestSizeLevel(unittest.TestCase):
@@ -247,6 +256,8 @@ class TestGraphCache(unittest.TestCase):
 
 
 from industry_topology.relation_engine import RelationEngine, RelationEngineError
+from industry_topology.enrichment import TopologyEnrichmentService
+from signal_analysis.models import SearchDocument
 
 
 class FakeLLMProvider:
@@ -257,12 +268,52 @@ class FakeLLMProvider:
         return self.payload
 
 
+class SequenceLLMProvider:
+    name = "fake"
+    is_available = True
+
+    def __init__(self, payloads):
+        self.payloads = list(payloads)
+        self.calls = 0
+
+    def complete_json(self, *, system_prompt, user_prompt, json_schema):
+        payload = self.payloads[min(self.calls, len(self.payloads) - 1)]
+        self.calls += 1
+        if isinstance(payload, Exception):
+            raise payload
+        return payload
+
+
 class FakeResolver:
     def resolve_many(self, codes, market):
         return {c: {"code": c, "name": f"公司{c}", "market": market, "sector": "板块", "market_cap": 1e10, "pct_chg": 1.0} for c in codes}
 
 
+class FakeSearchProvider:
+    name = "fake_search"
+    is_available = True
+
+    def __init__(self, docs=None, error=None):
+        self.docs = list(docs or [])
+        self.error = error
+        self.calls = []
+
+    def search(self, query: str, max_results: int):
+        self.calls.append((query, max_results))
+        if self.error:
+            raise self.error
+        return self.docs[:max_results]
+
+
 class TestRelationEngine(unittest.TestCase):
+    def test_user_prompt_includes_numeric_and_confidence_constraints(self):
+        prompt = RelationEngine._user_prompt("英伟达", "US", "NVDA", "半导体")
+
+        self.assertIn("pct_chg", prompt)
+        self.assertIn("confidence", prompt)
+        self.assertIn("不允许根据经验臆造实时数字", prompt)
+        self.assertIn("若不确定 market_cap 或 pct_chg，必须返回 null", prompt)
+
     def test_parse_valid_json(self):
         payload = {"items": [
             {"code": "300308", "name": "中际旭创", "market": "A", "direction": "upstream", "relation": "supplier", "evidence": "提供光模块"},
@@ -337,6 +388,138 @@ class TestRelationEngine(unittest.TestCase):
         self.assertEqual(set(result.keys()), {("US", "US.NVDA"), ("US", "TSM")})
         self.assertEqual(result[("US", "US.NVDA")][0].peer_code, "TSM")
         self.assertEqual(result[("US", "TSM")][0].peer_code, "ASML")
+
+
+class TestTopologyEnrichmentService(unittest.TestCase):
+    def test_unresolved_center_causes_initial_snapshot_failure(self):
+        llm = SequenceLLMProvider([
+            {
+                "resolved": False,
+                "market": "US",
+                "code": "NVDA",
+                "name": "",
+                "aliases": [],
+                "sector": "",
+                "industry": "",
+                "reason": "ambiguous",
+                "confidence": 0.2,
+            }
+        ])
+        engine = RelationEngine(FakeResolver(), llm)
+        enricher = TopologyEnrichmentService(engine, FakeSearchProvider())
+
+        with self.assertRaises(RelationEngineError):
+            enricher.build_initial_snapshot(market="US", code="NVDA", name="NVIDIA", sector="半导体")
+
+    def test_build_initial_snapshot_does_not_depend_on_search(self):
+        llm = SequenceLLMProvider([
+            {
+                "resolved": True,
+                "market": "US",
+                "code": "NVDA",
+                "name": "英伟达",
+                "aliases": ["NVIDIA"],
+                "sector": "AI芯片",
+                "industry": "半导体",
+                "reason": "resolved",
+                "confidence": 0.9,
+            },
+            {
+                "center": {
+                    "resolved": True,
+                    "market": "US",
+                    "code": "NVDA",
+                    "name": "英伟达",
+                    "aliases": ["NVIDIA"],
+                    "sector": "AI芯片",
+                    "industry": "半导体",
+                    "reason": "resolved",
+                    "confidence": 0.9,
+                },
+                "items": [
+                    {"code": "300308", "name": "中际旭创", "market": "A", "direction": "upstream", "relation": "supplier", "evidence": "提供光模块"},
+                ],
+                "warnings": [],
+            },
+        ])
+        engine = RelationEngine(FakeResolver(), llm)
+        enricher = TopologyEnrichmentService(engine, FakeSearchProvider(error=RuntimeError("search down")))
+
+        snapshot = enricher.build_initial_snapshot(market="US", code="NVDA", name="NVIDIA", sector="半导体")
+
+        self.assertEqual(snapshot["center"]["name"], "英伟达")
+        self.assertEqual(snapshot["items"][0]["code"], "300308")
+        self.assertEqual(snapshot["warnings"], [])
+
+    def test_search_enrich_failure_only_records_warning(self):
+        llm = SequenceLLMProvider([])
+        engine = RelationEngine(FakeResolver(), llm)
+        enricher = TopologyEnrichmentService(engine, FakeSearchProvider(error=RuntimeError("search down")))
+
+        result = enricher.enrich_graph_fields(
+            center={"market": "US", "code": "NVDA", "name": "英伟达", "sector": "AI芯片", "industry": "半导体"},
+            symbols=["US:NVDA", "A:300308"],
+        )
+
+        self.assertEqual(result["items"], [])
+        self.assertIn("search_unavailable", result["warnings"])
+
+    def test_search_enrich_returns_existing_node_patches_only(self):
+        llm = SequenceLLMProvider([
+            {
+                "center": {
+                    "resolved": True,
+                    "market": "US",
+                    "code": "NVDA",
+                    "name": "英伟达",
+                    "aliases": ["NVIDIA"],
+                    "sector": "AI芯片",
+                    "industry": "半导体",
+                    "market_cap": 2.9e12,
+                    "pct_chg": 4.1,
+                    "reason": "resolved",
+                    "confidence": 0.95,
+                    "field_sources": {"market_cap": "llm_search", "pct_chg": "llm_search"},
+                },
+                "items": [
+                    {
+                        "code": "300308",
+                        "name": "中际旭创",
+                        "market": "A",
+                        "direction": "upstream",
+                        "relation": "supplier",
+                        "evidence": "提供高速光模块",
+                        "sector": "光模块",
+                        "industry": "CPO",
+                        "market_cap": 9.5e10,
+                        "pct_chg": 1.8,
+                        "confidence": 0.81,
+                        "field_sources": {"market_cap": "llm_search", "pct_chg": "llm_search"},
+                    },
+                    {
+                        "code": "600000",
+                        "name": "不在当前图中",
+                        "market": "A",
+                        "direction": "peer",
+                        "relation": "competitor",
+                        "evidence": "忽略",
+                    },
+                ],
+                "warnings": [],
+            },
+        ])
+        docs = [SearchDocument(title="doc", url="https://example.com", content="NVIDIA supply chain", query="nvda")]
+        engine = RelationEngine(FakeResolver(), llm)
+        enricher = TopologyEnrichmentService(engine, FakeSearchProvider(docs=docs))
+
+        result = enricher.enrich_graph_fields(
+            center={"market": "US", "code": "NVDA", "name": "英伟达", "sector": "AI芯片", "industry": "半导体"},
+            symbols=["US:NVDA", "A:300308"],
+        )
+
+        self.assertEqual([item["id"] for item in result["items"]], ["US:NVDA", "A:300308"])
+        self.assertEqual(result["items"][0]["field_sources"]["market_cap"], "search_enrich")
+        self.assertEqual(result["items"][1]["field_sources"]["pct_chg"], "search_enrich")
 
 
 from industry_topology.service import TopologyService
@@ -421,6 +604,140 @@ class TestTopologyService(unittest.TestCase):
         result = svc.build_graph("US.NVDA", "US", depth=1, quote_mode="sync")
         self.assertEqual(result["stats"]["llm_calls"], 1)
         self.assertGreater(len(result["nodes"]), 1)
+
+    def test_build_graph_llm_initial_prefers_llm_fields_before_source_refresh(self):
+        cache = FakeCache({})
+        llm = SequenceLLMProvider([
+            {
+                "resolved": True,
+                "market": "US",
+                "code": "NVDA",
+                "name": "英伟达",
+                "aliases": ["NVIDIA"],
+                "sector": "AI芯片",
+                "industry": "半导体",
+                "market_cap": 2.8e12,
+                "pct_chg": 3.2,
+                "reason": "resolved",
+                "confidence": 0.93,
+                "field_sources": {"name": "llm_search", "sector": "llm_search", "industry": "llm_search", "market_cap": "llm_search", "pct_chg": "llm_search"},
+            },
+            {
+                "center": {
+                    "resolved": True,
+                    "market": "US",
+                    "code": "NVDA",
+                    "name": "英伟达",
+                    "aliases": ["NVIDIA"],
+                    "sector": "AI芯片",
+                    "industry": "半导体",
+                    "market_cap": 2.8e12,
+                    "pct_chg": 3.2,
+                    "reason": "resolved",
+                    "confidence": 0.93,
+                    "field_sources": {"name": "llm_search", "sector": "llm_search", "industry": "llm_search", "market_cap": "llm_search", "pct_chg": "llm_search"},
+                },
+                "items": [
+                    {
+                        "code": "300308",
+                        "name": "中际旭创",
+                        "market": "A",
+                        "direction": "upstream",
+                        "relation": "supplier",
+                        "evidence": "提供高速光模块",
+                        "sector": "光模块",
+                        "industry": "CPO",
+                        "market_cap": 9.5e10,
+                        "pct_chg": 1.8,
+                        "confidence": 0.81,
+                        "field_sources": {"name": "llm_search", "sector": "llm_search", "industry": "llm_search", "market_cap": "llm_search", "pct_chg": "llm_search"},
+                    }
+                ],
+                "warnings": [],
+            },
+        ])
+        svc = TopologyService(FakeDB(), llm_provider=llm)
+        svc.cache = cache
+        svc.resolver = FakeResolver2()
+        svc.engine = RelationEngine(FakeResolver2(), llm)
+        svc.enricher = TopologyEnrichmentService(svc.engine, FakeSearchProvider())
+
+        result = svc.build_graph("US.NVDA", "US", depth=1, quote_mode="llm_initial", center_name="NVIDIA")
+        node_map = {node["id"]: node for node in result["nodes"]}
+
+        self.assertEqual(result["stats"]["llm_calls"], 1)
+        self.assertEqual(result["stats"]["data_stage"], "llm_initial")
+        self.assertEqual(node_map["US:NVDA"]["name"], "英伟达")
+        self.assertEqual(node_map["US:NVDA"]["sector"], "AI芯片")
+        self.assertEqual(node_map["US:NVDA"]["industry"], "半导体")
+        self.assertEqual(node_map["US:NVDA"]["pct_chg"], 3.2)
+        self.assertEqual(node_map["US:NVDA"]["field_sources"]["name"], "llm_search")
+        self.assertAlmostEqual(node_map["US:NVDA"]["field_confidence"]["name"], 0.93)
+        self.assertEqual(node_map["A:300308"]["sector"], "光模块")
+        self.assertEqual(node_map["A:300308"]["industry"], "CPO")
+        self.assertEqual(node_map["A:300308"]["pct_chg"], 1.8)
+        self.assertEqual(node_map["A:300308"]["field_sources"]["market_cap"], "llm_search")
+
+    def test_build_graph_llm_initial_fails_when_initial_snapshot_missing(self):
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = FakeCache({})
+        svc.resolver = FakeResolver2()
+        svc.enricher = type("BrokenEnricher", (), {"build_initial_snapshot": lambda *args, **kwargs: {}})()
+
+        with self.assertRaises(RuntimeError):
+            svc.build_graph("US.NVDA", "US", depth=1, quote_mode="llm_initial", center_name="NVIDIA")
+
+    def test_search_enrich_uses_existing_symbols_and_returns_patches(self):
+        llm = SequenceLLMProvider([
+            {
+                "center": {
+                    "resolved": True,
+                    "market": "US",
+                    "code": "NVDA",
+                    "name": "英伟达",
+                    "aliases": ["NVIDIA"],
+                    "sector": "AI芯片",
+                    "industry": "半导体",
+                    "market_cap": 2.9e12,
+                    "pct_chg": 4.1,
+                    "reason": "resolved",
+                    "confidence": 0.95,
+                    "field_sources": {"market_cap": "llm_search", "pct_chg": "llm_search"},
+                },
+                "items": [
+                    {
+                        "code": "300308",
+                        "name": "中际旭创",
+                        "market": "A",
+                        "direction": "upstream",
+                        "relation": "supplier",
+                        "evidence": "提供高速光模块",
+                        "sector": "光模块",
+                        "industry": "CPO",
+                        "market_cap": 9.5e10,
+                        "pct_chg": 1.8,
+                        "confidence": 0.81,
+                        "field_sources": {"market_cap": "llm_search", "pct_chg": "llm_search"},
+                    },
+                ],
+                "warnings": [],
+            },
+        ])
+        docs = [SearchDocument(title="doc", url="https://example.com", content="NVIDIA supply chain", query="nvda")]
+        svc = TopologyService(FakeDB(), llm_provider=llm)
+        svc.cache = FakeCache({})
+        svc.resolver = FakeResolver2()
+        svc.engine = RelationEngine(FakeResolver2(), llm)
+        svc.enricher = TopologyEnrichmentService(svc.engine, FakeSearchProvider(docs=docs))
+
+        result = svc.search_enrich(
+            center={"market": "US", "code": "NVDA", "name": "英伟达", "sector": "AI芯片", "industry": "半导体"},
+            symbols=["US:NVDA", "A:300308"],
+        )
+
+        self.assertEqual(result["items"][0]["id"], "US:NVDA")
+        self.assertEqual(result["items"][1]["id"], "A:300308")
+        self.assertEqual(result["items"][1]["field_sources"]["market_cap"], "search_enrich")
 
     def test_build_graph_defer_does_not_call_llm(self):
         calls = {"count": 0}
@@ -674,9 +991,55 @@ class TestTopologyBackgroundScheduler(unittest.TestCase):
         second = _schedule_relation_generation(background, stats)
 
         self.assertTrue(first)
-        self.assertFalse(second)
-        self.assertEqual(len(background.tasks), 1)
-        self.assertEqual(_TOPOLOGY_GENERATION_IN_FLIGHT, {("US", "US.NVDA"), ("A", "300308")})
+
+
+class TestTopologyRoutes(unittest.TestCase):
+    def setUp(self):
+        _TOPOLOGY_GENERATION_IN_FLIGHT.clear()
+
+    def tearDown(self):
+        _TOPOLOGY_GENERATION_IN_FLIGHT.clear()
+
+    def test_graph_route_uses_llm_initial_mode(self):
+        service = MagicMock()
+        service.build_graph.return_value = {"nodes": [], "edges": [], "stats": {"relation_status": "cached"}}
+        background = FakeBackgroundTasks()
+
+        topology_graph_route(
+            GraphRequest(code="US.NVDA", market="US", depth=1, center_name="NVIDIA"),
+            background,
+            service,
+        )
+
+        self.assertEqual(service.build_graph.call_args.kwargs["quote_mode"], "llm_initial")
+
+    def test_search_enrich_route_passes_center_and_symbols(self):
+        service = MagicMock()
+        service.search_enrich.return_value = {"items": [], "warnings": []}
+
+        class Request:
+            center_market = "US"
+            center_code = "NVDA"
+            center_name = "英伟达"
+            center_sector = "AI芯片"
+            center_industry = "半导体"
+            symbols = ["US:NVDA", "A:300308"]
+
+        topology_search_enrich_route(Request(), service)
+
+        self.assertEqual(
+            service.search_enrich.call_args.kwargs,
+            {
+                "center": {
+                    "market": "US",
+                    "code": "NVDA",
+                    "name": "英伟达",
+                    "sector": "AI芯片",
+                    "industry": "半导体",
+                },
+                "symbols": ["US:NVDA", "A:300308"],
+            },
+        )
 
     def test_schedule_relation_generation_batches_stale_sources_by_five(self):
         background = FakeBackgroundTasks()
@@ -693,9 +1056,11 @@ class TestTopologyBackgroundScheduler(unittest.TestCase):
         class FakeSvc:
             def __init__(self):
                 self.quote_mode = None
+                self.center_name = None
 
-            def build_graph(self, code, market, depth, quote_mode="auto"):
+            def build_graph(self, code, market, depth, quote_mode="auto", center_name=""):
                 self.quote_mode = quote_mode
+                self.center_name = center_name
                 return {
                     "nodes": [],
                     "edges": [],
@@ -710,9 +1075,10 @@ class TestTopologyBackgroundScheduler(unittest.TestCase):
 
         background = FakeBackgroundTasks()
         svc = FakeSvc()
-        response = topology_graph_route(GraphRequest(code="US.NVDA", market="US", depth=1, quote_mode="defer"), background, svc)
+        response = topology_graph_route(GraphRequest(code="US.NVDA", market="US", depth=1, quote_mode="defer", center_name="英伟达"), background, svc)
 
-        self.assertEqual(svc.quote_mode, "auto")
+        self.assertEqual(svc.quote_mode, "llm_initial")
+        self.assertEqual(svc.center_name, "英伟达")
         self.assertTrue(response["data"]["stats"]["background_started"])
         self.assertEqual(len(background.tasks), 1)
 

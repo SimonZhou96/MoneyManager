@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from 'react'
 import { Circle } from '@antv/g'
 import { Graph } from '@antv/g6'
-import type { TopologyEdgeData, TopologyNodeData, TopologyQuoteItem, TopologyZone } from './types'
+import type { TopologyEdgeData, TopologyNodeData, TopologyNodePatch, TopologyQuoteItem, TopologyZone } from './types'
 
 interface Props {
   rawNodes: TopologyNodeData[]
   rawEdges: TopologyEdgeData[]
   onExpand: (code: string, market: string) => void
+  onStartTopology: () => void
+  onRefreshTopology: () => void
+  canStartTopology: boolean
+  canRefreshTopology: boolean
+  isTopologyBusy: boolean
   selectedNodeId?: string | null
   selectedEdgeKey?: string | null
   focusNodeId?: string | null
@@ -18,11 +23,19 @@ interface Props {
 
 export interface TopologyCanvasHandle {
   applyQuotes: (items: TopologyQuoteItem[]) => void
+  applyNodePatches: (items: TopologyNodePatch[]) => void
 }
 
 type G6Graph = InstanceType<typeof Graph>
 type GraphDatum = { id: string; data?: Record<string, unknown>; style?: Record<string, unknown> }
 type RenderedEdgeData = TopologyEdgeData & { edgeKey?: string; visualSource?: string; visualTarget?: string }
+type ToolbarAction = 'start-topology' | 'refresh-topology'
+
+interface ToolbarState {
+  canStartTopology: boolean
+  canRefreshTopology: boolean
+  isTopologyBusy: boolean
+}
 
 interface ViewState {
   zoom: number
@@ -65,6 +78,7 @@ const EDGE_COLOR: Record<string, string> = {
 const CENTER_OUT_EDGE = '#60a5fa'
 const CENTER_IN_EDGE = '#fbbf24'
 const DEFAULT_EDGE = '#64748b'
+const TOPOLOGY_ACTION_TOOLBAR_KEY = 'topology-action-toolbar'
 
 export function sizeLevelFromMarketCap(marketCap: number | null | undefined): 1 | 2 | 3 | 4 | 5 | 6 {
   if (marketCap === null || marketCap === undefined || !Number.isFinite(marketCap)) return 1
@@ -464,6 +478,27 @@ function relatedSets(nodes: TopologyNodeData[], edges: TopologyEdgeData[], ancho
   return { relatedNodeIds, relatedEdgeKeys }
 }
 
+function topologyToolbarItems(state: ToolbarState) {
+  return [
+    {
+      id: 'edit',
+      value: `start-topology ${state.canStartTopology ? 'is-enabled' : 'is-disabled'} ${state.isTopologyBusy ? 'is-busy' : ''}`,
+      title: state.isTopologyBusy ? '生成中...' : '开始拓扑',
+    },
+    {
+      id: 'reset',
+      value: `refresh-topology ${state.canRefreshTopology ? 'is-enabled' : 'is-disabled'}`,
+      title: '刷新关系',
+    },
+  ]
+}
+
+function toolbarActionFromValue(value: string): ToolbarAction | null {
+  if (value.startsWith('start-topology')) return 'start-topology'
+  if (value.startsWith('refresh-topology')) return 'refresh-topology'
+  return null
+}
+
 interface ParticleState {
   circle: Circle
   raf: number
@@ -545,6 +580,11 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   rawNodes,
   rawEdges,
   onExpand,
+  onStartTopology,
+  onRefreshTopology,
+  canStartTopology,
+  canRefreshTopology,
+  isTopologyBusy,
   selectedNodeId,
   selectedEdgeKey,
   focusNodeId,
@@ -563,6 +603,9 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   const particleMapRef = useRef<Map<string, ParticleState>>(new Map())
   const nodeParticleKeysRef = useRef<Set<string>>(new Set())
   const onExpandRef = useRef(onExpand)
+  const onStartTopologyRef = useRef(onStartTopology)
+  const onRefreshTopologyRef = useRef(onRefreshTopology)
+  const toolbarStateRef = useRef<ToolbarState>({ canStartTopology, canRefreshTopology, isTopologyBusy })
   const rawNodesRef = useRef(rawNodes)
   const rawEdgesRef = useRef(rawEdges)
   const onSelectNodeRef = useRef(onSelectNode)
@@ -571,6 +614,9 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
   const [hoveredEdgeKey, setHoveredEdgeKey] = useState<string | null>(null)
   onExpandRef.current = onExpand
+  onStartTopologyRef.current = onStartTopology
+  onRefreshTopologyRef.current = onRefreshTopology
+  toolbarStateRef.current = { canStartTopology, canRefreshTopology, isTopologyBusy }
   rawNodesRef.current = rawNodes
   rawEdgesRef.current = rawEdges
   onSelectNodeRef.current = onSelectNode
@@ -597,35 +643,30 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   const viewRef = useRef(view)
   viewRef.current = view
 
-  // ---- imperative quote update (bypasses React re-render) ----
-  const applyQuotes = useCallback((items: TopologyQuoteItem[]) => {
+  // ---- imperative node update (bypasses React re-render) ----
+  const applyNodePatches = useCallback((items: TopologyNodePatch[]) => {
     const graph = graphRef.current
     if (!graph || !initializedRef.current) return
 
-    const bySymbol = new Map(items.map((item) => [item.symbol, item]))
+    const bySymbol = new Map(items.map((item) => [item.id, item]))
     const curView = viewRef.current
     const updates: Array<{ id: string; data: Record<string, unknown>; style: Record<string, unknown> }> = []
 
-    // Merge quote data into rawNodesRef so tooltips/click handlers see latest
     rawNodesRef.current = rawNodesRef.current.map((node) => {
-      const quote = bySymbol.get(node.id)
-      if (!quote) return node
+      const patch = bySymbol.get(node.id)
+      if (!patch) return node
       return {
         ...node,
-        name: quote.name || node.name,
-        pct_chg: quote.pct_chg,
-        market_cap: quote.market_cap,
-        market_cap_str: quote.market_cap_str || node.market_cap_str,
-        size_level: quote.market_cap === null || quote.market_cap === undefined ? node.size_level : sizeLevelFromMarketCap(quote.market_cap),
-        quote_status: quote.status,
-        quote_updated_at: quote.updated_at,
-        quote_error: quote.error,
+        ...patch,
+        size_level: patch.market_cap === null || patch.market_cap === undefined
+          ? node.size_level
+          : (patch as Partial<TopologyNodeData>).size_level || sizeLevelFromMarketCap(patch.market_cap),
       }
     })
 
     for (const node of rawNodesRef.current) {
-      const quote = bySymbol.get(node.id)
-      if (!quote) continue
+      const patch = bySymbol.get(node.id)
+      if (!patch) continue
       updates.push({
         id: node.id,
         data: node as unknown as Record<string, unknown>,
@@ -638,7 +679,29 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     }
   }, [])
 
-  useImperativeHandle(ref, () => ({ applyQuotes }), [applyQuotes])
+  const applyQuotes = useCallback((items: TopologyQuoteItem[]) => {
+    applyNodePatches(items.map((item) => ({
+      id: item.symbol,
+      symbol: item.symbol,
+      market: item.market,
+      code: item.code,
+      name: item.name,
+      sector: item.sector,
+      industry: item.industry,
+      pct_chg: item.pct_chg,
+      market_cap: item.market_cap,
+      market_cap_str: item.market_cap_str,
+      quote_status: item.status,
+      quote_updated_at: item.updated_at,
+      quote_error: item.error,
+      field_sources: item.field_sources,
+      field_confidence: item.field_confidence,
+      data_stage: item.data_stage,
+      data_gaps: item.data_gaps,
+    })))
+  }, [applyNodePatches])
+
+  useImperativeHandle(ref, () => ({ applyQuotes, applyNodePatches }), [applyNodePatches, applyQuotes])
 
   const layoutPositions = useMemo(() => {
     const centerId = rawNodes.find((node) => node.is_center)?.id || null
@@ -677,6 +740,24 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
           'hover-activate',
         ],
       plugins: [
+        {
+          type: 'toolbar',
+          key: TOPOLOGY_ACTION_TOOLBAR_KEY,
+          className: 'topo-g6-toolbar',
+          position: 'top-right',
+          style: { top: '14px', right: '14px' },
+          getItems: () => topologyToolbarItems(toolbarStateRef.current),
+          onClick: (value: string) => {
+            const action = toolbarActionFromValue(value)
+            const state = toolbarStateRef.current
+            if (action === 'start-topology' && state.canStartTopology) {
+              onStartTopologyRef.current()
+            }
+            if (action === 'refresh-topology' && state.canRefreshTopology) {
+              onRefreshTopologyRef.current()
+            }
+          },
+        },
         { type: 'minimap', size: [180, 120], position: 'right-bottom' },
         {
           type: 'tooltip',
@@ -782,6 +863,19 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
 
   useEffect(() => {
     const graph = graphRef.current
+    if (!graph || graph.destroyed) return
+    graph.updatePlugin({
+      type: 'toolbar',
+      key: TOPOLOGY_ACTION_TOOLBAR_KEY,
+      className: 'topo-g6-toolbar',
+      position: 'top-right',
+      style: { top: '14px', right: '14px' },
+      getItems: () => topologyToolbarItems(toolbarStateRef.current),
+    } as never)
+  }, [canRefreshTopology, canStartTopology, isTopologyBusy])
+
+  useEffect(() => {
+    const graph = graphRef.current
     if (!graph) return
 
     const nextNodeIds = new Set(rawNodes.map((node) => node.id))
@@ -860,6 +954,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
         <span className="topo-legend-item topo-legend-item--center">中心</span>
       </div>
       <div className="topo-g6-help">滚轮缩放 · 拖拽画布 · 双击节点展开 · 悬浮查看详情</div>
+      {rawNodes.length === 0 ? <div className="topo-empty topo-empty--canvas">选择股票后点击画布右上角&quot;开始拓扑&quot;</div> : null}
       <div className="topo-canvas topo-canvas--g6" ref={containerRef} />
     </div>
   )

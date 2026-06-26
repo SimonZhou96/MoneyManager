@@ -90,7 +90,7 @@ class GraphRequest(BaseModel):
     code: str
     market: str
     depth: int = 3
-    quote_mode: str = "auto"
+    quote_mode: str = "llm_initial"
     center_name: str = ""
 
 
@@ -118,13 +118,24 @@ class QuoteRefreshRequest(BaseModel):
     force: bool = False
 
 
+class SearchEnrichRequest(BaseModel):
+    center_market: str
+    center_code: str
+    center_name: str = ""
+    center_sector: str = ""
+    center_industry: str = ""
+    symbols: List[str]
+
+
 def get_stock_terminal_service(db=Depends(get_db)) -> StockTerminalService:
     repository = MySqlStockTerminalRepository(db)
     return StockTerminalService(repository, build_stock_terminal_providers(db=db))
 
 
 def _graph_quote_mode(_: str) -> str:
-    return "auto"
+    allowed = {"llm_initial", "auto", "sync"}
+    mode = str(_ or "").strip().lower()
+    return mode if mode in allowed else "llm_initial"
 
 
 @router.get("/search")
@@ -135,9 +146,24 @@ def search(q: str = Query(..., min_length=1), limit: int = Query(10, le=50),
 
 @router.post("/graph")
 def graph(req: GraphRequest, background_tasks: BackgroundTasks, svc: TopologyService = Depends(get_topology_service)):
-    data = svc.build_graph(req.code, req.market, req.depth, quote_mode=_graph_quote_mode(req.quote_mode))
+    data = svc.build_graph(req.code, req.market, req.depth, quote_mode=_graph_quote_mode(req.quote_mode), center_name=req.center_name)
     if data.get("stats", {}).get("relation_status") == "generating":
         data["stats"]["background_started"] = _schedule_relation_generation(background_tasks, data["stats"])
+    return {"ok": True, "data": data}
+
+
+@router.post("/graph/search-enrich")
+def search_enrich(req: SearchEnrichRequest, svc: TopologyService = Depends(get_topology_service)):
+    data = svc.search_enrich(
+        center={
+            "market": req.center_market,
+            "code": req.center_code,
+            "name": req.center_name,
+            "sector": req.center_sector,
+            "industry": req.center_industry,
+        },
+        symbols=req.symbols,
+    )
     return {"ok": True, "data": data}
 
 
@@ -262,6 +288,12 @@ def _quote_from_cache(parsed: Dict[str, Any], quote: Any, status: Any) -> Dict[s
         "pct_chg": quote_payload.get("change_percent"),
         "market_cap": market_cap,
         "market_cap_str": _quote_market_cap_text(market_cap),
+        "field_sources": {
+            "name": "resolver",
+            "pct_chg": "resolver",
+            **({"market_cap": "resolver"} if market_cap is not None else {}),
+        },
+        "data_stage": "source_partial" if market_cap is None else "source_verified",
         "source": getattr(status, "source", "") or getattr(quote, "source", "") or "未知",
         "updated_at": status.to_dict().get("fetched_at") if hasattr(status, "to_dict") else "未知",
         "error": getattr(status, "error_message", "") or "无",
@@ -275,11 +307,15 @@ def _quote_status_item(parsed: Dict[str, Any], status: str, error: str = "", sou
         "market": parsed["market"],
         "code": parsed["code"],
         "name": _quote_display_name(parsed),
+        "sector": "",
+        "industry": "",
         "status": status,
         "price": None,
         "pct_chg": None,
         "market_cap": None,
         "market_cap_str": "未知",
+        "field_sources": {},
+        "data_stage": "source_partial",
         "source": source or "未知",
         "updated_at": updated_at or "未知",
         "error": error or "无",
@@ -360,9 +396,21 @@ def _enrich_quote_item_fundamentals(items: List[Dict[str, Any]], service: StockT
                 continue
             if _should_replace_display_name(item.get("name"), row.get("name")):
                 item["name"] = _quote_display_name(item, row.get("name"))
+                item.setdefault("field_sources", {})["name"] = "resolver_override"
+            sector = row.get("sector") or row.get("industry")
+            industry = row.get("industry") or row.get("sector")
+            if sector:
+                item["sector"] = sector
+                item.setdefault("field_sources", {})["sector"] = "resolver"
+            if industry:
+                item["industry"] = industry
+                item.setdefault("field_sources", {})["industry"] = "resolver"
             if item.get("market_cap") is None and row.get("market_cap") is not None:
                 item["market_cap"] = row.get("market_cap")
                 item["market_cap_str"] = _quote_market_cap_text(row.get("market_cap"))
+                item.setdefault("field_sources", {})["market_cap"] = "resolver"
+            if any(item.get(field) for field in ("sector", "industry")) and item.get("market_cap") is not None:
+                item["data_stage"] = "source_verified"
 
 
 def _enrich_quote_item_known_chinese_names(items: List[Dict[str, Any]]) -> None:

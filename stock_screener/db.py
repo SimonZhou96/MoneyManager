@@ -6100,7 +6100,7 @@ class MarketDatabase:
                     peer_market VARCHAR(8) NOT NULL,
                     peer_name VARCHAR(128) NOT NULL DEFAULT '',
                     relation VARCHAR(32) NOT NULL,
-                    direction VARCHAR(8) NOT NULL,
+                    direction VARCHAR(16) NOT NULL,
                     evidence TEXT,
                     is_empty TINYINT(1) NOT NULL DEFAULT 0,
                     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -6136,3 +6136,9 @@ class MarketDatabase:
                         raise RuntimeError(
                             f"Failed to add industry_relations.{column}; schema is incompatible with industry topology SQL"
                         ) from exc
+            try:
+                cursor.execute("ALTER TABLE industry_relations MODIFY COLUMN direction VARCHAR(16) NOT NULL")
+            except Exception as exc:
+                raise RuntimeError(
+                    "Failed to widen industry_relations.direction; schema is incompatible with industry topology SQL"
+                ) from exc

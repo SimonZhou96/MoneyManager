@@ -1,13 +1,25 @@
 import { api } from '../../api'
-import type { ExpandResult, SearchResult, TopologyGraph, TopologyQuoteBatch } from './types'
+import type { ExpandResult, SearchResult, TopologyGraph, TopologyQuoteBatch, TopologySearchEnrichResult } from './types'
 
 export const topologyApi = {
   search: (q: string, limit = 10) =>
     api<{ ok: true; data: SearchResult[] }>(`/api/topology/search?q=${encodeURIComponent(q)}&limit=${limit}`),
-  graph: (code: string, market: string, depth: number) =>
+  graph: (code: string, market: string, depth: number, centerName = '', quoteMode = 'llm_initial') =>
     api<{ ok: true; data: TopologyGraph }>('/api/topology/graph', {
       method: 'POST',
-      body: JSON.stringify({ code, market, depth }),
+      body: JSON.stringify({ code, market, depth, center_name: centerName, quote_mode: quoteMode }),
+    }),
+  searchEnrich: (center: { market: string; code: string; name?: string; sector?: string; industry?: string }, symbols: string[]) =>
+    api<{ ok: true; data: TopologySearchEnrichResult }>('/api/topology/graph/search-enrich', {
+      method: 'POST',
+      body: JSON.stringify({
+        center_market: center.market,
+        center_code: center.code,
+        center_name: center.name || '',
+        center_sector: center.sector || '',
+        center_industry: center.industry || '',
+        symbols,
+      }),
     }),
   expand: (code: string, market: string, depth: number, existingSymbols: string[]) =>
     api<{ ok: true; data: ExpandResult }>('/api/topology/expand', {

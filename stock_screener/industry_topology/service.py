@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 from collections import deque
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from market import normalize_market
 
 from .cache import GraphCache
+from .enrichment import TopologyEnrichmentService
 from .relation_engine import RelationEngine, RelationEngineError
 from .resolver import NodeResolver, compute_size_level, format_market_cap
 from .symbols import parse_topology_symbol, symbol_id
@@ -24,6 +26,8 @@ class TopologyService:
         if llm_provider is None:
             llm_provider = self._default_llm()
         self.engine = RelationEngine(self.resolver, llm_provider) if llm_provider else None
+        self.search_provider = None if getattr(llm_provider, "name", "") == "fake" else self._default_search()
+        self.enricher = TopologyEnrichmentService(self.engine, self.search_provider) if self.engine else None
         self._llm_calls = 0  # 会话累计
 
     @staticmethod
@@ -32,6 +36,36 @@ class TopologyService:
             from signal_analysis.factories import LLMProviderFactory
             from signal_analysis.models import AnalysisSettings
             return LLMProviderFactory.from_env(AnalysisSettings())
+        except Exception:
+            return None
+
+    @staticmethod
+    def _default_search():
+        try:
+            from signal_analysis.browser_search_providers import BingBaiduSearchProvider
+            from signal_analysis.factories import SearchProviderFactory
+            from signal_analysis.models import AnalysisSettings
+            from signal_analysis.search_providers import FallbackSearchProvider, NullSearchProvider
+
+            settings = AnalysisSettings(search_max_results=4)
+            providers = []
+            for provider_name in SearchProviderFactory._provider_order_from_env():
+                if provider_name == "bing_baidu":
+                    headless = os.getenv("BING_BAIDU_BROWSER_HEADLESS", "true").strip().lower() != "false"
+                    timeout = int(os.getenv("TOPOLOGY_BING_BAIDU_TIMEOUT_SEC", "5") or "5")
+                    provider = BingBaiduSearchProvider(headless=headless, timeout_sec=timeout)
+                    if not getattr(provider, "is_available", False):
+                        continue
+                    providers.append(provider)
+                    continue
+                provider = SearchProviderFactory._provider_from_env(provider_name, settings)
+                if getattr(provider, "is_available", False):
+                    providers.append(provider)
+            if not providers:
+                return NullSearchProvider()
+            if len(providers) == 1:
+                return providers[0]
+            return FallbackSearchProvider(providers)
         except Exception:
             return None
 
@@ -100,6 +134,11 @@ class TopologyService:
         nodes, edges = self._assemble(code, market, [code], cached_map, existing_set=set(), center_info=center_info, graph=graph)
         return {"nodes": nodes, "edges": edges, "stats": {"llm_calls": self._llm_calls}}
 
+    def search_enrich(self, *, center: Dict[str, Any], symbols: List[str]) -> Dict[str, Any]:
+        if self.enricher is None:
+            return {"items": [], "warnings": []}
+        return self.enricher.enrich_graph_fields(center=center, symbols=symbols)
+
     # -- 内部遍历 --
     def _traverse(
         self,
@@ -113,14 +152,36 @@ class TopologyService:
     ) -> Dict[str, Any]:
         existing_set = set(existing_codes) if existing_codes else set()
         include_quote = quote_mode == "sync"
-        center_info = self.resolver.resolve(code, market, include_quote=include_quote, fallback_name=center_name)
+        initial_stage = quote_mode == "llm_initial"
+        center_info = self._resolver_resolve(code, market, include_quote=include_quote, fallback_name=center_name)
         center_name = center_info.get("name", "") or code
         center_sector = center_info.get("sector", "") or "--"
+        llm_node_data: Dict[str, Dict[str, Any]] = {}
+        warnings: List[str] = []
+        initial_relations: Optional[List[Any]] = None
+
+        if initial_stage:
+            initial = self._build_initial_snapshot(code, market, center_name=center_name, center_sector=center_sector)
+            if not initial:
+                raise RuntimeError("LLM 首屏拓扑生成失败")
+            if initial:
+                center_payload = initial.get("center") if isinstance(initial.get("center"), dict) else {}
+                initial_relations = list(initial.get("relations") or [])
+                if not initial_relations:
+                    raise RuntimeError("LLM 首屏拓扑未返回任何关系节点")
+                llm_node_data = self._llm_node_data_from_relations(initial_relations)
+                llm_node_data[symbol_id(market, code)] = center_payload
+                center_info = self._merge_node_info(center_info, center_payload, prefer_llm=True)
+                center_name = center_info.get("name", "") or center_name
+                center_sector = center_info.get("sector", "") or center_sector
+                if initial_relations is not None:
+                    self.cache.save_relations(code, market, initial_relations, provider=self._provider_meta()[0], model=self._provider_meta()[1])
+            warnings = list(initial.get("warnings") or []) if initial_stage and initial else []
 
         # 收集缓存
         cached_map: Dict[str, List] = {}
         stale_sources: List[str] = []
-        cached_for_center = self.cache.get_relations(code, market)
+        cached_for_center = initial_relations if initial_relations is not None else self.cache.get_relations(code, market)
         if cached_for_center is not None:
             cached_map[code] = cached_for_center
         else:
@@ -138,7 +199,7 @@ class TopologyService:
                     stale_sources.append(r.peer_code)
 
         relation_status = "cached" if cached_map else "pending"
-        if quote_mode == "sync":
+        if quote_mode in {"sync", "llm_initial"}:
             # LLM 补算 stale_sources（受硬上限）
             for src in list(stale_sources):
                 rels = self._infer_with_limit(src, market, center_name if src == code else "", center_sector if src == code else "--")
@@ -177,6 +238,9 @@ class TopologyService:
             center_info=center_info,
             graph=graph,
             include_quote=include_quote,
+            llm_node_data=llm_node_data,
+            prefer_llm=initial_stage,
+            data_stage="llm_initial" if initial_stage else None,
         )
         stats = {
             "llm_calls": self._llm_calls,
@@ -185,11 +249,15 @@ class TopologyService:
             "stale_sources": self._stale_source_payload(stale_sources, market, code, cached_map),
             "depth": depth,
             "relation_status": relation_status,
+            "data_stage": "llm_initial" if initial_stage else "source_verified" if include_quote else "cached",
         }
         if not cached_map and self._llm_calls == 0 and quote_mode == "sync":
             stats["error"] = "llm_failed"
-        return {"center": self._to_node(center_info, code, market, expanded=True, is_center=True, stale=False, depth=0, zone="center"),
+        result = {"center": self._to_node(center_info, code, market, expanded=True, is_center=True, stale=False, depth=0, zone="center"),
                 "nodes": nodes, "edges": edges, "stats": stats}
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     def _infer_with_limit(self, code: str, market: str, name: str, sector: str):
         if self._llm_calls >= _LLM_HARD_LIMIT or self.engine is None:
@@ -247,21 +315,28 @@ class TopologyService:
         node_markets = TopologyService._build_node_markets(center_code, market, cached_map)
         return [{"code": source, "market": node_markets.get(source, market)} for source in stale_sources]
 
-    def _assemble(self, center_code, market, codes, cached_map, existing_set, is_center=False, center_info=None, graph=None, include_quote=False):
+    def _assemble(self, center_code, market, codes, cached_map, existing_set, is_center=False, center_info=None, graph=None, include_quote=False, llm_node_data=None, prefer_llm=False, data_stage=None):
         node_markets = self._build_node_markets(center_code, market, cached_map)
         # 从 LLM 缓存中提取 peer_name 和 peer_market_cap 作为回退
         peer_name_map: Dict[str, str] = {}
-        peer_market_cap_map: Dict[str, Optional[float]] = {}
-        peer_market_cap_str_map: Dict[str, str] = {}
+        peer_node_data: Dict[str, Dict[str, Any]] = {}
         for src, rels in cached_map.items():
             for r in rels:
                 if r.is_empty:
                     continue
                 if r.peer_name and r.peer_code not in peer_name_map:
                     peer_name_map[r.peer_code] = r.peer_name
-                if r.peer_market_cap is not None and r.peer_code not in peer_market_cap_map:
-                    peer_market_cap_map[r.peer_code] = r.peer_market_cap
-                    peer_market_cap_str_map[r.peer_code] = r.peer_market_cap_str
+                peer_node_data.setdefault(symbol_id(r.peer_market or market, r.peer_code), {
+                    "name": r.peer_name,
+                    "market_cap": r.peer_market_cap,
+                    "market_cap_str": r.peer_market_cap_str,
+                    "sector": r.peer_sector,
+                    "industry": r.peer_industry,
+                    "pct_chg": r.peer_pct_chg,
+                    "confidence": r.confidence,
+                    "field_sources": dict(r.field_sources or {}),
+                })
+        llm_node_data = {**peer_node_data, **(llm_node_data or {})}
         resolve_lookup = {
             c: self._resolve_identity(node_markets.get(c, market), c)
             for c in codes
@@ -270,7 +345,7 @@ class TopologyService:
         resolve_targets = [(identity[0], identity[1]) for identity in resolve_lookup.values()]
         infos = self.resolver.resolve_many(resolve_targets, include_quote=include_quote) if resolve_targets else {}
         if center_info is None:
-            center_info = self.resolver.resolve(center_code, market, include_quote=include_quote)
+            center_info = self._resolver_resolve(center_code, market, include_quote=include_quote)
         infos[symbol_id(market, center_info.get("code") or center_code)] = center_info
         node_meta = self._build_node_meta(center_code, cached_map, graph)
         nodes = []
@@ -282,11 +357,10 @@ class TopologyService:
             if (c in existing_set or symbol in existing_set) and not is_center:
                 continue
             info = infos.get(resolve_symbol, {"code": c, "name": "", "market": item_market, "sector": "--", "market_cap": None, "pct_chg": None, "quote_status": "pending"})
-            # LLM 回退：name 为空时用 peer_name，market_cap 为空时用 peer_market_cap
-            if not info.get("name") and c in peer_name_map:
-                info = {**info, "name": peer_name_map[c]}
-            if info.get("market_cap") is None and c in peer_market_cap_map:
-                info = {**info, "market_cap": peer_market_cap_map[c]}
+            llm_info = llm_node_data.get(symbol, {})
+            if c == center_code:
+                llm_info = llm_node_data.get(symbol_id(item_market, c), llm_info)
+            info = self._merge_node_info(info, llm_info, prefer_llm=prefer_llm)
             meta = node_meta.get(c, {"depth": 1, "zone": "peer"})
             nodes.append(
                 self._to_node(
@@ -299,6 +373,7 @@ class TopologyService:
                     stale=False,
                     depth=meta["depth"],
                     zone=meta["zone"],
+                    data_stage=data_stage or ("source_verified" if include_quote else "cached"),
                 )
             )
         edges = []
@@ -320,7 +395,7 @@ class TopologyService:
         return nodes, edges
 
     @staticmethod
-    def _to_node(info, code, market, expanded, is_center, stale, depth, zone, display_code=None):
+    def _to_node(info, code, market, expanded, is_center, stale, depth, zone, display_code=None, data_stage=None):
         market_cap = info.get("market_cap")
         node_market = market
         node_code = display_code or info.get("code") or code
@@ -329,6 +404,7 @@ class TopologyService:
             "code": node_code, "name": info.get("name", "") or code,
             "market": node_market,
             "sector": info.get("sector", "--") or "板块未知",
+            "industry": info.get("industry", "") or "",
             "pct_chg": info.get("pct_chg"),
             "market_cap": market_cap,
             "market_cap_str": format_market_cap(market_cap),
@@ -336,9 +412,88 @@ class TopologyService:
             "quote_status": info.get("quote_status", "pending"),
             "quote_updated_at": info.get("quote_updated_at"),
             "quote_error": info.get("quote_error", ""),
+            "field_sources": info.get("field_sources", {}),
+            "field_confidence": info.get("field_confidence", {}),
+            "data_gaps": info.get("data_gaps", []),
+            "data_stage": data_stage or info.get("data_stage", "cached"),
             "expanded": expanded, "stale": stale, "is_center": is_center,
             "depth": depth, "zone": zone,
         }
+
+    def _build_initial_snapshot(self, code: str, market: str, center_name: str, center_sector: str) -> Dict[str, Any]:
+        if self.enricher is None or self._llm_calls >= _LLM_HARD_LIMIT:
+            return {}
+        snapshot = self.enricher.build_initial_snapshot(
+            market=market,
+            code=code,
+            name=center_name,
+            sector=center_sector,
+        )
+        if snapshot:
+            self._llm_calls += 1
+            snapshot["relations"] = self.engine._parse_items(snapshot.get("items") or [], code, market) if self.engine else []
+        return snapshot
+
+    @staticmethod
+    def _llm_node_data_from_relations(relations: List[Any]) -> Dict[str, Dict[str, Any]]:
+        result: Dict[str, Dict[str, Any]] = {}
+        for rel in relations:
+            symbol = symbol_id(rel.peer_market, rel.peer_code)
+            result[symbol] = {
+                "name": rel.peer_name,
+                "sector": getattr(rel, "peer_sector", ""),
+                "industry": getattr(rel, "peer_industry", ""),
+                "market_cap": rel.peer_market_cap,
+                "market_cap_str": rel.peer_market_cap_str,
+                "pct_chg": getattr(rel, "peer_pct_chg", None),
+                "confidence": getattr(rel, "confidence", None),
+                "field_sources": dict(getattr(rel, "field_sources", None) or {}),
+            }
+        return result
+
+    @staticmethod
+    def _merge_node_info(source_info: Dict[str, Any], llm_info: Dict[str, Any], *, prefer_llm: bool) -> Dict[str, Any]:
+        result = dict(source_info or {})
+        field_sources = dict(result.get("field_sources") or {})
+        field_confidence = dict(result.get("field_confidence") or {})
+        llm_sources = dict(llm_info.get("field_sources") or {})
+        llm_confidence = llm_info.get("confidence")
+
+        for field in ("name", "sector", "industry", "market_cap", "pct_chg"):
+            source_value = source_info.get(field) if source_info else None
+            llm_value = llm_info.get(field) if llm_info else None
+            use_llm = prefer_llm and TopologyService._has_value(llm_value, field)
+            if not use_llm and TopologyService._has_value(source_value, field):
+                result[field] = source_value
+                field_sources[field] = "resolver_override" if TopologyService._has_value(llm_value, field) else "resolver"
+                field_confidence.pop(field, None)
+            elif TopologyService._has_value(llm_value, field):
+                result[field] = llm_value
+                field_sources[field] = llm_sources.get(field, "llm_search")
+                if llm_confidence is not None:
+                    field_confidence[field] = llm_confidence
+            elif TopologyService._has_value(source_value, field):
+                result[field] = source_value
+                field_sources[field] = "resolver"
+                field_confidence.pop(field, None)
+        result["field_sources"] = field_sources
+        result["field_confidence"] = field_confidence
+        result["data_gaps"] = [field for field in ("name", "sector", "industry", "market_cap", "pct_chg") if not TopologyService._has_value(result.get(field), field)]
+        return result
+
+    @staticmethod
+    def _has_value(value: Any, field: str) -> bool:
+        if value is None:
+            return False
+        if field in {"name", "sector", "industry"}:
+            return str(value).strip() not in {"", "--", "板块未知"}
+        return True
+
+    def _resolver_resolve(self, code: str, market: str, include_quote: bool = False, fallback_name: str = "") -> Dict[str, Any]:
+        try:
+            return self.resolver.resolve(code, market, include_quote=include_quote, fallback_name=fallback_name)
+        except TypeError:
+            return self.resolver.resolve(code, market, include_quote=include_quote)
 
     @staticmethod
     def _resolve_identity(market: str, code: str) -> tuple[str, str]:

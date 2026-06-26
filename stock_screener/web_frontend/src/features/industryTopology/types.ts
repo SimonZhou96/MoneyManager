@@ -2,6 +2,8 @@ export type Market = 'HK' | 'US' | 'A' | string
 export type Direction = 'upstream' | 'downstream' | 'peer'
 export type TopologyZone = Direction | 'center'
 export type QuoteStatus = 'pending' | 'queued' | 'cached' | 'fresh' | 'stale' | 'failed' | 'error' | 'skipped'
+export type TopologyDataStage = 'llm_initial' | 'source_partial' | 'source_verified' | string
+export type TopologyTaskStage = 'idle' | 'graph_loading' | 'graph_ready_search_enriching' | 'graph_ready_source_polling' | 'done' | 'partial' | 'failed'
 
 export interface TopologyNodeData {
   id: string
@@ -9,6 +11,7 @@ export interface TopologyNodeData {
   name: string
   market: Market
   sector: string
+  industry?: string
   pct_chg: number | null
   market_cap?: number | null
   market_cap_str: string
@@ -16,6 +19,10 @@ export interface TopologyNodeData {
   quote_status?: QuoteStatus
   quote_updated_at?: string | null
   quote_error?: string
+  field_sources?: Record<string, string>
+  field_confidence?: Record<string, number>
+  data_stage?: TopologyDataStage
+  data_gaps?: string[]
   expanded: boolean
   stale: boolean
   is_center: boolean
@@ -39,6 +46,7 @@ export interface TopologyStats {
   stale_sources?: Array<{ code: string; market: Market }>
   depth?: number
   relation_status?: 'cached' | 'generating' | 'fresh' | 'failed' | 'pending'
+  data_stage?: TopologyDataStage
   background_started?: boolean
   error?: string
 }
@@ -48,6 +56,33 @@ export interface TopologyGraph {
   nodes: TopologyNodeData[]
   edges: TopologyEdgeData[]
   stats: TopologyStats
+  warnings?: string[]
+}
+
+export interface TopologyNodePatch {
+  id: string
+  symbol?: string
+  code: string
+  market: Market
+  name?: string
+  sector?: string
+  industry?: string
+  pct_chg?: number | null
+  market_cap?: number | null
+  market_cap_str?: string
+  quote_status?: QuoteStatus
+  quote_updated_at?: string | null
+  quote_error?: string
+  field_sources?: Record<string, string>
+  field_confidence?: Record<string, number>
+  data_stage?: TopologyDataStage
+  data_gaps?: string[]
+}
+
+export interface TopologySearchEnrichResult {
+  items: TopologyNodePatch[]
+  warnings?: string[]
+  data_stage?: TopologyDataStage
 }
 
 export interface ExpandResult {
@@ -71,8 +106,14 @@ export interface TopologyQuoteItem {
   price: number | null
   pct_chg: number | null
   name: string
+  sector?: string
+  industry?: string
   market_cap: number | null
   market_cap_str: string
+  field_sources?: Record<string, string>
+  field_confidence?: Record<string, number>
+  data_stage?: TopologyDataStage
+  data_gaps?: string[]
   source: string
   updated_at: string | null
   error: string
