@@ -39,6 +39,11 @@ type RenderMeta = {
   fieldRanks: Partial<Record<RankedField, number>>
 }
 
+type PathScope = {
+  nodeIds: Set<string>
+  edgeKeys: Set<string>
+}
+
 function edgeKey(edge: TopologyEdgeData) {
   return `${edge.source}->${edge.target}:${edge.relation}`
 }
@@ -47,10 +52,139 @@ function normalizeText(value: string | null | undefined) {
   return (value || '').trim().toLowerCase()
 }
 
-function nodeMatchesQuery(node: TopologyNodeData, query: string) {
+function nodeMatchesCompanyQuery(node: TopologyNodeData, query: string) {
   const keyword = normalizeText(query)
   if (!keyword) return true
-  return [node.name, node.code, node.id, node.market, node.sector].some((field) => normalizeText(field).includes(keyword))
+  return [node.name, node.code, node.id].some((field) => normalizeText(field).includes(keyword))
+}
+
+function isValidSector(sector: string | null | undefined) {
+  const value = (sector || '').trim()
+  return value !== '' && value !== '--' && value !== '板块未知'
+}
+
+function addAdjacencyEdge(map: Map<string, TopologyEdgeData[]>, id: string, edge: TopologyEdgeData) {
+  const list = map.get(id) || []
+  list.push(edge)
+  map.set(id, list)
+}
+
+function traversalEndpoints(edge: TopologyEdgeData) {
+  if (edge.direction === 'upstream') {
+    return [{ source: edge.target, target: edge.source }]
+  }
+  return [{ source: edge.source, target: edge.target }]
+}
+
+function buildAdjacency(edges: TopologyEdgeData[], undirected = false) {
+  const map = new Map<string, TopologyEdgeData[]>()
+  edges.forEach((edge) => {
+    traversalEndpoints(edge).forEach(({ source, target }) => {
+      addAdjacencyEdge(map, source, edge)
+      if (undirected) addAdjacencyEdge(map, target, edge)
+    })
+  })
+  return map
+}
+
+function nextNodeForEdge(edge: TopologyEdgeData, current: string, undirected: boolean) {
+  for (const { source, target } of traversalEndpoints(edge)) {
+    if (source === current) return target
+    if (undirected && target === current) return source
+  }
+  return null
+}
+
+function findPath(startId: string, endId: string, adjacency: Map<string, TopologyEdgeData[]>, undirected = false) {
+  if (startId === endId) return { nodes: [startId], edges: [] as TopologyEdgeData[] }
+  const queue: string[] = [startId]
+  const seen = new Set([startId])
+  const previous = new Map<string, { nodeId: string; edge: TopologyEdgeData }>()
+
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    for (const edge of adjacency.get(current) || []) {
+      const next = nextNodeForEdge(edge, current, undirected)
+      if (!next || seen.has(next)) continue
+      seen.add(next)
+      previous.set(next, { nodeId: current, edge })
+      if (next === endId) {
+        const pathNodes = [endId]
+        const pathEdges: TopologyEdgeData[] = []
+        let cursor = endId
+        while (cursor !== startId) {
+          const step = previous.get(cursor)
+          if (!step) break
+          pathEdges.unshift(step.edge)
+          pathNodes.unshift(step.nodeId)
+          cursor = step.nodeId
+        }
+        return { nodes: pathNodes, edges: pathEdges }
+      }
+      queue.push(next)
+    }
+  }
+
+  return null
+}
+
+function addPathToScope(scope: PathScope, path: { nodes: string[]; edges: TopologyEdgeData[] } | null) {
+  if (!path) return
+  path.nodes.forEach((id) => scope.nodeIds.add(id))
+  path.edges.forEach((edge) => scope.edgeKeys.add(edgeKey(edge)))
+}
+
+function buildIncomingAdjacency(edges: TopologyEdgeData[]) {
+  const map = new Map<string, TopologyEdgeData[]>()
+  edges.forEach((edge) => {
+    traversalEndpoints(edge).forEach(({ target }) => addAdjacencyEdge(map, target, edge))
+  })
+  return map
+}
+
+function previousNodeForEdge(edge: TopologyEdgeData, current: string) {
+  for (const { source, target } of traversalEndpoints(edge)) {
+    if (target === current) return source
+  }
+  return null
+}
+
+function centerPathScopeForMatches(matchIds: Set<string>, centerId: string | undefined, edges: TopologyEdgeData[]) {
+  const directedAdjacency = buildAdjacency(edges)
+  const undirectedAdjacency = buildAdjacency(edges, true)
+  const scope: PathScope = { nodeIds: new Set(), edgeKeys: new Set() }
+
+  matchIds.forEach((id) => {
+    scope.nodeIds.add(id)
+    if (centerId) addPathToScope(scope, findPath(id, centerId, directedAdjacency) || findPath(id, centerId, undirectedAdjacency, true))
+  })
+
+  return scope
+}
+
+function oneHopUpstreamAndCenterPathScopeForMatches(
+  matchIds: Set<string>,
+  centerId: string | undefined,
+  edges: TopologyEdgeData[],
+) {
+  const directedAdjacency = buildAdjacency(edges)
+  const undirectedAdjacency = buildAdjacency(edges, true)
+  const incomingAdjacency = buildIncomingAdjacency(edges)
+  const scope: PathScope = { nodeIds: new Set(), edgeKeys: new Set() }
+
+  matchIds.forEach((id) => {
+    scope.nodeIds.add(id)
+    for (const edge of incomingAdjacency.get(id) || []) {
+      const previous = previousNodeForEdge(edge, id)
+      if (!previous) continue
+      scope.nodeIds.add(previous)
+      scope.edgeKeys.add(edgeKey(edge))
+    }
+
+    if (centerId) addPathToScope(scope, findPath(id, centerId, directedAdjacency) || findPath(id, centerId, undirectedAdjacency, true))
+  })
+
+  return scope
 }
 
 function hasFieldValue(field: RankedField, value: unknown) {
@@ -233,6 +367,8 @@ export function IndustryTopologyPanel() {
   const [canContinueTopology, setCanContinueTopology] = useState(false)
   const [relationFilters, setRelationFilters] = useState<Set<RelationFilter>>(() => new Set(['upstream', 'downstream', 'peer']))
   const [graphQuery, setGraphQuery] = useState('')
+  const [selectedSectors, setSelectedSectors] = useState<Set<string>>(() => new Set())
+  const [sectorMenuOpen, setSectorMenuOpen] = useState(false)
   const [onlyImportant, setOnlyImportant] = useState(false)
   const [highlightCycles, setHighlightCycles] = useState(false)
   const [selectedNode, setSelectedNode] = useState<TopologyNodeData | null>(null)
@@ -249,29 +385,94 @@ export function IndustryTopologyPanel() {
   const symbols = useMemo(() => nodes.map((node) => node.id), [nodes])
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
   const isBusy = taskStage === 'graph_loading' || taskStage === 'graph_depth_expanding' || taskStage === 'graph_ready_search_enriching' || taskStage === 'graph_ready_source_polling'
+  const sectorOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    nodes.forEach((node) => {
+      if (!isValidSector(node.sector)) return
+      counts.set(node.sector, (counts.get(node.sector) || 0) + 1)
+    })
+    return Array.from(counts.entries())
+      .map(([sector, count]) => ({ sector, count }))
+      .sort((a, b) => b.count - a.count || a.sector.localeCompare(b.sector))
+  }, [nodes])
 
   const visibleGraph = useMemo(() => {
     const center = nodes.find((node) => node.is_center)
-    const matchedNodeIds = new Set(nodes.filter((node) => nodeMatchesQuery(node, graphQuery)).map((node) => node.id))
-    const allowedEdges = edges.filter((edge) => relationFilters.has(edge.direction) && (!graphQuery || matchedNodeIds.has(edge.source) || matchedNodeIds.has(edge.target)))
+    const centerId = center?.id
+    const queryActive = normalizeText(graphQuery) !== ''
+    const clickedNodeId = selectedNode?.id
+    const clickActive = Boolean(clickedNodeId)
+    const sectorActive = selectedSectors.size > 0
+    const allowedEdges = edges.filter((edge) => relationFilters.has(edge.direction))
+    const directMatchedNodeIds = new Set<string>()
+    let pathNodeIds: Set<string> | null = null
+    let pathEdgeKeys: Set<string> | null = null
+
+    if (clickActive && clickedNodeId) {
+      directMatchedNodeIds.add(clickedNodeId)
+      const clickScope = oneHopUpstreamAndCenterPathScopeForMatches(new Set([clickedNodeId]), centerId, allowedEdges)
+      pathNodeIds = clickScope.nodeIds
+      pathEdgeKeys = clickScope.edgeKeys
+    } else if (queryActive) {
+      const queryMatchIds = new Set(nodes.filter((node) => nodeMatchesCompanyQuery(node, graphQuery)).map((node) => node.id))
+      queryMatchIds.forEach((id) => directMatchedNodeIds.add(id))
+      const queryScope = centerPathScopeForMatches(queryMatchIds, centerId, allowedEdges)
+      pathNodeIds = queryScope.nodeIds
+      pathEdgeKeys = queryScope.edgeKeys
+    }
+
+    if (sectorActive) {
+      const sectorMatchIds = new Set(nodes
+        .filter((node) => selectedSectors.has(node.sector))
+        .map((node) => node.id))
+      sectorMatchIds.forEach((id) => directMatchedNodeIds.add(id))
+      const sectorScope = centerPathScopeForMatches(sectorMatchIds, centerId, allowedEdges)
+      if (pathNodeIds && pathEdgeKeys) {
+        pathNodeIds = new Set(Array.from(pathNodeIds).filter((id) => sectorScope.nodeIds.has(id)))
+        pathEdgeKeys = new Set(Array.from(pathEdgeKeys).filter((id) => sectorScope.edgeKeys.has(id)))
+        if (centerId) pathNodeIds.add(centerId)
+        directMatchedNodeIds.forEach((id) => {
+          if (sectorScope.nodeIds.has(id) && (!queryActive || pathNodeIds?.has(id))) pathNodeIds?.add(id)
+        })
+      } else {
+        pathNodeIds = sectorScope.nodeIds
+        pathEdgeKeys = sectorScope.edgeKeys
+      }
+    }
+
     const edgeNodeIds = new Set<string>()
-    allowedEdges.forEach((edge) => {
+    const scopedEdges = pathEdgeKeys
+      ? allowedEdges.filter((edge) => pathEdgeKeys?.has(edgeKey(edge)))
+      : allowedEdges
+    scopedEdges.forEach((edge) => {
       edgeNodeIds.add(edge.source)
       edgeNodeIds.add(edge.target)
     })
     const filteredNodes = nodes.filter((node) => {
-      if (node.is_center) return true
-      if (onlyImportant && node.depth > 1 && node.size_level < 3) return false
-      if (graphQuery && !matchedNodeIds.has(node.id) && !edgeNodeIds.has(node.id)) return false
-      return edgeNodeIds.has(node.id) || node.id === center?.id
+      if (node.is_center) return !pathNodeIds || pathNodeIds.has(node.id)
+      if (pathNodeIds && !pathNodeIds.has(node.id)) return false
+      if (onlyImportant && !pathNodeIds?.has(node.id) && node.depth > 1 && node.size_level < 3) return false
+      return edgeNodeIds.has(node.id) || directMatchedNodeIds.has(node.id) || node.id === centerId
     })
     const visibleIds = new Set(filteredNodes.map((node) => node.id))
+    const visibleMatchedNodeIds = new Set(Array.from(directMatchedNodeIds).filter((id) => visibleIds.has(id)))
+    const visiblePathNodeIds = new Set(Array.from(pathNodeIds || []).filter((id) => visibleIds.has(id)))
+    const visibleEdges = scopedEdges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target))
     return {
       nodes: filteredNodes,
-      edges: allowedEdges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target)),
-      focusNodeId: graphQuery ? Array.from(matchedNodeIds).find((id) => visibleIds.has(id)) || null : null,
+      edges: visibleEdges,
+      focusNodeId: clickActive ? clickedNodeId || null : queryActive ? Array.from(visibleMatchedNodeIds)[0] || null : null,
+      matchedNodeIds: visibleMatchedNodeIds,
+      normalNodeIds: clickActive || queryActive || sectorActive ? visiblePathNodeIds : new Set<string>(),
+      directMatchedCount: visibleMatchedNodeIds.size,
+      highlightedNodeCount: clickActive || queryActive || sectorActive
+        ? new Set([...visiblePathNodeIds, ...visibleMatchedNodeIds]).size
+        : visibleMatchedNodeIds.size,
+      flowEdgeKeys: clickActive || queryActive || sectorActive
+        ? new Set(Array.from(pathEdgeKeys || []).filter((key) => visibleEdges.some((edge) => edgeKey(edge) === key)))
+        : new Set<string>(),
     }
-  }, [edges, graphQuery, nodes, onlyImportant, relationFilters])
+  }, [edges, graphQuery, nodes, onlyImportant, relationFilters, selectedNode?.id, selectedSectors])
 
   const edgeNodes = useMemo(() => selectedEdge ? {
     source: nodeById.get(selectedEdge.source),
@@ -633,6 +834,15 @@ export function IndustryTopologyPanel() {
     })
   }, [])
 
+  const toggleSector = useCallback((sector: string) => {
+    setSelectedSectors((prev) => {
+      const next = new Set(prev)
+      if (next.has(sector)) next.delete(sector)
+      else next.add(sector)
+      return next
+    })
+  }, [])
+
   const onSelectEdge = useCallback((edge: TopologyEdgeData | null, key?: string) => {
     setSelectedEdge(edge)
     setSelectedEdgeKey(edge ? key || edgeKey(edge) : null)
@@ -653,6 +863,8 @@ export function IndustryTopologyPanel() {
     setSelectedNode(null)
     setSelectedEdge(null)
     setSelectedEdgeKey(null)
+    setSelectedSectors(new Set())
+    setSectorMenuOpen(false)
 
     if (!selected) {
       nodesRef.current = []
@@ -764,6 +976,15 @@ export function IndustryTopologyPanel() {
     setProgressPct(100)
   }, [taskStage, quotePollState, relationPollState])
 
+  useEffect(() => {
+    if (selectedSectors.size === 0) return
+    const valid = new Set(sectorOptions.map((item) => item.sector))
+    setSelectedSectors((current) => {
+      const next = new Set(Array.from(current).filter((sector) => valid.has(sector)))
+      return next.size === current.size ? current : next
+    })
+  }, [sectorOptions, selectedSectors.size])
+
   return (
     <div className="industry-topology">
       <div className="topo-toolbar">
@@ -792,8 +1013,13 @@ export function IndustryTopologyPanel() {
           <input
             className="topo-graph-search"
             value={graphQuery}
-            onChange={(event) => setGraphQuery(event.target.value)}
-            placeholder="搜索公司 / 代码 / 板块"
+            onChange={(event) => {
+              setGraphQuery(event.target.value)
+              setSelectedNode(null)
+              setSelectedEdge(null)
+              setSelectedEdgeKey(null)
+            }}
+            placeholder="搜索公司 / 代码"
           />
           <div className="topo-filter-group" aria-label="关系类型过滤">
             {RELATION_FILTERS.map((item) => (
@@ -804,9 +1030,42 @@ export function IndustryTopologyPanel() {
               >{item.label}</button>
             ))}
           </div>
+          <div className="topo-sector-select">
+            <button
+              type="button"
+              className={`topo-sector-select-trigger${selectedSectors.size > 0 ? ' active' : ''}`}
+              onClick={() => setSectorMenuOpen((open) => !open)}
+              aria-expanded={sectorMenuOpen}
+            >
+              {selectedSectors.size > 0 ? `板块 ${selectedSectors.size}` : '筛选板块'}
+            </button>
+            {sectorMenuOpen ? (
+              <div className="topo-sector-menu">
+                <div className="topo-sector-menu-head">
+                  <span>当前图谱板块</span>
+                  {selectedSectors.size > 0 ? <button type="button" onClick={() => setSelectedSectors(new Set())}>清空</button> : null}
+                </div>
+                {sectorOptions.length > 0 ? sectorOptions.map((item) => (
+                  <label key={item.sector} className="topo-sector-option">
+                    <input
+                      type="checkbox"
+                      checked={selectedSectors.has(item.sector)}
+                      onChange={() => toggleSector(item.sector)}
+                    />
+                    <span>{item.sector}</span>
+                    <strong>{item.count}</strong>
+                  </label>
+                )) : <div className="topo-sector-empty">暂无可筛选板块</div>}
+              </div>
+            ) : null}
+          </div>
           <label className="topo-check"><input type="checkbox" checked={onlyImportant} onChange={(event) => setOnlyImportant(event.target.checked)} />只看重点</label>
           <label className="topo-check"><input type="checkbox" checked={highlightCycles} onChange={(event) => setHighlightCycles(event.target.checked)} />高亮环路</label>
-          <span className="topo-filter-summary">显示 {visibleGraph.nodes.length}/{nodes.length} 节点 · {visibleGraph.edges.length}/{edges.length} 关系</span>
+          <span className="topo-filter-summary">
+            显示 {visibleGraph.nodes.length}/{nodes.length} 节点 · {visibleGraph.edges.length}/{edges.length} 关系
+            {visibleGraph.directMatchedCount > 0 ? ` · 命中 ${visibleGraph.directMatchedCount}` : ''}
+            {visibleGraph.highlightedNodeCount > visibleGraph.directMatchedCount ? ` · 路径 ${visibleGraph.highlightedNodeCount}` : ''}
+          </span>
         </div>
       ) : null}
       <TopologyCanvas
@@ -823,6 +1082,10 @@ export function IndustryTopologyPanel() {
         selectedNodeId={selectedNode?.id || null}
         selectedEdgeKey={selectedEdgeKey}
         focusNodeId={visibleGraph.focusNodeId}
+        matchedNodeIds={visibleGraph.matchedNodeIds}
+        normalNodeIds={visibleGraph.normalNodeIds}
+        normalEdgeKeys={visibleGraph.flowEdgeKeys}
+        flowEdgeKeys={visibleGraph.flowEdgeKeys}
         highlightCycles={highlightCycles}
         onSelectNode={(node) => {
           if (node) {

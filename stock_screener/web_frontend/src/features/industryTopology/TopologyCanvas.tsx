@@ -16,6 +16,10 @@ interface Props {
   selectedNodeId?: string | null
   selectedEdgeKey?: string | null
   focusNodeId?: string | null
+  matchedNodeIds?: Set<string> | string[]
+  normalNodeIds?: Set<string> | string[]
+  normalEdgeKeys?: Set<string> | string[]
+  flowEdgeKeys?: Set<string> | string[]
   highlightCycles?: boolean
   onSelectNode?: (node: TopologyNodeData | null) => void
   onSelectEdge?: (edge: TopologyEdgeData | null, edgeKey?: string) => void
@@ -47,6 +51,9 @@ interface ViewState {
   focusNodeId?: string | null
   relatedNodeIds: Set<string>
   relatedEdgeKeys: Set<string>
+  matchedNodeIds: Set<string>
+  normalNodeIds: Set<string>
+  normalEdgeKeys: Set<string>
   cycleEdgeKeys: Set<string>
   highlightCycles: boolean
   pinnedEdgeKeys: Set<string>
@@ -129,34 +136,35 @@ function hasMarketCap(node: TopologyNodeData) {
 
 function nodeStyle(node: TopologyNodeData, view: ViewState) {
   const missingMarketCap = !hasMarketCap(node)
+  const matched = view.matchedNodeIds.has(node.id)
   const zoneFill = missingMarketCap && !node.is_center ? '#64748b' : ZONE_COLOR[node.zone] || ZONE_COLOR.peer
   const fill = node.pct_chg !== null && node.pct_chg !== undefined && !node.is_center
     ? node.pct_chg > 0 ? '#22c55e' : node.pct_chg < 0 ? '#ef4444' : zoneFill
     : zoneFill
   const stroke = STATUS_RING[node.quote_status || 'pending'] || '#64748b'
   const hasFocus = Boolean(view.focusNodeId || view.selectedNodeId || view.hoveredNodeId || view.selectedEdgeKey || view.hoveredEdgeKey)
-  const active = node.is_center || node.id === view.selectedNodeId || node.id === view.hoveredNodeId || node.id === view.focusNodeId || view.relatedNodeIds.has(node.id)
+  const active = matched || view.normalNodeIds.has(node.id) || node.is_center || node.id === view.selectedNodeId || node.id === view.hoveredNodeId || node.id === view.focusNodeId || view.relatedNodeIds.has(node.id)
   const baseOpacity = missingMarketCap && !node.is_center ? 0.42 : node.quote_status === 'failed' || node.quote_status === 'error' ? 0.68 : 0.95
   return {
-    size: nodeSize(node),
+    size: matched && !node.is_center ? nodeSize(node) + 6 : nodeSize(node),
     fill,
-    stroke,
-    lineWidth: active ? node.is_center ? 4 : 3 : 1.5,
+    stroke: matched ? '#f8fafc' : stroke,
+    lineWidth: matched ? node.is_center ? 5 : 4 : active ? node.is_center ? 4 : 3 : 1.5,
     opacity: hasFocus && !active ? 0.16 : baseOpacity,
     labelText: nodeLabel(node, view),
-    labelFill: node.is_center ? '#f8fafc' : '#cbd5e1',
-    labelFontSize: node.is_center ? 13 : 10,
-    labelFontWeight: node.is_center ? 700 : 500,
+    labelFill: matched ? '#f8fafc' : node.is_center ? '#f8fafc' : '#cbd5e1',
+    labelFontSize: matched ? node.is_center ? 14 : 11 : node.is_center ? 13 : 10,
+    labelFontWeight: matched || node.is_center ? 800 : 500,
     labelPlacement: 'bottom',
     labelBackground: true,
-    labelBackgroundFill: 'rgba(15, 23, 42, 0.78)',
+    labelBackgroundFill: matched ? 'rgba(251, 191, 36, 0.2)' : 'rgba(15, 23, 42, 0.78)',
     labelBackgroundRadius: 4,
     labelPadding: [2, 4, 2, 4],
     labelOpacity: hasFocus && !active ? 0.18 : node.is_center ? 1 : 0.82,
-    halo: node.is_center,
-    haloStroke: '#fbbf24',
-    haloLineWidth: 8,
-    haloStrokeOpacity: 0.18,
+    halo: node.is_center || matched,
+    haloStroke: matched ? '#f8fafc' : '#fbbf24',
+    haloLineWidth: matched ? 12 : 8,
+    haloStrokeOpacity: matched ? 0.28 : 0.18,
   }
 }
 
@@ -201,14 +209,15 @@ function edgeStyle(edge: TopologyEdgeData, centerId: string | undefined, view: V
   const stroke = edgeStroke(edge, centerId)
   const touchesCenter = Boolean(centerId && (edge.source === centerId || edge.target === centerId))
   const active = key === view.selectedEdgeKey || key === view.hoveredEdgeKey || view.relatedEdgeKeys.has(key)
+  const normal = view.normalEdgeKeys.has(key)
   const cyclic = view.highlightCycles && view.cycleEdgeKeys.has(key)
   const hasFocus = Boolean(view.focusNodeId || view.selectedNodeId || view.hoveredNodeId || view.selectedEdgeKey || view.hoveredEdgeKey)
   const isPinned = view.pinnedEdgeKeys.has(key)
   const showLabel = active || (view.zoom > 1.35 && touchesCenter)
   return {
     stroke: cyclic ? '#f8fafc' : stroke,
-    lineWidth: cyclic ? 3 : (active || isPinned) ? 2.5 : 1,
-    strokeOpacity: hasFocus && !active && !cyclic && !isPinned ? 0.03 : (active || cyclic || isPinned) ? 0.9 : 0.15,
+    lineWidth: cyclic ? 3 : (active || isPinned) ? 2.5 : normal ? 1.4 : 1,
+    strokeOpacity: hasFocus && !active && !cyclic && !isPinned && !normal ? 0.03 : (active || cyclic || isPinned) ? 0.9 : normal ? 0.32 : 0.15,
     lineDash: cyclic ? [6, 4] : undefined,
     endArrow: false,
     shadowBlur: cyclic ? 16 : (active || isPinned) ? 10 : 0,
@@ -245,6 +254,11 @@ function ringSectoredLayout(
   existingPositions?: Map<string, { x: number; y: number }>,
 ): Map<string, { x: number; y: number }> {
   const positions = new Map<string, { x: number; y: number }>()
+
+  if (nodes.length === 1) {
+    positions.set(nodes[0].id, { x: 0, y: 0 })
+    return positions
+  }
 
   // 1. Preserve existing positions (expand: keep stable layout)
   if (existingPositions) {
@@ -515,6 +529,26 @@ function toolbarActionFromValue(value: string): ToolbarAction | null {
   return null
 }
 
+function fitGraphView(graph: G6Graph, nodeCount: number) {
+  if (graph.destroyed) return
+  const g = graph as unknown as { fitView?: (options?: unknown) => unknown; fitCenter?: () => unknown }
+  try {
+    if (nodeCount <= 1) {
+      if (typeof g.fitCenter === 'function') void g.fitCenter()
+      return
+    }
+    if (typeof g.fitView === 'function') {
+      void g.fitView({ padding: 80 })
+      return
+    }
+    if (typeof g.fitCenter === 'function') {
+      void g.fitCenter()
+    }
+  } catch {
+    /* viewport fitting is best-effort */
+  }
+}
+
 interface ParticleState {
   circle: Circle
   raf: number
@@ -605,6 +639,10 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   selectedNodeId,
   selectedEdgeKey,
   focusNodeId,
+  matchedNodeIds = [],
+  normalNodeIds = [],
+  normalEdgeKeys = [],
+  flowEdgeKeys = [],
   highlightCycles = false,
   onSelectNode,
   onSelectEdge,
@@ -618,6 +656,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   const centerIdRef = useRef<string | null>(null)
   const particleMapRef = useRef<Map<string, ParticleState>>(new Map())
   const nodeParticleKeysRef = useRef<Set<string>>(new Set())
+  const flowParticleKeysRef = useRef<Set<string>>(new Set())
   const tooltipPatchedRef = useRef(false)
   const onExpandRef = useRef(onExpand)
   const onStartTopologyRef = useRef(onStartTopology)
@@ -646,6 +685,9 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     const activeNodeId = focusNodeId || selectedNodeId || hoveredNodeId
     const activeEdgeKey = selectedEdgeKey || hoveredEdgeKey
     const related = relatedSets(rawNodes, rawEdges, activeNodeId, activeEdgeKey)
+    const matchSet = matchedNodeIds instanceof Set ? matchedNodeIds : new Set(matchedNodeIds)
+    const normalSet = normalNodeIds instanceof Set ? normalNodeIds : new Set(normalNodeIds)
+    const normalEdgeSet = normalEdgeKeys instanceof Set ? normalEdgeKeys : new Set(normalEdgeKeys)
     return {
       zoom,
       hoveredNodeId,
@@ -653,12 +695,15 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       selectedNodeId,
       selectedEdgeKey,
       focusNodeId,
+      matchedNodeIds: matchSet,
+      normalNodeIds: normalSet,
+      normalEdgeKeys: normalEdgeSet,
       highlightCycles,
       pinnedEdgeKeys,
       cycleEdgeKeys: detectCycleEdges(rawEdges),
       ...related,
     }
-  }, [focusNodeId, highlightCycles, hoveredEdgeKey, hoveredNodeId, rawEdges, rawNodes, selectedEdgeKey, selectedNodeId, zoom, pinnedEdgeKeys])
+  }, [focusNodeId, highlightCycles, hoveredEdgeKey, hoveredNodeId, matchedNodeIds, normalEdgeKeys, normalNodeIds, rawEdges, rawNodes, selectedEdgeKey, selectedNodeId, zoom, pinnedEdgeKeys])
 
   const viewRef = useRef(view)
   viewRef.current = view
@@ -953,6 +998,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       destroyParticle(graph, particleMapRef.current)
       graph.setData(graphData as never)
       void graph.render().then(() => {
+        fitGraphView(graph, rawNodes.length)
         // Patch tooltip plugin for pin support (must run after async render completes)
         if (!tooltipPatchedRef.current) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1026,6 +1072,37 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       }
     }
   }, [selectedNodeId, rawEdges, rawNodes])
+
+  // --- 筛选子图粒子动画 ---
+  // 搜索/板块筛选命中后，在保留下来的路径边上显示流向。
+  useEffect(() => {
+    const graph = graphRef.current
+    if (!graph || !initializedRef.current) return
+
+    for (const key of flowParticleKeysRef.current) {
+      destroyParticle(graph, particleMapRef.current, key)
+    }
+    flowParticleKeysRef.current.clear()
+
+    const flowSet = flowEdgeKeys instanceof Set ? flowEdgeKeys : new Set(flowEdgeKeys)
+    if (flowSet.size === 0 || rawEdges.length === 0) return
+
+    const centerId = rawNodes.find((n) => n.is_center)?.id
+
+    for (const edge of rawEdges) {
+      const key = edgeKey(edge)
+      if (!flowSet.has(key)) continue
+      const visual = visualEdge(edge)
+      const stroke = edgeStroke(visual, centerId)
+      const particleKey = `flow:${key}`
+      startParticle(graph, particleMapRef.current, particleKey, {
+        visualSource: visual.source,
+        visualTarget: visual.target,
+        stroke,
+      })
+      flowParticleKeysRef.current.add(particleKey)
+    }
+  }, [flowEdgeKeys, rawEdges, rawNodes])
 
   return (
     <div className="topo-canvas-shell">

@@ -1885,8 +1885,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/web_frontend/src/features/industryTopology/IndustryTopologyPanel.tsx": {
-    "mtime": 1782726936.9201822,
-    "ast_hash": "15098027bbc77ac4148b67857c1f6675",
+    "mtime": 1782746879.34166,
+    "ast_hash": "f52871895c78ec32544e67fbceeaa27a",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/web_frontend/src/features/industryTopology/types.ts": {
@@ -1905,8 +1905,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/web_frontend/src/features/industryTopology/TopologyCanvas.tsx": {
-    "mtime": 1782726853.7856596,
-    "ast_hash": "15d40b50edf54dc90f8d831acf1657cb",
+    "mtime": 1782746718.4652114,
+    "ast_hash": "512f751a9cb6e040c0688decd280cd01",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/industry_topology/enrichment.py": {
