@@ -307,12 +307,16 @@ class RelationEngine:
         避免反复空推理。
         """
         result: Dict[Tuple[str, str], List[CachedRelation]] = {}
+        source_aliases: Dict[Tuple[str, str], Tuple[str, str]] = {}
         for s in sources:
             code = str(s.get("code", "")).strip()
             market = str(s.get("market", "")).strip().upper()
             if not code:
                 continue
-            result[(market, code)] = []
+            key = (market, code)
+            result[key] = []
+            source_aliases[key] = key
+            source_aliases[(market, _normalize_peer_code(code))] = key
         if not result:
             return result
 
@@ -328,9 +332,9 @@ class RelationEngine:
         for grp in groups:
             if not isinstance(grp, dict):
                 continue
-            src_code = str(grp.get("source_code", "")).strip()
+            src_code = _normalize_peer_code(str(grp.get("source_code", "")).strip())
             src_market = str(grp.get("source_market", "")).strip().upper()
-            key = (src_market, src_code)
+            key = source_aliases.get((src_market, src_code))
             if key not in result:
                 continue
             items = grp.get("items") if isinstance(grp.get("items"), list) else []

@@ -116,7 +116,7 @@ class TopologyTaskRegistry:
         expired_ids = [
             task_id
             for task_id, task in self._tasks.items()
-            if task.expires_at <= now and task.stage != "initial_graph_running"
+            if task.expires_at <= now and task.stage not in {"initial_graph_running", "depth_expanding"}
         ]
         for task_id in expired_ids:
             self._tasks.pop(task_id, None)
@@ -137,20 +137,37 @@ class TopologyTaskRunner:
             return
         try:
             service = self.service_factory()
-            graph = service.build_initial_graph_only(task.code, task.market, depth=task.depth, center_name=task.center_name)
-            warnings = list(graph.get("warnings") or [])
-            self.registry.update(
-                task_id,
-                stage="initial_graph_ready",
-                progress_pct=55,
-                message="Initial graph ready",
-                graph=graph,
-                warnings=warnings,
-            )
+            graph = task.graph
+            for graph in service.iter_depth_graphs(task.code, task.market, depth=task.depth, center_name=task.center_name):
+                task = self.registry.get(task_id)
+                if task is None or task.stage == "cancelled":
+                    return
+                stats = graph.get("stats") or {}
+                reached_depth = max_graph_depth(graph)
+                progress_pct = depth_progress_pct(reached_depth, task.depth)
+                self.registry.update(
+                    task_id,
+                    stage="depth_expanding",
+                    progress_pct=progress_pct,
+                    message=f"第 {stats.get('expanding_depth') or reached_depth} 度拓扑生成中",
+                    graph=graph,
+                    warnings=list(graph.get("warnings") or []),
+                )
             task = self.registry.get(task_id)
             if task is None or task.stage == "cancelled":
                 return
-            self.registry.update(task_id, stage="enriching", progress_pct=70, message="Enriching graph")
+            requested_depth = max(int(task.depth or 0), 0)
+            reached_depth = max_graph_depth(graph)
+            if requested_depth > reached_depth:
+                self.registry.update(
+                    task_id,
+                    stage="partial",
+                    progress_pct=95,
+                    message=f"Topology graph partial: reached depth {reached_depth}, requested depth {requested_depth}",
+                    warnings=["topology_depth_incomplete"],
+                )
+                return
+            self.registry.update(task_id, stage="enriching", progress_pct=95, message="Enriching graph", graph=graph)
             self._run_search_enrich(task_id, service)
             task = self.registry.get(task_id)
             if task is None or task.stage == "cancelled":
@@ -175,13 +192,13 @@ class TopologyTaskRunner:
             symbols = [node.get("id") for node in graph.get("nodes") or [] if node.get("id")]
             enriched = service.search_enrich(center=center, symbols=symbols)
         except Exception:
-            self.registry.update(task_id, stage="enriching", progress_pct=75, message="Search enrichment unavailable", warnings=["search_unavailable"])
+            self.registry.update(task_id, stage="enriching", progress_pct=95, message="Search enrichment unavailable", warnings=["search_unavailable"])
             return
         items = enriched.get("items") or []
         warnings = list(enriched.get("warnings") or [])
         if items:
             graph = merge_node_patches(graph, items)
-        self.registry.update(task_id, stage="source_polling", progress_pct=85, message="Checking source relations", graph=graph, warnings=warnings)
+        self.registry.update(task_id, stage="source_polling", progress_pct=95, message="Checking source relations", graph=graph, warnings=warnings)
 
 
 def build_skeleton_graph(*, code: str, market: str, center_name: str, depth: int) -> Dict[str, Any]:
@@ -230,6 +247,21 @@ def build_skeleton_graph(*, code: str, market: str, center_name: str, depth: int
         },
         "warnings": [],
     }
+
+
+def max_graph_depth(graph: Dict[str, Any]) -> int:
+    depths = [
+        int(node.get("depth") or 0)
+        for node in graph.get("nodes") or []
+        if isinstance(node, dict)
+    ]
+    return max(depths, default=0)
+
+
+def depth_progress_pct(reached_depth: int, requested_depth: int) -> int:
+    if requested_depth <= 0:
+        return 90
+    return min(90, max(5, round(5 + (max(reached_depth, 0) / requested_depth) * 85)))
 
 
 def merge_node_patches(graph: Dict[str, Any], patches: list[Dict[str, Any]]) -> Dict[str, Any]:

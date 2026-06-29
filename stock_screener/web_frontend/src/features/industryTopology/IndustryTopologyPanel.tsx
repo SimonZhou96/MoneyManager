@@ -126,6 +126,7 @@ function buildRenderMeta(node: TopologyNodeData): RenderMeta {
 
 function buildProgress(stage: TopologyTaskStage, nodes: TopologyNodeData[], relationPollState: RelationPollState) {
   if (stage === 'graph_loading') return 10
+  if (stage === 'graph_depth_expanding') return 35
   if (stage === 'graph_ready_search_enriching') return 65
   if (stage === 'graph_ready_source_polling') {
     const total = nodes.length || 1
@@ -138,8 +139,9 @@ function buildProgress(stage: TopologyTaskStage, nodes: TopologyNodeData[], rela
   return 0
 }
 
-function progressLabel(stage: TopologyTaskStage, quotePollState: QuotePollState, relationPollState: RelationPollState) {
+function progressLabel(stage: TopologyTaskStage, quotePollState: QuotePollState, relationPollState: RelationPollState, expandingDepth: number | null) {
   if (stage === 'graph_loading') return 'LLM 首屏拓扑生成中'
+  if (stage === 'graph_depth_expanding') return expandingDepth ? `第 ${expandingDepth} 度拓扑生成中` : '拓扑逐层生成中'
   if (stage === 'graph_ready_search_enriching') return 'Search 补强中'
   if (stage === 'graph_ready_source_polling') {
     if (quotePollState === 'polling' && relationPollState === 'polling') return '数据源行情与关系校正中'
@@ -227,6 +229,8 @@ export function IndustryTopologyPanel() {
   const [progressPct, setProgressPct] = useState(0)
   const [quotePollState, setQuotePollState] = useState<QuotePollState>('idle')
   const [relationPollState, setRelationPollState] = useState<RelationPollState>('idle')
+  const [expandingDepth, setExpandingDepth] = useState<number | null>(null)
+  const [canContinueTopology, setCanContinueTopology] = useState(false)
   const [relationFilters, setRelationFilters] = useState<Set<RelationFilter>>(() => new Set(['upstream', 'downstream', 'peer']))
   const [graphQuery, setGraphQuery] = useState('')
   const [onlyImportant, setOnlyImportant] = useState(false)
@@ -244,7 +248,7 @@ export function IndustryTopologyPanel() {
 
   const symbols = useMemo(() => nodes.map((node) => node.id), [nodes])
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
-  const isBusy = taskStage === 'graph_loading' || taskStage === 'graph_ready_search_enriching' || taskStage === 'graph_ready_source_polling'
+  const isBusy = taskStage === 'graph_loading' || taskStage === 'graph_depth_expanding' || taskStage === 'graph_ready_search_enriching' || taskStage === 'graph_ready_source_polling'
 
   const visibleGraph = useMemo(() => {
     const center = nodes.find((node) => node.is_center)
@@ -259,7 +263,7 @@ export function IndustryTopologyPanel() {
       if (node.is_center) return true
       if (onlyImportant && node.depth > 1 && node.size_level < 3) return false
       if (graphQuery && !matchedNodeIds.has(node.id) && !edgeNodeIds.has(node.id)) return false
-      return edgeNodeIds.has(node.id) || node.depth <= 1 || node.id === center?.id
+      return edgeNodeIds.has(node.id) || node.id === center?.id
     })
     const visibleIds = new Set(filteredNodes.map((node) => node.id))
     return {
@@ -452,6 +456,7 @@ export function IndustryTopologyPanel() {
     setWarnings((current) => Array.from(new Set([...(graph.warnings || []), ...current])))
     setStats(formatTopologyStats(graph.stats, graph.warnings || []))
     setRelationStatus(graph.stats.relation_status)
+    setCanContinueTopology(Boolean(graph.stats.can_continue || graph.stats.relation_status === 'generating'))
     setRelationPollState(graph.stats.relation_status === 'generating' ? 'polling' : 'done')
     const refreshSymbols = nextNodes
       .filter((node) => replaceAll || !previousIds.has(node.id))
@@ -483,8 +488,9 @@ export function IndustryTopologyPanel() {
     void startQuoteRefresh(refreshSymbols)
   }, [mergeIntoExistingNodes, startQuoteRefresh])
 
-  const startTopology = useCallback(async () => {
+  const startTopology = useCallback(async (mode: 'start' | 'continue' = 'start') => {
     if (!selected) return
+    const isContinue = mode === 'continue'
     const taskId = taskIdRef.current + 1
     taskIdRef.current = taskId
     const previousGraphTaskId = graphTaskIdRef.current
@@ -496,6 +502,7 @@ export function IndustryTopologyPanel() {
     setProgressPct(5)
     setQuotePollState('idle')
     setRelationPollState('idle')
+    setExpandingDepth(null)
     if (previousGraphTaskId) {
       void topologyApi.cancelGraphTask(previousGraphTaskId).catch(() => undefined)
     }
@@ -503,7 +510,9 @@ export function IndustryTopologyPanel() {
       const created = await topologyApi.createGraphTask(selected.code, selected.market, depth, selected.name, 'llm_initial')
       if (taskId !== taskIdRef.current) return
       graphTaskIdRef.current = created.data.task_id
-      applyGraph(created.data.graph, true, true)
+      if (!isContinue || nodesRef.current.length === 0) {
+        applyGraph(created.data.graph, true, true)
+      }
       setWarnings(Array.from(new Set(created.data.warnings || [])))
       setStats(created.data.message || formatTopologyStats(created.data.graph.stats, created.data.warnings || []))
       setProgressPct(created.data.progress_pct)
@@ -516,11 +525,16 @@ export function IndustryTopologyPanel() {
           if (taskId !== taskIdRef.current || graphTaskIdRef.current !== activeGraphTaskId) return
           const task = res.data
           if (task.graph) {
-            applyGraph(task.graph, task.stage === 'initial_graph_ready', task.stage === 'initial_graph_ready')
+            const replaceGraph = !isContinue && task.stage === 'initial_graph_ready'
+            applyGraph(task.graph, replaceGraph, replaceGraph)
           }
           setWarnings(Array.from(new Set(task.warnings || [])))
           setStats(task.error?.message || task.message || formatTopologyStats(task.graph.stats, task.warnings || []))
           setProgressPct(task.progress_pct)
+          setExpandingDepth(task.graph?.stats?.expanding_depth ?? null)
+          if (task.stage === 'depth_expanding') {
+            setTaskStage('graph_depth_expanding')
+          }
           if (task.stage === 'initial_graph_ready' || task.stage === 'enriching' || task.stage === 'source_polling') {
             setTaskStage('graph_ready_source_polling')
           }
@@ -625,6 +639,61 @@ export function IndustryTopologyPanel() {
   }, [])
 
   useEffect(() => {
+    const loadId = taskIdRef.current + 1
+    taskIdRef.current = loadId
+    graphTaskIdRef.current = null
+    relationPollAttemptsRef.current = 0
+    pollAttemptsRef.current = 0
+    setWarnings([])
+    setProgressPct(0)
+    setQuotePollState('idle')
+    setRelationPollState('idle')
+    setExpandingDepth(null)
+    setCanContinueTopology(false)
+    setSelectedNode(null)
+    setSelectedEdge(null)
+    setSelectedEdgeKey(null)
+
+    if (!selected) {
+      nodesRef.current = []
+      setNodes([])
+      setEdges([])
+      setStats('')
+      setRelationStatus(undefined)
+      setTaskStage('idle')
+      return
+    }
+
+    setTaskStage('idle')
+    setStats('读取已有拓扑...')
+    topologyApi.existingGraph(selected.code, selected.market, depth, selected.name)
+      .then((res) => {
+        if (loadId !== taskIdRef.current) return
+        if (res.data.nodes.length > 1 || res.data.edges.length > 0) {
+          applyGraph(res.data, true, true)
+          setTaskStage(res.data.stats.can_continue || res.data.stats.relation_status === 'generating' ? 'partial' : 'done')
+          setProgressPct(res.data.stats.can_continue || res.data.stats.relation_status === 'generating' ? 100 : 100)
+        } else {
+          nodesRef.current = []
+          setNodes([])
+          setEdges([])
+          setRelationStatus(res.data.stats.relation_status)
+          setCanContinueTopology(false)
+          setStats('暂无已有拓扑，可开始生成')
+          setTaskStage('idle')
+        }
+      })
+      .catch((e) => {
+        if (loadId !== taskIdRef.current) return
+        nodesRef.current = []
+        setNodes([])
+        setEdges([])
+        setStats(`读取已有拓扑失败: ${(e as Error).message}`)
+        setTaskStage('failed')
+      })
+  }, [applyGraph, depth, selected])
+
+  useEffect(() => {
     if (quotePollState !== 'polling' || symbols.length === 0) return
     const activeSymbols = () => nodesRef.current
       .filter((node) => !hasCompleteQuoteFields(node) && !NON_RETRY_QUOTE_STATUSES.has(node.quote_status || 'pending'))
@@ -712,7 +781,7 @@ export function IndustryTopologyPanel() {
             <span style={{ width: `${progressPct}%` }} />
           </div>
           <div className="topo-progress-meta">
-            <strong>{progressLabel(taskStage, quotePollState, relationPollState)}</strong>
+            <strong>{progressLabel(taskStage, quotePollState, relationPollState, expandingDepth)}</strong>
             <span>{progressPct}%</span>
           </div>
           {warnings.length > 0 ? <div className="topo-progress-warning">warnings: {warnings.join(', ')}</div> : null}
@@ -745,11 +814,12 @@ export function IndustryTopologyPanel() {
         rawNodes={visibleGraph.nodes}
         rawEdges={visibleGraph.edges}
         onExpand={onExpand}
-        onStartTopology={startTopology}
+        onStartTopology={() => startTopology(canContinueTopology ? 'continue' : 'start')}
         onRefreshTopology={onRefresh}
         canStartTopology={Boolean(selected) && !isBusy}
         canRefreshTopology={Boolean(selected) && !isBusy}
         isTopologyBusy={isBusy}
+        startTopologyLabel={canContinueTopology ? '继续拓扑' : '开始拓扑'}
         selectedNodeId={selectedNode?.id || null}
         selectedEdgeKey={selectedEdgeKey}
         focusNodeId={visibleGraph.focusNodeId}

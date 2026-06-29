@@ -155,6 +155,12 @@ def graph(req: GraphRequest, background_tasks: BackgroundTasks, svc: TopologySer
     return {"ok": True, "data": data}
 
 
+@router.post("/graph/existing")
+def existing_graph(req: GraphRequest, svc: TopologyService = Depends(get_topology_service)):
+    data = svc.build_graph(req.code, req.market, req.depth, quote_mode="auto", center_name=req.center_name)
+    return {"ok": True, "data": data}
+
+
 @router.post("/graph/tasks")
 def create_graph_task(req: GraphRequest, background_tasks: BackgroundTasks):
     task = _TOPOLOGY_TASKS.create_task(

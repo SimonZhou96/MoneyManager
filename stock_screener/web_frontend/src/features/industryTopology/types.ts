@@ -3,11 +3,12 @@ export type Direction = 'upstream' | 'downstream' | 'peer'
 export type TopologyZone = Direction | 'center'
 export type QuoteStatus = 'pending' | 'queued' | 'cached' | 'fresh' | 'stale' | 'failed' | 'error' | 'skipped'
 export type TopologyDataStage = 'llm_initial' | 'source_partial' | 'source_verified' | string
-export type TopologyTaskStage = 'idle' | 'graph_loading' | 'graph_ready_search_enriching' | 'graph_ready_source_polling' | 'done' | 'partial' | 'failed'
+export type TopologyTaskStage = 'idle' | 'graph_loading' | 'graph_depth_expanding' | 'graph_ready_search_enriching' | 'graph_ready_source_polling' | 'done' | 'partial' | 'failed'
 export type TopologyGraphTaskStage =
   | 'queued'
   | 'initial_graph_running'
   | 'initial_graph_ready'
+  | 'depth_expanding'
   | 'enriching'
   | 'source_polling'
   | 'done'
@@ -58,9 +59,13 @@ export interface TopologyStats {
   stale_nodes?: number
   stale_sources?: Array<{ code: string; market: Market }>
   depth?: number
+  requested_depth?: number
+  reached_depth?: number
+  expanding_depth?: number
   relation_status?: 'cached' | 'generating' | 'fresh' | 'failed' | 'pending'
   data_stage?: TopologyDataStage
   background_started?: boolean
+  can_continue?: boolean
   error?: string
 }
 

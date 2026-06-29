@@ -16,6 +16,11 @@ export const topologyApi = {
       method: 'POST',
       body: JSON.stringify({ code, market, depth, center_name: centerName, quote_mode: quoteMode }),
     }),
+  existingGraph: (code: string, market: string, depth: number, centerName = '') =>
+    api<{ ok: true; data: TopologyGraph }>('/api/topology/graph/existing', {
+      method: 'POST',
+      body: JSON.stringify({ code, market, depth, center_name: centerName, quote_mode: 'auto' }),
+    }),
   createGraphTask: (code: string, market: string, depth: number, centerName = '', quoteMode = 'llm_initial') =>
     api<{ ok: true; data: TopologyGraphTask }>('/api/topology/graph/tasks', {
       method: 'POST',

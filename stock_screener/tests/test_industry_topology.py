@@ -10,6 +10,7 @@ from industry_topology.models import (
     RelationType, Direction, TopologyNode, TopologyEdge, CachedRelation,
 )
 from industry_topology.resolver import compute_size_level, format_market_cap, NodeResolver
+import industry_topology.service as topology_service_module
 from industry_topology.service import TopologyService
 from industry_topology.symbols import parse_topology_symbol, symbol_id
 from stock_terminal.models import BlockStatus, QuoteSnapshot
@@ -21,6 +22,7 @@ from web.topology import (
     _quote_status_item,
     _schedule_relation_generation,
     _TOPOLOGY_GENERATION_IN_FLIGHT,
+    existing_graph as topology_existing_graph_route,
     graph as topology_graph_route,
     quotes as topology_quotes_route,
     refresh_quotes as topology_refresh_quotes_route,
@@ -299,11 +301,12 @@ class TestTopologyServiceMerge(unittest.TestCase):
 
 class FakeTaskService:
     def __init__(self, graph=None, enrich=None, error=None):
+        self.layer_calls = []
         self.graph = graph or {
             "center": {"id": "US:NVDA", "code": "NVDA", "market": "US", "name": "NVIDIA", "data_stage": "llm_initial"},
             "nodes": [
-                {"id": "US:NVDA", "code": "NVDA", "market": "US", "name": "NVIDIA", "is_center": True, "data_stage": "llm_initial"},
-                {"id": "US:TSM", "code": "TSM", "market": "US", "name": "TSMC", "is_center": False, "data_stage": "llm_initial"},
+                {"id": "US:NVDA", "code": "NVDA", "market": "US", "name": "NVIDIA", "is_center": True, "data_stage": "llm_initial", "depth": 0},
+                {"id": "US:TSM", "code": "TSM", "market": "US", "name": "TSMC", "is_center": False, "data_stage": "llm_initial", "depth": 1},
             ],
             "edges": [{"source": "US:NVDA", "target": "US:TSM", "direction": "upstream", "relation": "foundry_packaging", "label": "代工"}],
             "stats": {"relation_status": "initial_ready", "data_stage": "llm_initial"},
@@ -316,6 +319,55 @@ class FakeTaskService:
         if self.error:
             raise self.error
         return self.graph
+
+    def iter_depth_graphs(self, code, market, depth=3, center_name=""):
+        if self.error:
+            raise self.error
+        center = {
+            "id": "US:NVDA", "code": "NVDA", "market": "US", "name": "NVIDIA",
+            "is_center": True, "data_stage": "llm_initial", "depth": 0,
+        }
+        tsm = {
+            "id": "US:TSM", "code": "TSM", "market": "US", "name": "TSM",
+            "is_center": False, "data_stage": "llm_initial", "depth": 1,
+        }
+        asml = {
+            "id": "US:ASML", "code": "ASML", "market": "US", "name": "ASML",
+            "is_center": False, "data_stage": "llm_initial", "depth": 2,
+        }
+        zeiss = {
+            "id": "US:ZEISS", "code": "ZEISS", "market": "US", "name": "ZEISS",
+            "is_center": False, "data_stage": "llm_initial", "depth": 3,
+        }
+        layers = [
+            ([center, tsm], [{"source": "US:NVDA", "target": "US:TSM", "direction": "upstream", "relation": "foundry_packaging", "label": "代工"}]),
+            ([center, tsm, asml], [
+                {"source": "US:NVDA", "target": "US:TSM", "direction": "upstream", "relation": "foundry_packaging", "label": "代工"},
+                {"source": "US:TSM", "target": "US:ASML", "direction": "upstream", "relation": "equipment", "label": "设备"},
+            ]),
+            ([center, tsm, asml, zeiss], [
+                {"source": "US:NVDA", "target": "US:TSM", "direction": "upstream", "relation": "foundry_packaging", "label": "代工"},
+                {"source": "US:TSM", "target": "US:ASML", "direction": "upstream", "relation": "equipment", "label": "设备"},
+                {"source": "US:ASML", "target": "US:ZEISS", "direction": "upstream", "relation": "component", "label": "组件"},
+            ]),
+        ]
+        for layer, (nodes, edges) in enumerate(layers[:depth], 1):
+            self.layer_calls.append([node["code"] for node in nodes if node["depth"] == layer - 1])
+            yield {
+                "center": center,
+                "nodes": nodes,
+                "edges": edges,
+                "stats": {
+                    "requested_depth": depth,
+                    "depth": depth,
+                    "reached_depth": layer,
+                    "expanding_depth": layer,
+                    "llm_calls": layer,
+                    "relation_status": "generating" if layer < depth else "initial_ready",
+                    "data_stage": "llm_initial",
+                },
+                "warnings": [],
+            }
 
     def search_enrich(self, *, center, symbols):
         return self.enrich
@@ -335,8 +387,9 @@ class TestTopologyTaskRegistry(unittest.TestCase):
 
     def test_runner_reaches_done_with_initial_graph(self):
         registry = TopologyTaskRegistry(ttl_seconds=60)
-        task = registry.create_task(code="NVDA", market="US", depth=3, center_name="NVIDIA", quote_mode="llm_initial")
-        runner = TopologyTaskRunner(registry, lambda: FakeTaskService())
+        task = registry.create_task(code="NVDA", market="US", depth=1, center_name="NVIDIA", quote_mode="llm_initial")
+        service = FakeTaskService()
+        runner = TopologyTaskRunner(registry, lambda: service)
 
         runner.run(task.task_id)
         snapshot = registry.get_snapshot(task.task_id)
@@ -344,7 +397,60 @@ class TestTopologyTaskRegistry(unittest.TestCase):
         self.assertEqual(snapshot["stage"], "done")
         self.assertEqual(snapshot["progress_pct"], 100)
         self.assertEqual(len(snapshot["graph"]["nodes"]), 2)
-        self.assertEqual(snapshot["graph"]["stats"]["relation_status"], "initial_ready")
+        self.assertEqual(snapshot["graph"]["stats"]["reached_depth"], 1)
+        self.assertEqual(service.layer_calls, [["NVDA"]])
+
+    def test_runner_updates_snapshot_after_each_depth_layer(self):
+        registry = TopologyTaskRegistry(ttl_seconds=60)
+        task = registry.create_task(code="NVDA", market="US", depth=3, center_name="NVIDIA", quote_mode="llm_initial")
+        snapshots = []
+        original_update = registry.update
+
+        def recording_update(*args, **kwargs):
+            updated = original_update(*args, **kwargs)
+            if kwargs.get("stage") == "depth_expanding" and kwargs.get("graph"):
+                snapshots.append(registry.get_snapshot(task.task_id))
+            return updated
+
+        registry.update = recording_update
+        service = FakeTaskService()
+        runner = TopologyTaskRunner(registry, lambda: service)
+
+        runner.run(task.task_id)
+        final = registry.get_snapshot(task.task_id)
+
+        self.assertEqual([snap["graph"]["stats"]["reached_depth"] for snap in snapshots], [1, 2, 3])
+        self.assertEqual([len(snap["graph"]["nodes"]) for snap in snapshots], [2, 3, 4])
+        self.assertEqual(service.layer_calls, [["NVDA"], ["TSM"], ["ASML"]])
+        self.assertEqual(final["stage"], "done")
+
+    def test_runner_marks_partial_when_requested_depth_is_not_reached(self):
+        registry = TopologyTaskRegistry(ttl_seconds=60)
+        task = registry.create_task(code="NVDA", market="US", depth=3, center_name="NVIDIA", quote_mode="llm_initial")
+        service = FakeTaskService(graph={
+            "center": {"id": "US:NVDA", "code": "NVDA", "market": "US", "name": "NVIDIA", "data_stage": "llm_initial", "depth": 0},
+            "nodes": [
+                {"id": "US:NVDA", "code": "NVDA", "market": "US", "name": "NVIDIA", "is_center": True, "data_stage": "llm_initial", "depth": 0},
+                {"id": "US:TSM", "code": "TSM", "market": "US", "name": "TSM", "is_center": False, "data_stage": "llm_initial", "depth": 1},
+            ],
+            "edges": [{"source": "US:NVDA", "target": "US:TSM", "direction": "upstream", "relation": "foundry_packaging", "label": "代工"}],
+            "stats": {"requested_depth": 3, "depth": 3, "reached_depth": 1, "relation_status": "initial_ready", "data_stage": "llm_initial"},
+            "warnings": [],
+        })
+
+        def one_layer(*args, **kwargs):
+            yield service.graph
+
+        service.iter_depth_graphs = one_layer
+        runner = TopologyTaskRunner(registry, lambda: service)
+
+        runner.run(task.task_id)
+        snapshot = registry.get_snapshot(task.task_id)
+
+        self.assertEqual(snapshot["stage"], "partial")
+        self.assertLess(snapshot["progress_pct"], 100)
+        self.assertIn("requested depth 3", snapshot["message"])
+        self.assertIn("topology_depth_incomplete", snapshot["warnings"])
 
     def test_runner_failure_preserves_skeleton(self):
         registry = TopologyTaskRegistry(ttl_seconds=60)
@@ -937,7 +1043,7 @@ class TestTopologyService(unittest.TestCase):
         self.assertEqual(node_map["A:300308"]["pct_chg"], 1.8)
         self.assertEqual(node_map["A:300308"]["field_sources"]["market_cap"], "llm_search")
 
-    def test_build_initial_graph_only_does_not_infer_stale_sources(self):
+    def test_build_initial_graph_only_depth_one_does_not_infer_stale_sources(self):
         cache = FakeCache({})
         llm = SequenceLLMProvider([
             {
@@ -984,15 +1090,224 @@ class TestTopologyService(unittest.TestCase):
         svc.engine = RelationEngine(FakeResolver2(), llm)
         svc.enricher = TopologyEnrichmentService(svc.engine, FakeSearchProvider())
 
-        result = svc.build_initial_graph_only("NVDA", "US", depth=3, center_name="NVIDIA")
+        result = svc.build_initial_graph_only("NVDA", "US", depth=1, center_name="NVIDIA")
 
         self.assertEqual(result["stats"]["data_stage"], "llm_initial")
         self.assertEqual(result["stats"]["relation_status"], "initial_ready")
         self.assertEqual(result["stats"]["llm_calls"], 1)
         self.assertEqual(llm.calls, 2)
-        self.assertEqual([item[0] for item in cache.saved], ["NVDA"])
+        self.assertEqual([item[0] for item in cache.saved], ["US.NVDA"])
         self.assertGreaterEqual(len(result["nodes"]), 2)
         self.assertTrue(any(node["id"] == "US:TSM" for node in result["nodes"]))
+
+    def test_build_initial_graph_only_expands_to_requested_depth_with_batch_inference(self):
+        cache = FakeCache({})
+        llm = SequenceLLMProvider([
+            {
+                "resolved": True,
+                "market": "US",
+                "code": "NVDA",
+                "name": "英伟达",
+                "aliases": ["NVIDIA"],
+                "sector": "AI芯片",
+                "industry": "半导体",
+                "reason": "resolved",
+                "confidence": 0.9,
+            },
+            {
+                "center": {
+                    "resolved": True,
+                    "market": "US",
+                    "code": "NVDA",
+                    "name": "英伟达",
+                    "aliases": ["NVIDIA"],
+                    "sector": "AI芯片",
+                    "industry": "半导体",
+                    "reason": "resolved",
+                    "confidence": 0.9,
+                },
+                "items": [
+                    {
+                        "code": "TSM",
+                        "name": "台积电",
+                        "market": "US",
+                        "direction": "upstream",
+                        "relation": "foundry_packaging",
+                        "evidence": "先进制程代工",
+                    }
+                ],
+                "warnings": [],
+            },
+            {"groups": [
+                {"source_code": "TSM", "source_market": "US", "items": [
+                    {
+                        "code": "ASML",
+                        "name": "阿斯麦",
+                        "market": "US",
+                        "direction": "upstream",
+                        "relation": "equipment",
+                        "evidence": "光刻设备",
+                    }
+                ]},
+            ]},
+            {"groups": [
+                {"source_code": "ASML", "source_market": "US", "items": [
+                    {
+                        "code": "ZEISS",
+                        "name": "蔡司",
+                        "market": "US",
+                        "direction": "upstream",
+                        "relation": "component",
+                        "evidence": "光学组件",
+                    }
+                ]},
+            ]},
+        ])
+        svc = TopologyService(FakeDB(), llm_provider=llm)
+        svc.cache = cache
+        svc.resolver = FakeResolver2()
+        svc.engine = RelationEngine(FakeResolver2(), llm)
+        svc.enricher = TopologyEnrichmentService(svc.engine, FakeSearchProvider())
+
+        result = svc.build_initial_graph_only("NVDA", "US", depth=3, center_name="NVIDIA")
+        node_map = {node["id"]: node for node in result["nodes"]}
+
+        self.assertEqual(result["stats"]["relation_status"], "initial_ready")
+        self.assertEqual(result["stats"]["reached_depth"], 3)
+        self.assertEqual(result["stats"]["llm_calls"], 3)
+        self.assertEqual(node_map["US:TSM"]["depth"], 1)
+        self.assertEqual(node_map["US:ASML"]["depth"], 2)
+        self.assertEqual(node_map["US:ZEISS"]["depth"], 3)
+        self.assertEqual([item[0] for item in cache.saved], ["US.NVDA", "US.TSM", "US.ASML"])
+
+    def test_iter_depth_graphs_uses_infer_batch_from_center_and_yields_each_layer(self):
+        cache = FakeCache({})
+        llm = SequenceLLMProvider([
+            {"groups": [
+                {"source_code": "NVDA", "source_market": "US", "items": [
+                    {"code": "TSM", "name": "台积电", "market": "US", "direction": "upstream", "relation": "foundry_packaging", "evidence": "先进制程代工"},
+                ]},
+            ]},
+            {"groups": [
+                {"source_code": "TSM", "source_market": "US", "items": [
+                    {"code": "ASML", "name": "阿斯麦", "market": "US", "direction": "upstream", "relation": "equipment", "evidence": "光刻设备"},
+                ]},
+            ]},
+            {"groups": [
+                {"source_code": "ASML", "source_market": "US", "items": [
+                    {"code": "ZEISS", "name": "蔡司", "market": "US", "direction": "upstream", "relation": "component", "evidence": "光学组件"},
+                ]},
+            ]},
+        ])
+        svc = TopologyService(FakeDB(), llm_provider=llm)
+        svc.cache = cache
+        svc.resolver = FakeResolver2()
+        svc.engine = RelationEngine(FakeResolver2(), llm)
+
+        graphs = list(svc.iter_depth_graphs("NVDA", "US", depth=3, center_name="NVIDIA"))
+
+        self.assertEqual([graph["stats"]["reached_depth"] for graph in graphs], [1, 2, 3])
+        self.assertEqual([len(graph["nodes"]) for graph in graphs], [2, 3, 4])
+        self.assertEqual(llm.calls, 3)
+        self.assertEqual([item[0] for item in cache.saved], ["US.NVDA", "US.TSM", "US.ASML"])
+
+    def test_iter_depth_graphs_reuses_cached_center_and_continues_from_missing_layer(self):
+        cache = FakeCache({
+            "US.NVDA": [_make_relation("US.TSM", peer_market="US")],
+        })
+        llm = SequenceLLMProvider([
+            {"groups": [
+                {"source_code": "TSM", "source_market": "US", "items": [
+                    {"code": "ASML", "name": "阿斯麦", "market": "US", "direction": "upstream", "relation": "equipment", "evidence": "光刻设备"},
+                ]},
+            ]},
+        ])
+        svc = TopologyService(FakeDB(), llm_provider=llm)
+        svc.cache = cache
+        svc.resolver = FakeResolver2()
+        svc.engine = RelationEngine(FakeResolver2(), llm)
+
+        graphs = list(svc.iter_depth_graphs("NVDA", "US", depth=2, center_name="NVIDIA"))
+
+        self.assertEqual(len(graphs), 1)
+        self.assertEqual(graphs[0]["stats"]["reached_depth"], 2)
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual([item[0] for item in cache.saved], ["US.TSM"])
+
+    def test_iter_depth_graphs_accepts_bare_source_code_for_prefixed_center_symbol(self):
+        cache = FakeCache({})
+        llm = SequenceLLMProvider([
+            {"groups": [
+                {"source_code": "NVDA", "source_market": "US", "items": [
+                    {"code": "TSM", "name": "台积电", "market": "US", "direction": "upstream", "relation": "foundry_packaging", "evidence": "先进制程代工"},
+                ]},
+            ]},
+        ])
+        svc = TopologyService(FakeDB(), llm_provider=llm)
+        svc.cache = cache
+        svc.resolver = FakeResolver2()
+        svc.engine = RelationEngine(FakeResolver2(), llm)
+
+        graphs = list(svc.iter_depth_graphs("US.NVDA", "US", depth=1, center_name="NVIDIA"))
+
+        self.assertEqual(len(graphs), 1)
+        self.assertEqual(graphs[0]["stats"]["reached_depth"], 1)
+        self.assertTrue(any(node["id"] == "US:TSM" for node in graphs[0]["nodes"]))
+        self.assertEqual([item[0] for item in cache.saved], ["US.NVDA"])
+
+    def test_iter_depth_graphs_stops_when_next_layer_returns_empty_group(self):
+        cache = FakeCache({})
+        llm = SequenceLLMProvider([
+            {"groups": [
+                {"source_code": "NVDA", "source_market": "US", "items": [
+                    {"code": "TSM", "name": "台积电", "market": "US", "direction": "upstream", "relation": "foundry_packaging", "evidence": "先进制程代工"},
+                ]},
+            ]},
+            {"groups": [
+                {"source_code": "TSM", "source_market": "US", "items": []},
+            ]},
+        ])
+        svc = TopologyService(FakeDB(), llm_provider=llm)
+        svc.cache = cache
+        svc.resolver = FakeResolver2()
+        svc.engine = RelationEngine(FakeResolver2(), llm)
+
+        graphs = list(svc.iter_depth_graphs("NVDA", "US", depth=3, center_name="NVIDIA"))
+
+        self.assertEqual([graph["stats"]["reached_depth"] for graph in graphs], [1, 1])
+        self.assertEqual(graphs[-1]["stats"]["expanding_depth"], 2)
+        self.assertEqual([item[0] for item in cache.saved], ["US.NVDA", "US.TSM"])
+
+    def test_iter_depth_graphs_stops_at_llm_hard_limit_and_keeps_existing_graph(self):
+        original_limit = topology_service_module._LLM_HARD_LIMIT
+        topology_service_module._LLM_HARD_LIMIT = 1
+        try:
+            cache = FakeCache({})
+            llm = SequenceLLMProvider([
+                {"groups": [
+                    {"source_code": "NVDA", "source_market": "US", "items": [
+                        {"code": "TSM", "name": "台积电", "market": "US", "direction": "upstream", "relation": "foundry_packaging", "evidence": "先进制程代工"},
+                    ]},
+                ]},
+                {"groups": [
+                    {"source_code": "TSM", "source_market": "US", "items": [
+                        {"code": "ASML", "name": "阿斯麦", "market": "US", "direction": "upstream", "relation": "equipment", "evidence": "光刻设备"},
+                    ]},
+                ]},
+            ])
+            svc = TopologyService(FakeDB(), llm_provider=llm)
+            svc.cache = cache
+            svc.resolver = FakeResolver2()
+            svc.engine = RelationEngine(FakeResolver2(), llm)
+
+            graphs = list(svc.iter_depth_graphs("NVDA", "US", depth=3, center_name="NVIDIA"))
+        finally:
+            topology_service_module._LLM_HARD_LIMIT = original_limit
+
+        self.assertEqual(len(graphs), 1)
+        self.assertEqual(graphs[0]["stats"]["reached_depth"], 1)
+        self.assertEqual(len(graphs[0]["nodes"]), 2)
+        self.assertEqual(llm.calls, 1)
 
     def test_build_graph_llm_initial_fails_when_initial_snapshot_missing(self):
         svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
@@ -1105,6 +1420,35 @@ class TestTopologyService(unittest.TestCase):
         self.assertEqual(result["stats"]["stale_nodes"], 1)
         self.assertEqual(result["stats"]["stale_sources"], [{"code": "US.NVDA", "market": "US"}])
 
+    def test_build_graph_auto_uses_prefixed_us_cache_key_without_bare_fallback(self):
+        cache = FakeCache({
+            "NVDA": [_make_relation("TSM", peer_market="US")],
+        })
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = cache
+        svc.resolver = FakeResolver2()
+
+        result = svc.build_graph("US.NVDA", "US", depth=1, quote_mode="auto")
+
+        self.assertEqual(result["stats"]["relation_status"], "generating")
+        self.assertEqual(result["stats"]["cached_nodes"], 0)
+        self.assertEqual(result["stats"]["stale_nodes"], 1)
+        self.assertEqual(result["stats"]["stale_sources"], [{"code": "US.NVDA", "market": "US"}])
+
+    def test_build_graph_auto_empty_relation_placeholder_can_continue(self):
+        cache = FakeCache({
+            "US.NVDA": [_make_relation("", peer_market="", is_empty=True)],
+        })
+        svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
+        svc.cache = cache
+        svc.resolver = FakeResolver2()
+
+        result = svc.build_graph("US.NVDA", "US", depth=3, quote_mode="auto")
+
+        self.assertEqual(result["stats"]["relation_status"], "cached")
+        self.assertEqual(result["stats"]["reached_depth"], 0)
+        self.assertTrue(result["stats"]["can_continue"])
+
     def test_build_graph_auto_partial_cache_returns_cached_edges_and_stale_sources(self):
         cache = FakeCache({
             "US.NVDA": [_make_relation("300308")],
@@ -1121,6 +1465,9 @@ class TestTopologyService(unittest.TestCase):
         self.assertEqual(result["stats"]["cached_nodes"], 1)
         self.assertEqual(result["stats"]["stale_nodes"], 1)
         self.assertEqual(result["stats"]["stale_sources"], [{"code": "300308", "market": "A"}])
+        self.assertEqual(result["stats"]["requested_depth"], 2)
+        self.assertEqual(result["stats"]["reached_depth"], 1)
+        self.assertTrue(result["stats"]["can_continue"])
 
     def test_build_graph_auto_full_cache_does_not_mark_generating(self):
         cache = FakeCache({
@@ -1136,6 +1483,9 @@ class TestTopologyService(unittest.TestCase):
         self.assertEqual(result["stats"]["relation_status"], "cached")
         self.assertEqual(result["stats"]["stale_nodes"], 0)
         self.assertEqual(result["stats"]["stale_sources"], [])
+        self.assertEqual(result["stats"]["requested_depth"], 2)
+        self.assertEqual(result["stats"]["reached_depth"], 2)
+        self.assertFalse(result["stats"]["can_continue"])
 
     def test_llm_failure_empty_relations_returns_center_node(self):
         svc = TopologyService(FakeDB(), llm_provider=FakeLLMProvider({"items": []}))
@@ -1166,7 +1516,7 @@ class TestTopologyService(unittest.TestCase):
         ])
 
         self.assertTrue(result)
-        self.assertEqual([item[0] for item in svc.cache.saved], ["US.NVDA", "TSM"])
+        self.assertEqual([item[0] for item in svc.cache.saved], ["US.NVDA", "US.TSM"])
         self.assertEqual(len(svc.cache.saved[0][1]), 1)
         self.assertEqual(svc.cache.saved[1][1], [])
 
@@ -1213,7 +1563,7 @@ class TestTopologyService(unittest.TestCase):
 
     def test_build_graph_uses_peer_market_and_symbol_ids(self):
         cache = FakeCache({
-            "01810": [
+            "HK.01810": [
                 _make_relation("QCOM", peer_market="US"),
                 _make_relation("002600", peer_market="A"),
                 _make_relation("6981", peer_market="JP"),
@@ -1328,6 +1678,19 @@ class TestTopologyRoutes(unittest.TestCase):
         )
 
         self.assertEqual(service.build_graph.call_args.kwargs["quote_mode"], "llm_initial")
+
+    def test_existing_graph_route_reads_auto_without_background_scheduler(self):
+        service = MagicMock()
+        service.build_graph.return_value = {"nodes": [], "edges": [], "stats": {"relation_status": "generating"}}
+
+        response = topology_existing_graph_route(
+            GraphRequest(code="US.NVDA", market="US", depth=2, center_name="NVIDIA"),
+            service,
+        )
+
+        self.assertEqual(response["data"]["stats"]["relation_status"], "generating")
+        self.assertNotIn("background_started", response["data"]["stats"])
+        self.assertEqual(service.build_graph.call_args.kwargs["quote_mode"], "auto")
 
     def test_search_enrich_route_passes_center_and_symbols(self):
         service = MagicMock()

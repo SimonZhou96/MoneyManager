@@ -12,6 +12,7 @@ interface Props {
   canStartTopology: boolean
   canRefreshTopology: boolean
   isTopologyBusy: boolean
+  startTopologyLabel?: string
   selectedNodeId?: string | null
   selectedEdgeKey?: string | null
   focusNodeId?: string | null
@@ -34,6 +35,7 @@ interface ToolbarState {
   canStartTopology: boolean
   canRefreshTopology: boolean
   isTopologyBusy: boolean
+  startTopologyLabel: string
 }
 
 interface ViewState {
@@ -497,7 +499,7 @@ function topologyToolbarItems(state: ToolbarState) {
     {
       id: 'edit',
       value: `start-topology ${state.canStartTopology ? 'is-enabled' : 'is-disabled'} ${state.isTopologyBusy ? 'is-busy' : ''}`,
-      title: state.isTopologyBusy ? '生成中...' : '开始拓扑',
+      title: state.isTopologyBusy ? '生成中...' : state.startTopologyLabel,
     },
     {
       id: 'reset',
@@ -599,6 +601,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   canStartTopology,
   canRefreshTopology,
   isTopologyBusy,
+  startTopologyLabel = '开始拓扑',
   selectedNodeId,
   selectedEdgeKey,
   focusNodeId,
@@ -619,7 +622,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   const onExpandRef = useRef(onExpand)
   const onStartTopologyRef = useRef(onStartTopology)
   const onRefreshTopologyRef = useRef(onRefreshTopology)
-  const toolbarStateRef = useRef<ToolbarState>({ canStartTopology, canRefreshTopology, isTopologyBusy })
+  const toolbarStateRef = useRef<ToolbarState>({ canStartTopology, canRefreshTopology, isTopologyBusy, startTopologyLabel })
   const rawNodesRef = useRef(rawNodes)
   const rawEdgesRef = useRef(rawEdges)
   const onSelectNodeRef = useRef(onSelectNode)
@@ -632,7 +635,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   onExpandRef.current = onExpand
   onStartTopologyRef.current = onStartTopology
   onRefreshTopologyRef.current = onRefreshTopology
-  toolbarStateRef.current = { canStartTopology, canRefreshTopology, isTopologyBusy }
+  toolbarStateRef.current = { canStartTopology, canRefreshTopology, isTopologyBusy, startTopologyLabel }
   rawNodesRef.current = rawNodes
   rawEdgesRef.current = rawEdges
   onSelectNodeRef.current = onSelectNode
@@ -924,7 +927,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       style: { top: '14px', right: '14px' },
       getItems: () => topologyToolbarItems(toolbarStateRef.current),
     } as never)
-  }, [canRefreshTopology, canStartTopology, isTopologyBusy])
+  }, [canRefreshTopology, canStartTopology, isTopologyBusy, startTopologyLabel])
 
   // Clear pinned edge labels when topology fundamentally changes (new center / reset)
   useEffect(() => {
@@ -1033,7 +1036,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
         <span className="topo-legend-item topo-legend-item--center">中心</span>
       </div>
       <div className="topo-g6-help">滚轮缩放 · 拖拽画布 · 双击节点展开 · 悬浮查看详情</div>
-      {rawNodes.length === 0 ? <div className="topo-empty topo-empty--canvas">选择股票后点击画布右上角&quot;开始拓扑&quot;</div> : null}
+      {rawNodes.length === 0 ? <div className="topo-empty topo-empty--canvas">选择股票后会优先加载上次拓扑，可开始或继续生成</div> : null}
       <div className="topo-canvas topo-canvas--g6" ref={containerRef} />
     </div>
   )

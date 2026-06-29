@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import replace
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -13,9 +14,10 @@ from .cache import GraphCache
 from .enrichment import TopologyEnrichmentService
 from .relation_engine import RelationEngine, RelationEngineError
 from .resolver import NodeResolver, compute_size_level, format_market_cap
-from .symbols import parse_topology_symbol, symbol_id
+from .symbols import bare_code, parse_topology_symbol, symbol_id
 
 _LLM_HARD_LIMIT = 20
+_DEFAULT_DEPTH_BATCH_SIZE = 5
 
 
 class TopologyService:
@@ -105,7 +107,7 @@ class TopologyService:
     def build_initial_graph_only(self, code: str, market: str, depth: int = 3, center_name: str = "") -> Dict[str, Any]:
         market = normalize_market(market)
         center_info = self._resolver_resolve(code, market, include_quote=False, fallback_name=center_name)
-        resolved_code = center_info.get("code") or code
+        resolved_code = self._storage_code(center_info.get("code") or code, market)
         center_name_value = center_info.get("name", "") or center_name or resolved_code
         center_sector = center_info.get("sector", "") or "--"
         initial = self._build_initial_snapshot(
@@ -117,7 +119,7 @@ class TopologyService:
         if not initial:
             raise RuntimeError("LLM 首屏拓扑生成失败")
         center_payload = initial.get("center") if isinstance(initial.get("center"), dict) else {}
-        initial_relations = list(initial.get("relations") or [])
+        initial_relations = self._normalize_relation_storage_codes(list(initial.get("relations") or []))
         if not initial_relations:
             raise RuntimeError("LLM 首屏拓扑未返回任何关系节点")
 
@@ -131,6 +133,7 @@ class TopologyService:
         except Exception:
             pass
 
+        self._expand_cached_map_to_depth(resolved_code, market, depth, cached_map)
         graph = self.cache.build_graph(cached_map)
         reachable = {resolved_code}
         if resolved_code in graph:
@@ -162,6 +165,7 @@ class TopologyService:
             "stale_nodes": 0,
             "stale_sources": [],
             "depth": depth,
+            "reached_depth": self._max_cached_depth(resolved_code, cached_map, graph),
             "relation_status": "initial_ready",
             "data_stage": "llm_initial",
         }
@@ -182,6 +186,55 @@ class TopologyService:
             "stats": stats,
             "warnings": list(initial.get("warnings") or []),
         }
+
+    def iter_depth_graphs(self, code: str, market: str, depth: int = 3, center_name: str = ""):
+        market = normalize_market(market)
+        requested_depth = max(int(depth or 0), 0)
+        center_info = self._resolver_resolve(code, market, include_quote=False, fallback_name=center_name)
+        resolved_code = self._storage_code(center_info.get("code") or code, market)
+        cached_map, stale_sources = self._load_cached_map_to_depth(resolved_code, market, requested_depth)
+        batch_size = self._depth_batch_size()
+        initial_graph = self.cache.build_graph(cached_map)
+        reached_depth = self._completed_depth(resolved_code, requested_depth, cached_map, stale_sources, initial_graph)
+
+        if cached_map and reached_depth >= requested_depth:
+            yield self._graph_from_cached_map(
+                resolved_code,
+                market,
+                requested_depth,
+                cached_map,
+                center_info=center_info,
+                expanding_depth=reached_depth,
+                data_stage="cached",
+                reached_depth=reached_depth,
+            )
+            return
+
+        for expanding_depth in range(max(1, reached_depth + 1), requested_depth + 1):
+            frontier = self._depth_frontier(resolved_code, market, cached_map, expanding_depth)
+            if not frontier:
+                return
+            progressed = False
+            for i in range(0, len(frontier), batch_size):
+                if self._llm_calls >= _LLM_HARD_LIMIT:
+                    return
+                result = self._infer_batch_with_limit(frontier[i:i + batch_size])
+                if not result:
+                    continue
+                for (_, source_code), rels in result.items():
+                    cached_map[source_code] = rels
+                    progressed = True
+            graph = self._graph_from_cached_map(
+                resolved_code,
+                market,
+                requested_depth,
+                cached_map,
+                center_info=center_info,
+                expanding_depth=expanding_depth,
+            )
+            yield graph
+            if not progressed or int(graph.get("stats", {}).get("reached_depth") or 0) < expanding_depth:
+                return
 
     # -- 按需展开 --
     def expand(
@@ -235,6 +288,7 @@ class TopologyService:
         include_quote = quote_mode == "sync"
         initial_stage = quote_mode == "llm_initial"
         center_info = self._resolver_resolve(code, market, include_quote=include_quote, fallback_name=center_name)
+        code = self._storage_code(center_info.get("code") or code, market)
         center_name = center_info.get("name", "") or code
         center_sector = center_info.get("sector", "") or "--"
         llm_node_data: Dict[str, Dict[str, Any]] = {}
@@ -247,7 +301,7 @@ class TopologyService:
                 raise RuntimeError("LLM 首屏拓扑生成失败")
             if initial:
                 center_payload = initial.get("center") if isinstance(initial.get("center"), dict) else {}
-                initial_relations = list(initial.get("relations") or [])
+                initial_relations = self._normalize_relation_storage_codes(list(initial.get("relations") or []))
                 if not initial_relations:
                     raise RuntimeError("LLM 首屏拓扑未返回任何关系节点")
                 llm_node_data = self._llm_node_data_from_relations(initial_relations)
@@ -259,25 +313,11 @@ class TopologyService:
                     self.cache.save_relations(code, market, initial_relations, provider=self._provider_meta()[0], model=self._provider_meta()[1])
             warnings = list(initial.get("warnings") or []) if initial_stage and initial else []
 
-        # 收集缓存
-        cached_map: Dict[str, List] = {}
-        stale_sources: List[str] = []
-        cached_for_center = initial_relations if initial_relations is not None else self.cache.get_relations(code, market)
-        if cached_for_center is not None:
-            cached_map[code] = cached_for_center
+        # 收集缓存；auto/defer 只读已有关系，sync/llm_initial 再补缺失。
+        if initial_relations is not None:
+            cached_map, stale_sources = self._load_cached_map_to_depth(code, market, depth, initial_relations=initial_relations)
         else:
-            stale_sources.append(code)
-
-        # 对已缓存节点的子关系也尝试加载（depth>1 时）
-        if depth > 1 and cached_for_center:
-            for r in cached_for_center:
-                if r.is_empty:
-                    continue
-                sub = self.cache.get_relations(r.peer_code, r.peer_market)
-                if sub is not None:
-                    cached_map[r.peer_code] = sub
-                else:
-                    stale_sources.append(r.peer_code)
+            cached_map, stale_sources = self._load_cached_map_to_depth(code, market, depth)
 
         relation_status = "cached" if cached_map else "pending"
         if quote_mode in {"sync", "llm_initial"}:
@@ -285,6 +325,7 @@ class TopologyService:
             for src in list(stale_sources):
                 rels = self._infer_with_limit(src, market, center_name if src == code else "", center_sector if src == code else "--")
                 if rels is not None:
+                    rels = self._normalize_relation_storage_codes(rels)
                     cached_map[src] = rels
                     # 写缓存
                     try:
@@ -323,12 +364,16 @@ class TopologyService:
             prefer_llm=initial_stage,
             data_stage="llm_initial" if initial_stage else None,
         )
+        reached_depth = self._completed_depth(code, depth, cached_map, stale_sources, graph)
         stats = {
             "llm_calls": self._llm_calls,
             "cached_nodes": len(cached_map),
             "stale_nodes": len(stale_sources),
             "stale_sources": self._stale_source_payload(stale_sources, market, code, cached_map),
             "depth": depth,
+            "requested_depth": depth,
+            "reached_depth": reached_depth,
+            "can_continue": bool(stale_sources) or reached_depth < depth,
             "relation_status": relation_status,
             "data_stage": "llm_initial" if initial_stage else "source_verified" if include_quote else "cached",
         }
@@ -352,19 +397,68 @@ class TopologyService:
         except Exception:
             return None
 
+    def _load_cached_map_to_depth(
+        self,
+        center_code: str,
+        market: str,
+        depth: int,
+        *,
+        initial_relations: Optional[List[Any]] = None,
+    ) -> Tuple[Dict[str, List], List[str]]:
+        cached_map: Dict[str, List] = {}
+        stale_sources: List[str] = []
+        requested_depth = max(int(depth or 0), 0)
+
+        if initial_relations is not None:
+            cached_map[center_code] = initial_relations
+        else:
+            center_relations = self.cache.get_relations(center_code, market)
+            if center_relations is None:
+                return cached_map, [center_code]
+            cached_map[center_code] = center_relations
+
+        for source_depth in range(0, requested_depth):
+            graph = self.cache.build_graph(cached_map)
+            node_meta = self._build_node_meta(center_code, cached_map, graph)
+            node_markets = self._build_node_markets(center_code, market, cached_map)
+            frontier = [
+                code
+                for code, meta in node_meta.items()
+                if meta["depth"] == source_depth and code in cached_map
+            ]
+            for source_code in frontier:
+                for rel in cached_map.get(source_code) or []:
+                    if rel.is_empty:
+                        continue
+                    if rel.peer_code in cached_map or rel.peer_code in stale_sources:
+                        continue
+                    peer_depth = node_meta.get(rel.peer_code, {}).get("depth")
+                    if peer_depth is None or peer_depth >= requested_depth:
+                        continue
+                    peer_market = node_markets.get(rel.peer_code, rel.peer_market or market)
+                    peer_relations = self.cache.get_relations(rel.peer_code, peer_market)
+                    if peer_relations is None:
+                        stale_sources.append(rel.peer_code)
+                    else:
+                        cached_map[rel.peer_code] = peer_relations
+        return cached_map, stale_sources
+
     def infer_and_cache_batch(self, sources: List[Dict[str, str]]) -> bool:
         """批量推理多个 source 并写缓存。一次 LLM 调用覆盖整批。
 
         sources: [{code, market, name?, sector?}] —— name/sector 缺失时用 resolver 补齐。
         未返回 group 的 source 写入空关系缓存，避免反复 generating。
         """
+        return bool(self._infer_batch_with_limit(sources))
+
+    def _infer_batch_with_limit(self, sources: List[Dict[str, str]]) -> Dict[Tuple[str, str], List[Any]]:
         if not sources or self.engine is None or self._llm_calls >= _LLM_HARD_LIMIT:
-            return False
+            return {}
 
         enriched: List[Dict[str, str]] = []
         for s in sources:
-            code = str(s.get("code", "")).strip()
             market = normalize_market(str(s.get("market", "")))
+            code = self._storage_code(str(s.get("code", "")).strip(), market)
             if not code:
                 continue
             name = str(s.get("name", "") or "")
@@ -375,21 +469,183 @@ class TopologyService:
                 sector = sector if (sector and sector != "--") else (info.get("sector", "") or "--")
             enriched.append({"code": code, "market": market, "name": name, "sector": sector})
         if not enriched:
-            return False
+            return {}
 
         try:
             result = self.engine.infer_batch(enriched)
             self._llm_calls += 1
         except Exception:
-            return False
+            return {}
 
         p_name, m_name = self._provider_meta()
+        normalized_result: Dict[Tuple[str, str], List[Any]] = {}
         for (market, code), rels in result.items():
+            storage_code = self._storage_code(code, market)
+            rels = self._normalize_relation_storage_codes(rels)
+            normalized_result[(market, storage_code)] = rels
             try:
-                self.cache.save_relations(code, market, rels, provider=p_name, model=m_name)
+                self.cache.save_relations(storage_code, market, rels, provider=p_name, model=m_name)
             except Exception:
                 pass
-        return True
+        return normalized_result
+
+    @staticmethod
+    def _storage_code(code: str, market: str) -> str:
+        normalized_market = normalize_market(market)
+        value = str(code or "").strip().upper()
+        if not value:
+            return ""
+        if normalized_market == "US":
+            return value if value.startswith("US.") else f"US.{value}"
+        if normalized_market == "HK":
+            if value.startswith("HK."):
+                return f"HK.{value[3:].zfill(5)}" if value[3:].isdigit() else value
+            return f"HK.{value.zfill(5)}" if value.isdigit() else value
+        if normalized_market in {"JP", "TW", "KR"}:
+            return value if value.startswith(f"{normalized_market}.") else f"{normalized_market}.{value}"
+        return value
+
+    @classmethod
+    def _normalize_relation_storage_codes(cls, relations: List[Any]) -> List[Any]:
+        normalized: List[Any] = []
+        for rel in relations:
+            peer_market = str(getattr(rel, "peer_market", "") or "")
+            peer_code = str(getattr(rel, "peer_code", "") or "")
+            next_peer_code = cls._storage_code(peer_code, peer_market)
+            if next_peer_code and next_peer_code != peer_code:
+                rel = replace(rel, peer_code=next_peer_code)
+            normalized.append(rel)
+        return normalized
+
+    def _expand_cached_map_to_depth(self, center_code: str, market: str, depth: int, cached_map: Dict[str, List]) -> None:
+        if depth <= 1 or not cached_map:
+            return
+        batch_size = self._depth_batch_size()
+        graph = self.cache.build_graph(cached_map)
+        while self._llm_calls < _LLM_HARD_LIMIT:
+            node_meta = self._build_node_meta(center_code, cached_map, graph)
+            frontier = [
+                {"code": code, "market": self._build_node_markets(center_code, market, cached_map).get(code, market)}
+                for code, meta in node_meta.items()
+                if 0 < meta["depth"] < depth and code not in cached_map
+            ]
+            if not frontier:
+                return
+            progressed = False
+            for i in range(0, len(frontier), batch_size):
+                if self._llm_calls >= _LLM_HARD_LIMIT:
+                    return
+                result = self._infer_batch_with_limit(frontier[i:i + batch_size])
+                if not result:
+                    continue
+                for (_, code), rels in result.items():
+                    cached_map[code] = rels
+                    progressed = True
+            if not progressed:
+                return
+            graph = self.cache.build_graph(cached_map)
+
+    def _depth_frontier(self, center_code: str, market: str, cached_map: Dict[str, List], expanding_depth: int) -> List[Dict[str, str]]:
+        if expanding_depth <= 1:
+            return [] if center_code in cached_map else [{"code": center_code, "market": market}]
+        graph = self.cache.build_graph(cached_map)
+        node_meta = self._build_node_meta(center_code, cached_map, graph)
+        node_markets = self._build_node_markets(center_code, market, cached_map)
+        return [
+            {"code": code, "market": node_markets.get(code, market)}
+            for code, meta in node_meta.items()
+            if meta["depth"] == expanding_depth - 1 and code not in cached_map
+        ]
+
+    def _graph_from_cached_map(
+        self,
+        center_code: str,
+        market: str,
+        requested_depth: int,
+        cached_map: Dict[str, List],
+        *,
+        center_info: Dict[str, Any],
+        expanding_depth: int,
+        data_stage: str = "llm_initial",
+        reached_depth: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        graph = self.cache.build_graph(cached_map)
+        reachable = {center_code}
+        if center_code in graph:
+            reachable.update(self.cache.reachable_within(graph, center_code, requested_depth))
+        for src, rels in cached_map.items():
+            for rel in rels:
+                if rel.is_empty:
+                    continue
+                reachable.add(src)
+                reachable.add(rel.peer_code)
+        nodes, edges = self._assemble(
+            center_code,
+            market,
+            list(reachable),
+            cached_map,
+            existing_set=set(),
+            is_center=True,
+            center_info=center_info,
+            graph=graph,
+            include_quote=False,
+            prefer_llm=True,
+            data_stage=data_stage,
+        )
+        reached_depth = reached_depth if reached_depth is not None else self._max_cached_depth(center_code, cached_map, graph)
+        return {
+            "center": self._to_node(
+                center_info,
+                center_code,
+                market,
+                expanded=True,
+                is_center=True,
+                stale=False,
+                depth=0,
+                zone="center",
+                data_stage=data_stage,
+            ),
+            "nodes": nodes,
+            "edges": edges,
+            "stats": {
+                "llm_calls": self._llm_calls,
+                "cached_nodes": len(cached_map),
+                "stale_nodes": 0,
+                "stale_sources": [],
+                "depth": requested_depth,
+                "requested_depth": requested_depth,
+                "reached_depth": reached_depth,
+                "expanding_depth": expanding_depth,
+                "can_continue": reached_depth < requested_depth,
+                "relation_status": "initial_ready" if reached_depth >= requested_depth else "generating",
+                "data_stage": data_stage,
+            },
+            "warnings": [],
+        }
+
+    @staticmethod
+    def _max_cached_depth(center_code: str, cached_map: Dict[str, List], graph: Any = None) -> int:
+        meta = TopologyService._build_node_meta(center_code, cached_map, graph)
+        return max((item["depth"] for item in meta.values()), default=0)
+
+    @staticmethod
+    def _completed_depth(center_code: str, requested_depth: int, cached_map: Dict[str, List], stale_sources: List[str], graph: Any = None) -> int:
+        has_non_empty_relation = any(
+            not getattr(rel, "is_empty", False)
+            for rels in cached_map.values()
+            for rel in (rels or [])
+        )
+        if cached_map and not stale_sources and has_non_empty_relation:
+            return max(int(requested_depth or 0), 0)
+        return TopologyService._max_cached_depth(center_code, cached_map, graph)
+
+    @staticmethod
+    def _depth_batch_size() -> int:
+        try:
+            value = int(os.getenv("TOPOLOGY_DEPTH_BATCH_SIZE", str(_DEFAULT_DEPTH_BATCH_SIZE)) or _DEFAULT_DEPTH_BATCH_SIZE)
+        except ValueError:
+            value = _DEFAULT_DEPTH_BATCH_SIZE
+        return max(1, value)
 
     @staticmethod
     def _stale_source_payload(stale_sources: List[str], market: str, center_code: str, cached_map: Dict[str, List]) -> List[Dict[str, str]]:

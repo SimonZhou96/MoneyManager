@@ -4855,13 +4855,23 @@ section { background: transparent; }
   font-size: 11px;
   backdrop-filter: blur(10px);
 }
-.topo-g6-tip { min-width: 220px; max-width: 320px; color: #e8e0d0; font-size: 12px; }
+.topo-canvas-shell :where(.g6-tooltip, .g6-tooltip-container),
+body :where(.g6-tooltip, .g6-tooltip-container):has(.topo-g6-tip) {
+  padding: 10px 12px !important;
+  border: 1px solid rgba(96, 165, 250, 0.28) !important;
+  border-radius: 10px !important;
+  background: rgba(8, 13, 20, 0.96) !important;
+  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.46), 0 0 0 1px rgba(15, 23, 42, 0.72) inset !important;
+  color: #dbeafe !important;
+  backdrop-filter: blur(12px);
+}
+.topo-g6-tip { min-width: 220px; max-width: 320px; color: #dbeafe; font-size: 12px; }
 .topo-g6-tip-title { margin-bottom: 8px; color: #f8fafc; font-size: 14px; font-weight: 800; }
 .topo-g6-tip-row { display: flex; justify-content: space-between; gap: 18px; padding: 3px 0; border-bottom: 1px solid rgba(148, 163, 184, 0.12); }
-.topo-g6-tip-row span { color: #8a8070; }
-.topo-g6-tip-row strong { color: #e8e0d0; font-weight: 700; text-align: right; }
+.topo-g6-tip-row span { color: #93a4bc; }
+.topo-g6-tip-row strong { color: #f8fafc; font-weight: 700; text-align: right; }
 .topo-g6-tip-evidence { margin-top: 8px; padding: 8px; border-radius: 8px; background: rgba(96, 165, 250, 0.1); color: #cbd5e1; line-height: 1.5; }
-.topo-g6-tip-hint { margin-top: 8px; color: #8a8070; font-size: 11px; }
+.topo-g6-tip-hint { margin-top: 8px; color: #93a4bc; font-size: 11px; }
 /* Pinned edge labels — amber-tinted via inline style in edgeStyle() (labelFill: #fbbf24, labelBackgroundFill: rgba(251,191,36,0.15)).
    G6 renders edge labels as SVG elements with inline styles; no additional CSS selectors needed. */
 .topo-detail-panel {
