@@ -142,6 +142,20 @@ function buildIncomingAdjacency(edges: TopologyEdgeData[]) {
   return map
 }
 
+function relationAllowedNodeIds(nodes: TopologyNodeData[], filters: Set<RelationFilter>) {
+  return new Set(nodes
+    .filter((node) => node.is_center || filters.has(node.zone as RelationFilter))
+    .map((node) => node.id))
+}
+
+function relationScopedEdges(edges: TopologyEdgeData[], allowedNodeIds: Set<string>, filters: Set<RelationFilter>) {
+  return edges.filter((edge) => (
+    filters.has(edge.direction)
+    && allowedNodeIds.has(edge.source)
+    && allowedNodeIds.has(edge.target)
+  ))
+}
+
 function previousNodeForEdge(edge: TopologyEdgeData, current: string) {
   for (const { source, target } of traversalEndpoints(edge)) {
     if (target === current) return source
@@ -403,18 +417,21 @@ export function IndustryTopologyPanel() {
     const clickedNodeId = selectedNode?.id
     const clickActive = Boolean(clickedNodeId)
     const sectorActive = selectedSectors.size > 0
-    const allowedEdges = edges.filter((edge) => relationFilters.has(edge.direction))
+    const relationNodeIds = relationAllowedNodeIds(nodes, relationFilters)
+    const allowedEdges = relationScopedEdges(edges, relationNodeIds, relationFilters)
     const directMatchedNodeIds = new Set<string>()
     let pathNodeIds: Set<string> | null = null
     let pathEdgeKeys: Set<string> | null = null
 
     if (clickActive && clickedNodeId) {
-      directMatchedNodeIds.add(clickedNodeId)
+      if (relationNodeIds.has(clickedNodeId)) directMatchedNodeIds.add(clickedNodeId)
       const clickScope = oneHopUpstreamAndCenterPathScopeForMatches(new Set([clickedNodeId]), centerId, allowedEdges)
       pathNodeIds = clickScope.nodeIds
       pathEdgeKeys = clickScope.edgeKeys
     } else if (queryActive) {
-      const queryMatchIds = new Set(nodes.filter((node) => nodeMatchesCompanyQuery(node, graphQuery)).map((node) => node.id))
+      const queryMatchIds = new Set(nodes
+        .filter((node) => relationNodeIds.has(node.id) && nodeMatchesCompanyQuery(node, graphQuery))
+        .map((node) => node.id))
       queryMatchIds.forEach((id) => directMatchedNodeIds.add(id))
       const queryScope = centerPathScopeForMatches(queryMatchIds, centerId, allowedEdges)
       pathNodeIds = queryScope.nodeIds
@@ -423,7 +440,7 @@ export function IndustryTopologyPanel() {
 
     if (sectorActive) {
       const sectorMatchIds = new Set(nodes
-        .filter((node) => selectedSectors.has(node.sector))
+        .filter((node) => relationNodeIds.has(node.id) && selectedSectors.has(node.sector))
         .map((node) => node.id))
       sectorMatchIds.forEach((id) => directMatchedNodeIds.add(id))
       const sectorScope = centerPathScopeForMatches(sectorMatchIds, centerId, allowedEdges)
@@ -449,6 +466,7 @@ export function IndustryTopologyPanel() {
       edgeNodeIds.add(edge.target)
     })
     const filteredNodes = nodes.filter((node) => {
+      if (!relationNodeIds.has(node.id)) return false
       if (node.is_center) return !pathNodeIds || pathNodeIds.has(node.id)
       if (pathNodeIds && !pathNodeIds.has(node.id)) return false
       if (onlyImportant && !pathNodeIds?.has(node.id) && node.depth > 1 && node.size_level < 3) return false
