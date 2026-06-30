@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from 'react'
 import { Circle } from '@antv/g'
 import { Graph } from '@antv/g6'
+import { RadialLayout } from '@antv/layout'
+import type { GraphData as AntVLayoutGraphData, NodeData as AntVLayoutNodeData } from '@antv/layout'
 import type { TopologyEdgeData, TopologyNodeColorMetric, TopologyNodeData, TopologyNodePatch, TopologyQuoteItem, TopologyRenderEdgeData, TopologyRenderNodeData } from './types'
 import { displaySector, isAggregateEdge, isAggregateNode } from './topologyAggregation'
 
@@ -135,17 +137,17 @@ function sectorHullKey(sector: string) {
 
 function sectorHullFill(index: number) {
   const fills = [
-    'rgba(96, 165, 250, 0.09)',
-    'rgba(45, 212, 191, 0.08)',
-    'rgba(251, 191, 36, 0.08)',
-    'rgba(167, 139, 250, 0.08)',
-    'rgba(248, 113, 113, 0.07)',
+    'rgba(250, 204, 21, 0.18)',
+    'rgba(253, 224, 71, 0.15)',
+    'rgba(251, 191, 36, 0.14)',
+    'rgba(254, 240, 138, 0.13)',
+    'rgba(245, 158, 11, 0.12)',
   ]
   return fills[index % fills.length]
 }
 
 function sectorHullStroke(index: number) {
-  const strokes = ['#60a5fa', '#2dd4bf', '#fbbf24', '#a78bfa', '#f87171']
+  const strokes = ['#facc15', '#fde047', '#fbbf24', '#fef08a', '#f59e0b']
   return strokes[index % strokes.length]
 }
 
@@ -459,6 +461,17 @@ interface DirectionGroup {
   sectors: SectorInfo[]
 }
 
+type RadialSectorNodeData = AntVLayoutNodeData & {
+  id: string
+  sector: string
+  depth: number
+  sectorRank: number
+  nodeRank: number
+  size: number
+}
+
+type SectorBand = { sector: string; interval: AngularInterval; weight: number }
+
 const DIRECTION_DOMAINS: Record<LayoutDirection, AngularInterval> = {
   upstream: makeInterval(Math.PI * 0.14, Math.PI * 0.86),
   downstream: makeInterval(Math.PI * 1.14, Math.PI * 1.86),
@@ -604,12 +617,12 @@ function splitDirectionGroups(layoutNodes: LayoutNode[], edges: TopologyRenderEd
   return groups.filter((group) => group.sectors.length > 0)
 }
 
-function ringSectoredLayout(
+async function ringSectoredLayout(
   nodes: TopologyRenderNodeData[],
   edges: TopologyRenderEdgeData[],
   existingPositions?: Map<string, { x: number; y: number }>,
   preservedNodeIds?: Set<string>,
-): Map<string, { x: number; y: number }> {
+): Promise<Map<string, { x: number; y: number }>> {
   const positions = new Map<string, { x: number; y: number }>()
 
   if (nodes.length === 1) {
@@ -631,17 +644,240 @@ function ringSectoredLayout(
   if (center) positions.set(center.id, { x: 0, y: 0 })
 
   const layoutNodes = buildLayoutNodes(nodes, edges).filter((node) => !positions.has(node.id))
-  const hubBuffer = computeHubBuffer(center?.id, edges)
-  const directionGroups = splitDirectionGroups(layoutNodes, edges)
-  directionGroups.forEach((group) => {
-    allocateSectorAngles(group)
-    group.sectors.forEach((sector) => computeRingRadii(sector, hubBuffer))
-    resolveSectorPolarCollisions(group)
-  })
-  placeNodesInPolarSpace(directionGroups, edges, positions)
+  if (layoutNodes.length > 0) {
+    const radialPositions = await computeG6RadialSectorPositions(nodes, edges, layoutNodes, center?.id)
+    radialPositions.forEach((position, id) => {
+      if (!positions.has(id)) positions.set(id, position)
+    })
+  }
 
   placeAggregateRepresentatives(nodes, positions)
 
+  return positions
+}
+
+async function computeG6RadialSectorPositions(
+  nodes: TopologyRenderNodeData[],
+  edges: TopologyRenderEdgeData[],
+  layoutNodes: LayoutNode[],
+  centerId: string | undefined,
+) {
+  const sectorRank = buildSectorRank(layoutNodes)
+  const nodeOrder = new Map<string, LayoutNode>()
+  layoutNodes.forEach((node) => nodeOrder.set(node.id, node))
+  const graphData: AntVLayoutGraphData<RadialSectorNodeData> = {
+    nodes: [
+      ...nodes
+        .filter((node) => node.is_center)
+        .map((node) => ({
+          id: node.id,
+          sector: '__center__',
+          depth: 0,
+          sectorRank: -1,
+          nodeRank: -1,
+          size: nodeSize(node) * 2,
+        })),
+      ...layoutNodes
+        .sort(stableRadialLayoutNodeCompare)
+        .map((layoutNode, index) => ({
+          id: layoutNode.id,
+          sector: layoutNode.sector,
+          depth: layoutNode.depth,
+          sectorRank: sectorRank.get(layoutNode.sector) ?? index,
+          nodeRank: index,
+          size: layoutNode.nodeRadius * 2,
+        })),
+    ],
+    edges: edges.map((edge, index) => ({
+      id: `${edge.source}->${edge.target}:${edge.relation}:${index}`,
+      source: edge.source,
+      target: edge.target,
+      relation: edge.relation,
+    })),
+  }
+
+  const unitRadius = computeRadialUnitRadius(layoutNodes)
+  const layout = new RadialLayout({
+    center: [0, 0],
+    focusNode: centerId || null,
+    unitRadius,
+    linkDistance: Math.max(80, unitRadius * 0.52),
+    preventOverlap: true,
+    strictRadial: false,
+    nodeSize: (node: AntVLayoutNodeData) => Number((node as RadialSectorNodeData).size || 28),
+    nodeSpacing: 28,
+    sortBy: (node: AntVLayoutNodeData) => {
+      const data = node as RadialSectorNodeData
+      return data.sectorRank * 10000 + data.depth * 100 + data.nodeRank
+    },
+    sortStrength: 42,
+    maxIteration: 220,
+    maxPreventOverlapIteration: 120,
+  })
+  try {
+    await layout.execute(graphData)
+  } catch {
+    return computeFallbackRadialPositions(layoutNodes)
+  }
+
+  const rawPositions = new Map<string, { x: number; y: number }>()
+  layout.forEachNode((node) => {
+    if (!nodeOrder.has(String(node.id))) return
+    rawPositions.set(String(node.id), { x: node.x || 0, y: node.y || 0 })
+  })
+  layout.destroy()
+
+  if (rawPositions.size === 0) return computeFallbackRadialPositions(layoutNodes)
+  return normalizeSectorRadialRings(layoutNodes, rawPositions, sectorRank)
+}
+
+function buildSectorRank(layoutNodes: LayoutNode[]) {
+  const sectors = new Map<string, { sector: string; count: number; degree: number }>()
+  layoutNodes.forEach((node) => {
+    const current = sectors.get(node.sector) || { sector: node.sector, count: 0, degree: 0 }
+    current.count += 1
+    current.degree += node.degree
+    sectors.set(node.sector, current)
+  })
+  return new Map([...sectors.values()]
+    .sort((a, b) => b.count - a.count || b.degree - a.degree || a.sector.localeCompare(b.sector))
+    .map((sector, index) => [sector.sector, index]))
+}
+
+function stableRadialLayoutNodeCompare(a: LayoutNode, b: LayoutNode) {
+  const sectorDiff = a.sector.localeCompare(b.sector)
+  if (sectorDiff !== 0) return sectorDiff
+  const depthDiff = a.depth - b.depth
+  if (depthDiff !== 0) return depthDiff
+  return stableNodeCompare(a, b)
+}
+
+function computeRadialUnitRadius(layoutNodes: LayoutNode[]) {
+  const rings = buildRings(layoutNodes)
+  const maxRingNeed = rings.reduce((max, ring) => {
+    const arcNeed = ring.nodes.reduce((sum, node) => sum + node.nodeRadius * 2 + Math.min(72, node.labelWidth * 0.42) + NODE_ARC_GAP, 0)
+    return Math.max(max, arcNeed / (Math.PI * 2))
+  }, R_BASE)
+  return Math.max(190, Math.min(360, maxRingNeed * 1.24))
+}
+
+function normalizeSectorRadialRings(
+  layoutNodes: LayoutNode[],
+  rawPositions: Map<string, { x: number; y: number }>,
+  sectorRank: Map<string, number>,
+) {
+  const positions = new Map<string, { x: number; y: number }>()
+  const byDepth = new Map<number, LayoutNode[]>()
+  layoutNodes.forEach((node) => {
+    const group = byDepth.get(node.depth) || []
+    group.push(node)
+    byDepth.set(node.depth, group)
+  })
+
+  const depthRadii = new Map<number, number>()
+  ;[...byDepth.keys()].sort((a, b) => a - b).forEach((depth, index) => {
+    const nodesAtDepth = byDepth.get(depth) || []
+    const radialMedian = median(nodesAtDepth
+      .map((node) => rawPositions.get(node.id))
+      .filter((pos): pos is { x: number; y: number } => Boolean(pos))
+      .map((pos) => Math.hypot(pos.x, pos.y)))
+    const ringNeed = nodesAtDepth.reduce((sum, node) => sum + node.nodeRadius * 2 + Math.min(88, node.labelWidth * 0.5) + NODE_ARC_GAP, 0) / (Math.PI * 2)
+    const previous = index === 0 ? 0 : depthRadii.get(depth - 1) || 0
+    depthRadii.set(depth, Math.max(R_BASE + (depth - 1) * MIN_RING_GAP, previous + MIN_RING_GAP, radialMedian, ringNeed * 1.12))
+  })
+
+  const sectorBands = allocateGlobalSectorBands(layoutNodes, sectorRank)
+  const sectorBandByName = new Map(sectorBands.map((band) => [band.sector, band]))
+
+  for (const [depth, depthNodes] of byDepth.entries()) {
+    const radius = depthRadii.get(depth) || R_BASE
+    const nodesBySector = groupNodesBySector(depthNodes)
+    ;[...nodesBySector.entries()]
+      .sort(([sectorA], [sectorB]) => (sectorRank.get(sectorA) ?? 0) - (sectorRank.get(sectorB) ?? 0) || sectorA.localeCompare(sectorB))
+      .forEach(([sector, sectorNodes]) => {
+        const band = sectorBandByName.get(sector)
+        if (!band) return
+        const ordered = [...sectorNodes].sort((a, b) => angleFromPosition(rawPositions.get(a.id)) - angleFromPosition(rawPositions.get(b.id)) || stableNodeCompare(a, b))
+        const interval = insetInterval(band.interval, Math.min(Math.PI * 0.035, angleSize(band.interval) * 0.12))
+        const angles = distributeAnglesEvenly(ordered.length, interval)
+        ordered.forEach((node, index) => {
+          positions.set(node.id, polarToCartesian(angles[index] ?? interval.center, radius))
+        })
+      })
+  }
+
+  return positions
+}
+
+function allocateGlobalSectorBands(layoutNodes: LayoutNode[], sectorRank: Map<string, number>): SectorBand[] {
+  const sectors = new Map<string, { sector: string; weight: number; nodes: LayoutNode[] }>()
+  layoutNodes.forEach((node) => {
+    const current = sectors.get(node.sector) || { sector: node.sector, weight: 0, nodes: [] }
+    current.nodes.push(node)
+    current.weight += 1 + Math.log2(node.degree + 1) * 0.28 + Math.min(72, node.labelWidth) * 0.006
+    sectors.set(node.sector, current)
+  })
+
+  const ordered = [...sectors.values()]
+    .sort((a, b) => (sectorRank.get(a.sector) ?? 0) - (sectorRank.get(b.sector) ?? 0) || a.sector.localeCompare(b.sector))
+  if (ordered.length === 0) return []
+
+  const gap = Math.min(SECTOR_ANGLE_GAP, Math.PI * 2 / Math.max(24, ordered.length * 4))
+  const totalGap = gap * ordered.length
+  const available = Math.PI * 2 - totalGap
+  const minAngle = Math.min(Math.PI * 0.11, available / ordered.length * 0.7)
+  const base = minAngle * ordered.length
+  const remaining = Math.max(0, available - base)
+  const totalWeight = ordered.reduce((sum, sector) => sum + sector.weight, 0) || 1
+  let cursor = -Math.PI / 2
+
+  return ordered.map((sector) => {
+    const size = minAngle + remaining * (sector.weight / totalWeight)
+    const band = {
+      sector: sector.sector,
+      weight: sector.weight,
+      interval: makeInterval(cursor, cursor + size),
+    }
+    cursor += size + gap
+    return band
+  })
+}
+
+function groupNodesBySector(nodes: LayoutNode[]) {
+  const groups = new Map<string, LayoutNode[]>()
+  nodes.forEach((node) => {
+    const group = groups.get(node.sector) || []
+    group.push(node)
+    groups.set(node.sector, group)
+  })
+  return groups
+}
+
+function insetInterval(interval: AngularInterval, inset: number) {
+  const maxInset = angleSize(interval) * 0.3
+  const safeInset = Math.min(inset, maxInset)
+  return makeInterval(interval.start + safeInset, interval.end - safeInset)
+}
+
+function median(values: number[]) {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+}
+
+function angleFromPosition(position: { x: number; y: number } | undefined) {
+  if (!position) return 0
+  return Math.atan2(-position.y, position.x)
+}
+
+function computeFallbackRadialPositions(layoutNodes: LayoutNode[]) {
+  const positions = new Map<string, { x: number; y: number }>()
+  const sectorRank = buildSectorRank(layoutNodes)
+  normalizeSectorRadialRings(layoutNodes, new Map(layoutNodes.map((node) => {
+    const rank = sectorRank.get(node.sector) || 0
+    return [node.id, polarToCartesian(-Math.PI / 2 + rank * 0.6, R_BASE + (node.depth - 1) * MIN_RING_GAP)]
+  })), sectorRank).forEach((position, id) => positions.set(id, position))
   return positions
 }
 
@@ -1156,6 +1392,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   const nodeParticleKeysRef = useRef<Set<string>>(new Set())
   const flowParticleKeysRef = useRef<Set<string>>(new Set())
   const tooltipPatchedRef = useRef(false)
+  const lastFittedLayoutKeyRef = useRef('')
   const onExpandRef = useRef(onExpand)
   const onExpandAggregateRef = useRef<Props['onExpandAggregate']>(onExpandAggregate)
   const onCollapseAggregateRef = useRef<Props['onCollapseAggregate']>(onCollapseAggregate)
@@ -1309,16 +1546,25 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
 
   useImperativeHandle(ref, () => ({ applyQuotes, applyNodePatches }), [applyNodePatches, applyQuotes])
 
-  const layoutPositions = useMemo(() => {
+  const [layoutPositions, setLayoutPositions] = useState<Map<string, { x: number; y: number }>>(new Map())
+
+  useEffect(() => {
+    let cancelled = false
     const centerId = rawNodes.find((node) => node.is_center)?.id || null
     if (centerId !== centerIdRef.current) {
       positionsRef.current = new Map()
       manuallyPositionedNodeIdsRef.current = new Set()
       centerIdRef.current = centerId
     }
-    const next = ringSectoredLayout(rawNodes, rawEdges, positionsRef.current, manuallyPositionedNodeIdsRef.current)
-    positionsRef.current = next
-    return next
+    void ringSectoredLayout(rawNodes, rawEdges, positionsRef.current, manuallyPositionedNodeIdsRef.current)
+      .then((next) => {
+        if (cancelled) return
+        positionsRef.current = next
+        setLayoutPositions(next)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [rawEdges, rawNodes])
 
   const graphData = useMemo(() => toG6Data(rawNodes, rawEdges, view, layoutPositions, nodeColorMetric), [layoutPositions, nodeColorMetric, rawEdges, rawNodes, view])
@@ -1545,11 +1791,10 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       return
     }
 
-    const nodeFillMap = buildNodeFillMap(rawNodes, rawEdges, nodeColorMetric)
-    graph.updateNodeData(rawNodes.map((node) => ({
+    graph.updateNodeData(graphData.nodes.map((node) => ({
       id: node.id,
-      data: node as unknown as Record<string, unknown>,
-      style: nodeStyle(node, view, nodeFillMap.get(node.id) || CENTER_NODE_FILL),
+      data: node.data,
+      style: node.style,
     })) as never)
     graph.updateEdgeData(graphData.edges.map((edge) => ({
       id: edge.id,
@@ -1558,7 +1803,14 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       data: edge.data,
       style: edge.style,
     })) as never)
-    void graph.draw()
+    const centerId = rawNodes.find((node) => node.is_center)?.id
+    const layoutKey = `${centerId || ''}:${rawNodes.length}:${rawEdges.length}:${layoutPositions.size}`
+    void graph.draw().then(() => {
+      if (layoutPositions.size > 0 && layoutKey !== lastFittedLayoutKeyRef.current) {
+        lastFittedLayoutKeyRef.current = layoutKey
+        fitGraphView(graph, rawNodes.length, centerId)
+      }
+    })
     previousNodeIdsRef.current = nextNodeIds
     previousEdgeIdsRef.current = nextEdgeIds
   }, [graphData, graphPlugins, nodeColorMetric, rawEdges, rawNodes, view])

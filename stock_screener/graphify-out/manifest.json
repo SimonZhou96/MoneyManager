@@ -1905,8 +1905,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/web_frontend/src/features/industryTopology/TopologyCanvas.tsx": {
-    "mtime": 1782813170.893024,
-    "ast_hash": "eb452e56c69ed39509a7392954431256",
+    "mtime": 1782815378.5267875,
+    "ast_hash": "2fa3f06a7653f4cbe16a68d25ea8e722",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/industry_topology/enrichment.py": {
@@ -2342,6 +2342,11 @@
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/docs/superpowers/plans/2026-06-30-topology-sector-hull-interaction.md": {
     "mtime": 1782798624.208722,
     "ast_hash": "066a642b053818f0dff4e0da6689d5cc",
+    "semantic_hash": ""
+  },
+  "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/.superpowers/brainstorm/43271-1782813527/content/g6-layout-options.html": {
+    "mtime": 1782813608.3507588,
+    "ast_hash": "d7cc0e564eb4268a0897898c2d6b199a",
     "semantic_hash": ""
   }
 }
