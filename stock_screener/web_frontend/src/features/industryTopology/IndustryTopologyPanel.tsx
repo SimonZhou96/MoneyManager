@@ -7,6 +7,7 @@ import type {
   SearchResult,
   TopologyEdgeData,
   TopologyGraph,
+  TopologyNodeColorMetric,
   TopologyNodeData,
   TopologyNodePatch,
   TopologyQuoteItem,
@@ -385,6 +386,7 @@ export function IndustryTopologyPanel() {
   const [sectorMenuOpen, setSectorMenuOpen] = useState(false)
   const [onlyImportant, setOnlyImportant] = useState(false)
   const [highlightCycles, setHighlightCycles] = useState(false)
+  const [nodeColorMetric, setNodeColorMetric] = useState<TopologyNodeColorMetric>('out_degree')
   const [selectedNode, setSelectedNode] = useState<TopologyNodeData | null>(null)
   const [selectedEdge, setSelectedEdge] = useState<TopologyEdgeData | null>(null)
   const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null)
@@ -1048,6 +1050,17 @@ export function IndustryTopologyPanel() {
               >{item.label}</button>
             ))}
           </div>
+          <label className="topo-filter topo-node-color-filter">
+            <span>节点颜色</span>
+            <select
+              value={nodeColorMetric}
+              onChange={(event) => setNodeColorMetric(event.target.value as TopologyNodeColorMetric)}
+            >
+              <option value="out_degree">出度</option>
+              <option value="in_degree">入度</option>
+              <option value="total_degree">出度 + 入度</option>
+            </select>
+          </label>
           <div className="topo-sector-select">
             <button
               type="button"
@@ -1097,6 +1110,7 @@ export function IndustryTopologyPanel() {
         canRefreshTopology={Boolean(selected) && !isBusy}
         isTopologyBusy={isBusy}
         startTopologyLabel={canContinueTopology ? '继续拓扑' : '开始拓扑'}
+        nodeColorMetric={nodeColorMetric}
         selectedNodeId={selectedNode?.id || null}
         selectedEdgeKey={selectedEdgeKey}
         focusNodeId={visibleGraph.focusNodeId}

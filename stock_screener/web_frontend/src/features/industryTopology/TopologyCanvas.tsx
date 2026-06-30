@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from 'react'
 import { Circle } from '@antv/g'
 import { Graph } from '@antv/g6'
-import type { TopologyEdgeData, TopologyNodeData, TopologyNodePatch, TopologyQuoteItem, TopologyZone } from './types'
+import type { TopologyEdgeData, TopologyNodeColorMetric, TopologyNodeData, TopologyNodePatch, TopologyQuoteItem } from './types'
 
 interface Props {
   rawNodes: TopologyNodeData[]
@@ -13,6 +13,7 @@ interface Props {
   canRefreshTopology: boolean
   isTopologyBusy: boolean
   startTopologyLabel?: string
+  nodeColorMetric: TopologyNodeColorMetric
   selectedNodeId?: string | null
   selectedEdgeKey?: string | null
   focusNodeId?: string | null
@@ -34,6 +35,7 @@ type G6Graph = InstanceType<typeof Graph>
 type GraphDatum = { id: string; data?: Record<string, unknown>; style?: Record<string, unknown> }
 type RenderedEdgeData = TopologyEdgeData & { edgeKey?: string; visualSource?: string; visualTarget?: string }
 type ToolbarAction = 'start-topology' | 'refresh-topology'
+type NodeDegreeStats = { out: number; in: number; total: number }
 
 interface ToolbarState {
   canStartTopology: boolean
@@ -59,13 +61,6 @@ interface ViewState {
   pinnedEdgeKeys: Set<string>
 }
 
-const ZONE_COLOR: Record<TopologyZone, string> = {
-  center: '#fbbf24',
-  upstream: '#60a5fa',
-  downstream: '#f59e0b',
-  peer: '#8b5cf6',
-}
-
 const STATUS_RING: Record<string, string> = {
   pending: '#64748b',
   queued: '#64748b',
@@ -87,6 +82,15 @@ const CENTER_OUT_EDGE = '#60a5fa'
 const CENTER_IN_EDGE = '#fbbf24'
 const DEFAULT_EDGE = '#64748b'
 const TOPOLOGY_ACTION_TOOLBAR_KEY = 'topology-action-toolbar'
+const CENTER_NODE_FILL = '#fbbf24'
+const DEGREE_GOLD_MIN = { r: 254, g: 243, b: 199 }
+const DEGREE_GOLD_MAX = { r: 180, g: 83, b: 9 }
+
+const NODE_COLOR_METRIC_LABEL: Record<TopologyNodeColorMetric, string> = {
+  out_degree: '出度',
+  in_degree: '入度',
+  total_degree: '总度数',
+}
 
 export function sizeLevelFromMarketCap(marketCap: number | null | undefined): 1 | 2 | 3 | 4 | 5 | 6 {
   if (marketCap === null || marketCap === undefined || !Number.isFinite(marketCap)) return 1
@@ -134,13 +138,55 @@ function hasMarketCap(node: TopologyNodeData) {
   return node.market_cap !== null && node.market_cap !== undefined && node.market_cap_str !== '未知' && node.market_cap_str !== '--'
 }
 
-function nodeStyle(node: TopologyNodeData, view: ViewState) {
+function buildNodeDegreeMap(nodes: TopologyNodeData[], edges: TopologyEdgeData[]): Map<string, NodeDegreeStats> {
+  const degreeMap = new Map<string, NodeDegreeStats>()
+  nodes.forEach((node) => degreeMap.set(node.id, { out: 0, in: 0, total: 0 }))
+  edges.forEach((edge) => {
+    const sourceStats = degreeMap.get(edge.source)
+    if (sourceStats) {
+      sourceStats.out += 1
+      sourceStats.total += 1
+    }
+
+    const targetStats = degreeMap.get(edge.target)
+    if (targetStats) {
+      targetStats.in += 1
+      targetStats.total += 1
+    }
+  })
+  return degreeMap
+}
+
+function getDegreeMetricValue(stats: NodeDegreeStats | undefined, metric: TopologyNodeColorMetric): number {
+  if (!stats) return 0
+  if (metric === 'out_degree') return stats.out
+  if (metric === 'in_degree') return stats.in
+  return stats.total
+}
+
+function interpolateGoldColor(value: number, maxValue: number): string {
+  const ratio = maxValue > 0 ? Math.min(Math.max(value / maxValue, 0), 1) : 0
+  const r = Math.round(DEGREE_GOLD_MIN.r + (DEGREE_GOLD_MAX.r - DEGREE_GOLD_MIN.r) * ratio)
+  const g = Math.round(DEGREE_GOLD_MIN.g + (DEGREE_GOLD_MAX.g - DEGREE_GOLD_MIN.g) * ratio)
+  const b = Math.round(DEGREE_GOLD_MIN.b + (DEGREE_GOLD_MAX.b - DEGREE_GOLD_MIN.b) * ratio)
+  return `rgb(${r}, ${g}, ${b})`
+}
+
+function buildNodeFillMap(nodes: TopologyNodeData[], edges: TopologyEdgeData[], metric: TopologyNodeColorMetric): Map<string, string> {
+  const degreeMap = buildNodeDegreeMap(nodes, edges)
+  const maxMetricValue = Math.max(0, ...nodes.map((node) => getDegreeMetricValue(degreeMap.get(node.id), metric)))
+  const fillMap = new Map<string, string>()
+  nodes.forEach((node) => {
+    const metricValue = getDegreeMetricValue(degreeMap.get(node.id), metric)
+    fillMap.set(node.id, node.is_center ? CENTER_NODE_FILL : interpolateGoldColor(metricValue, maxMetricValue))
+  })
+  return fillMap
+}
+
+function nodeStyle(node: TopologyNodeData, view: ViewState, degreeFill: string) {
   const missingMarketCap = !hasMarketCap(node)
   const matched = view.matchedNodeIds.has(node.id)
-  const zoneFill = missingMarketCap && !node.is_center ? '#64748b' : ZONE_COLOR[node.zone] || ZONE_COLOR.peer
-  const fill = node.pct_chg !== null && node.pct_chg !== undefined && !node.is_center
-    ? node.pct_chg > 0 ? '#22c55e' : node.pct_chg < 0 ? '#ef4444' : zoneFill
-    : zoneFill
+  const fill = node.is_center ? CENTER_NODE_FILL : degreeFill
   const stroke = STATUS_RING[node.quote_status || 'pending'] || '#64748b'
   const hasFocus = Boolean(view.focusNodeId || view.selectedNodeId || view.hoveredNodeId || view.selectedEdgeKey || view.hoveredEdgeKey)
   const active = matched || view.normalNodeIds.has(node.id) || node.is_center || node.id === view.selectedNodeId || node.id === view.hoveredNodeId || node.id === view.focusNodeId || view.relatedNodeIds.has(node.id)
@@ -418,8 +464,10 @@ function toG6Data(
   edges: TopologyEdgeData[],
   view: ViewState,
   positions: Map<string, { x: number; y: number }>,
+  nodeColorMetric: TopologyNodeColorMetric,
 ) {
   const centerId = nodes.find((node) => node.is_center)?.id
+  const nodeFillMap = buildNodeFillMap(nodes, edges, nodeColorMetric)
 
   return {
     nodes: nodes.map((node) => {
@@ -430,7 +478,7 @@ function toG6Data(
         style: {
           x: pos.x,
           y: pos.y,
-          ...nodeStyle(node, view),
+          ...nodeStyle(node, view, nodeFillMap.get(node.id) || CENTER_NODE_FILL),
         },
       }
     }),
@@ -644,6 +692,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   normalEdgeKeys = [],
   flowEdgeKeys = [],
   highlightCycles = false,
+  nodeColorMetric,
   onSelectNode,
   onSelectEdge,
 }, ref) {
@@ -729,20 +778,21 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       }
     })
 
+    const nodeFillMap = buildNodeFillMap(rawNodesRef.current, rawEdgesRef.current, nodeColorMetric)
     for (const node of rawNodesRef.current) {
       const patch = bySymbol.get(node.id)
       if (!patch) continue
       updates.push({
         id: node.id,
         data: node as unknown as Record<string, unknown>,
-        style: nodeStyle(node, curView),
+        style: nodeStyle(node, curView, nodeFillMap.get(node.id) || CENTER_NODE_FILL),
       })
     }
 
     if (updates.length > 0) {
       graph.updateNodeData(updates as never)
     }
-  }, [])
+  }, [nodeColorMetric])
 
   const applyQuotes = useCallback((items: TopologyQuoteItem[]) => {
     applyNodePatches(items.map((item) => ({
@@ -779,7 +829,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     return next
   }, [rawNodes])
 
-  const graphData = useMemo(() => toG6Data(rawNodes, rawEdges, view, layoutPositions), [layoutPositions, rawEdges, rawNodes, view])
+  const graphData = useMemo(() => toG6Data(rawNodes, rawEdges, view, layoutPositions, nodeColorMetric), [layoutPositions, nodeColorMetric, rawEdges, rawNodes, view])
 
   useEffect(() => {
     const container = containerRef.current
@@ -792,7 +842,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       data: { nodes: [], edges: [] },
       node: {
         type: 'circle',
-        style: ((datum: GraphDatum) => datum.style || nodeStyle(datum.data as unknown as TopologyNodeData, view)) as never,
+        style: ((datum: GraphDatum) => datum.style || nodeStyle(datum.data as unknown as TopologyNodeData, view, CENTER_NODE_FILL)) as never,
       },
       edge: {
         type: 'line',
@@ -1024,10 +1074,11 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       return
     }
 
+    const nodeFillMap = buildNodeFillMap(rawNodes, rawEdges, nodeColorMetric)
     graph.updateNodeData(rawNodes.map((node) => ({
       id: node.id,
       data: node as unknown as Record<string, unknown>,
-      style: nodeStyle(node, view),
+      style: nodeStyle(node, view, nodeFillMap.get(node.id) || CENTER_NODE_FILL),
     })) as never)
     graph.updateEdgeData(graphData.edges.map((edge) => ({
       id: edge.id,
@@ -1039,7 +1090,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     void graph.draw()
     previousNodeIdsRef.current = nextNodeIds
     previousEdgeIdsRef.current = nextEdgeIds
-  }, [graphData, rawNodes])
+  }, [graphData, nodeColorMetric, rawEdges, rawNodes, view])
 
   // --- 节点选中粒子动画 ---
   // 选中节点时，在所有关联边上显示方向性粒子流
@@ -1111,6 +1162,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
         <span className="topo-legend-item topo-legend-item--downstream">下游</span>
         <span className="topo-legend-item topo-legend-item--peer">同业</span>
         <span className="topo-legend-item topo-legend-item--center">中心</span>
+        <span className="topo-legend-item topo-legend-item--degree">节点颜色：浅金 = 连接少，深金 = 连接多，当前指标 = {NODE_COLOR_METRIC_LABEL[nodeColorMetric]}</span>
       </div>
       <div className="topo-g6-help">滚轮缩放 · 拖拽画布 · 双击节点展开 · 悬浮查看详情</div>
       {rawNodes.length === 0 ? <div className="topo-empty topo-empty--canvas">选择股票后会优先加载上次拓扑，可开始或继续生成</div> : null}
