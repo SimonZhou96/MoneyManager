@@ -2,7 +2,7 @@ import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
 import { Circle } from '@antv/g'
 import { Graph } from '@antv/g6'
 import type { TopologyEdgeData, TopologyNodeColorMetric, TopologyNodeData, TopologyNodePatch, TopologyQuoteItem, TopologyRenderEdgeData, TopologyRenderNodeData } from './types'
-import { isAggregateEdge, isAggregateNode } from './topologyAggregation'
+import { displaySector, isAggregateEdge, isAggregateNode } from './topologyAggregation'
 
 interface Props {
   rawNodes: TopologyRenderNodeData[]
@@ -40,6 +40,7 @@ type GraphPluginOption = Record<string, unknown> & { type: string; key?: string 
 type RenderedEdgeData = TopologyRenderEdgeData & { edgeKey?: string; visualSource?: string; visualTarget?: string }
 type ToolbarAction = 'start-topology' | 'refresh-topology'
 type NodeDegreeStats = { out: number; in: number; total: number }
+type SectorHullGroup = { sector: string; memberIds: string[]; zone?: string }
 
 interface ToolbarState {
   canStartTopology: boolean
@@ -148,19 +149,43 @@ function sectorHullStroke(index: number) {
   return strokes[index % strokes.length]
 }
 
-function sectorHullPlugins(nodes: TopologyRenderNodeData[]): GraphPluginOption[] {
+function sectorHullGroups(nodes: TopologyRenderNodeData[]): SectorHullGroup[] {
   const visibleNodeIds = new Set(nodes.map((node) => node.id))
+  const sectorMembers = new Map<string, Set<string>>()
+  const sectorZone = new Map<string, string>()
+
+  nodes.forEach((node) => {
+    if (node.is_center) return
+    const sector = isAggregateNode(node) ? node.aggregate_sector : displaySector(node)
+    const members = sectorMembers.get(sector) || new Set<string>()
+    members.add(node.id)
+    if (isAggregateNode(node)) {
+      node.visible_representative_ids.forEach((id) => {
+        if (visibleNodeIds.has(id)) members.add(id)
+      })
+      sectorZone.set(sector, node.zone)
+    } else if (!sectorZone.has(sector)) {
+      sectorZone.set(sector, node.zone)
+    }
+    sectorMembers.set(sector, members)
+  })
+
+  return [...sectorMembers.entries()]
+    .map(([sector, members]) => ({
+      sector,
+      memberIds: [...members],
+      zone: sectorZone.get(sector),
+    }))
+    .filter((group) => group.memberIds.length >= 2)
+}
+
+function sectorHullPlugins(nodes: TopologyRenderNodeData[]): GraphPluginOption[] {
   const plugins: GraphPluginOption[] = []
-  nodes.filter(isAggregateNode).forEach((node, index) => {
-    const members = [node.id, ...node.visible_representative_ids]
-      .filter((id, memberIndex, list) => visibleNodeIds.has(id) && list.indexOf(id) === memberIndex)
-
-    if (members.length < 2) return
-
+  sectorHullGroups(nodes).forEach((group, index) => {
     plugins.push({
       type: 'hull',
-      key: sectorHullKey(node.aggregate_sector),
-      members,
+      key: sectorHullKey(group.sector),
+      members: group.memberIds,
       padding: 38,
       concavity: 120,
       corner: 'rounded',
@@ -169,8 +194,8 @@ function sectorHullPlugins(nodes: TopologyRenderNodeData[]): GraphPluginOption[]
       lineWidth: 1.6,
       lineDash: [8, 6],
       label: true,
-      labelText: node.aggregate_sector,
-      labelPlacement: node.zone === 'downstream' ? 'bottom' : 'top',
+      labelText: group.sector,
+      labelPlacement: group.zone === 'downstream' ? 'bottom' : 'top',
       labelCloseToPath: false,
       labelFill: '#dbeafe',
       labelFontSize: 11,
