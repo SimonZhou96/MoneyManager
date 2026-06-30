@@ -1158,10 +1158,11 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   return (
     <div className="topo-canvas-shell">
       <div className="topo-legend" aria-hidden="true">
-        <span className="topo-legend-item topo-legend-item--upstream">上游</span>
-        <span className="topo-legend-item topo-legend-item--downstream">下游</span>
-        <span className="topo-legend-item topo-legend-item--peer">同业</span>
-        <span className="topo-legend-item topo-legend-item--center">中心</span>
+        <span className="topo-legend-label">关系</span>
+        <span className="topo-legend-item topo-legend-item--line topo-legend-item--upstream">上游边</span>
+        <span className="topo-legend-item topo-legend-item--line topo-legend-item--downstream">下游边</span>
+        <span className="topo-legend-item topo-legend-item--line topo-legend-item--peer">同业边</span>
+        <span className="topo-legend-item topo-legend-item--center">中心节点</span>
         <span className="topo-legend-item topo-legend-item--degree">节点颜色：浅金 = 连接少，深金 = 连接多，当前指标 = {NODE_COLOR_METRIC_LABEL[nodeColorMetric]}</span>
       </div>
       <div className="topo-g6-help">滚轮缩放 · 拖拽画布 · 双击节点展开 · 悬浮查看详情</div>

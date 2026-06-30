@@ -4763,6 +4763,7 @@ section { background: transparent; }
 .topo-filter {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 6px;
   color: #a8b3c7;
   font-size: 12px;
@@ -4775,6 +4776,7 @@ section { background: transparent; }
   background: #111827;
   color: #e8e0d0;
   font-size: 12px;
+  cursor: pointer;
 }
 .topo-filter select:focus { border-color: #60a5fa; outline: none; box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.16); }
 .topo-sector-select { position: relative; display: inline-flex; }
@@ -4900,13 +4902,21 @@ section { background: transparent; }
   z-index: 10;
   top: 14px;
   left: 14px;
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+  max-width: min(720px, calc(100% - 28px));
   padding: 6px 10px;
   border: 1px solid #2a3040;
-  border-radius: 999px;
+  border-radius: 8px;
   background: rgba(20, 25, 32, 0.92);
   backdrop-filter: blur(10px);
+}
+.topo-legend-label {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
 }
 .topo-legend-item {
   display: inline-flex;
@@ -4923,15 +4933,26 @@ section { background: transparent; }
   border-radius: 999px;
   background: currentColor;
 }
+.topo-legend-item--line::before {
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+}
 .topo-legend-item--upstream { color: #60a5fa; }
 .topo-legend-item--downstream { color: #f59e0b; }
 .topo-legend-item--peer { color: #8b5cf6; }
 .topo-legend-item--center { color: #fbbf24; }
 .topo-legend-item--degree { color: #fef3c7; flex-basis: 100%; margin-top: 2px; }
+.topo-legend-item--degree::before {
+  width: 28px;
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #fef3c7, #b45309);
+}
 .topo-g6-help {
   position: absolute;
   z-index: 10;
-  top: 60px;
+  top: 76px;
   right: 14px;
   padding: 6px 10px;
   border: 1px solid #2a3040;
@@ -5000,6 +5021,6 @@ body :where(.g6-tooltip, .g6-tooltip-container):has(.topo-g6-tip) {
   .topo-toolbar { align-items: flex-start; }
   .topo-stats { margin-left: 0; flex: 1 1 100%; }
   .topo-filter-summary { margin-left: 0; }
-  .topo-g6-help { left: 14px; right: auto; top: 56px; max-width: calc(100% - 28px); }
+  .topo-g6-help { left: 14px; right: auto; top: 86px; max-width: calc(100% - 28px); }
   .topo-detail-panel { left: 16px; right: 16px; top: auto; bottom: 16px; width: auto; max-height: 42vh; }
 }
