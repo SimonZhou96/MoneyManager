@@ -209,6 +209,13 @@ function sectorHullPlugins(nodes: TopologyRenderNodeData[]): GraphPluginOption[]
   return plugins
 }
 
+function refreshSectorHulls(graph: G6Graph, nodes: TopologyRenderNodeData[]) {
+  sectorHullGroups(nodes).forEach((group) => {
+    const hull = graph.getPluginInstance(sectorHullKey(group.sector)) as { updateMember?: (members: string[]) => void } | undefined
+    hull?.updateMember?.(group.memberIds)
+  })
+}
+
 function nodeLabel(node: TopologyRenderNodeData, view: ViewState) {
   if (isAggregateNode(node)) return `${node.aggregate_sector}\n+${node.hidden_node_ids.length}`
   const text = node.name || node.code
@@ -381,10 +388,29 @@ const R_BASE = 240
 const R_STEP = 140
 const PEER_X = 280
 const PEER_Y_GAP = 64
+const SECTOR_BAND_GAP = Math.PI * 0.035
+const SECTOR_RADIAL_GAP = 44
 
 interface Sector {
   start: number  // radians
   end: number    // radians
+}
+
+function sectorKeyForLayout(node: TopologyRenderNodeData) {
+  return isAggregateNode(node) ? node.aggregate_sector : displaySector(node)
+}
+
+function groupBySectorForLayout(nodes: TopologyRenderNodeData[]) {
+  const groups = new Map<string, TopologyRenderNodeData[]>()
+  nodes.forEach((node) => {
+    const key = sectorKeyForLayout(node)
+    const group = groups.get(key) || []
+    group.push(node)
+    groups.set(key, group)
+  })
+  return [...groups.entries()]
+    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    .map(([sector, sectorNodes]) => ({ sector, nodes: sectorNodes }))
 }
 
 function ringSectoredLayout(
@@ -420,17 +446,17 @@ function ringSectoredLayout(
 
   // 4. Upstream → top sector (15° – 165°)
   if (unplaced.upstream.length > 0) {
-    placeInSector(unplaced.upstream, positions, { start: Math.PI * 0.08, end: Math.PI * 0.92 })
+    placeSectorBandsInArc(unplaced.upstream, positions, { start: Math.PI * 0.08, end: Math.PI * 0.92 })
   }
 
   // 5. Downstream → bottom sector (195° – 345°)
   if (unplaced.downstream.length > 0) {
-    placeInSector(unplaced.downstream, positions, { start: Math.PI * 1.08, end: Math.PI * 1.92 })
+    placeSectorBandsInArc(unplaced.downstream, positions, { start: Math.PI * 1.08, end: Math.PI * 1.92 })
   }
 
   // 6. Peers → left / right columns
   if (unplaced.peer.length > 0) {
-    placePeers(unplaced.peer, positions)
+    placePeerSectorBands(unplaced.peer, positions)
   }
 
   placeAggregateRepresentatives(nodes, positions)
@@ -473,11 +499,35 @@ function placeAggregateRepresentatives(
   }
 }
 
+function placeSectorBandsInArc(
+  nodes: TopologyRenderNodeData[],
+  positions: Map<string, { x: number; y: number }>,
+  arc: Sector,
+) {
+  const groups = groupBySectorForLayout(nodes)
+  if (groups.length <= 1) {
+    placeInSector(nodes, positions, arc)
+    return
+  }
+
+  const spread = arc.end - arc.start
+  const usableSpread = Math.max(spread * 0.42, spread - SECTOR_BAND_GAP * (groups.length - 1))
+  const bandWidth = usableSpread / groups.length
+  const start = (arc.start + arc.end) / 2 - usableSpread / 2
+
+  groups.forEach((group, index) => {
+    const sectorStart = start + index * bandWidth + (index > 0 ? SECTOR_BAND_GAP / 2 : 0)
+    const sectorEnd = sectorStart + Math.max(bandWidth - SECTOR_BAND_GAP / 2, bandWidth * 0.78)
+    placeInSector(group.nodes, positions, { start: sectorStart, end: sectorEnd }, index)
+  })
+}
+
 /** Sort within zone+depth: largest market_cap → center of sector. */
 function placeInSector(
   nodes: TopologyRenderNodeData[],
   positions: Map<string, { x: number; y: number }>,
   sector: Sector,
+  sectorIndex = 0,
 ) {
   // Group by depth; sort each depth by market_cap descending
   const byDepth = new Map<number, TopologyRenderNodeData[]>()
@@ -495,7 +545,7 @@ function placeInSector(
     const group = byDepth.get(depth)!
     // Sort largest market_cap first → they anchor the sector center
     group.sort((a, b) => (b.market_cap ?? 0) - (a.market_cap ?? 0))
-    const radius = R_BASE + (depth - 1) * R_STEP
+    const radius = R_BASE + sectorIndex * SECTOR_RADIAL_GAP + (depth - 1) * R_STEP
     const centerAngle = (sector.start + sector.end) / 2
     const angleStep = group.length <= 1 ? 0 : spread / Math.max(2, group.length)
 
@@ -506,6 +556,37 @@ function placeInSector(
         x: Math.cos(angle) * radius,
         y: -Math.sin(angle) * radius,  // screen Y goes down, negate for math angles
       })
+    })
+  }
+}
+
+function placePeerSectorBands(
+  nodes: TopologyRenderNodeData[],
+  positions: Map<string, { x: number; y: number }>,
+) {
+  const groups = groupBySectorForLayout(nodes)
+  if (groups.length <= 1) {
+    placePeers(nodes, positions)
+    return
+  }
+
+  const leftGroups = groups.filter((_, index) => index % 2 === 0)
+  const rightGroups = groups.filter((_, index) => index % 2 === 1)
+
+  for (const side of [
+    { groups: leftGroups, x: -PEER_X },
+    { groups: rightGroups, x: PEER_X },
+  ]) {
+    let cursorY = -((side.groups.reduce((sum, group) => sum + Math.max(1, group.nodes.length), 0) - 1) * PEER_Y_GAP + Math.max(0, side.groups.length - 1) * 52) / 2
+    side.groups.forEach((group, groupIndex) => {
+      const sorted = [...group.nodes].sort((a, b) => (b.market_cap ?? 0) - (a.market_cap ?? 0))
+      sorted.forEach((node, nodeIndex) => {
+        positions.set(node.id, {
+          x: side.x + (groupIndex % 2) * (side.x < 0 ? -52 : 52),
+          y: cursorY + nodeIndex * PEER_Y_GAP,
+        })
+      })
+      cursorY += Math.max(1, sorted.length) * PEER_Y_GAP + 52
     })
   }
 }
@@ -1105,6 +1186,11 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       onSelectNodeRef.current?.(node)
     })
 
+    graph.on('node:drag', () => {
+      if (graph.destroyed) return
+      refreshSectorHulls(graph, rawNodesRef.current)
+    })
+
     graph.on('node:dragend', (event: unknown) => {
       const id = (event as { target?: { id?: string } }).target?.id
       if (!id || graph.destroyed) return
@@ -1114,6 +1200,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       } catch {
         /* position is best-effort only */
       }
+      refreshSectorHulls(graph, rawNodesRef.current)
 
     })
 

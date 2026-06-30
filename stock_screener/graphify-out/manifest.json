@@ -1905,8 +1905,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/web_frontend/src/features/industryTopology/TopologyCanvas.tsx": {
-    "mtime": 1782798193.050557,
-    "ast_hash": "26a14939f67f63ee4a01d1c281d510bd",
+    "mtime": 1782798705.6922493,
+    "ast_hash": "c39c45b8178d45981d8e8a122bd593b5",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/industry_topology/enrichment.py": {
@@ -2337,6 +2337,11 @@
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/docs/superpowers/specs/2026-06-30-topology-sector-aggregation-design.md": {
     "mtime": 1782792247.789818,
     "ast_hash": "bffcf87064d8f70674d786c27d40283d",
+    "semantic_hash": ""
+  },
+  "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/docs/superpowers/plans/2026-06-30-topology-sector-hull-interaction.md": {
+    "mtime": 1782798624.208722,
+    "ast_hash": "066a642b053818f0dff4e0da6689d5cc",
     "semantic_hash": ""
   }
 }
