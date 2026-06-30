@@ -349,7 +349,44 @@ function ringSectoredLayout(
     placePeers(unplaced.peer, positions)
   }
 
+  placeAggregateRepresentatives(nodes, positions)
+
   return positions
+}
+
+function placeAggregateRepresentatives(
+  nodes: TopologyRenderNodeData[],
+  positions: Map<string, { x: number; y: number }>,
+) {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]))
+  const aggregateNodes = nodes.filter(isAggregateNode)
+  for (const aggregate of aggregateNodes) {
+    const anchor = positions.get(aggregate.id)
+    if (!anchor) continue
+    const representativeIds = aggregate.visible_representative_ids
+      .filter((id) => {
+        const node = nodeById.get(id)
+        return Boolean(node && !node.is_center && positions.has(id))
+      })
+      .slice(0, 3)
+    if (representativeIds.length === 0) continue
+
+    const baseAngle = aggregate.zone === 'upstream'
+      ? Math.PI / 2
+      : aggregate.zone === 'downstream'
+        ? -Math.PI / 2
+        : anchor.x < 0 ? Math.PI : 0
+    const offsets = representativeIds.length === 1 ? [0] : representativeIds.length === 2 ? [-0.42, 0.42] : [-0.56, 0, 0.56]
+    const radius = 72
+
+    representativeIds.forEach((id, index) => {
+      const angle = baseAngle + offsets[index]
+      positions.set(id, {
+        x: anchor.x + Math.cos(angle) * radius,
+        y: anchor.y - Math.sin(angle) * radius,
+      })
+    })
+  }
 }
 
 /** Sort within zone+depth: largest market_cap → center of sector. */
