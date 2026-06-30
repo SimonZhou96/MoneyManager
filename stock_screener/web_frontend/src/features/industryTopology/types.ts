@@ -1,6 +1,7 @@
 export type Market = 'HK' | 'US' | 'A' | string
 export type Direction = 'upstream' | 'downstream' | 'peer'
 export type TopologyZone = Direction | 'center'
+export type TopologyNodeColorMetric = 'out_degree' | 'in_degree' | 'total_degree'
 export type QuoteStatus = 'pending' | 'queued' | 'cached' | 'fresh' | 'stale' | 'failed' | 'error' | 'skipped'
 export type TopologyDataStage = 'llm_initial' | 'source_partial' | 'source_verified' | string
 export type TopologyTaskStage = 'idle' | 'graph_loading' | 'graph_depth_expanding' | 'graph_ready_search_enriching' | 'graph_ready_source_polling' | 'done' | 'partial' | 'failed'

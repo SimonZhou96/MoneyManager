@@ -4760,6 +4760,23 @@ section { background: transparent; }
   font-size: 12px;
 }
 .topo-filter-group button.active { border-color: #60a5fa; background: rgba(96, 165, 250, 0.16); color: #dbeafe; }
+.topo-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #a8b3c7;
+  font-size: 12px;
+}
+.topo-filter span { color: #93a4bc; }
+.topo-filter select {
+  padding: 5px 28px 5px 10px;
+  border: 1px solid #2a3040;
+  border-radius: 999px;
+  background: #111827;
+  color: #e8e0d0;
+  font-size: 12px;
+}
+.topo-filter select:focus { border-color: #60a5fa; outline: none; box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.16); }
 .topo-sector-select { position: relative; display: inline-flex; }
 .topo-sector-select-trigger {
   padding: 5px 10px;
@@ -4910,6 +4927,7 @@ section { background: transparent; }
 .topo-legend-item--downstream { color: #f59e0b; }
 .topo-legend-item--peer { color: #8b5cf6; }
 .topo-legend-item--center { color: #fbbf24; }
+.topo-legend-item--degree { color: #fef3c7; flex-basis: 100%; margin-top: 2px; }
 .topo-g6-help {
   position: absolute;
   z-index: 10;
