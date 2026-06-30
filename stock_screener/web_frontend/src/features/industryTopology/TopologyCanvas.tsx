@@ -385,37 +385,230 @@ function edgeStyle(edge: TopologyRenderEdgeData, centerId: string | undefined, v
 // No force simulation; positions are stable, predictable, and zone-loyal.
 
 const R_BASE = 240
-const R_STEP = 140
-const PEER_X = 280
-const PEER_Y_GAP = 64
-const SECTOR_BAND_GAP = Math.PI * 0.035
-const SECTOR_RADIAL_GAP = 44
+const MIN_RING_GAP = 132
+const NODE_ARC_GAP = 24
+const SECTOR_ANGLE_GAP = Math.PI * 0.028
+const SECTOR_PADDING_RADIUS = 42
+const HUB_BUFFER_BASE = 190
+const HUB_BUFFER_FACTOR = 18
+const PEER_SPLIT_WEIGHT_BALANCE = 0.92
+const POLAR_COLLISION_PASSES = 2
+
+type LayoutDirection = 'upstream' | 'downstream' | 'peerLeft' | 'peerRight'
 
 interface Sector {
   start: number  // radians
   end: number    // radians
 }
 
+interface AngularInterval {
+  start: number
+  end: number
+  center: number
+}
+
+interface RadialInterval {
+  inner: number
+  outer: number
+}
+
+interface SectorCollisionBox {
+  minAngle: number
+  maxAngle: number
+  minRadius: number
+  maxRadius: number
+}
+
+interface LayoutNode {
+  node: TopologyRenderNodeData
+  id: string
+  sector: string
+  baseDirection: 'upstream' | 'downstream' | 'peer'
+  direction: LayoutDirection
+  depth: number
+  degree: number
+  marketCap: number
+  labelWidth: number
+  nodeRadius: number
+}
+
+interface RingInfo {
+  depth: number
+  nodes: LayoutNode[]
+  requiredRadius: number
+  actualRadius: number
+}
+
+interface SectorInfo {
+  sector: string
+  direction: LayoutDirection
+  weight: number
+  nodeCount: number
+  edgeCount: number
+  maxRingLoad: number
+  avgLabelWidth: number
+  rings: RingInfo[]
+  angle: AngularInterval
+  radius: RadialInterval
+  collisionBox: SectorCollisionBox
+}
+
+interface DirectionGroup {
+  direction: LayoutDirection
+  angularDomain: AngularInterval
+  sectors: SectorInfo[]
+}
+
+const DIRECTION_DOMAINS: Record<LayoutDirection, AngularInterval> = {
+  upstream: makeInterval(Math.PI * 0.14, Math.PI * 0.86),
+  downstream: makeInterval(Math.PI * 1.14, Math.PI * 1.86),
+  peerLeft: makeInterval(Math.PI * 0.86, Math.PI * 1.26),
+  peerRight: makeInterval(-Math.PI * 0.26, Math.PI * 0.14),
+}
+
+function makeInterval(start: number, end: number): AngularInterval {
+  return { start, end, center: (start + end) / 2 }
+}
+
+function angleSize(interval: AngularInterval) {
+  return Math.max(0.001, interval.end - interval.start)
+}
+
 function sectorKeyForLayout(node: TopologyRenderNodeData) {
   return isAggregateNode(node) ? node.aggregate_sector : displaySector(node)
 }
 
-function groupBySectorForLayout(nodes: TopologyRenderNodeData[]) {
-  const groups = new Map<string, TopologyRenderNodeData[]>()
+function stableNodeCompare(a: LayoutNode, b: LayoutNode) {
+  const degreeDiff = b.degree - a.degree
+  if (degreeDiff !== 0) return degreeDiff
+  const capDiff = b.marketCap - a.marketCap
+  if (capDiff !== 0) return capDiff
+  return (a.node.name || a.id).localeCompare(b.node.name || b.id) || a.id.localeCompare(b.id)
+}
+
+function estimateLabelWidth(node: TopologyRenderNodeData) {
+  const text = node.name || node.code || node.id
+  return Math.min(132, Math.max(36, text.length * 7.2))
+}
+
+function buildLayoutNodes(nodes: TopologyRenderNodeData[], edges: TopologyRenderEdgeData[]): LayoutNode[] {
+  const degreeMap = buildNodeDegreeMap(nodes, edges)
+  return nodes
+    .filter((node) => !node.is_center)
+    .map((node): LayoutNode => {
+      const baseDirection = node.zone === 'upstream' || node.zone === 'downstream' ? node.zone : 'peer'
+      return {
+        node,
+        id: node.id,
+        sector: sectorKeyForLayout(node),
+        baseDirection,
+        direction: baseDirection === 'peer' ? 'peerLeft' : baseDirection,
+        depth: Math.max(1, node.depth || 1),
+        degree: degreeMap.get(node.id)?.total || 0,
+        marketCap: node.market_cap || 0,
+        labelWidth: estimateLabelWidth(node),
+        nodeRadius: nodeSize(node),
+      }
+    })
+}
+
+function groupLayoutNodesBySector(nodes: LayoutNode[], direction: LayoutDirection, edges: TopologyRenderEdgeData[]): SectorInfo[] {
+  const groups = new Map<string, LayoutNode[]>()
   nodes.forEach((node) => {
-    const key = sectorKeyForLayout(node)
+    const key = node.sector
     const group = groups.get(key) || []
     group.push(node)
     groups.set(key, group)
   })
   return [...groups.entries()]
-    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
-    .map(([sector, sectorNodes]) => ({ sector, nodes: sectorNodes }))
+    .map(([sector, sectorNodes]) => buildSectorInfo(sector, direction, sectorNodes, edges))
+    .sort(stableSectorCompare)
+}
+
+function stableSectorCompare(a: SectorInfo, b: SectorInfo) {
+  const weightDiff = b.weight - a.weight
+  if (Math.abs(weightDiff) > 0.0001) return weightDiff
+  const countDiff = b.nodeCount - a.nodeCount
+  if (countDiff !== 0) return countDiff
+  return a.sector.localeCompare(b.sector)
+}
+
+function buildSectorInfo(sector: string, direction: LayoutDirection, nodes: LayoutNode[], edges: TopologyRenderEdgeData[]): SectorInfo {
+  const nodeIds = new Set(nodes.map((node) => node.id))
+  const edgeCount = edges.filter((edge) => nodeIds.has(edge.source) || nodeIds.has(edge.target)).length
+  const rings = buildRings(nodes)
+  const maxRingLoad = Math.max(1, ...rings.map((ring) => ring.nodes.length))
+  const avgLabelWidth = nodes.reduce((sum, node) => sum + node.labelWidth, 0) / Math.max(1, nodes.length)
+  const weight = computeSectorWeight(nodes.length, edgeCount, maxRingLoad, avgLabelWidth)
+  return {
+    sector,
+    direction,
+    weight,
+    nodeCount: nodes.length,
+    edgeCount,
+    maxRingLoad,
+    avgLabelWidth,
+    rings,
+    angle: makeInterval(0, 0),
+    radius: { inner: R_BASE, outer: R_BASE },
+    collisionBox: { minAngle: 0, maxAngle: 0, minRadius: R_BASE, maxRadius: R_BASE },
+  }
+}
+
+function buildRings(nodes: LayoutNode[]): RingInfo[] {
+  const byDepth = new Map<number, LayoutNode[]>()
+  nodes.forEach((node) => {
+    const group = byDepth.get(node.depth) || []
+    group.push(node)
+    byDepth.set(node.depth, group)
+  })
+  return [...byDepth.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([depth, ringNodes]) => ({
+      depth,
+      nodes: [...ringNodes].sort(stableNodeCompare),
+      requiredRadius: R_BASE,
+      actualRadius: R_BASE,
+    }))
+}
+
+function computeSectorWeight(nodeCount: number, edgeCount: number, maxRingLoad: number, avgLabelWidth: number) {
+  return Math.sqrt(nodeCount) + Math.log2(edgeCount + 1) * 0.6 + maxRingLoad * 0.35 + avgLabelWidth * 0.01
+}
+
+function splitDirectionGroups(layoutNodes: LayoutNode[], edges: TopologyRenderEdgeData[]): DirectionGroup[] {
+  const upstreamNodes = layoutNodes.filter((node) => node.baseDirection === 'upstream')
+  const downstreamNodes = layoutNodes.filter((node) => node.baseDirection === 'downstream')
+  const peerSectors = groupLayoutNodesBySector(layoutNodes.filter((node) => node.baseDirection === 'peer'), 'peerLeft', edges)
+  const peerLeft: SectorInfo[] = []
+  const peerRight: SectorInfo[] = []
+  let leftWeight = 0
+  let rightWeight = 0
+
+  peerSectors.forEach((sector, index) => {
+    const targetLeft = leftWeight <= rightWeight * PEER_SPLIT_WEIGHT_BALANCE || (Math.abs(leftWeight - rightWeight) < 0.0001 && index % 2 === 0)
+    const target = targetLeft ? peerLeft : peerRight
+    sector.direction = targetLeft ? 'peerLeft' : 'peerRight'
+    sector.rings.forEach((ring) => ring.nodes.forEach((node) => { node.direction = sector.direction }))
+    target.push(sector)
+    if (targetLeft) leftWeight += sector.weight
+    else rightWeight += sector.weight
+  })
+
+  const groups: DirectionGroup[] = [
+    { direction: 'upstream', angularDomain: DIRECTION_DOMAINS.upstream, sectors: groupLayoutNodesBySector(upstreamNodes, 'upstream', edges) },
+    { direction: 'peerLeft', angularDomain: DIRECTION_DOMAINS.peerLeft, sectors: peerLeft.sort(stableSectorCompare) },
+    { direction: 'peerRight', angularDomain: DIRECTION_DOMAINS.peerRight, sectors: peerRight.sort(stableSectorCompare) },
+    { direction: 'downstream', angularDomain: DIRECTION_DOMAINS.downstream, sectors: groupLayoutNodesBySector(downstreamNodes, 'downstream', edges) },
+  ]
+  return groups.filter((group) => group.sectors.length > 0)
 }
 
 function ringSectoredLayout(
   nodes: TopologyRenderNodeData[],
+  edges: TopologyRenderEdgeData[],
   existingPositions?: Map<string, { x: number; y: number }>,
+  preservedNodeIds?: Set<string>,
 ): Map<string, { x: number; y: number }> {
   const positions = new Map<string, { x: number; y: number }>()
 
@@ -427,6 +620,7 @@ function ringSectoredLayout(
   // 1. Preserve existing positions (expand: keep stable layout)
   if (existingPositions) {
     for (const node of nodes) {
+      if (!preservedNodeIds?.has(node.id)) continue
       const existing = existingPositions.get(node.id)
       if (existing) positions.set(node.id, { ...existing })
     }
@@ -436,28 +630,15 @@ function ringSectoredLayout(
   const center = nodes.find((node) => node.is_center)
   if (center) positions.set(center.id, { x: 0, y: 0 })
 
-  // 3. Collect unplaced nodes, group by zone
-  const unplaced: Record<'upstream' | 'downstream' | 'peer', TopologyRenderNodeData[]> = { upstream: [], downstream: [], peer: [] }
-  for (const node of nodes) {
-    if (positions.has(node.id) || node.is_center) continue
-    const zone = node.zone === 'upstream' || node.zone === 'downstream' ? node.zone : 'peer'
-    unplaced[zone].push(node)
-  }
-
-  // 4. Upstream → top sector (15° – 165°)
-  if (unplaced.upstream.length > 0) {
-    placeSectorBandsInArc(unplaced.upstream, positions, { start: Math.PI * 0.08, end: Math.PI * 0.92 })
-  }
-
-  // 5. Downstream → bottom sector (195° – 345°)
-  if (unplaced.downstream.length > 0) {
-    placeSectorBandsInArc(unplaced.downstream, positions, { start: Math.PI * 1.08, end: Math.PI * 1.92 })
-  }
-
-  // 6. Peers → left / right columns
-  if (unplaced.peer.length > 0) {
-    placePeerSectorBands(unplaced.peer, positions)
-  }
+  const layoutNodes = buildLayoutNodes(nodes, edges).filter((node) => !positions.has(node.id))
+  const hubBuffer = computeHubBuffer(center?.id, edges)
+  const directionGroups = splitDirectionGroups(layoutNodes, edges)
+  directionGroups.forEach((group) => {
+    allocateSectorAngles(group)
+    group.sectors.forEach((sector) => computeRingRadii(sector, hubBuffer))
+    resolveSectorPolarCollisions(group)
+  })
+  placeNodesInPolarSpace(directionGroups, edges, positions)
 
   placeAggregateRepresentatives(nodes, positions)
 
@@ -499,120 +680,144 @@ function placeAggregateRepresentatives(
   }
 }
 
-function placeSectorBandsInArc(
-  nodes: TopologyRenderNodeData[],
-  positions: Map<string, { x: number; y: number }>,
-  arc: Sector,
-) {
-  const groups = groupBySectorForLayout(nodes)
-  if (groups.length <= 1) {
-    placeInSector(nodes, positions, arc)
-    return
-  }
+function computeHubBuffer(centerId: string | undefined, edges: TopologyRenderEdgeData[]) {
+  if (!centerId) return R_BASE
+  const hubDegree = edges.filter((edge) => edge.source === centerId || edge.target === centerId).length
+  return Math.max(R_BASE, HUB_BUFFER_BASE + Math.sqrt(hubDegree) * HUB_BUFFER_FACTOR)
+}
 
-  const spread = arc.end - arc.start
-  const usableSpread = Math.max(spread * 0.42, spread - SECTOR_BAND_GAP * (groups.length - 1))
-  const bandWidth = usableSpread / groups.length
-  const start = (arc.start + arc.end) / 2 - usableSpread / 2
+function allocateSectorAngles(group: DirectionGroup) {
+  const sectors = group.sectors.sort(stableSectorCompare)
+  const domainSize = angleSize(group.angularDomain)
+  const gap = Math.min(SECTOR_ANGLE_GAP, domainSize / Math.max(8, sectors.length * 3))
+  const available = Math.max(domainSize * 0.72, domainSize - gap * Math.max(0, sectors.length - 1))
+  const minAngle = Math.min(Math.PI * 0.075, Math.max(Math.PI * 0.035, available * 0.06))
+  const compressedMinAngle = Math.min(minAngle, available / Math.max(1, sectors.length) * 0.82)
+  const base = compressedMinAngle * sectors.length
+  const remaining = Math.max(0, available - base)
+  const totalWeight = sectors.reduce((sum, sector) => sum + sector.weight, 0) || 1
+  let cursor = group.angularDomain.center - available / 2
 
-  groups.forEach((group, index) => {
-    const sectorStart = start + index * bandWidth + (index > 0 ? SECTOR_BAND_GAP / 2 : 0)
-    const sectorEnd = sectorStart + Math.max(bandWidth - SECTOR_BAND_GAP / 2, bandWidth * 0.78)
-    placeInSector(group.nodes, positions, { start: sectorStart, end: sectorEnd }, index)
+  sectors.forEach((sector) => {
+    const size = compressedMinAngle + remaining * (sector.weight / totalWeight)
+    sector.angle = makeInterval(cursor, cursor + size)
+    cursor += size + gap
   })
 }
 
-/** Sort within zone+depth: largest market_cap → center of sector. */
-function placeInSector(
-  nodes: TopologyRenderNodeData[],
-  positions: Map<string, { x: number; y: number }>,
-  sector: Sector,
-  sectorIndex = 0,
-) {
-  // Group by depth; sort each depth by market_cap descending
-  const byDepth = new Map<number, TopologyRenderNodeData[]>()
-  for (const node of nodes) {
-    const depth = node.depth || 1
-    const group = byDepth.get(depth) || []
-    group.push(node)
-    byDepth.set(depth, group)
-  }
+function computeRingRadii(sector: SectorInfo, hubBuffer: number) {
+  const sectorAngle = angleSize(sector.angle)
+  let previousRadius = hubBuffer
+  sector.rings.forEach((ring, index) => {
+    const nodeArc = ring.nodes.reduce((sum, node) => sum + node.nodeRadius * 2, 0)
+    const labelReserve = ring.nodes.reduce((sum, node) => sum + node.labelWidth, 0) / Math.max(1, ring.nodes.length) * 0.48
+    const gapArc = Math.max(0, ring.nodes.length - 1) * NODE_ARC_GAP
+    ring.requiredRadius = (nodeArc + labelReserve + gapArc) / Math.max(sectorAngle, Math.PI * 0.04)
+    ring.actualRadius = Math.max(hubBuffer + (ring.depth - 1) * MIN_RING_GAP, previousRadius + (index === 0 ? 0 : MIN_RING_GAP), ring.requiredRadius)
+    previousRadius = ring.actualRadius
+  })
 
-  const sortedDepths = Array.from(byDepth.keys()).sort((a, b) => a - b)
-  const spread = sector.end - sector.start
+  const radii = sector.rings.map((ring) => ring.actualRadius)
+  const inner = Math.max(80, Math.min(...radii, hubBuffer) - SECTOR_PADDING_RADIUS)
+  const outer = Math.max(...radii, hubBuffer) + SECTOR_PADDING_RADIUS
+  sector.radius = { inner, outer }
+  sector.collisionBox = computeSectorCollisionBox(sector)
+}
 
-  for (const depth of sortedDepths) {
-    const group = byDepth.get(depth)!
-    // Sort largest market_cap first → they anchor the sector center
-    group.sort((a, b) => (b.market_cap ?? 0) - (a.market_cap ?? 0))
-    const radius = R_BASE + sectorIndex * SECTOR_RADIAL_GAP + (depth - 1) * R_STEP
-    const centerAngle = (sector.start + sector.end) / 2
-    const angleStep = group.length <= 1 ? 0 : spread / Math.max(2, group.length)
-
-    group.forEach((node, i) => {
-      const rank = i === 0 ? 0 : (Math.ceil(i / 2) * (i % 2 === 1 ? -1 : 1))
-      const angle = centerAngle + rank * angleStep
-      positions.set(node.id, {
-        x: Math.cos(angle) * radius,
-        y: -Math.sin(angle) * radius,  // screen Y goes down, negate for math angles
-      })
-    })
+function computeSectorCollisionBox(sector: SectorInfo): SectorCollisionBox {
+  return {
+    minAngle: sector.angle.start - Math.PI * 0.012,
+    maxAngle: sector.angle.end + Math.PI * 0.012,
+    minRadius: sector.radius.inner - SECTOR_PADDING_RADIUS,
+    maxRadius: sector.radius.outer + SECTOR_PADDING_RADIUS,
   }
 }
 
-function placePeerSectorBands(
-  nodes: TopologyRenderNodeData[],
+function polarBoxesOverlap(a: SectorCollisionBox, b: SectorCollisionBox) {
+  const angleOverlap = Math.max(a.minAngle, b.minAngle) < Math.min(a.maxAngle, b.maxAngle)
+  const radiusOverlap = Math.max(a.minRadius, b.minRadius) < Math.min(a.maxRadius, b.maxRadius)
+  return angleOverlap && radiusOverlap
+}
+
+function resolveSectorPolarCollisions(group: DirectionGroup) {
+  const sectors = group.sectors.sort((a, b) => a.angle.center - b.angle.center || stableSectorCompare(a, b))
+  for (let pass = 0; pass < POLAR_COLLISION_PASSES; pass += 1) {
+    for (let index = 1; index < sectors.length; index += 1) {
+      const prev = sectors[index - 1]
+      const current = sectors[index]
+      if (!polarBoxesOverlap(prev.collisionBox, current.collisionBox)) continue
+      const shift = Math.min(MIN_RING_GAP * 1.5, Math.max(0, prev.collisionBox.maxRadius - current.collisionBox.minRadius) + SECTOR_PADDING_RADIUS)
+      current.rings.forEach((ring) => {
+        ring.actualRadius += shift
+      })
+      current.radius = { inner: current.radius.inner + shift, outer: current.radius.outer + shift }
+      current.collisionBox = computeSectorCollisionBox(current)
+    }
+  }
+}
+
+function placeNodesInPolarSpace(
+  groups: DirectionGroup[],
+  edges: TopologyRenderEdgeData[],
   positions: Map<string, { x: number; y: number }>,
 ) {
-  const groups = groupBySectorForLayout(nodes)
-  if (groups.length <= 1) {
-    placePeers(nodes, positions)
-    return
-  }
-
-  const leftGroups = groups.filter((_, index) => index % 2 === 0)
-  const rightGroups = groups.filter((_, index) => index % 2 === 1)
-
-  for (const side of [
-    { groups: leftGroups, x: -PEER_X },
-    { groups: rightGroups, x: PEER_X },
-  ]) {
-    let cursorY = -((side.groups.reduce((sum, group) => sum + Math.max(1, group.nodes.length), 0) - 1) * PEER_Y_GAP + Math.max(0, side.groups.length - 1) * 52) / 2
-    side.groups.forEach((group, groupIndex) => {
-      const sorted = [...group.nodes].sort((a, b) => (b.market_cap ?? 0) - (a.market_cap ?? 0))
-      sorted.forEach((node, nodeIndex) => {
-        positions.set(node.id, {
-          x: side.x + (groupIndex % 2) * (side.x < 0 ? -52 : 52),
-          y: cursorY + nodeIndex * PEER_Y_GAP,
+  const placedAngles = new Map<string, number>()
+  groups.forEach((group) => {
+    group.sectors
+      .sort((a, b) => a.angle.center - b.angle.center || stableSectorCompare(a, b))
+      .forEach((sector) => {
+        sector.rings.forEach((ring) => {
+          const ordered = orderRingNodesByBarycenter(ring, edges, placedAngles, sector.angle.center)
+          const angles = distributeAnglesEvenly(ordered.length, sector.angle)
+          ordered.forEach((layoutNode, index) => {
+            const angle = angles[index] ?? sector.angle.center
+            positions.set(layoutNode.id, polarToCartesian(angle, ring.actualRadius))
+            placedAngles.set(layoutNode.id, angle)
+          })
         })
       })
-      cursorY += Math.max(1, sorted.length) * PEER_Y_GAP + 52
-    })
-  }
+  })
 }
 
-/** Peers in two vertical columns, sorted by market_cap, center-aligned vertically. */
-function placePeers(
-  nodes: TopologyRenderNodeData[],
-  positions: Map<string, { x: number; y: number }>,
+function orderRingNodesByBarycenter(
+  ring: RingInfo,
+  edges: TopologyRenderEdgeData[],
+  placedAngles: Map<string, number>,
+  fallbackAngle: number,
 ) {
-  nodes.sort((a, b) => (b.market_cap ?? 0) - (a.market_cap ?? 0))
-
-  const half = Math.ceil(nodes.length / 2)
-  const leftNodes = nodes.slice(0, half)
-  const rightNodes = nodes.slice(half)
-
-  for (const side of [
-    { nodes: leftNodes, x: -PEER_X },
-    { nodes: rightNodes, x: PEER_X },
-  ]) {
-    const count = side.nodes.length
-    const totalHeight = (count - 1) * PEER_Y_GAP
-    const startY = -totalHeight / 2
-
-    side.nodes.forEach((node, i) => {
-      positions.set(node.id, { x: side.x, y: startY + i * PEER_Y_GAP })
+  const scored = ring.nodes.map((node) => {
+    const neighborAngles: number[] = []
+    edges.forEach((edge) => {
+      const neighborId = edge.source === node.id ? edge.target : edge.target === node.id ? edge.source : null
+      if (!neighborId) return
+      const angle = placedAngles.get(neighborId)
+      if (angle !== undefined) neighborAngles.push(angle)
     })
+    const barycenter = neighborAngles.length > 0
+      ? neighborAngles.reduce((sum, angle) => sum + angle, 0) / neighborAngles.length
+      : fallbackAngle
+    return { node, barycenter }
+  })
+  return scored
+    .sort((a, b) => a.barycenter - b.barycenter || stableNodeCompare(a.node, b.node))
+    .map((item) => item.node)
+}
+
+function distributeAnglesEvenly(count: number, interval: AngularInterval) {
+  if (count <= 0) return []
+  if (count === 1) return [interval.center]
+  const size = angleSize(interval)
+  const inset = Math.min(size * 0.18, Math.PI * 0.045)
+  const start = interval.start + inset
+  const end = interval.end - inset
+  const usable = Math.max(0.001, end - start)
+  return Array.from({ length: count }, (_, index) => start + usable * (index / Math.max(1, count - 1)))
+}
+
+function polarToCartesian(angle: number, radius: number) {
+  return {
+    x: Math.cos(angle) * radius,
+    y: -Math.sin(angle) * radius,
   }
 }
 
@@ -937,6 +1142,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   const previousNodeIdsRef = useRef<Set<string>>(new Set())
   const previousEdgeIdsRef = useRef<Set<string>>(new Set())
   const positionsRef = useRef<Map<string, { x: number; y: number }>>(new Map())
+  const manuallyPositionedNodeIdsRef = useRef<Set<string>>(new Set())
   const centerIdRef = useRef<string | null>(null)
   const particleMapRef = useRef<Map<string, ParticleState>>(new Map())
   const nodeParticleKeysRef = useRef<Set<string>>(new Set())
@@ -1099,12 +1305,13 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     const centerId = rawNodes.find((node) => node.is_center)?.id || null
     if (centerId !== centerIdRef.current) {
       positionsRef.current = new Map()
+      manuallyPositionedNodeIdsRef.current = new Set()
       centerIdRef.current = centerId
     }
-    const next = ringSectoredLayout(rawNodes, positionsRef.current)
+    const next = ringSectoredLayout(rawNodes, rawEdges, positionsRef.current, manuallyPositionedNodeIdsRef.current)
     positionsRef.current = next
     return next
-  }, [rawNodes])
+  }, [rawEdges, rawNodes])
 
   const graphData = useMemo(() => toG6Data(rawNodes, rawEdges, view, layoutPositions, nodeColorMetric), [layoutPositions, nodeColorMetric, rawEdges, rawNodes, view])
 
@@ -1197,6 +1404,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       try {
         const [x, y] = graph.getElementPosition(id) as [number, number]
         positionsRef.current.set(id, { x, y })
+        manuallyPositionedNodeIdsRef.current.add(id)
       } catch {
         /* position is best-effort only */
       }
