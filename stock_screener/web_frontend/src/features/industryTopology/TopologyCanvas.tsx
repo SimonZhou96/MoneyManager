@@ -1015,21 +1015,29 @@ function toolbarActionFromValue(value: string): ToolbarAction | null {
   return null
 }
 
-function fitGraphView(graph: G6Graph, nodeCount: number) {
+function fitGraphView(graph: G6Graph, nodeCount: number, centerId?: string) {
   if (graph.destroyed) return
-  const g = graph as unknown as { fitView?: (options?: unknown) => unknown; fitCenter?: () => unknown }
+  const g = graph as unknown as {
+    fitView?: (options?: unknown) => unknown
+    fitCenter?: () => unknown
+    focusElement?: (id: string, animation?: unknown) => unknown
+  }
+  const focusCenter = () => {
+    if (centerId && typeof g.focusElement === 'function') void g.focusElement(centerId, { duration: 0 })
+  }
   try {
     if (nodeCount <= 1) {
       if (typeof g.fitCenter === 'function') void g.fitCenter()
       return
     }
     if (typeof g.fitView === 'function') {
-      void g.fitView({ padding: 80 })
+      void Promise.resolve(g.fitView({ padding: 80 })).then(focusCenter)
       return
     }
     if (typeof g.fitCenter === 'function') {
       void g.fitCenter()
     }
+    focusCenter()
   } catch {
     /* viewport fitting is best-effort */
   }
@@ -1511,7 +1519,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       tooltipPatchedRef.current = false
       graph.setData(graphData as never)
       void graph.render().then(() => {
-        fitGraphView(graph, rawNodes.length)
+        fitGraphView(graph, rawNodes.length, rawNodes.find((node) => node.is_center)?.id)
         // Patch tooltip plugin for pin support (must run after async render completes)
         if (!tooltipPatchedRef.current) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any

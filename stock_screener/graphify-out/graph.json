@@ -11644,7 +11644,7 @@
       "source_file": "stock_pool.py",
       "source_location": "L159",
       "id": "stock_screener_stock_pool_normalize_pool_types",
-      "community": 337,
+      "community": 11,
       "norm_label": "normalize_pool_types()"
     },
     {
@@ -11653,7 +11653,7 @@
       "source_file": "stock_pool.py",
       "source_location": "L178",
       "id": "stock_screener_stock_pool_parse_pool_types",
-      "community": 337,
+      "community": 403,
       "norm_label": "parse_pool_types()"
     },
     {
@@ -12058,7 +12058,7 @@
       "source_file": "stock_pool.py",
       "source_location": "L160",
       "id": "stock_screener_stock_pool_rationale_160",
-      "community": 337,
+      "community": 11,
       "norm_label": "validate pool types and remove duplicates while preserving order."
     },
     {
@@ -12067,7 +12067,7 @@
       "source_file": "stock_pool.py",
       "source_location": "L179",
       "id": "stock_screener_stock_pool_rationale_179",
-      "community": 337,
+      "community": 403,
       "norm_label": "parse cli/interactive pool type input."
     },
     {
@@ -25054,7 +25054,7 @@
       "source_file": "tests/backtest_momentum_rotation.py",
       "source_location": "L1",
       "id": "tests_backtest_momentum_rotation_py",
-      "community": 283,
+      "community": 337,
       "norm_label": "backtest_momentum_rotation.py"
     },
     {
@@ -25063,7 +25063,7 @@
       "source_file": "tests/backtest_momentum_rotation.py",
       "source_location": "L57",
       "id": "tests_backtest_momentum_rotation_load_data",
-      "community": 283,
+      "community": 337,
       "norm_label": "load_data()"
     },
     {
@@ -25072,7 +25072,7 @@
       "source_file": "tests/backtest_momentum_rotation.py",
       "source_location": "L57",
       "id": "tests_backtest_momentum_rotation_py_marketdatabase",
-      "community": 283,
+      "community": 337,
       "norm_label": "marketdatabase"
     },
     {
@@ -25081,7 +25081,7 @@
       "source_file": "tests/backtest_momentum_rotation.py",
       "source_location": "L57",
       "id": "tests_backtest_momentum_rotation_py_str",
-      "community": 283,
+      "community": 337,
       "norm_label": "str"
     },
     {
@@ -25090,7 +25090,7 @@
       "source_file": "tests/backtest_momentum_rotation.py",
       "source_location": "L57",
       "id": "tests_backtest_momentum_rotation_py_dataframe",
-      "community": 283,
+      "community": 337,
       "norm_label": "dataframe"
     },
     {
@@ -25099,7 +25099,7 @@
       "source_file": "tests/backtest_momentum_rotation.py",
       "source_location": "L74",
       "id": "tests_backtest_momentum_rotation_compute_market_index",
-      "community": 283,
+      "community": 337,
       "norm_label": "compute_market_index()"
     },
     {
@@ -25108,7 +25108,7 @@
       "source_file": "tests/backtest_momentum_rotation.py",
       "source_location": "L90",
       "id": "tests_backtest_momentum_rotation_print_report",
-      "community": 283,
+      "community": 337,
       "norm_label": "print_report()"
     },
     {
@@ -25117,7 +25117,7 @@
       "source_file": "tests/backtest_momentum_rotation.py",
       "source_location": "L90",
       "id": "tests_backtest_momentum_rotation_py_float",
-      "community": 283,
+      "community": 337,
       "norm_label": "float"
     },
     {
@@ -25126,7 +25126,7 @@
       "source_file": "tests/backtest_momentum_rotation.py",
       "source_location": "L131",
       "id": "tests_backtest_momentum_rotation_main",
-      "community": 283,
+      "community": 337,
       "norm_label": "main()"
     },
     {
@@ -27439,7 +27439,7 @@
       "source_file": "tests/test_rule_engine.py",
       "source_location": "L103",
       "id": "tests_test_rule_engine_fakemarketintelservice_get_stock_intel",
-      "community": 66,
+      "community": 353,
       "norm_label": ".get_stock_intel()"
     },
     {
@@ -34513,7 +34513,7 @@
       "source_file": "tests/test_market_intel_models.py",
       "source_location": "L1",
       "id": "tests_test_market_intel_models_py",
-      "community": 52,
+      "community": 353,
       "norm_label": "test_market_intel_models.py"
     },
     {
@@ -34522,7 +34522,7 @@
       "source_file": "tests/test_market_intel_models.py",
       "source_location": "L18",
       "id": "tests_test_market_intel_models_marketintelmodeltests",
-      "community": 66,
+      "community": 353,
       "norm_label": "marketintelmodeltests"
     },
     {
@@ -34531,7 +34531,7 @@
       "source_file": "tests/test_market_intel_models.py",
       "source_location": "L19",
       "id": "tests_test_market_intel_models_marketintelmodeltests_test_intel_item_round_trip_preserves_event_time",
-      "community": 66,
+      "community": 353,
       "norm_label": ".test_intel_item_round_trip_preserves_event_time()"
     },
     {
@@ -34540,7 +34540,7 @@
       "source_file": "tests/test_market_intel_models.py",
       "source_location": "L41",
       "id": "tests_test_market_intel_models_marketintelmodeltests_test_intel_item_round_trip_preserves_metadata",
-      "community": 66,
+      "community": 353,
       "norm_label": ".test_intel_item_round_trip_preserves_metadata()"
     },
     {
@@ -34549,7 +34549,7 @@
       "source_file": "tests/test_market_intel_models.py",
       "source_location": "L67",
       "id": "tests_test_market_intel_models_marketintelmodeltests_test_stock_intel_bundle_groups_items_and_serializes_source_status",
-      "community": 66,
+      "community": 353,
       "norm_label": ".test_stock_intel_bundle_groups_items_and_serializes_source_status()"
     },
     {
@@ -34558,7 +34558,7 @@
       "source_file": "tests/test_market_intel_models.py",
       "source_location": "L119",
       "id": "tests_test_market_intel_models_marketintelmodeltests_test_stock_intel_bundle_groups_sort_by_event_time_before_other_timestamps",
-      "community": 66,
+      "community": 353,
       "norm_label": ".test_stock_intel_bundle_groups_sort_by_event_time_before_other_timestamps()"
     },
     {
@@ -34567,7 +34567,7 @@
       "source_file": "tests/test_market_intel_models.py",
       "source_location": "L171",
       "id": "tests_test_market_intel_models_marketintelmodeltests_test_evidence_pack_carries_data_gaps_and_citations",
-      "community": 66,
+      "community": 353,
       "norm_label": ".test_evidence_pack_carries_data_gaps_and_citations()"
     },
     {
@@ -34576,7 +34576,7 @@
       "source_file": "tests/test_market_intel_models.py",
       "source_location": "L187",
       "id": "tests_test_market_intel_models_marketintelmodeltests_test_dedupe_items_keeps_first_item_for_same_identity",
-      "community": 66,
+      "community": 353,
       "norm_label": ".test_dedupe_items_keeps_first_item_for_same_identity()"
     },
     {
@@ -34585,7 +34585,7 @@
       "source_file": "tests/test_market_intel_models.py",
       "source_location": "L217",
       "id": "tests_test_market_intel_models_marketintelmodeltests_test_ttl_policy_is_concrete",
-      "community": 66,
+      "community": 353,
       "norm_label": ".test_ttl_policy_is_concrete()"
     },
     {
@@ -34594,7 +34594,7 @@
       "source_file": "tests/test_market_intel_models.py",
       "source_location": "L229",
       "id": "tests_test_market_intel_models_marketintelmodeltests_test_group_sort_handles_mixed_timezone_datetimes",
-      "community": 66,
+      "community": 52,
       "norm_label": ".test_group_sort_handles_mixed_timezone_datetimes()"
     },
     {
@@ -35080,7 +35080,7 @@
       "source_file": "tests/test_market_intel_repository.py",
       "source_location": "L93",
       "id": "tests_test_market_intel_repository_marketintelrepositorytests_test_in_memory_repository_stores_items_bundle_and_provider_runs",
-      "community": 78,
+      "community": 61,
       "norm_label": ".test_in_memory_repository_stores_items_bundle_and_provider_runs()"
     },
     {
@@ -35143,7 +35143,7 @@
       "source_file": "tests/test_market_intel_repository.py",
       "source_location": "L346",
       "id": "tests_test_market_intel_repository_marketintelrepositorytests_test_in_memory_repository_sorts_by_event_time_first",
-      "community": 78,
+      "community": 61,
       "norm_label": ".test_in_memory_repository_sorts_by_event_time_first()"
     },
     {
@@ -35152,7 +35152,7 @@
       "source_file": "tests/test_market_intel_repository.py",
       "source_location": "L376",
       "id": "tests_test_market_intel_repository_marketintelrepositorytests_test_in_memory_repository_sorts_offset_event_times_by_utc_instant",
-      "community": 78,
+      "community": 61,
       "norm_label": ".test_in_memory_repository_sorts_offset_event_times_by_utc_instant()"
     },
     {
@@ -43628,7 +43628,7 @@
       "label": "ParticleState",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1038",
+      "source_location": "L1046",
       "id": "industrytopology_topologycanvas_particlestate",
       "community": 287,
       "norm_label": "particlestate"
@@ -43637,7 +43637,7 @@
       "label": "destroyParticle()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1043",
+      "source_location": "L1051",
       "id": "industrytopology_topologycanvas_destroyparticle",
       "community": 287,
       "norm_label": "destroyparticle()"
@@ -43646,7 +43646,7 @@
       "label": "startParticle()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1071",
+      "source_location": "L1079",
       "id": "industrytopology_topologycanvas_startparticle",
       "community": 287,
       "norm_label": "startparticle()"
@@ -43655,7 +43655,7 @@
       "label": "TopologyCanvas",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1115",
+      "source_location": "L1123",
       "id": "industrytopology_topologycanvas_topologycanvas",
       "community": 302,
       "norm_label": "topologycanvas"
@@ -45475,7 +45475,7 @@
       "source_file": "quant_lab/models.py",
       "source_location": "L1",
       "id": "quant_lab_models_py",
-      "community": 35,
+      "community": 19,
       "norm_label": "models.py"
     },
     {
@@ -45520,7 +45520,7 @@
       "source_file": "quant_lab/models.py",
       "source_location": "L61",
       "id": "quant_lab_models_positionsnapshot",
-      "community": 35,
+      "community": 19,
       "norm_label": "positionsnapshot"
     },
     {
@@ -46510,7 +46510,7 @@
       "source_file": "quant_lab/strategies/momentum_rotation.py",
       "source_location": "L44",
       "id": "strategies_momentum_rotation_momentumrotationconfig",
-      "community": 283,
+      "community": 337,
       "norm_label": "momentumrotationconfig"
     },
     {
@@ -46564,7 +46564,7 @@
       "source_file": "quant_lab/strategies/momentum_rotation.py",
       "source_location": "L94",
       "id": "strategies_momentum_rotation_momentumrotationstrategy_init",
-      "community": 283,
+      "community": 337,
       "norm_label": ".__init__()"
     },
     {
@@ -46690,7 +46690,7 @@
       "source_file": "quant_lab/strategies/momentum_rotation.py",
       "source_location": "L340",
       "id": "strategies_momentum_rotation_momentumrotationrunner",
-      "community": 283,
+      "community": 337,
       "norm_label": "momentumrotationrunner"
     },
     {
@@ -46699,7 +46699,7 @@
       "source_file": "quant_lab/strategies/momentum_rotation.py",
       "source_location": "L347",
       "id": "strategies_momentum_rotation_momentumrotationrunner_init",
-      "community": 283,
+      "community": 337,
       "norm_label": ".__init__()"
     },
     {
@@ -46789,7 +46789,7 @@
       "source_file": "quant_lab/strategies/momentum_rotation.py",
       "source_location": "L341",
       "id": "strategies_momentum_rotation_rationale_341",
-      "community": 283,
+      "community": 337,
       "norm_label": "\u52a8\u91cf\u8f6e\u52a8\u7b56\u7565\u56de\u6d4b\u8fd0\u884c\u5668\u3002      \u5904\u7406\u7ec4\u5408\u5c42\u9762\u7684\u903b\u8f91:\u8d44\u91d1\u7ba1\u7406\u3001\u4ed3\u4f4d\u5206\u914d\u3001\u51c0\u503c\u8ba1\u7b97\u3002     \u7b56\u7565\u5f15\u64ce(momentumrotationstrategy)\u53ea\u8d1f"
     },
     {
@@ -53861,7 +53861,7 @@
       "source_file": "market_intel/models.py",
       "source_location": "L144",
       "id": "market_intel_models_stockintelbundle",
-      "community": 66,
+      "community": 353,
       "norm_label": "stockintelbundle"
     },
     {
@@ -53933,7 +53933,7 @@
       "source_file": "market_intel/repository.py",
       "source_location": "L1",
       "id": "market_intel_repository_py",
-      "community": 78,
+      "community": 79,
       "norm_label": "repository.py"
     },
     {
@@ -53942,7 +53942,7 @@
       "source_file": "market_intel/repository.py",
       "source_location": "L13",
       "id": "market_intel_repository_item_sort_timestamp",
-      "community": 78,
+      "community": 79,
       "norm_label": "_item_sort_timestamp()"
     },
     {
@@ -53951,7 +53951,7 @@
       "source_file": "market_intel/repository.py",
       "source_location": "L13",
       "id": "market_intel_repository_py_float",
-      "community": 78,
+      "community": 79,
       "norm_label": "float"
     },
     {
@@ -54050,7 +54050,7 @@
       "source_file": "market_intel/repository.py",
       "source_location": "L59",
       "id": "market_intel_repository_inmemorymarketintelrepository",
-      "community": 78,
+      "community": 61,
       "norm_label": "inmemorymarketintelrepository"
     },
     {
@@ -54059,7 +54059,7 @@
       "source_file": "market_intel/repository.py",
       "source_location": "L60",
       "id": "market_intel_repository_inmemorymarketintelrepository_init",
-      "community": 78,
+      "community": 61,
       "norm_label": ".__init__()"
     },
     {
@@ -54104,7 +54104,7 @@
       "source_file": "market_intel/repository.py",
       "source_location": "L128",
       "id": "market_intel_repository_inmemorymarketintelrepository_insert_provider_run",
-      "community": 78,
+      "community": 61,
       "norm_label": ".insert_provider_run()"
     },
     {
@@ -56255,7 +56255,7 @@
       "source_file": "market_intel/providers/base.py",
       "source_location": "L56",
       "id": "providers_base_dedupe_items",
-      "community": 52,
+      "community": 353,
       "norm_label": "dedupe_items()"
     },
     {
@@ -79150,7 +79150,7 @@
       "file_type": "rationale",
       "source_file": "stock_pool.py",
       "source_location": "L135",
-      "community": 337,
+      "community": 11,
       "norm_label": "validate pool types and remove duplicates while preserving order.",
       "id": "stock_screener_stock_pool_rationale_135"
     },
@@ -79159,7 +79159,7 @@
       "file_type": "rationale",
       "source_file": "stock_pool.py",
       "source_location": "L154",
-      "community": 337,
+      "community": 403,
       "norm_label": "parse cli/interactive pool type input.",
       "id": "stock_screener_stock_pool_rationale_154"
     },
@@ -80302,7 +80302,7 @@
       "file_type": "rationale",
       "source_file": "stock_pool.py",
       "source_location": "L101",
-      "community": 337,
+      "community": 11,
       "norm_label": "validate pool types and remove duplicates while preserving order.",
       "id": "stock_screener_stock_pool_rationale_101"
     },
@@ -80311,7 +80311,7 @@
       "file_type": "rationale",
       "source_file": "stock_pool.py",
       "source_location": "L120",
-      "community": 337,
+      "community": 403,
       "norm_label": "parse cli/interactive pool type input.",
       "id": "stock_screener_stock_pool_rationale_120"
     },
@@ -80779,7 +80779,7 @@
       "file_type": "rationale",
       "source_file": "stock_pool.py",
       "source_location": "L97",
-      "community": 337,
+      "community": 11,
       "norm_label": "validate pool types and remove duplicates while preserving order.",
       "id": "stock_screener_stock_pool_rationale_97"
     },
@@ -80788,7 +80788,7 @@
       "file_type": "rationale",
       "source_file": "stock_pool.py",
       "source_location": "L116",
-      "community": 337,
+      "community": 403,
       "norm_label": "parse cli/interactive pool type input.",
       "id": "stock_screener_stock_pool_rationale_116"
     },
@@ -259213,9 +259213,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L423",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_layoutnode",
-      "target": "industrytopology_types_topologyrendernodedata",
-      "confidence_score": 1.0
+      "target": "industrytopology_types_topologyrendernodedata"
     },
     {
       "relation": "imports",
@@ -259829,9 +259829,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L397",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_layoutdirection",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_layoutdirection"
     },
     {
       "relation": "contains",
@@ -259849,9 +259849,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L404",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_angularinterval",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_angularinterval"
     },
     {
       "relation": "contains",
@@ -259859,9 +259859,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L410",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_radialinterval",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_radialinterval"
     },
     {
       "relation": "contains",
@@ -259869,9 +259869,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L415",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_sectorcollisionbox",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_sectorcollisionbox"
     },
     {
       "relation": "contains",
@@ -259879,9 +259879,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L422",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_layoutnode",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_layoutnode"
     },
     {
       "relation": "contains",
@@ -259889,9 +259889,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L435",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_ringinfo",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_ringinfo"
     },
     {
       "relation": "contains",
@@ -259899,9 +259899,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L442",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_sectorinfo",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_sectorinfo"
     },
     {
       "relation": "contains",
@@ -259909,9 +259909,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L456",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_directiongroup",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_directiongroup"
     },
     {
       "relation": "contains",
@@ -259919,9 +259919,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L462",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_direction_domains",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_direction_domains"
     },
     {
       "relation": "contains",
@@ -259929,9 +259929,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L469",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_makeinterval",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_makeinterval"
     },
     {
       "relation": "contains",
@@ -259939,9 +259939,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L473",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_anglesize",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_anglesize"
     },
     {
       "relation": "contains",
@@ -259959,9 +259959,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L481",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_stablenodecompare",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_stablenodecompare"
     },
     {
       "relation": "contains",
@@ -259969,9 +259969,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L489",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_estimatelabelwidth",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_estimatelabelwidth"
     },
     {
       "relation": "contains",
@@ -259979,9 +259979,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L494",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_buildlayoutnodes",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_buildlayoutnodes"
     },
     {
       "relation": "contains",
@@ -259989,9 +259989,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L515",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_grouplayoutnodesbysector",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_grouplayoutnodesbysector"
     },
     {
       "relation": "contains",
@@ -259999,9 +259999,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L528",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_stablesectorcompare",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_stablesectorcompare"
     },
     {
       "relation": "contains",
@@ -260009,9 +260009,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L536",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_buildsectorinfo",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_buildsectorinfo"
     },
     {
       "relation": "contains",
@@ -260019,9 +260019,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L558",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_buildrings",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_buildrings"
     },
     {
       "relation": "contains",
@@ -260029,9 +260029,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L575",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_computesectorweight",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_computesectorweight"
     },
     {
       "relation": "contains",
@@ -260039,9 +260039,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L579",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_splitdirectiongroups",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_splitdirectiongroups"
     },
     {
       "relation": "contains",
@@ -260069,9 +260069,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L683",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_computehubbuffer",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_computehubbuffer"
     },
     {
       "relation": "contains",
@@ -260079,9 +260079,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L689",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_allocatesectorangles",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_allocatesectorangles"
     },
     {
       "relation": "contains",
@@ -260089,9 +260089,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L708",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_computeringradii",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_computeringradii"
     },
     {
       "relation": "contains",
@@ -260099,9 +260099,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L727",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_computesectorcollisionbox",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_computesectorcollisionbox"
     },
     {
       "relation": "contains",
@@ -260109,9 +260109,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L736",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_polarboxesoverlap",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_polarboxesoverlap"
     },
     {
       "relation": "contains",
@@ -260119,9 +260119,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L742",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_resolvesectorpolarcollisions",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_resolvesectorpolarcollisions"
     },
     {
       "relation": "contains",
@@ -260129,9 +260129,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L759",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_placenodesinpolarspace",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_placenodesinpolarspace"
     },
     {
       "relation": "contains",
@@ -260139,9 +260139,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L782",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_orderringnodesbybarycenter",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_orderringnodesbybarycenter"
     },
     {
       "relation": "contains",
@@ -260149,9 +260149,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L806",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_distributeanglesevenly",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_distributeanglesevenly"
     },
     {
       "relation": "contains",
@@ -260159,9 +260159,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L817",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_polartocartesian",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_polartocartesian"
     },
     {
       "relation": "contains",
@@ -260460,9 +260460,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L495",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_buildlayoutnodes",
-      "target": "industrytopology_topologycanvas_buildnodedegreemap",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_buildnodedegreemap"
     },
     {
       "relation": "calls",
@@ -260515,9 +260515,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L552",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_buildsectorinfo",
-      "target": "industrytopology_topologycanvas_makeinterval",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_makeinterval"
     },
     {
       "relation": "calls",
@@ -260526,9 +260526,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L691",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_allocatesectorangles",
-      "target": "industrytopology_topologycanvas_anglesize",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_anglesize"
     },
     {
       "relation": "calls",
@@ -260537,9 +260537,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L709",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_computeringradii",
-      "target": "industrytopology_topologycanvas_anglesize",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_anglesize"
     },
     {
       "relation": "calls",
@@ -260548,9 +260548,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L809",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_distributeanglesevenly",
-      "target": "industrytopology_topologycanvas_anglesize",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_anglesize"
     },
     {
       "relation": "calls",
@@ -260559,9 +260559,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L633",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_ringsectoredlayout",
-      "target": "industrytopology_topologycanvas_buildlayoutnodes",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_buildlayoutnodes"
     },
     {
       "relation": "calls",
@@ -260570,9 +260570,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L582",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_splitdirectiongroups",
-      "target": "industrytopology_topologycanvas_grouplayoutnodesbysector",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_grouplayoutnodesbysector"
     },
     {
       "relation": "calls",
@@ -260581,9 +260581,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L539",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_buildsectorinfo",
-      "target": "industrytopology_topologycanvas_buildrings",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_buildrings"
     },
     {
       "relation": "calls",
@@ -260592,9 +260592,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L542",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_buildsectorinfo",
-      "target": "industrytopology_topologycanvas_computesectorweight",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_computesectorweight"
     },
     {
       "relation": "calls",
@@ -260603,9 +260603,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L635",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_ringsectoredlayout",
-      "target": "industrytopology_topologycanvas_splitdirectiongroups",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_splitdirectiongroups"
     },
     {
       "relation": "calls",
@@ -260614,9 +260614,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L634",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_ringsectoredlayout",
-      "target": "industrytopology_topologycanvas_computehubbuffer",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_computehubbuffer"
     },
     {
       "relation": "calls",
@@ -260625,9 +260625,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L641",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_ringsectoredlayout",
-      "target": "industrytopology_topologycanvas_placenodesinpolarspace",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_placenodesinpolarspace"
     },
     {
       "relation": "calls",
@@ -260691,9 +260691,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L724",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_computeringradii",
-      "target": "industrytopology_topologycanvas_computesectorcollisionbox",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_computesectorcollisionbox"
     },
     {
       "relation": "calls",
@@ -260702,9 +260702,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L754",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_resolvesectorpolarcollisions",
-      "target": "industrytopology_topologycanvas_computesectorcollisionbox",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_computesectorcollisionbox"
     },
     {
       "relation": "calls",
@@ -260713,9 +260713,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L748",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_resolvesectorpolarcollisions",
-      "target": "industrytopology_topologycanvas_polarboxesoverlap",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_polarboxesoverlap"
     },
     {
       "relation": "calls",
@@ -329741,5 +329741,5 @@
     }
   ],
   "hyperedges": [],
-  "built_at_commit": "d6eb3881dc8935209cb58cf8b598e0dab9aa3579"
+  "built_at_commit": "0764edcdc18da33247c6ec567b726e35880095ca"
 }

@@ -1,16 +1,16 @@
 # Graph Report - stock_screener  (2026-06-30)
 
 ## Corpus Check
-- 432 files · ~445,400 words
+- 432 files · ~445,433 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 9001 nodes · 23821 edges · 410 communities (337 shown, 73 thin omitted)
+- 9001 nodes · 23821 edges · 411 communities (338 shown, 73 thin omitted)
 - Extraction: 77% EXTRACTED · 23% INFERRED · 0% AMBIGUOUS · INFERRED: 5562 edges (avg confidence: 0.51)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `d6eb3881`
+- Built from commit: `0764edcd`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -364,6 +364,7 @@
 - [[_COMMUNITY_Community 350|Community 350]]
 - [[_COMMUNITY_Community 351|Community 351]]
 - [[_COMMUNITY_Community 352|Community 352]]
+- [[_COMMUNITY_Community 353|Community 353]]
 - [[_COMMUNITY_Community 354|Community 354]]
 - [[_COMMUNITY_Community 355|Community 355]]
 - [[_COMMUNITY_Community 356|Community 356]]
@@ -444,7 +445,7 @@
 - `float` --uses--> `MarketDatabase`  [INFERRED]
   tests/debug_topology.py → db.py
 
-## Communities (410 total, 73 thin omitted)
+## Communities (411 total, 73 thin omitted)
 
 ### Community 0 - "Community 0"
 Cohesion: 0.30
@@ -491,8 +492,8 @@ Cohesion: 0.08
 Nodes (12): cache_key_for_macro_analysis(), screening_row_from_snapshot(), FakeOptionMarketDataProvider, OptionMarketDataProviderChain, strategy_label(), FailingMacroProvider, OptionLabMacroAnalysisTests, RecordingMacroProvider (+4 more)
 
 ### Community 11 - "Community 11"
-Cohesion: 0.06
-Nodes (72): bool, date, MarketDatabase, MySqlConfig, str, SectorInfo, env_flag(), MainForceRiskServiceFactory (+64 more)
+Cohesion: 0.05
+Nodes (77): bool, date, MarketDatabase, MySqlConfig, str, SectorInfo, env_flag(), MainForceRiskServiceFactory (+69 more)
 
 ### Community 12 - "Community 12"
 Cohesion: 0.07
@@ -524,7 +525,7 @@ Nodes (36): bool, DataFrame, Exception, int, str, _a_code(), AKShareKlineFetcher
 
 ### Community 19 - "Community 19"
 Cohesion: 0.14
-Nodes (44): MetricSnapshot, Order, BacktestResult, _bars_to_frame(), _is_base_strategy(), _market_value(), Bar, bool (+36 more)
+Nodes (45): MetricSnapshot, Order, BacktestResult, _bars_to_frame(), _is_base_strategy(), _market_value(), Bar, bool (+37 more)
 
 ### Community 20 - "Community 20"
 Cohesion: 0.15
@@ -588,7 +589,7 @@ Nodes (9): bool, float, int, str, InteractiveOptionLabApp, InteractiveOptionLabO
 
 ### Community 35 - "Community 35"
 Cohesion: 0.06
-Nodes (51): BaseStrategy, PositionSnapshot, 策略配置（JSON-serializable，对前端暴露）, StrategyConfig, DataFrame, Signal, str, DataFrame (+43 more)
+Nodes (50): BaseStrategy, 策略配置（JSON-serializable，对前端暴露）, StrategyConfig, DataFrame, Signal, str, DataFrame, Signal (+42 more)
 
 ### Community 36 - "Community 36"
 Cohesion: 0.10
@@ -656,7 +657,7 @@ Nodes (21): Selected-stock terminal data layer., BlockStatus, data_status(), Fun
 
 ### Community 52 - "Community 52"
 Cohesion: 0.14
-Nodes (21): bool, datetime, float, IntelItem, str, AnalystEstimateData, CreditSpreadData, _datetime_sort_timestamp() (+13 more)
+Nodes (20): bool, datetime, float, IntelItem, str, AnalystEstimateData, CreditSpreadData, _datetime_sort_timestamp() (+12 more)
 
 ### Community 53 - "Community 53"
 Cohesion: 0.11
@@ -683,8 +684,8 @@ Cohesion: 0.24
 Nodes (18): bool, float, int, MarketIntelProvider, str, MarketIntelProvider, CailianpressIntelProvider, build_market_intel_providers() (+10 more)
 
 ### Community 61 - "Community 61"
-Cohesion: 0.15
-Nodes (6): CountingProvider, FailingProvider, make_item(), MarketIndexCodeProvider, MarketIntelServiceTests, ProviderNameOnlyProvider
+Cohesion: 0.12
+Nodes (7): InMemoryMarketIntelRepository, CountingProvider, FailingProvider, make_item(), MarketIndexCodeProvider, MarketIntelServiceTests, ProviderNameOnlyProvider
 
 ### Community 62 - "Community 62"
 Cohesion: 0.21
@@ -699,8 +700,8 @@ Cohesion: 0.13
 Nodes (3): FakeConnection, FakeCursor, OptionLabDbTests
 
 ### Community 66 - "Community 66"
-Cohesion: 0.14
-Nodes (7): EvidencePackBuilder, intel_items_to_search_documents(), MarketIntelBundle, StockIntelBundle, make_item(), MarketIntelEvidenceTests, MarketIntelModelTests
+Cohesion: 0.31
+Nodes (5): EvidencePackBuilder, intel_items_to_search_documents(), MarketIntelBundle, make_item(), MarketIntelEvidenceTests
 
 ### Community 67 - "Community 67"
 Cohesion: 0.04
@@ -743,12 +744,12 @@ Cohesion: 0.11
 Nodes (17): compilerOptions, allowJs, allowSyntheticDefaultImports, esModuleInterop, forceConsistentCasingInFileNames, isolatedModules, jsx, lib (+9 more)
 
 ### Community 78 - "Community 78"
-Cohesion: 0.07
-Nodes (14): InMemoryMarketIntelRepository, _item_sort_timestamp(), MarketIntelRepository, MySqlMarketIntelRepository, bool, float, int, str (+6 more)
+Cohesion: 0.09
+Nodes (11): MarketIntelRepository, MySqlMarketIntelRepository, bool, int, str, Persist normalized market intelligence items., Return normalized items for a stock or market scope., Persist the latest aggregate bundle for a scope. (+3 more)
 
 ### Community 79 - "Community 79"
-Cohesion: 0.28
-Nodes (12): DataSourceStatus, _datetime_sort_timestamp(), datetime_to_json(), from_dict(), _group_item_dicts(), _item_sort_timestamp(), parse_datetime(), Any (+4 more)
+Cohesion: 0.22
+Nodes (14): DataSourceStatus, _datetime_sort_timestamp(), datetime_to_json(), from_dict(), _group_item_dicts(), _item_sort_timestamp(), parse_datetime(), Any (+6 more)
 
 ### Community 80 - "Community 80"
 Cohesion: 0.21
@@ -1395,8 +1396,8 @@ Cohesion: 0.24
 Nodes (7): evaluate_strategy_gate(), 判断策略组合是否满足最终通过条件。      默认逻辑：左一战法 && 任一其他策略。     当显式关闭左一战法时，保持旧逻辑：任一策略满足即可。, 判断策略组合是否满足最终通过条件。      默认逻辑：左一战法 && 任一其他策略。     当显式关闭左一战法时，保持旧逻辑：任一策略满足即可。, StrategyChainResult, make_strategy_result(), output(), ScreenServiceStrategyGateTest
 
 ### Community 283 - "Community 283"
-Cohesion: 0.12
-Nodes (31): bool, DataFrame, date, float, Signal, str, _compute_metrics(), _get_price() (+23 more)
+Cohesion: 0.17
+Nodes (20): bool, DataFrame, date, float, Signal, str, _compute_metrics(), _get_price() (+12 more)
 
 ### Community 284 - "Community 284"
 Cohesion: 0.13
@@ -1607,8 +1608,8 @@ Cohesion: 0.23
 Nodes (13): RetailReportRenderer, bearish_market_temp(), bullish_market_temp(), default_market_temp(), full_context(), minimal_context(), Any, MarketTemperature (+5 more)
 
 ### Community 337 - "Community 337"
-Cohesion: 0.20
-Nodes (10): normalize_pool_types(), parse_pool_types(), Validate pool types and remove duplicates while preserving order., Parse CLI/interactive pool type input., Parse CLI/interactive pool type input., Validate pool types and remove duplicates while preserving order., Parse CLI/interactive pool type input., Validate pool types and remove duplicates while preserving order. (+2 more)
+Cohesion: 0.36
+Nodes (11): MomentumRotationConfig, MomentumRotationRunner, 动量轮动策略回测运行器。      处理组合层面的逻辑：资金管理、仓位分配、净值计算。     策略引擎（MomentumRotationStrategy）只负, compute_market_index(), load_data(), main(), print_report(), DataFrame (+3 more)
 
 ### Community 339 - "Community 339"
 Cohesion: 0.22
@@ -1661,6 +1662,10 @@ Nodes (9): 1.1 与市场特定默认链的关系, code:block1 (全部股票 → 
 ### Community 352 - "Community 352"
 Cohesion: 0.20
 Nodes (9): 4.1 基本信息, 4.2 参数, 4.3 输入, 4.4 处理流程, 4.6 输出, 4.7 决策映射, code:block8 (StockInfo          → code, name, market), code:block9 (┌─ 1. 获取证据包) (+1 more)
+
+### Community 353 - "Community 353"
+Cohesion: 0.21
+Nodes (3): StockIntelBundle, dedupe_items(), MarketIntelModelTests
 
 ### Community 354 - "Community 354"
 Cohesion: 0.22
@@ -1735,8 +1740,8 @@ Cohesion: 0.29
 Nodes (6): code:ts (function refreshSectorHulls(graph: G6Graph, nodes: TopologyR), code:bash (git add web_frontend/src/features/industryTopology/TopologyC), Task 1: Add Hull Refresh Helpers, Task 2: Sector-Aware Initial Layout, Task 3: Project Graph and Commit, Topology Sector Hull Interaction Implementation Plan
 
 ### Community 403 - "Community 403"
-Cohesion: 0.12
-Nodes (31): int, MarketDatabase, MySqlConfig, str, fetch_and_save_all_etf(), fetch_and_save_best_stocks(), fetch_and_save_industry_top5(), fetch_and_save_major_index_constituents() (+23 more)
+Cohesion: 0.10
+Nodes (36): int, MarketDatabase, MySqlConfig, str, fetch_and_save_all_etf(), fetch_and_save_best_stocks(), fetch_and_save_industry_top5(), fetch_and_save_major_index_constituents() (+28 more)
 
 ### Community 404 - "Community 404"
 Cohesion: 0.05
@@ -1778,7 +1783,7 @@ Nodes (4): code:bash (cd web_frontend && npm run dev), code:bash (cd web_fronten
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `MarketDatabase` connect `Community 343` to `Community 2`, `Community 3`, `Community 5`, `Community 11`, `Community 13`, `Community 14`, `Community 403`, `Community 404`, `Community 276`, `Community 22`, `Community 407`, `Community 23`, `Community 281`, `Community 280`, `Community 283`, `Community 284`, `Community 21`, `Community 290`, `Community 37`, `Community 294`, `Community 295`, `Community 46`, `Community 50`, `Community 309`, `Community 55`, `Community 316`, `Community 65`, `Community 321`, `Community 67`, `Community 70`, `Community 330`, `Community 82`, `Community 84`, `Community 86`, `Community 87`, `Community 344`, `Community 342`, `Community 88`, `Community 350`, `Community 95`, `Community 96`, `Community 102`, `Community 108`?**
+- **Why does `MarketDatabase` connect `Community 343` to `Community 2`, `Community 3`, `Community 5`, `Community 11`, `Community 13`, `Community 14`, `Community 403`, `Community 404`, `Community 276`, `Community 22`, `Community 407`, `Community 23`, `Community 281`, `Community 280`, `Community 21`, `Community 284`, `Community 290`, `Community 37`, `Community 294`, `Community 295`, `Community 46`, `Community 50`, `Community 309`, `Community 55`, `Community 316`, `Community 65`, `Community 321`, `Community 67`, `Community 70`, `Community 330`, `Community 337`, `Community 82`, `Community 84`, `Community 86`, `Community 87`, `Community 344`, `Community 342`, `Community 88`, `Community 350`, `Community 95`, `Community 96`, `Community 102`, `Community 108`?**
   _High betweenness centrality (0.102) - this node is a cross-community bridge._
 - **Why does `MarketCache` connect `Community 3` to `Community 2`, `Community 293`, `Community 71`, `Community 297`, `Community 108`, `Community 12`, `Community 333`, `Community 335`, `Community 334`, `Community 343`, `Community 280`, `Community 348`, `Community 95`?**
   _High betweenness centrality (0.042) - this node is a cross-community bridge._
