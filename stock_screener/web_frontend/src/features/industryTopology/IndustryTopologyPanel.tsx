@@ -5,15 +5,20 @@ import type { TopologyCanvasHandle } from './TopologyCanvas'
 import { topologyApi } from './topologyApi'
 import type {
   SearchResult,
+  TopologyAggregateEdgeData,
+  TopologyAggregateNodeData,
   TopologyEdgeData,
   TopologyGraph,
   TopologyNodeColorMetric,
   TopologyNodeData,
   TopologyNodePatch,
   TopologyQuoteItem,
+  TopologyRenderEdgeData,
+  TopologyRenderNodeData,
   TopologyStats,
   TopologyTaskStage,
 } from './types'
+import { aggregateTopology, displaySector, isAggregateEdge, isAggregateNode, type TopologyViewMode } from './topologyAggregation'
 
 const POLL_INTERVAL_MS = 2500
 const MAX_POLL_ATTEMPTS = 24
@@ -61,7 +66,7 @@ function nodeMatchesCompanyQuery(node: TopologyNodeData, query: string) {
 
 function isValidSector(sector: string | null | undefined) {
   const value = (sector || '').trim()
-  return value !== '' && value !== '--' && value !== '板块未知'
+  return value !== '' && value !== '--'
 }
 
 function addAdjacencyEdge(map: Map<string, TopologyEdgeData[]>, id: string, edge: TopologyEdgeData) {
@@ -313,13 +318,53 @@ function DetailPanel({
   edge,
   edgeNodes,
   onClose,
+  onExpandSector,
+  onFilterSector,
 }: {
-  node: TopologyNodeData | null
-  edge: TopologyEdgeData | null
+  node: TopologyRenderNodeData | null
+  edge: TopologyRenderEdgeData | null
   edgeNodes: { source?: TopologyNodeData; target?: TopologyNodeData }
   onClose: () => void
+  onExpandSector: (sector: string) => void
+  onFilterSector: (sector: string) => void
 }) {
   if (!node && !edge) return null
+  if (node && isAggregateNode(node as TopologyAggregateNodeData)) {
+    const aggregate = node as TopologyAggregateNodeData
+    return (
+      <aside className="topo-detail-panel topo-detail-panel--aggregate">
+        <button className="topo-detail-close" onClick={onClose}>×</button>
+        <div className="topo-detail-kicker">板块聚合</div>
+        <h3>{aggregate.aggregate_sector}</h3>
+        <div className="topo-detail-row"><span>折叠公司</span><strong>{aggregate.hidden_node_ids.length}</strong></div>
+        <div className="topo-detail-row"><span>代表公司</span><strong>{aggregate.visible_representative_ids.length}</strong></div>
+        <div className="topo-detail-row"><span>上游</span><strong>{aggregate.relation_counts.upstream || 0}</strong></div>
+        <div className="topo-detail-row"><span>下游</span><strong>{aggregate.relation_counts.downstream || 0}</strong></div>
+        <div className="topo-detail-row"><span>同业</span><strong>{aggregate.relation_counts.peer || 0}</strong></div>
+        <div className="topo-detail-actions">
+          <button type="button" onClick={() => onExpandSector(aggregate.aggregate_sector)}>展开板块</button>
+          <button type="button" onClick={() => onFilterSector(aggregate.aggregate_sector)}>只看该板块</button>
+        </div>
+      </aside>
+    )
+  }
+  if (edge && isAggregateEdge(edge as TopologyAggregateEdgeData)) {
+    const aggregate = edge as TopologyAggregateEdgeData
+    return (
+      <aside className="topo-detail-panel topo-detail-panel--aggregate">
+        <button className="topo-detail-close" onClick={onClose}>×</button>
+        <div className="topo-detail-kicker">聚合关系</div>
+        <h3>{aggregate.aggregate_sector}</h3>
+        <div className="topo-detail-row"><span>方向</span><strong>{aggregate.direction}</strong></div>
+        <div className="topo-detail-row"><span>关系数</span><strong>{aggregate.relation_count}</strong></div>
+        <p className="topo-detail-evidence">{aggregate.evidence || '展开板块查看完整关系证据。'}</p>
+        <div className="topo-detail-actions">
+          <button type="button" onClick={() => onExpandSector(aggregate.aggregate_sector)}>展开板块</button>
+          <button type="button" onClick={() => onFilterSector(aggregate.aggregate_sector)}>只看该板块</button>
+        </div>
+      </aside>
+    )
+  }
   if (edge) {
     return (
       <aside className="topo-detail-panel">
@@ -334,8 +379,7 @@ function DetailPanel({
       </aside>
     )
   }
-  const sector = node?.sector && node.sector !== '--' ? node.sector : '板块未知'
-  const industry = node?.industry?.trim() || '行业未知'
+  const sector = node ? displaySector(node) : '板块未知'
   const dataStage = node?.data_stage === 'llm_initial'
     ? 'AI 初始结果'
     : node?.data_stage === 'source_verified'
@@ -354,7 +398,6 @@ function DetailPanel({
       <div className="topo-detail-row"><span>代码</span><strong>{node?.id}</strong></div>
       <div className="topo-detail-row"><span>市场</span><strong>{node?.market}</strong></div>
       <div className="topo-detail-row"><span>板块</span><strong>{sector}</strong></div>
-      <div className="topo-detail-row"><span>行业</span><strong>{industry}</strong></div>
       <div className="topo-detail-row"><span>价格</span><strong>{node?.price ?? '--'}</strong></div>
       <div className="topo-detail-row"><span>市值</span><strong>{node?.market_cap_str || '未知'}</strong></div>
       <div className="topo-detail-row"><span>涨跌幅</span><strong>{node?.pct_chg ?? '--'}</strong></div>
@@ -385,10 +428,12 @@ export function IndustryTopologyPanel() {
   const [selectedSectors, setSelectedSectors] = useState<Set<string>>(() => new Set())
   const [sectorMenuOpen, setSectorMenuOpen] = useState(false)
   const [onlyImportant, setOnlyImportant] = useState(false)
+  const [viewMode, setViewMode] = useState<TopologyViewMode>('summary')
+  const [expandedSectors, setExpandedSectors] = useState<Set<string>>(() => new Set())
   const [highlightCycles, setHighlightCycles] = useState(false)
   const [nodeColorMetric, setNodeColorMetric] = useState<TopologyNodeColorMetric>('out_degree')
-  const [selectedNode, setSelectedNode] = useState<TopologyNodeData | null>(null)
-  const [selectedEdge, setSelectedEdge] = useState<TopologyEdgeData | null>(null)
+  const [selectedNode, setSelectedNode] = useState<TopologyRenderNodeData | null>(null)
+  const [selectedEdge, setSelectedEdge] = useState<TopologyRenderEdgeData | null>(null)
   const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null)
   const pollAttemptsRef = useRef(0)
   const relationPollAttemptsRef = useRef(0)
@@ -404,8 +449,10 @@ export function IndustryTopologyPanel() {
   const sectorOptions = useMemo(() => {
     const counts = new Map<string, number>()
     nodes.forEach((node) => {
-      if (!isValidSector(node.sector)) return
-      counts.set(node.sector, (counts.get(node.sector) || 0) + 1)
+      if (node.is_center) return
+      const sector = displaySector(node)
+      if (!isValidSector(sector)) return
+      counts.set(sector, (counts.get(sector) || 0) + 1)
     })
     return Array.from(counts.entries())
       .map(([sector, count]) => ({ sector, count }))
@@ -416,7 +463,7 @@ export function IndustryTopologyPanel() {
     const center = nodes.find((node) => node.is_center)
     const centerId = center?.id
     const queryActive = normalizeText(graphQuery) !== ''
-    const clickedNodeId = selectedNode?.id
+    const clickedNodeId = selectedNode && !isAggregateNode(selectedNode) ? selectedNode.id : null
     const clickActive = Boolean(clickedNodeId)
     const sectorActive = selectedSectors.size > 0
     const relationNodeIds = relationAllowedNodeIds(nodes, relationFilters)
@@ -442,7 +489,7 @@ export function IndustryTopologyPanel() {
 
     if (sectorActive) {
       const sectorMatchIds = new Set(nodes
-        .filter((node) => relationNodeIds.has(node.id) && selectedSectors.has(node.sector))
+        .filter((node) => relationNodeIds.has(node.id) && selectedSectors.has(displaySector(node)))
         .map((node) => node.id))
       sectorMatchIds.forEach((id) => directMatchedNodeIds.add(id))
       const sectorScope = centerPathScopeForMatches(sectorMatchIds, centerId, allowedEdges)
@@ -478,9 +525,28 @@ export function IndustryTopologyPanel() {
     const visibleMatchedNodeIds = new Set(Array.from(directMatchedNodeIds).filter((id) => visibleIds.has(id)))
     const visiblePathNodeIds = new Set(Array.from(pathNodeIds || []).filter((id) => visibleIds.has(id)))
     const visibleEdges = scopedEdges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target))
+    const searchMatchNodeIds = queryActive ? visibleMatchedNodeIds : new Set<string>()
+    const aggregated = viewMode === 'summary'
+      ? aggregateTopology(filteredNodes, visibleEdges, {
+        centerId,
+        expandedSectors,
+        searchMatchNodeIds,
+        representativeLimit: 3,
+      })
+      : {
+        nodes: filteredNodes as TopologyRenderNodeData[],
+        edges: visibleEdges as TopologyRenderEdgeData[],
+        aggregateCount: 0,
+        foldedNodeCount: 0,
+        sectorCount: sectorOptions.length,
+        aggregateNodeIds: new Set<string>(),
+        autoExpandedSectors: new Set<string>(),
+      }
+    const renderedNodeIds = new Set(aggregated.nodes.map((node) => node.id))
+    const renderedEdges = aggregated.edges.filter((edge) => renderedNodeIds.has(edge.source) && renderedNodeIds.has(edge.target))
     return {
-      nodes: filteredNodes,
-      edges: visibleEdges,
+      nodes: aggregated.nodes,
+      edges: renderedEdges,
       focusNodeId: clickActive ? clickedNodeId || null : queryActive ? Array.from(visibleMatchedNodeIds)[0] || null : null,
       matchedNodeIds: visibleMatchedNodeIds,
       normalNodeIds: clickActive || queryActive || sectorActive ? visiblePathNodeIds : new Set<string>(),
@@ -489,15 +555,34 @@ export function IndustryTopologyPanel() {
         ? new Set([...visiblePathNodeIds, ...visibleMatchedNodeIds]).size
         : visibleMatchedNodeIds.size,
       flowEdgeKeys: clickActive || queryActive || sectorActive
-        ? new Set(Array.from(pathEdgeKeys || []).filter((key) => visibleEdges.some((edge) => edgeKey(edge) === key)))
+        ? new Set(Array.from(pathEdgeKeys || []).filter((key) => renderedEdges.some((edge) => edgeKey(edge) === key)))
         : new Set<string>(),
+      aggregateCount: aggregated.aggregateCount,
+      foldedNodeCount: aggregated.foldedNodeCount,
+      sectorCount: aggregated.sectorCount,
     }
-  }, [edges, graphQuery, nodes, onlyImportant, relationFilters, selectedNode?.id, selectedSectors])
+  }, [edges, expandedSectors, graphQuery, nodes, onlyImportant, relationFilters, sectorOptions.length, selectedNode, selectedSectors, viewMode])
 
   const edgeNodes = useMemo(() => selectedEdge ? {
     source: nodeById.get(selectedEdge.source),
     target: nodeById.get(selectedEdge.target),
   } : {}, [nodeById, selectedEdge])
+
+  const expandSector = useCallback((sector: string) => {
+    setExpandedSectors((current) => new Set(current).add(sector))
+  }, [])
+
+  const collapseSector = useCallback((sector: string) => {
+    setExpandedSectors((current) => {
+      const next = new Set(current)
+      next.delete(sector)
+      return next
+    })
+  }, [])
+
+  const collapseAllSectors = useCallback(() => {
+    setExpandedSectors(new Set())
+  }, [])
 
   const commitNodeState = useCallback((nextNodes: TopologyNodeData[], changedNodes: TopologyNodeData[]) => {
     nodesRef.current = nextNodes
@@ -673,6 +758,9 @@ export function IndustryTopologyPanel() {
       setSelectedNode(null)
       setSelectedEdge(null)
       setSelectedEdgeKey(null)
+    }
+    if (replaceAll) {
+      setExpandedSectors(new Set())
     }
     setWarnings((current) => Array.from(new Set([...(graph.warnings || []), ...current])))
     setStats(formatTopologyStats(graph.stats, graph.warnings || []))
@@ -863,7 +951,7 @@ export function IndustryTopologyPanel() {
     })
   }, [])
 
-  const onSelectEdge = useCallback((edge: TopologyEdgeData | null, key?: string) => {
+  const onSelectEdge = useCallback((edge: TopologyRenderEdgeData | null, key?: string) => {
     setSelectedEdge(edge)
     setSelectedEdgeKey(edge ? key || edgeKey(edge) : null)
   }, [])
@@ -884,6 +972,7 @@ export function IndustryTopologyPanel() {
     setSelectedEdge(null)
     setSelectedEdgeKey(null)
     setSelectedSectors(new Set())
+    setExpandedSectors(new Set())
     setSectorMenuOpen(false)
 
     if (!selected) {
@@ -1050,6 +1139,13 @@ export function IndustryTopologyPanel() {
               >{item.label}</button>
             ))}
           </div>
+          <div className="topo-view-mode" aria-label="拓扑视图模式">
+            <button type="button" className={viewMode === 'summary' ? 'active' : ''} onClick={() => setViewMode('summary')}>摘要</button>
+            <button type="button" className={viewMode === 'full' ? 'active' : ''} onClick={() => setViewMode('full')}>完整</button>
+          </div>
+          {expandedSectors.size > 0 ? (
+            <button type="button" className="topo-collapse-all" onClick={collapseAllSectors}>全部收起</button>
+          ) : null}
           <label className="topo-filter topo-node-color-filter">
             <span>节点颜色</span>
             <select
@@ -1094,6 +1190,7 @@ export function IndustryTopologyPanel() {
           <label className="topo-check"><input type="checkbox" checked={highlightCycles} onChange={(event) => setHighlightCycles(event.target.checked)} />高亮环路</label>
           <span className="topo-filter-summary">
             显示 {visibleGraph.nodes.length}/{nodes.length} 节点 · {visibleGraph.edges.length}/{edges.length} 关系
+            {viewMode === 'summary' ? ` · 聚合 ${visibleGraph.aggregateCount} 板块 · 折叠 ${visibleGraph.foldedNodeCount}` : ''}
             {visibleGraph.directMatchedCount > 0 ? ` · 命中 ${visibleGraph.directMatchedCount}` : ''}
             {visibleGraph.highlightedNodeCount > visibleGraph.directMatchedCount ? ` · 路径 ${visibleGraph.highlightedNodeCount}` : ''}
           </span>
@@ -1119,10 +1216,16 @@ export function IndustryTopologyPanel() {
         normalEdgeKeys={visibleGraph.flowEdgeKeys}
         flowEdgeKeys={visibleGraph.flowEdgeKeys}
         highlightCycles={highlightCycles}
+        onExpandAggregate={(sector) => expandSector(sector)}
+        onCollapseAggregate={(sector) => collapseSector(sector)}
         onSelectNode={(node) => {
           if (node) {
-            const enriched = nodesRef.current.find((item) => item.id === node.id)
-            setSelectedNode(enriched || node)
+            if (isAggregateNode(node)) {
+              setSelectedNode(node)
+            } else {
+              const enriched = nodesRef.current.find((item) => item.id === node.id)
+              setSelectedNode(enriched || node)
+            }
           } else {
             setSelectedNode(null)
           }
@@ -1130,7 +1233,14 @@ export function IndustryTopologyPanel() {
         }}
         onSelectEdge={onSelectEdge}
       />
-      <DetailPanel node={selectedNode} edge={selectedEdge} edgeNodes={edgeNodes} onClose={() => { setSelectedNode(null); onSelectEdge(null) }} />
+      <DetailPanel
+        node={selectedNode}
+        edge={selectedEdge}
+        edgeNodes={edgeNodes}
+        onClose={() => { setSelectedNode(null); onSelectEdge(null) }}
+        onExpandSector={expandSector}
+        onFilterSector={(sector) => setSelectedSectors(new Set([sector]))}
+      />
     </div>
   )
 }
