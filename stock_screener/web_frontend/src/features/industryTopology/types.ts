@@ -54,6 +54,26 @@ export interface TopologyEdgeData {
   evidence: string
 }
 
+export interface TopologyAggregateNodeData extends TopologyNodeData {
+  is_aggregate: true
+  aggregate_sector: string
+  hidden_node_ids: string[]
+  visible_representative_ids: string[]
+  relation_counts: Partial<Record<Direction, number>>
+  source_edges: TopologyEdgeData[]
+}
+
+export interface TopologyAggregateEdgeData extends TopologyEdgeData {
+  is_aggregate: true
+  aggregate_sector: string
+  hidden_node_ids: string[]
+  source_edges: TopologyEdgeData[]
+  relation_count: number
+}
+
+export type TopologyRenderNodeData = TopologyNodeData | TopologyAggregateNodeData
+export type TopologyRenderEdgeData = TopologyEdgeData | TopologyAggregateEdgeData
+
 export interface TopologyStats {
   llm_calls: number
   cached_nodes?: number
