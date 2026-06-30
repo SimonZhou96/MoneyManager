@@ -3510,7 +3510,7 @@
       "source_file": "custom_list.py",
       "source_location": "L1",
       "id": "custom_list_py",
-      "community": 95,
+      "community": 0,
       "norm_label": "custom_list.py"
     },
     {
@@ -3519,7 +3519,7 @@
       "source_file": "custom_list.py",
       "source_location": "L38",
       "id": "stock_screener_custom_list_customlistparseresult",
-      "community": 95,
+      "community": 0,
       "norm_label": "customlistparseresult"
     },
     {
@@ -3528,7 +3528,7 @@
       "source_file": "custom_list.py",
       "source_location": "L47",
       "id": "stock_screener_custom_list_input_summary",
-      "community": 95,
+      "community": 0,
       "norm_label": "input_summary()"
     },
     {
@@ -3546,7 +3546,7 @@
       "source_file": "custom_list.py",
       "source_location": "L59",
       "id": "stock_screener_custom_list_customlistcodeparser_init",
-      "community": 95,
+      "community": 0,
       "norm_label": ".__init__()"
     },
     {
@@ -3555,7 +3555,7 @@
       "source_file": "custom_list.py",
       "source_location": "L59",
       "id": "custom_list_py_int",
-      "community": 95,
+      "community": 0,
       "norm_label": "int"
     },
     {
@@ -3564,7 +3564,7 @@
       "source_file": "custom_list.py",
       "source_location": "L62",
       "id": "stock_screener_custom_list_customlistcodeparser_parse",
-      "community": 95,
+      "community": 0,
       "norm_label": ".parse()"
     },
     {
@@ -3573,7 +3573,7 @@
       "source_file": "custom_list.py",
       "source_location": "L62",
       "id": "custom_list_py_str",
-      "community": 95,
+      "community": 0,
       "norm_label": "str"
     },
     {
@@ -3582,7 +3582,7 @@
       "source_file": "custom_list.py",
       "source_location": "L62",
       "id": "custom_list_py_any",
-      "community": 95,
+      "community": 0,
       "norm_label": "any"
     },
     {
@@ -3591,7 +3591,7 @@
       "source_file": "custom_list.py",
       "source_location": "L101",
       "id": "stock_screener_custom_list_customlistcodeparser_normalize_one",
-      "community": 95,
+      "community": 0,
       "norm_label": "._normalize_one()"
     },
     {
@@ -3600,7 +3600,7 @@
       "source_file": "custom_list.py",
       "source_location": "L132",
       "id": "stock_screener_custom_list_customlistcodeparser_has_foreign_market_hint",
-      "community": 95,
+      "community": 0,
       "norm_label": "._has_foreign_market_hint()"
     },
     {
@@ -3609,7 +3609,7 @@
       "source_file": "custom_list.py",
       "source_location": "L132",
       "id": "custom_list_py_bool",
-      "community": 95,
+      "community": 0,
       "norm_label": "bool"
     },
     {
@@ -3618,7 +3618,7 @@
       "source_file": "custom_list.py",
       "source_location": "L143",
       "id": "stock_screener_custom_list_customlistcodeparser_status_row",
-      "community": 95,
+      "community": 0,
       "norm_label": "._status_row()"
     },
     {
@@ -3627,7 +3627,7 @@
       "source_file": "custom_list.py",
       "source_location": "L165",
       "id": "stock_screener_custom_list_build_custom_list_report_sections",
-      "community": 95,
+      "community": 0,
       "norm_label": "build_custom_list_report_sections()"
     },
     {
@@ -3636,7 +3636,7 @@
       "source_file": "custom_list.py",
       "source_location": "L179",
       "id": "stock_screener_custom_list_decision_section",
-      "community": 95,
+      "community": 0,
       "norm_label": "_decision_section()"
     },
     {
@@ -3645,7 +3645,7 @@
       "source_file": "custom_list.py",
       "source_location": "L206",
       "id": "stock_screener_custom_list_failure_reason_section",
-      "community": 95,
+      "community": 0,
       "norm_label": "_failure_reason_section()"
     },
     {
@@ -3654,7 +3654,7 @@
       "source_file": "custom_list.py",
       "source_location": "L223",
       "id": "stock_screener_custom_list_strategy_process_section",
-      "community": 95,
+      "community": 0,
       "norm_label": "_strategy_process_section()"
     },
     {
@@ -3663,7 +3663,7 @@
       "source_file": "custom_list.py",
       "source_location": "L234",
       "id": "stock_screener_custom_list_score_breakdown_section",
-      "community": 95,
+      "community": 0,
       "norm_label": "_score_breakdown_section()"
     },
     {
@@ -3672,7 +3672,7 @@
       "source_file": "custom_list.py",
       "source_location": "L253",
       "id": "stock_screener_custom_list_macro_evidence_section",
-      "community": 95,
+      "community": 0,
       "norm_label": "_macro_evidence_section()"
     },
     {
@@ -3681,7 +3681,7 @@
       "source_file": "custom_list.py",
       "source_location": "L286",
       "id": "stock_screener_custom_list_report_rule_item",
-      "community": 95,
+      "community": 0,
       "norm_label": "_report_rule_item()"
     },
     {
@@ -3690,7 +3690,7 @@
       "source_file": "custom_list.py",
       "source_location": "L299",
       "id": "stock_screener_custom_list_extract_macro_details",
-      "community": 95,
+      "community": 0,
       "norm_label": "_extract_macro_details()"
     },
     {
@@ -3699,7 +3699,7 @@
       "source_file": "custom_list.py",
       "source_location": "L311",
       "id": "stock_screener_custom_list_details_preview",
-      "community": 95,
+      "community": 0,
       "norm_label": "_details_preview()"
     },
     {
@@ -3708,7 +3708,7 @@
       "source_file": "custom_list.py",
       "source_location": "L325",
       "id": "stock_screener_custom_list_normalize_evidence_links",
-      "community": 95,
+      "community": 0,
       "norm_label": "_normalize_evidence_links()"
     },
     {
@@ -3717,7 +3717,7 @@
       "source_file": "custom_list.py",
       "source_location": "L343",
       "id": "stock_screener_custom_list_macro_dimension_label",
-      "community": 95,
+      "community": 0,
       "norm_label": "_macro_dimension_label()"
     },
     {
@@ -3735,7 +3735,7 @@
       "source_file": "custom_list.py",
       "source_location": "L358",
       "id": "stock_screener_custom_list_customlistjobservice_init",
-      "community": 95,
+      "community": 0,
       "norm_label": ".__init__()"
     },
     {
@@ -3744,7 +3744,7 @@
       "source_file": "custom_list.py",
       "source_location": "L358",
       "id": "custom_list_py_marketdatabase",
-      "community": 95,
+      "community": 0,
       "norm_label": "marketdatabase"
     },
     {
@@ -3753,7 +3753,7 @@
       "source_file": "custom_list.py",
       "source_location": "L361",
       "id": "stock_screener_custom_list_customlistjobservice_params_for_chain",
-      "community": 95,
+      "community": 0,
       "norm_label": "._params_for_chain()"
     },
     {
@@ -3762,7 +3762,7 @@
       "source_file": "custom_list.py",
       "source_location": "L369",
       "id": "stock_screener_custom_list_customlistjobservice_create_job",
-      "community": 95,
+      "community": 0,
       "norm_label": ".create_job()"
     },
     {
@@ -3771,7 +3771,7 @@
       "source_file": "custom_list.py",
       "source_location": "L450",
       "id": "stock_screener_custom_list_customlistjobservice_build_results",
-      "community": 95,
+      "community": 0,
       "norm_label": ".build_results()"
     },
     {
@@ -3780,7 +3780,7 @@
       "source_file": "custom_list.py",
       "source_location": "L513",
       "id": "stock_screener_custom_list_customlistrunresult",
-      "community": 95,
+      "community": 0,
       "norm_label": "customlistrunresult"
     },
     {
@@ -3798,7 +3798,7 @@
       "source_file": "custom_list.py",
       "source_location": "L524",
       "id": "stock_screener_custom_list_customlistscreeningrunner_init",
-      "community": 95,
+      "community": 0,
       "norm_label": ".__init__()"
     },
     {
@@ -3807,7 +3807,7 @@
       "source_file": "custom_list.py",
       "source_location": "L524",
       "id": "custom_list_py_mysqlconfig",
-      "community": 95,
+      "community": 0,
       "norm_label": "mysqlconfig"
     },
     {
@@ -3816,7 +3816,7 @@
       "source_file": "custom_list.py",
       "source_location": "L527",
       "id": "stock_screener_custom_list_customlistscreeningrunner_run",
-      "community": 95,
+      "community": 0,
       "norm_label": ".run()"
     },
     {
@@ -3843,7 +3843,7 @@
       "source_file": "custom_list.py",
       "source_location": "L166",
       "id": "stock_screener_custom_list_rationale_166",
-      "community": 95,
+      "community": 0,
       "norm_label": "build report-style explanation blocks for one custom-list result row."
     },
     {
@@ -6462,7 +6462,7 @@
       "source_file": "rule_engine.py",
       "source_location": "L104",
       "id": "stock_screener_rule_engine_rulemetadata",
-      "community": 2,
+      "community": 282,
       "norm_label": "rulemetadata"
     },
     {
@@ -6624,7 +6624,7 @@
       "source_file": "rule_engine.py",
       "source_location": "L228",
       "id": "stock_screener_rule_engine_ruleregistry_list_entries",
-      "community": 2,
+      "community": 282,
       "norm_label": ".list_entries()"
     },
     {
@@ -6741,7 +6741,7 @@
       "source_file": "rule_engine.py",
       "source_location": "L571",
       "id": "stock_screener_rule_engine_ruleexpressionevaluator_init",
-      "community": 2,
+      "community": 282,
       "norm_label": ".__init__()"
     },
     {
@@ -7227,7 +7227,7 @@
       "source_file": "scheduled_daily_job.py",
       "source_location": "L818",
       "id": "stock_screener_scheduled_daily_job_screeningpostprocessor",
-      "community": 95,
+      "community": 0,
       "norm_label": "screeningpostprocessor"
     },
     {
@@ -7434,7 +7434,7 @@
       "source_file": "scheduled_daily_job.py",
       "source_location": "L819",
       "id": "stock_screener_scheduled_daily_job_rationale_819",
-      "community": 95,
+      "community": 0,
       "norm_label": "shared passed-stock csv, main-force risk, and ai report processing."
     },
     {
@@ -8926,7 +8926,7 @@
       "source_file": "timeframe.py",
       "source_location": "L51",
       "id": "stock_screener_timeframe_parse_timeframe",
-      "community": 92,
+      "community": 309,
       "norm_label": "parse_timeframe()"
     },
     {
@@ -8989,7 +8989,7 @@
       "source_file": "timeframe.py",
       "source_location": "L52",
       "id": "stock_screener_timeframe_rationale_52",
-      "community": 92,
+      "community": 309,
       "norm_label": "\u6821\u9a8c\u5e76\u6807\u51c6\u5316 timeframe \u5b57\u7b26\u4e32      args:         s: \u7528\u6237\u4f20\u5165\u7684 timeframe(\u5982 \"1h\", \"1d\")      re"
     },
     {
@@ -9340,7 +9340,7 @@
       "source_file": "yf_ratelimit.py",
       "source_location": "L40",
       "id": "stock_screener_yf_ratelimit_yf_sleep",
-      "community": 280,
+      "community": 108,
       "norm_label": "yf_sleep()"
     },
     {
@@ -9448,7 +9448,7 @@
       "source_file": "yf_ratelimit.py",
       "source_location": "L42",
       "id": "stock_screener_yf_ratelimit_rationale_42",
-      "community": 280,
+      "community": 108,
       "norm_label": "\u5e26\u6296\u52a8\u7684\u5ef6\u8fdf,\u907f\u514d\u591a\u7ebf\u7a0b/\u591a\u8fdb\u7a0b\u649e\u5728\u540c\u4e00\u65f6\u523b\u91cd\u8bd5\u3002"
     },
     {
@@ -9592,7 +9592,7 @@
       "source_file": "filters.py",
       "source_location": "L61",
       "id": "stock_screener_filters_filtercontext",
-      "community": 38,
+      "community": 67,
       "norm_label": "filtercontext"
     },
     {
@@ -11653,7 +11653,7 @@
       "source_file": "stock_pool.py",
       "source_location": "L178",
       "id": "stock_screener_stock_pool_parse_pool_types",
-      "community": 403,
+      "community": 92,
       "norm_label": "parse_pool_types()"
     },
     {
@@ -12067,7 +12067,7 @@
       "source_file": "stock_pool.py",
       "source_location": "L179",
       "id": "stock_screener_stock_pool_rationale_179",
-      "community": 403,
+      "community": 92,
       "norm_label": "parse cli/interactive pool type input."
     },
     {
@@ -14632,7 +14632,7 @@
       "source_file": "web/worker.py",
       "source_location": "L1",
       "id": "web_worker_py",
-      "community": 50,
+      "community": 37,
       "norm_label": "worker.py"
     },
     {
@@ -14641,7 +14641,7 @@
       "source_file": "web/worker.py",
       "source_location": "L12",
       "id": "web_worker_main",
-      "community": 50,
+      "community": 37,
       "norm_label": "main()"
     },
     {
@@ -14650,7 +14650,7 @@
       "source_file": "web/worker.py",
       "source_location": "L12",
       "id": "web_worker_py_int",
-      "community": 50,
+      "community": 37,
       "norm_label": "int"
     },
     {
@@ -14695,7 +14695,7 @@
       "source_file": "web/options.py",
       "source_location": "L48",
       "id": "web_options_saveorderplanrequest",
-      "community": 0,
+      "community": 25,
       "norm_label": "saveorderplanrequest"
     },
     {
@@ -14704,7 +14704,7 @@
       "source_file": "web/options.py",
       "source_location": "L52",
       "id": "web_options_fillorderplanrequest",
-      "community": 0,
+      "community": 25,
       "norm_label": "fillorderplanrequest"
     },
     {
@@ -14722,7 +14722,7 @@
       "source_file": "web/options.py",
       "source_location": "L59",
       "id": "web_options_py_riskprofile",
-      "community": 0,
+      "community": 25,
       "norm_label": "riskprofile"
     },
     {
@@ -14920,7 +14920,7 @@
       "source_file": "web/options.py",
       "source_location": "L374",
       "id": "web_options_py_bool",
-      "community": 0,
+      "community": 25,
       "norm_label": "bool"
     },
     {
@@ -14947,7 +14947,7 @@
       "source_file": "web/auth.py",
       "source_location": "L1",
       "id": "web_auth_py",
-      "community": 50,
+      "community": 37,
       "norm_label": "auth.py"
     },
     {
@@ -14965,7 +14965,7 @@
       "source_file": "web/auth.py",
       "source_location": "L22",
       "id": "web_auth_get_db",
-      "community": 50,
+      "community": 37,
       "norm_label": "get_db()"
     },
     {
@@ -14974,7 +14974,7 @@
       "source_file": "web/auth.py",
       "source_location": "L30",
       "id": "web_auth_client_ip",
-      "community": 50,
+      "community": 37,
       "norm_label": "client_ip()"
     },
     {
@@ -14983,7 +14983,7 @@
       "source_file": "web/auth.py",
       "source_location": "L30",
       "id": "web_auth_py_request",
-      "community": 50,
+      "community": 37,
       "norm_label": "request"
     },
     {
@@ -14992,7 +14992,7 @@
       "source_file": "web/auth.py",
       "source_location": "L30",
       "id": "web_auth_py_str",
-      "community": 50,
+      "community": 37,
       "norm_label": "str"
     },
     {
@@ -15001,7 +15001,7 @@
       "source_file": "web/auth.py",
       "source_location": "L37",
       "id": "web_auth_authenticate",
-      "community": 50,
+      "community": 37,
       "norm_label": "authenticate()"
     },
     {
@@ -15010,7 +15010,7 @@
       "source_file": "web/auth.py",
       "source_location": "L37",
       "id": "web_auth_py_marketdatabase",
-      "community": 50,
+      "community": 37,
       "norm_label": "marketdatabase"
     },
     {
@@ -15019,7 +15019,7 @@
       "source_file": "web/auth.py",
       "source_location": "L37",
       "id": "web_auth_py_bool",
-      "community": 50,
+      "community": 37,
       "norm_label": "bool"
     },
     {
@@ -15028,7 +15028,7 @@
       "source_file": "web/auth.py",
       "source_location": "L51",
       "id": "web_auth_create_login_session",
-      "community": 50,
+      "community": 37,
       "norm_label": "create_login_session()"
     },
     {
@@ -15037,7 +15037,7 @@
       "source_file": "web/auth.py",
       "source_location": "L51",
       "id": "web_auth_py_response",
-      "community": 50,
+      "community": 37,
       "norm_label": "response"
     },
     {
@@ -15046,7 +15046,7 @@
       "source_file": "web/auth.py",
       "source_location": "L51",
       "id": "web_auth_py_int",
-      "community": 50,
+      "community": 37,
       "norm_label": "int"
     },
     {
@@ -15055,7 +15055,7 @@
       "source_file": "web/auth.py",
       "source_location": "L64",
       "id": "web_auth_clear_login_session",
-      "community": 50,
+      "community": 37,
       "norm_label": "clear_login_session()"
     },
     {
@@ -15064,7 +15064,7 @@
       "source_file": "web/auth.py",
       "source_location": "L70",
       "id": "web_auth_require_user",
-      "community": 50,
+      "community": 37,
       "norm_label": "require_user()"
     },
     {
@@ -15073,7 +15073,7 @@
       "source_file": "web/auth.py",
       "source_location": "L82",
       "id": "web_auth_optional_user",
-      "community": 50,
+      "community": 37,
       "norm_label": "optional_user()"
     },
     {
@@ -15082,7 +15082,7 @@
       "source_file": "web/auth.py",
       "source_location": "L94",
       "id": "web_auth_require_agent",
-      "community": 50,
+      "community": 37,
       "norm_label": "require_agent()"
     },
     {
@@ -15091,7 +15091,7 @@
       "source_file": "web/config.py",
       "source_location": "L1",
       "id": "web_config_py",
-      "community": 50,
+      "community": 37,
       "norm_label": "config.py"
     },
     {
@@ -15100,7 +15100,7 @@
       "source_file": "web/config.py",
       "source_location": "L13",
       "id": "web_config_pyinstaller_dotenv",
-      "community": 50,
+      "community": 37,
       "norm_label": "_pyinstaller_dotenv()"
     },
     {
@@ -15109,7 +15109,7 @@
       "source_file": "web/config.py",
       "source_location": "L13",
       "id": "web_config_py_path",
-      "community": 50,
+      "community": 37,
       "norm_label": "path"
     },
     {
@@ -15118,7 +15118,7 @@
       "source_file": "web/config.py",
       "source_location": "L28",
       "id": "web_config_load_dotenv",
-      "community": 50,
+      "community": 37,
       "norm_label": "load_dotenv()"
     },
     {
@@ -15127,7 +15127,7 @@
       "source_file": "web/config.py",
       "source_location": "L52",
       "id": "web_config_mysql_config_from_env",
-      "community": 50,
+      "community": 37,
       "norm_label": "mysql_config_from_env()"
     },
     {
@@ -15136,7 +15136,7 @@
       "source_file": "web/config.py",
       "source_location": "L52",
       "id": "web_config_py_mysqlconfig",
-      "community": 50,
+      "community": 37,
       "norm_label": "mysqlconfig"
     },
     {
@@ -15154,7 +15154,7 @@
       "source_file": "web/config.py",
       "source_location": "L68",
       "id": "web_config_session_cookie_name",
-      "community": 50,
+      "community": 37,
       "norm_label": "session_cookie_name()"
     },
     {
@@ -15163,7 +15163,7 @@
       "source_file": "web/config.py",
       "source_location": "L68",
       "id": "web_config_py_str",
-      "community": 50,
+      "community": 37,
       "norm_label": "str"
     },
     {
@@ -15172,7 +15172,7 @@
       "source_file": "web/config.py",
       "source_location": "L72",
       "id": "web_config_session_ttl_hours",
-      "community": 50,
+      "community": 37,
       "norm_label": "session_ttl_hours()"
     },
     {
@@ -15181,7 +15181,7 @@
       "source_file": "web/config.py",
       "source_location": "L72",
       "id": "web_config_py_int",
-      "community": 50,
+      "community": 37,
       "norm_label": "int"
     },
     {
@@ -15190,7 +15190,7 @@
       "source_file": "web/config.py",
       "source_location": "L76",
       "id": "web_config_cookie_secure",
-      "community": 50,
+      "community": 37,
       "norm_label": "cookie_secure()"
     },
     {
@@ -15199,7 +15199,7 @@
       "source_file": "web/config.py",
       "source_location": "L76",
       "id": "web_config_py_bool",
-      "community": 50,
+      "community": 37,
       "norm_label": "bool"
     },
     {
@@ -15208,7 +15208,7 @@
       "source_file": "web/config.py",
       "source_location": "L80",
       "id": "web_config_agent_token",
-      "community": 50,
+      "community": 37,
       "norm_label": "agent_token()"
     },
     {
@@ -15217,7 +15217,7 @@
       "source_file": "web/config.py",
       "source_location": "L14",
       "id": "web_config_rationale_14",
-      "community": 50,
+      "community": 37,
       "norm_label": "pyinstaller \u6253\u5305\u540e,.env \u5728 sys._meipass \u6216\u53ef\u6267\u884c\u6587\u4ef6\u540c\u7ea7\u3002"
     },
     {
@@ -15712,7 +15712,7 @@
       "source_file": "web/business.py",
       "source_location": "L1",
       "id": "web_business_py",
-      "community": 14,
+      "community": 309,
       "norm_label": "business.py"
     },
     {
@@ -15721,7 +15721,7 @@
       "source_file": "web/business.py",
       "source_location": "L8",
       "id": "web_business_businesserror",
-      "community": 0,
+      "community": 309,
       "norm_label": "businesserror"
     },
     {
@@ -15730,7 +15730,7 @@
       "source_file": "web/bootstrap_user.py",
       "source_location": "L1",
       "id": "web_bootstrap_user_py",
-      "community": 50,
+      "community": 37,
       "norm_label": "bootstrap_user.py"
     },
     {
@@ -15739,7 +15739,7 @@
       "source_file": "web/bootstrap_user.py",
       "source_location": "L11",
       "id": "web_bootstrap_user_main",
-      "community": 50,
+      "community": 37,
       "norm_label": "main()"
     },
     {
@@ -15748,7 +15748,7 @@
       "source_file": "web/bootstrap_user.py",
       "source_location": "L11",
       "id": "web_bootstrap_user_py_int",
-      "community": 50,
+      "community": 37,
       "norm_label": "int"
     },
     {
@@ -16324,7 +16324,7 @@
       "source_file": "web/stock_terminal.py",
       "source_location": "L1",
       "id": "web_stock_terminal_py",
-      "community": 92,
+      "community": 309,
       "norm_label": "stock_terminal.py"
     },
     {
@@ -16333,7 +16333,7 @@
       "source_file": "web/stock_terminal.py",
       "source_location": "L22",
       "id": "web_stock_terminal_get_stock_terminal_service",
-      "community": 92,
+      "community": 309,
       "norm_label": "get_stock_terminal_service()"
     },
     {
@@ -16342,7 +16342,7 @@
       "source_file": "web/stock_terminal.py",
       "source_location": "L22",
       "id": "web_stock_terminal_py_stockterminalservice",
-      "community": 92,
+      "community": 309,
       "norm_label": "stockterminalservice"
     },
     {
@@ -16351,7 +16351,7 @@
       "source_file": "web/stock_terminal.py",
       "source_location": "L28",
       "id": "web_stock_terminal_get_summary",
-      "community": 92,
+      "community": 309,
       "norm_label": "get_summary()"
     },
     {
@@ -16360,7 +16360,7 @@
       "source_file": "web/stock_terminal.py",
       "source_location": "L28",
       "id": "web_stock_terminal_py_str",
-      "community": 92,
+      "community": 309,
       "norm_label": "str"
     },
     {
@@ -16369,7 +16369,7 @@
       "source_file": "web/stock_terminal.py",
       "source_location": "L28",
       "id": "web_stock_terminal_py_currentuser",
-      "community": 92,
+      "community": 309,
       "norm_label": "currentuser"
     },
     {
@@ -16378,7 +16378,7 @@
       "source_file": "web/stock_terminal.py",
       "source_location": "L28",
       "id": "web_stock_terminal_py_any",
-      "community": 92,
+      "community": 309,
       "norm_label": "any"
     },
     {
@@ -16387,7 +16387,7 @@
       "source_file": "web/stock_terminal.py",
       "source_location": "L40",
       "id": "web_stock_terminal_get_klines",
-      "community": 92,
+      "community": 309,
       "norm_label": "get_klines()"
     },
     {
@@ -16396,7 +16396,7 @@
       "source_file": "web/stock_terminal.py",
       "source_location": "L40",
       "id": "web_stock_terminal_py_int",
-      "community": 0,
+      "community": 309,
       "norm_label": "int"
     },
     {
@@ -16405,7 +16405,7 @@
       "source_file": "web/stock_terminal.py",
       "source_location": "L63",
       "id": "web_stock_terminal_get_minute",
-      "community": 92,
+      "community": 309,
       "norm_label": "get_minute()"
     },
     {
@@ -16414,7 +16414,7 @@
       "source_file": "web/stock_terminal.py",
       "source_location": "L75",
       "id": "web_stock_terminal_get_fund_flow",
-      "community": 92,
+      "community": 309,
       "norm_label": "get_fund_flow()"
     },
     {
@@ -16423,7 +16423,7 @@
       "source_file": "web/stock_terminal.py",
       "source_location": "L86",
       "id": "web_stock_terminal_normalize_stock",
-      "community": 92,
+      "community": 309,
       "norm_label": "_normalize_stock()"
     },
     {
@@ -16441,7 +16441,7 @@
       "source_file": "web/quant.py",
       "source_location": "L21",
       "id": "web_quant_quantbacktestrequest",
-      "community": 37,
+      "community": 0,
       "norm_label": "quantbacktestrequest"
     },
     {
@@ -16558,7 +16558,7 @@
       "source_file": "web/quant.py",
       "source_location": "L109",
       "id": "web_quant_optimizationrequest",
-      "community": 37,
+      "community": 0,
       "norm_label": "optimizationrequest"
     },
     {
@@ -17008,7 +17008,7 @@
       "source_file": "web/main.py",
       "source_location": "L521",
       "id": "web_main_login",
-      "community": 50,
+      "community": 37,
       "norm_label": "login()"
     },
     {
@@ -17044,7 +17044,7 @@
       "source_file": "web/main.py",
       "source_location": "L532",
       "id": "web_main_logout",
-      "community": 50,
+      "community": 37,
       "norm_label": "logout()"
     },
     {
@@ -17602,7 +17602,7 @@
       "source_file": "web/market_intel.py",
       "source_location": "L23",
       "id": "web_market_intel_refreshrequest",
-      "community": 0,
+      "community": 32,
       "norm_label": "refreshrequest"
     },
     {
@@ -17611,7 +17611,7 @@
       "source_file": "web/market_intel.py",
       "source_location": "L28",
       "id": "web_market_intel_evidencepackpreviewrequest",
-      "community": 0,
+      "community": 32,
       "norm_label": "evidencepackpreviewrequest"
     },
     {
@@ -17917,7 +17917,7 @@
       "source_file": "web/validation.py",
       "source_location": "L65",
       "id": "web_validation_py_any",
-      "community": 14,
+      "community": 309,
       "norm_label": "any"
     },
     {
@@ -23407,7 +23407,7 @@
       "source_file": "tests/test_unified_bullish_top20_hk02685.py",
       "source_location": "L1",
       "id": "tests_test_unified_bullish_top20_hk02685_py",
-      "community": 2,
+      "community": 282,
       "norm_label": "test_unified_bullish_top20_hk02685.py"
     },
     {
@@ -23425,7 +23425,7 @@
       "source_file": "tests/test_unified_bullish_top20_hk02685.py",
       "source_location": "L58",
       "id": "tests_test_unified_bullish_top20_hk02685_setupclass",
-      "community": 2,
+      "community": 282,
       "norm_label": "setupclass()"
     },
     {
@@ -23434,7 +23434,7 @@
       "source_file": "tests/test_unified_bullish_top20_hk02685.py",
       "source_location": "L108",
       "id": "tests_test_unified_bullish_top20_hk02685_teardownclass",
-      "community": 2,
+      "community": 282,
       "norm_label": "teardownclass()"
     },
     {
@@ -23632,7 +23632,7 @@
       "source_file": "tests/test_unified_bullish_top20_hk02685.py",
       "source_location": "L356",
       "id": "tests_test_unified_bullish_top20_hk02685_unifiedbullishtop20macrorulesfortop20test",
-      "community": 316,
+      "community": 282,
       "norm_label": "unifiedbullishtop20macrorulesfortop20test"
     },
     {
@@ -23641,7 +23641,7 @@
       "source_file": "tests/test_unified_bullish_top20_hk02685.py",
       "source_location": "L395",
       "id": "tests_test_unified_bullish_top20_hk02685_unifiedbullishtop20macrorulesfortop20test_test_22_macro_rules_execute_exactly_4",
-      "community": 316,
+      "community": 282,
       "norm_label": ".test_22_macro_rules_execute_exactly_4()"
     },
     {
@@ -23650,7 +23650,7 @@
       "source_file": "tests/test_unified_bullish_top20_hk02685.py",
       "source_location": "L415",
       "id": "tests_test_unified_bullish_top20_hk02685_unifiedbullishtop20macrorulesfortop20test_test_23_macro_rules_not_in_technical_results",
-      "community": 316,
+      "community": 282,
       "norm_label": ".test_23_macro_rules_not_in_technical_results()"
     },
     {
@@ -23659,7 +23659,7 @@
       "source_file": "tests/test_unified_bullish_top20_hk02685.py",
       "source_location": "L437",
       "id": "tests_test_unified_bullish_top20_hk02685_unifiedbullishtop20macrorulesfortop20test_test_24_macro_rules_dont_affect_technical_match_count",
-      "community": 316,
+      "community": 282,
       "norm_label": ".test_24_macro_rules_dont_affect_technical_match_count()"
     },
     {
@@ -23668,7 +23668,7 @@
       "source_file": "tests/test_unified_bullish_top20_hk02685.py",
       "source_location": "L453",
       "id": "tests_test_unified_bullish_top20_hk02685_unifiedbullishtop20macrorulesfortop20test_test_25_macro_result_passed_is_true",
-      "community": 316,
+      "community": 282,
       "norm_label": ".test_25_macro_result_passed_is_true()"
     },
     {
@@ -23677,7 +23677,7 @@
       "source_file": "tests/test_unified_bullish_top20_hk02685.py",
       "source_location": "L457",
       "id": "tests_test_unified_bullish_top20_hk02685_unifiedbullishtop20macrorulesfortop20test_test_26_print_macro_rule_outputs",
-      "community": 316,
+      "community": 282,
       "norm_label": ".test_26_print_macro_rule_outputs()"
     },
     {
@@ -23812,7 +23812,7 @@
       "source_file": "tests/test_unified_bullish_top20_hk02685.py",
       "source_location": "L357",
       "id": "tests_test_unified_bullish_top20_hk02685_rationale_357",
-      "community": 316,
+      "community": 282,
       "norm_label": "\u9a8c\u8bc1 evaluate_macro_rules_for_top20() \u7684\u6b63\u786e\u884c\u4e3a\u3002"
     },
     {
@@ -23821,7 +23821,7 @@
       "source_file": "tests/test_unified_bullish_top20_hk02685.py",
       "source_location": "L396",
       "id": "tests_test_unified_bullish_top20_hk02685_rationale_396",
-      "community": 316,
+      "community": 282,
       "norm_label": "evaluate_macro_rules_for_top20 \u5e94\u6070\u597d\u6267\u884c 4 \u6761\u89c4\u5219\u3002"
     },
     {
@@ -23830,7 +23830,7 @@
       "source_file": "tests/test_unified_bullish_top20_hk02685.py",
       "source_location": "L416",
       "id": "tests_test_unified_bullish_top20_hk02685_rationale_416",
-      "community": 316,
+      "community": 282,
       "norm_label": "\u5b8f\u89c2\u89c4\u5219\u4e0d\u5e94\u51fa\u73b0\u5728 evaluate_bullish_technical_rules \u7684\u7ed3\u679c\u4e2d\u3002"
     },
     {
@@ -23839,7 +23839,7 @@
       "source_file": "tests/test_unified_bullish_top20_hk02685.py",
       "source_location": "L438",
       "id": "tests_test_unified_bullish_top20_hk02685_rationale_438",
-      "community": 316,
+      "community": 282,
       "norm_label": "total_match_count \u4ecd\u53ea\u7edf\u8ba1\u6280\u672f\u89c4\u5219\u547d\u4e2d,\u4e0d\u53d7\u5b8f\u89c2\u89c4\u5219\u5f71\u54cd\u3002"
     },
     {
@@ -23848,7 +23848,7 @@
       "source_file": "tests/test_unified_bullish_top20_hk02685.py",
       "source_location": "L454",
       "id": "tests_test_unified_bullish_top20_hk02685_rationale_454",
-      "community": 316,
+      "community": 282,
       "norm_label": "\u5b8f\u89c2\u89c4\u5219\u7ed3\u679c passed=true(\u4e0d\u53c2\u4e0e\u963b\u65ad)\u3002"
     },
     {
@@ -30679,7 +30679,7 @@
       "source_file": "tests/test_quant_api.py",
       "source_location": "L1",
       "id": "tests_test_quant_api_py",
-      "community": 50,
+      "community": 37,
       "norm_label": "test_quant_api.py"
     },
     {
@@ -31030,7 +31030,7 @@
       "source_file": "tests/test_energy_phase_classifier.py",
       "source_location": "L318",
       "id": "tests_test_energy_phase_classifier_energyphaseclassifiertest_test_rule_registry_builds_energy_phase_classifier",
-      "community": 42,
+      "community": 282,
       "norm_label": ".test_rule_registry_builds_energy_phase_classifier()"
     },
     {
@@ -31363,7 +31363,7 @@
       "source_file": "tests/test_energy_phase_classifier.py",
       "source_location": "L319",
       "id": "tests_test_energy_phase_classifier_rationale_319",
-      "community": 42,
+      "community": 282,
       "norm_label": "ruleregistry should instantiate energyphaseclassifier from metadata."
     },
     {
@@ -32785,7 +32785,7 @@
       "source_file": "tests/test_market_cache.py",
       "source_location": "L967",
       "id": "tests_test_market_cache_testpolicyeventcomputation",
-      "community": 348,
+      "community": 280,
       "norm_label": "testpolicyeventcomputation"
     },
     {
@@ -32794,7 +32794,7 @@
       "source_file": "tests/test_market_cache.py",
       "source_location": "L970",
       "id": "tests_test_market_cache_testpolicyeventcomputation_setup",
-      "community": 348,
+      "community": 280,
       "norm_label": ".setup()"
     },
     {
@@ -32803,7 +32803,7 @@
       "source_file": "tests/test_market_cache.py",
       "source_location": "L973",
       "id": "tests_test_market_cache_testpolicyeventcomputation_test_policy_event_returns_result",
-      "community": 348,
+      "community": 280,
       "norm_label": ".test_policy_event_returns_result()"
     },
     {
@@ -32812,7 +32812,7 @@
       "source_file": "tests/test_market_cache.py",
       "source_location": "L979",
       "id": "tests_test_market_cache_testpolicyeventcomputation_test_policy_event_no_tavily_returns_neutral",
-      "community": 348,
+      "community": 280,
       "norm_label": ".test_policy_event_no_tavily_returns_neutral()"
     },
     {
@@ -32821,7 +32821,7 @@
       "source_file": "tests/test_market_cache.py",
       "source_location": "L985",
       "id": "tests_test_market_cache_testpolicyeventcomputation_test_policy_event_mocked_positive_kw",
-      "community": 348,
+      "community": 280,
       "norm_label": ".test_policy_event_mocked_positive_kw()"
     },
     {
@@ -32830,7 +32830,7 @@
       "source_file": "tests/test_market_cache.py",
       "source_location": "L1014",
       "id": "tests_test_market_cache_testpolicyeventcomputation_test_policy_event_mocked_negative_kw",
-      "community": 348,
+      "community": 280,
       "norm_label": ".test_policy_event_mocked_negative_kw()"
     },
     {
@@ -33190,7 +33190,7 @@
       "source_file": "tests/test_market_cache.py",
       "source_location": "L968",
       "id": "tests_test_market_cache_rationale_968",
-      "community": 348,
+      "community": 280,
       "norm_label": "_compute_policy_event \u5b9e\u73b0\u6d4b\u8bd5\u3002"
     },
     {
@@ -33199,7 +33199,7 @@
       "source_file": "tests/test_market_cache.py",
       "source_location": "L974",
       "id": "tests_test_market_cache_rationale_974",
-      "community": 348,
+      "community": 280,
       "norm_label": "\u8ba1\u7b97\u59cb\u7ec8\u8fd4\u56de policyeventresult(\u4e0d\u8fd4\u56de none)\u3002"
     },
     {
@@ -33208,7 +33208,7 @@
       "source_file": "tests/test_market_cache.py",
       "source_location": "L980",
       "id": "tests_test_market_cache_rationale_980",
-      "community": 348,
+      "community": 280,
       "norm_label": "\u672a\u914d\u7f6e tavily \u2192 score=50, direction=neutral\u3002"
     },
     {
@@ -33217,7 +33217,7 @@
       "source_file": "tests/test_market_cache.py",
       "source_location": "L986",
       "id": "tests_test_market_cache_rationale_986",
-      "community": 348,
+      "community": 280,
       "norm_label": "\u6a21\u62df tavily \u8fd4\u56de\u542b\u6b63\u9762\u5173\u952e\u8bcd \u2192 score > 50\u3002"
     },
     {
@@ -33226,7 +33226,7 @@
       "source_file": "tests/test_market_cache.py",
       "source_location": "L1015",
       "id": "tests_test_market_cache_rationale_1015",
-      "community": 348,
+      "community": 280,
       "norm_label": "\u6a21\u62df tavily \u8fd4\u56de\u542b\u8d1f\u9762\u5173\u952e\u8bcd \u2192 score < 50\u3002"
     },
     {
@@ -34720,7 +34720,7 @@
       "source_file": "tests/test_technical_patterns.py",
       "source_location": "L1",
       "id": "tests_test_technical_patterns_py",
-      "community": 341,
+      "community": 282,
       "norm_label": "test_technical_patterns.py"
     },
     {
@@ -34729,7 +34729,7 @@
       "source_file": "tests/test_technical_patterns.py",
       "source_location": "L16",
       "id": "tests_test_technical_patterns_df",
-      "community": 341,
+      "community": 282,
       "norm_label": "_df()"
     },
     {
@@ -34738,7 +34738,7 @@
       "source_file": "tests/test_technical_patterns.py",
       "source_location": "L32",
       "id": "tests_test_technical_patterns_technicalpatterntest",
-      "community": 341,
+      "community": 282,
       "norm_label": "technicalpatterntest"
     },
     {
@@ -34747,7 +34747,7 @@
       "source_file": "tests/test_technical_patterns.py",
       "source_location": "L33",
       "id": "tests_test_technical_patterns_technicalpatterntest_test_analyze_bullish_engulfing_detects_latest_two_candles",
-      "community": 341,
+      "community": 282,
       "norm_label": ".test_analyze_bullish_engulfing_detects_latest_two_candles()"
     },
     {
@@ -34756,7 +34756,7 @@
       "source_file": "tests/test_technical_patterns.py",
       "source_location": "L46",
       "id": "tests_test_technical_patterns_technicalpatterntest_test_analyze_three_black_crows_detects_bearish_sequence",
-      "community": 341,
+      "community": 282,
       "norm_label": ".test_analyze_three_black_crows_detects_bearish_sequence()"
     },
     {
@@ -34765,7 +34765,7 @@
       "source_file": "tests/test_technical_patterns.py",
       "source_location": "L59",
       "id": "tests_test_technical_patterns_technicalpatterntest_test_technical_pattern_strategizer_outputs_chinese_label_details",
-      "community": 341,
+      "community": 282,
       "norm_label": ".test_technical_pattern_strategizer_outputs_chinese_label_details()"
     },
     {
@@ -34774,7 +34774,7 @@
       "source_file": "tests/test_technical_patterns.py",
       "source_location": "L73",
       "id": "tests_test_technical_patterns_technicalpatterntest_test_rule_registry_builds_technical_pattern_strategizer",
-      "community": 341,
+      "community": 282,
       "norm_label": ".test_rule_registry_builds_technical_pattern_strategizer()"
     },
     {
@@ -34783,7 +34783,7 @@
       "source_file": "tests/test_technical_patterns.py",
       "source_location": "L90",
       "id": "tests_test_technical_patterns_technicalpatterntest_test_macd_bullish_cross_pattern_is_supported",
-      "community": 341,
+      "community": 282,
       "norm_label": ".test_macd_bullish_cross_pattern_is_supported()"
     },
     {
@@ -34909,7 +34909,7 @@
       "source_file": "tests/test_screen_service_strategy_gate.py",
       "source_location": "L183",
       "id": "tests_test_screen_service_strategy_gate_screenservicestrategygatetest_test_run_screening_task_uses_db_rule_engine_by_default",
-      "community": 2,
+      "community": 282,
       "norm_label": ".test_run_screening_task_uses_db_rule_engine_by_default()"
     },
     {
@@ -35503,7 +35503,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L1",
       "id": "tests_test_new_strategizers_py",
-      "community": 38,
+      "community": 50,
       "norm_label": "test_new_strategizers.py"
     },
     {
@@ -35512,7 +35512,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L21",
       "id": "tests_test_new_strategizers_make_stock",
-      "community": 38,
+      "community": 50,
       "norm_label": "_make_stock()"
     },
     {
@@ -35521,7 +35521,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L21",
       "id": "tests_test_new_strategizers_py_str",
-      "community": 38,
+      "community": 50,
       "norm_label": "str"
     },
     {
@@ -35530,7 +35530,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L21",
       "id": "tests_test_new_strategizers_py_stockinfo",
-      "community": 38,
+      "community": 50,
       "norm_label": "stockinfo"
     },
     {
@@ -35539,7 +35539,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L31",
       "id": "tests_test_new_strategizers_testearningsrevisionnotavily",
-      "community": 38,
+      "community": 50,
       "norm_label": "testearningsrevisionnotavily"
     },
     {
@@ -35548,7 +35548,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L34",
       "id": "tests_test_new_strategizers_testearningsrevisionnotavily_setup",
-      "community": 38,
+      "community": 50,
       "norm_label": ".setup()"
     },
     {
@@ -35557,7 +35557,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L39",
       "id": "tests_test_new_strategizers_testearningsrevisionnotavily_test_returns_output_object",
-      "community": 38,
+      "community": 50,
       "norm_label": ".test_returns_output_object()"
     },
     {
@@ -35566,7 +35566,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L45",
       "id": "tests_test_new_strategizers_testearningsrevisionnotavily_test_no_tavily_returns_neutral",
-      "community": 38,
+      "community": 50,
       "norm_label": ".test_no_tavily_returns_neutral()"
     },
     {
@@ -35575,7 +35575,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L52",
       "id": "tests_test_new_strategizers_testearningsrevisionnotavily_test_no_tavily_not_satisfied",
-      "community": 38,
+      "community": 50,
       "norm_label": ".test_no_tavily_not_satisfied()"
     },
     {
@@ -35584,7 +35584,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L59",
       "id": "tests_test_new_strategizers_testearningsrevisionnotavily_test_empty_stock_name_and_code",
-      "community": 38,
+      "community": 50,
       "norm_label": ".test_empty_stock_name_and_code()"
     },
     {
@@ -35602,7 +35602,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L75",
       "id": "tests_test_new_strategizers_testearningsrevisionscoring",
-      "community": 38,
+      "community": 50,
       "norm_label": "testearningsrevisionscoring"
     },
     {
@@ -35611,7 +35611,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L78",
       "id": "tests_test_new_strategizers_testearningsrevisionscoring_setup",
-      "community": 38,
+      "community": 50,
       "norm_label": ".setup()"
     },
     {
@@ -35620,7 +35620,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L82",
       "id": "tests_test_new_strategizers_testearningsrevisionscoring_mock_search",
-      "community": 38,
+      "community": 50,
       "norm_label": "._mock_search()"
     },
     {
@@ -35629,7 +35629,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L96",
       "id": "tests_test_new_strategizers_testearningsrevisionscoring_test_positive_keywords_increase_score",
-      "community": 38,
+      "community": 50,
       "norm_label": ".test_positive_keywords_increase_score()"
     },
     {
@@ -35638,7 +35638,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L119",
       "id": "tests_test_new_strategizers_testearningsrevisionscoring_test_negative_keywords_decrease_score",
-      "community": 38,
+      "community": 50,
       "norm_label": ".test_negative_keywords_decrease_score()"
     },
     {
@@ -35647,7 +35647,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L142",
       "id": "tests_test_new_strategizers_testearningsrevisionscoring_test_positive_outweighs_negative",
-      "community": 38,
+      "community": 50,
       "norm_label": ".test_positive_outweighs_negative()"
     },
     {
@@ -35656,7 +35656,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L32",
       "id": "tests_test_new_strategizers_rationale_32",
-      "community": 38,
+      "community": 50,
       "norm_label": "earningsrevision tests when tavily is not configured."
     },
     {
@@ -35665,7 +35665,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L40",
       "id": "tests_test_new_strategizers_rationale_40",
-      "community": 38,
+      "community": 50,
       "norm_label": "apply() always returns a strategizeroutput, never crashes."
     },
     {
@@ -35674,7 +35674,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L46",
       "id": "tests_test_new_strategizers_rationale_46",
-      "community": 38,
+      "community": 50,
       "norm_label": "\u672a\u914d\u7f6e tavily \u2192 score=50, earnings_trend=stable."
     },
     {
@@ -35683,7 +35683,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L53",
       "id": "tests_test_new_strategizers_rationale_53",
-      "community": 38,
+      "community": 50,
       "norm_label": "\u672a\u914d\u7f6e tavily \u2192 score=50, satisfied=true(\u4e2d\u6027\u4fe1\u53f7\u89c6\u4e3a\u6ee1\u8db3)\u3002"
     },
     {
@@ -35692,7 +35692,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L60",
       "id": "tests_test_new_strategizers_rationale_60",
-      "community": 38,
+      "community": 50,
       "norm_label": "\u80a1\u7968\u540d\u79f0\u548c\u4ee3\u7801\u5747\u4e3a\u7a7a \u2192 \u8fd4\u56de\u4e2d\u6027,\u4e0d\u5d29\u6e83\u3002"
     },
     {
@@ -35701,7 +35701,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L76",
       "id": "tests_test_new_strategizers_rationale_76",
-      "community": 38,
+      "community": 50,
       "norm_label": "earningsrevision scoring tests with mocked tavily results."
     },
     {
@@ -35710,7 +35710,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L83",
       "id": "tests_test_new_strategizers_rationale_83",
-      "community": 38,
+      "community": 50,
       "norm_label": "patch tavilysearchprovider.search() to return given docs."
     },
     {
@@ -35719,7 +35719,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L97",
       "id": "tests_test_new_strategizers_rationale_97",
-      "community": 38,
+      "community": 50,
       "norm_label": "tavily \u8fd4\u56de\u542b\u6b63\u9762\u5173\u952e\u8bcd \u2192 score > 50, trend=improving\u3002"
     },
     {
@@ -35728,7 +35728,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L120",
       "id": "tests_test_new_strategizers_rationale_120",
-      "community": 38,
+      "community": 50,
       "norm_label": "tavily \u8fd4\u56de\u542b\u8d1f\u9762\u5173\u952e\u8bcd \u2192 score < 50, trend=deteriorating\u3002"
     },
     {
@@ -35737,7 +35737,7 @@
       "source_file": "tests/test_new_strategizers.py",
       "source_location": "L143",
       "id": "tests_test_new_strategizers_rationale_143",
-      "community": 38,
+      "community": 50,
       "norm_label": "\u6b63\u9762\u5173\u952e\u8bcd\u591a\u4e8e\u8d1f\u9762 \u2192 trend=improving, score=55~70\u3002"
     },
     {
@@ -37033,7 +37033,7 @@
       "source_file": "tests/test_quant_rule_chain_adapter.py",
       "source_location": "L20",
       "id": "tests_test_quant_rule_chain_adapter_fakeruleengine_init",
-      "community": 2,
+      "community": 282,
       "norm_label": ".__init__()"
     },
     {
@@ -42487,7 +42487,7 @@
       "source_file": "web_frontend/src/features/industryTopology/topologyAggregation.ts",
       "source_location": "L35",
       "id": "industrytopology_topologyaggregation_cleantext",
-      "community": 36,
+      "community": 303,
       "norm_label": "cleantext()"
     },
     {
@@ -42496,7 +42496,7 @@
       "source_file": "web_frontend/src/features/industryTopology/topologyAggregation.ts",
       "source_location": "L40",
       "id": "industrytopology_topologyaggregation_displaysector",
-      "community": 36,
+      "community": 303,
       "norm_label": "displaysector()"
     },
     {
@@ -43099,7 +43099,7 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L154",
       "id": "industrytopology_topologycanvas_sectorhullgroups",
-      "community": 287,
+      "community": 303,
       "norm_label": "sectorhullgroups()"
     },
     {
@@ -43108,7 +43108,7 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L184",
       "id": "industrytopology_topologycanvas_sectorhullplugins",
-      "community": 287,
+      "community": 303,
       "norm_label": "sectorhullplugins()"
     },
     {
@@ -43117,7 +43117,7 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L214",
       "id": "industrytopology_topologycanvas_refreshsectorhulls",
-      "community": 287,
+      "community": 303,
       "norm_label": "refreshsectorhulls()"
     },
     {
@@ -43337,19 +43337,10 @@
       "norm_label": "radialsectornodedata"
     },
     {
-      "label": "RadialLayoutNode",
-      "file_type": "code",
-      "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L473",
-      "id": "industrytopology_topologycanvas_radiallayoutnode",
-      "community": 287,
-      "norm_label": "radiallayoutnode"
-    },
-    {
       "label": "SectorBand",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L474",
+      "source_location": "L473",
       "id": "industrytopology_topologycanvas_sectorband",
       "community": 287,
       "norm_label": "sectorband"
@@ -43358,7 +43349,7 @@
       "label": "DIRECTION_DOMAINS",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L476",
+      "source_location": "L475",
       "id": "industrytopology_topologycanvas_direction_domains",
       "community": 287,
       "norm_label": "direction_domains"
@@ -43367,7 +43358,7 @@
       "label": "makeInterval()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L483",
+      "source_location": "L482",
       "id": "industrytopology_topologycanvas_makeinterval",
       "community": 287,
       "norm_label": "makeinterval()"
@@ -43376,7 +43367,7 @@
       "label": "angleSize()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L487",
+      "source_location": "L486",
       "id": "industrytopology_topologycanvas_anglesize",
       "community": 287,
       "norm_label": "anglesize()"
@@ -43385,16 +43376,16 @@
       "label": "sectorKeyForLayout()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L491",
+      "source_location": "L490",
       "id": "industrytopology_topologycanvas_sectorkeyforlayout",
-      "community": 36,
+      "community": 303,
       "norm_label": "sectorkeyforlayout()"
     },
     {
       "label": "stableNodeCompare()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L495",
+      "source_location": "L494",
       "id": "industrytopology_topologycanvas_stablenodecompare",
       "community": 287,
       "norm_label": "stablenodecompare()"
@@ -43403,7 +43394,7 @@
       "label": "estimateLabelWidth()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L503",
+      "source_location": "L502",
       "id": "industrytopology_topologycanvas_estimatelabelwidth",
       "community": 287,
       "norm_label": "estimatelabelwidth()"
@@ -43412,7 +43403,7 @@
       "label": "buildLayoutNodes()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L508",
+      "source_location": "L507",
       "id": "industrytopology_topologycanvas_buildlayoutnodes",
       "community": 287,
       "norm_label": "buildlayoutnodes()"
@@ -43421,7 +43412,7 @@
       "label": "groupLayoutNodesBySector()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L529",
+      "source_location": "L528",
       "id": "industrytopology_topologycanvas_grouplayoutnodesbysector",
       "community": 287,
       "norm_label": "grouplayoutnodesbysector()"
@@ -43430,7 +43421,7 @@
       "label": "stableSectorCompare()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L542",
+      "source_location": "L541",
       "id": "industrytopology_topologycanvas_stablesectorcompare",
       "community": 287,
       "norm_label": "stablesectorcompare()"
@@ -43439,34 +43430,34 @@
       "label": "buildSectorInfo()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L550",
+      "source_location": "L549",
       "id": "industrytopology_topologycanvas_buildsectorinfo",
-      "community": 344,
+      "community": 287,
       "norm_label": "buildsectorinfo()"
     },
     {
       "label": "buildRings()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L572",
+      "source_location": "L571",
       "id": "industrytopology_topologycanvas_buildrings",
-      "community": 344,
+      "community": 287,
       "norm_label": "buildrings()"
     },
     {
       "label": "computeSectorWeight()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L589",
+      "source_location": "L588",
       "id": "industrytopology_topologycanvas_computesectorweight",
-      "community": 344,
+      "community": 287,
       "norm_label": "computesectorweight()"
     },
     {
       "label": "splitDirectionGroups()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L593",
+      "source_location": "L592",
       "id": "industrytopology_topologycanvas_splitdirectiongroups",
       "community": 287,
       "norm_label": "splitdirectiongroups()"
@@ -43475,7 +43466,7 @@
       "label": "ringSectoredLayout()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L621",
+      "source_location": "L620",
       "id": "industrytopology_topologycanvas_ringsectoredlayout",
       "community": 287,
       "norm_label": "ringsectoredlayout()"
@@ -43484,7 +43475,7 @@
       "label": "computeG6RadialSectorPositions()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L660",
+      "source_location": "L659",
       "id": "industrytopology_topologycanvas_computeg6radialsectorpositions",
       "community": 344,
       "norm_label": "computeg6radialsectorpositions()"
@@ -43493,7 +43484,7 @@
       "label": "buildSectorRank()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L735",
+      "source_location": "L734",
       "id": "industrytopology_topologycanvas_buildsectorrank",
       "community": 344,
       "norm_label": "buildsectorrank()"
@@ -43502,7 +43493,7 @@
       "label": "stableRadialLayoutNodeCompare()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L748",
+      "source_location": "L747",
       "id": "industrytopology_topologycanvas_stableradiallayoutnodecompare",
       "community": 287,
       "norm_label": "stableradiallayoutnodecompare()"
@@ -43511,16 +43502,16 @@
       "label": "computeRadialUnitRadius()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L756",
+      "source_location": "L755",
       "id": "industrytopology_topologycanvas_computeradialunitradius",
-      "community": 344,
+      "community": 287,
       "norm_label": "computeradialunitradius()"
     },
     {
       "label": "normalizeSectorRadialRings()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L765",
+      "source_location": "L764",
       "id": "industrytopology_topologycanvas_normalizesectorradialrings",
       "community": 344,
       "norm_label": "normalizesectorradialrings()"
@@ -43529,7 +43520,7 @@
       "label": "allocateGlobalSectorBands()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L813",
+      "source_location": "L812",
       "id": "industrytopology_topologycanvas_allocateglobalsectorbands",
       "community": 344,
       "norm_label": "allocateglobalsectorbands()"
@@ -43538,7 +43529,7 @@
       "label": "groupNodesBySector()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L847",
+      "source_location": "L846",
       "id": "industrytopology_topologycanvas_groupnodesbysector",
       "community": 344,
       "norm_label": "groupnodesbysector()"
@@ -43547,7 +43538,7 @@
       "label": "insetInterval()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L857",
+      "source_location": "L856",
       "id": "industrytopology_topologycanvas_insetinterval",
       "community": 287,
       "norm_label": "insetinterval()"
@@ -43556,7 +43547,7 @@
       "label": "median()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L863",
+      "source_location": "L862",
       "id": "industrytopology_topologycanvas_median",
       "community": 287,
       "norm_label": "median()"
@@ -43565,7 +43556,7 @@
       "label": "angleFromPosition()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L870",
+      "source_location": "L869",
       "id": "industrytopology_topologycanvas_anglefromposition",
       "community": 287,
       "norm_label": "anglefromposition()"
@@ -43574,7 +43565,7 @@
       "label": "computeFallbackRadialPositions()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L875",
+      "source_location": "L874",
       "id": "industrytopology_topologycanvas_computefallbackradialpositions",
       "community": 344,
       "norm_label": "computefallbackradialpositions()"
@@ -43583,7 +43574,7 @@
       "label": "placeAggregateRepresentatives()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L885",
+      "source_location": "L884",
       "id": "industrytopology_topologycanvas_placeaggregaterepresentatives",
       "community": 287,
       "norm_label": "placeaggregaterepresentatives()"
@@ -43592,7 +43583,7 @@
       "label": "computeHubBuffer()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L920",
+      "source_location": "L919",
       "id": "industrytopology_topologycanvas_computehubbuffer",
       "community": 287,
       "norm_label": "computehubbuffer()"
@@ -43601,7 +43592,7 @@
       "label": "allocateSectorAngles()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L926",
+      "source_location": "L925",
       "id": "industrytopology_topologycanvas_allocatesectorangles",
       "community": 287,
       "norm_label": "allocatesectorangles()"
@@ -43610,7 +43601,7 @@
       "label": "computeRingRadii()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L945",
+      "source_location": "L944",
       "id": "industrytopology_topologycanvas_computeringradii",
       "community": 287,
       "norm_label": "computeringradii()"
@@ -43619,7 +43610,7 @@
       "label": "computeSectorCollisionBox()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L964",
+      "source_location": "L963",
       "id": "industrytopology_topologycanvas_computesectorcollisionbox",
       "community": 287,
       "norm_label": "computesectorcollisionbox()"
@@ -43628,7 +43619,7 @@
       "label": "polarBoxesOverlap()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L973",
+      "source_location": "L972",
       "id": "industrytopology_topologycanvas_polarboxesoverlap",
       "community": 287,
       "norm_label": "polarboxesoverlap()"
@@ -43637,7 +43628,7 @@
       "label": "resolveSectorPolarCollisions()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L979",
+      "source_location": "L978",
       "id": "industrytopology_topologycanvas_resolvesectorpolarcollisions",
       "community": 287,
       "norm_label": "resolvesectorpolarcollisions()"
@@ -43646,7 +43637,7 @@
       "label": "placeNodesInPolarSpace()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L996",
+      "source_location": "L995",
       "id": "industrytopology_topologycanvas_placenodesinpolarspace",
       "community": 287,
       "norm_label": "placenodesinpolarspace()"
@@ -43655,7 +43646,7 @@
       "label": "orderRingNodesByBarycenter()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1019",
+      "source_location": "L1018",
       "id": "industrytopology_topologycanvas_orderringnodesbybarycenter",
       "community": 287,
       "norm_label": "orderringnodesbybarycenter()"
@@ -43664,7 +43655,7 @@
       "label": "distributeAnglesEvenly()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1043",
+      "source_location": "L1042",
       "id": "industrytopology_topologycanvas_distributeanglesevenly",
       "community": 287,
       "norm_label": "distributeanglesevenly()"
@@ -43673,7 +43664,7 @@
       "label": "polarToCartesian()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1054",
+      "source_location": "L1053",
       "id": "industrytopology_topologycanvas_polartocartesian",
       "community": 287,
       "norm_label": "polartocartesian()"
@@ -43682,7 +43673,7 @@
       "label": "detectCycleEdges()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1061",
+      "source_location": "L1060",
       "id": "industrytopology_topologycanvas_detectcycleedges",
       "community": 287,
       "norm_label": "detectcycleedges()"
@@ -43691,7 +43682,7 @@
       "label": "toG6Data()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1114",
+      "source_location": "L1113",
       "id": "industrytopology_topologycanvas_tog6data",
       "community": 287,
       "norm_label": "tog6data()"
@@ -43700,7 +43691,7 @@
       "label": "quoteTooltip()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1152",
+      "source_location": "L1151",
       "id": "industrytopology_topologycanvas_quotetooltip",
       "community": 303,
       "norm_label": "quotetooltip()"
@@ -43709,7 +43700,7 @@
       "label": "edgeTooltip()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1184",
+      "source_location": "L1183",
       "id": "industrytopology_topologycanvas_edgetooltip",
       "community": 303,
       "norm_label": "edgetooltip()"
@@ -43718,7 +43709,7 @@
       "label": "relatedSets()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1213",
+      "source_location": "L1212",
       "id": "industrytopology_topologycanvas_relatedsets",
       "community": 287,
       "norm_label": "relatedsets()"
@@ -43727,7 +43718,7 @@
       "label": "topologyToolbarItems()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1234",
+      "source_location": "L1233",
       "id": "industrytopology_topologycanvas_topologytoolbaritems",
       "community": 287,
       "norm_label": "topologytoolbaritems()"
@@ -43736,7 +43727,7 @@
       "label": "toolbarActionFromValue()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1249",
+      "source_location": "L1248",
       "id": "industrytopology_topologycanvas_toolbaractionfromvalue",
       "community": 287,
       "norm_label": "toolbaractionfromvalue()"
@@ -43745,7 +43736,7 @@
       "label": "fitGraphView()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1255",
+      "source_location": "L1254",
       "id": "industrytopology_topologycanvas_fitgraphview",
       "community": 287,
       "norm_label": "fitgraphview()"
@@ -43754,7 +43745,7 @@
       "label": "ParticleState",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1283",
+      "source_location": "L1282",
       "id": "industrytopology_topologycanvas_particlestate",
       "community": 287,
       "norm_label": "particlestate"
@@ -43763,7 +43754,7 @@
       "label": "destroyParticle()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1288",
+      "source_location": "L1287",
       "id": "industrytopology_topologycanvas_destroyparticle",
       "community": 287,
       "norm_label": "destroyparticle()"
@@ -43772,7 +43763,7 @@
       "label": "startParticle()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1316",
+      "source_location": "L1315",
       "id": "industrytopology_topologycanvas_startparticle",
       "community": 287,
       "norm_label": "startparticle()"
@@ -43781,7 +43772,7 @@
       "label": "TopologyCanvas",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L1360",
+      "source_location": "L1359",
       "id": "industrytopology_topologycanvas_topologycanvas",
       "community": 302,
       "norm_label": "topologycanvas"
@@ -45259,7 +45250,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L29",
       "id": "quant_lab_service_quantlabservice",
-      "community": 358,
+      "community": 56,
       "norm_label": "quantlabservice"
     },
     {
@@ -45268,7 +45259,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L30",
       "id": "quant_lab_service_quantlabservice_init",
-      "community": 358,
+      "community": 56,
       "norm_label": ".__init__()"
     },
     {
@@ -45277,7 +45268,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L35",
       "id": "quant_lab_service_quantlabservice_submit_backtest",
-      "community": 358,
+      "community": 56,
       "norm_label": ".submit_backtest()"
     },
     {
@@ -45286,7 +45277,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L35",
       "id": "quant_lab_service_py_int",
-      "community": 358,
+      "community": 56,
       "norm_label": "int"
     },
     {
@@ -45295,7 +45286,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L35",
       "id": "quant_lab_service_py_str",
-      "community": 358,
+      "community": 56,
       "norm_label": "str"
     },
     {
@@ -45313,7 +45304,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L51",
       "id": "quant_lab_service_quantlabservice_get_backtest",
-      "community": 358,
+      "community": 56,
       "norm_label": ".get_backtest()"
     },
     {
@@ -45322,7 +45313,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L72",
       "id": "quant_lab_service_quantlabservice_run_backtest",
-      "community": 358,
+      "community": 56,
       "norm_label": ".run_backtest()"
     },
     {
@@ -45331,7 +45322,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L122",
       "id": "quant_lab_service_quantlabservice_submit_strategy_backtest",
-      "community": 358,
+      "community": 56,
       "norm_label": ".submit_strategy_backtest()"
     },
     {
@@ -45340,7 +45331,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L131",
       "id": "quant_lab_service_quantlabservice_run_strategy_backtest",
-      "community": 358,
+      "community": 56,
       "norm_label": ".run_strategy_backtest()"
     },
     {
@@ -45349,7 +45340,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L200",
       "id": "quant_lab_service_quantlabservice_run_momentum_rotation_backtest",
-      "community": 358,
+      "community": 56,
       "norm_label": "._run_momentum_rotation_backtest()"
     },
     {
@@ -45358,7 +45349,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L312",
       "id": "quant_lab_service_quantlabservice_submit_optimization",
-      "community": 358,
+      "community": 56,
       "norm_label": ".submit_optimization()"
     },
     {
@@ -45367,7 +45358,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L321",
       "id": "quant_lab_service_quantlabservice_run_optimization",
-      "community": 358,
+      "community": 56,
       "norm_label": ".run_optimization()"
     },
     {
@@ -45376,7 +45367,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L377",
       "id": "quant_lab_service_parse_date",
-      "community": 358,
+      "community": 56,
       "norm_label": "_parse_date()"
     },
     {
@@ -45394,7 +45385,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L383",
       "id": "quant_lab_service_progress_log_entry",
-      "community": 358,
+      "community": 56,
       "norm_label": "_progress_log_entry()"
     },
     {
@@ -45403,7 +45394,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L387",
       "id": "quant_lab_service_build_default_data_provider",
-      "community": 358,
+      "community": 56,
       "norm_label": "_build_default_data_provider()"
     },
     {
@@ -45421,7 +45412,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L396",
       "id": "quant_lab_service_open_futu_quote_context",
-      "community": 358,
+      "community": 56,
       "norm_label": "_open_futu_quote_context()"
     },
     {
@@ -45430,7 +45421,7 @@
       "source_file": "quant_lab/service.py",
       "source_location": "L410",
       "id": "quant_lab_service_env_enabled",
-      "community": 358,
+      "community": 56,
       "norm_label": "_env_enabled()"
     },
     {
@@ -49318,7 +49309,7 @@
       "source_file": "option_lab/models.py",
       "source_location": "L88",
       "id": "option_lab_models_contractdetail",
-      "community": 83,
+      "community": 26,
       "norm_label": "contractdetail"
     },
     {
@@ -51422,7 +51413,7 @@
       "source_file": "scoring/market_cache.py",
       "source_location": "L334",
       "id": "scoring_market_cache_marketcache_compute_liquidity",
-      "community": 280,
+      "community": 108,
       "norm_label": "._compute_liquidity()"
     },
     {
@@ -51440,7 +51431,7 @@
       "source_file": "scoring/market_cache.py",
       "source_location": "L360",
       "id": "scoring_market_cache_marketcache_compute_liquidity_a",
-      "community": 280,
+      "community": 108,
       "norm_label": "._compute_liquidity_a()"
     },
     {
@@ -51449,7 +51440,7 @@
       "source_file": "scoring/market_cache.py",
       "source_location": "L518",
       "id": "scoring_market_cache_marketcache_compute_liquidity_hk",
-      "community": 280,
+      "community": 108,
       "norm_label": "._compute_liquidity_hk()"
     },
     {
@@ -51458,7 +51449,7 @@
       "source_file": "scoring/market_cache.py",
       "source_location": "L604",
       "id": "scoring_market_cache_marketcache_compute_liquidity_us",
-      "community": 280,
+      "community": 108,
       "norm_label": "._compute_liquidity_us()"
     },
     {
@@ -51557,7 +51548,7 @@
       "source_file": "scoring/market_cache.py",
       "source_location": "L335",
       "id": "scoring_market_cache_rationale_335",
-      "community": 280,
+      "community": 108,
       "norm_label": "\u6d41\u52a8\u6027\u5373\u65f6\u62a5:\u6839\u636e\u5e02\u573a\u7c7b\u578b,\u4ece\u53ef\u7528\u6570\u636e\u6e90\u8ba1\u7b97\u8d44\u91d1\u6d41\u52a8\u6027\u6307\u6807\u3002          a-share: \u4e24\u878d\u4f59\u989d\u53d8\u5316 + \u5317\u5411\u8d44\u91d1 + \u6210\u4ea4\u91cf(\u878d\u8d44\u4e70\u5165\u989d\u4ee3\u7406)"
     },
     {
@@ -51566,7 +51557,7 @@
       "source_file": "scoring/market_cache.py",
       "source_location": "L361",
       "id": "scoring_market_cache_rationale_361",
-      "community": 280,
+      "community": 108,
       "norm_label": "a \u80a1\u6d41\u52a8\u6027:\u4e24\u878d\u4f59\u989d + \u5317\u5411\u8d44\u91d1 + \u6210\u4ea4\u91cf(\u878d\u8d44\u4e70\u5165\u989d\u4ee3\u7406)\u3002"
     },
     {
@@ -51575,7 +51566,7 @@
       "source_file": "scoring/market_cache.py",
       "source_location": "L605",
       "id": "scoring_market_cache_rationale_605",
-      "community": 280,
+      "community": 108,
       "norm_label": "\u7f8e\u80a1\u6d41\u52a8\u6027:vix \u60c5\u7eea\u6307\u6807 + etf \u8d44\u91d1\u6d41\u4ee3\u7406\u3002"
     },
     {
@@ -51710,7 +51701,7 @@
       "source_file": "api/screen_service.py",
       "source_location": "L79",
       "id": "api_screen_service_zuoyi_direction_label",
-      "community": 341,
+      "community": 2,
       "norm_label": "_zuoyi_direction_label()"
     },
     {
@@ -51728,7 +51719,7 @@
       "source_file": "api/screen_service.py",
       "source_location": "L87",
       "id": "api_screen_service_get_strategy_condition_labels",
-      "community": 341,
+      "community": 2,
       "norm_label": "get_strategy_condition_labels()"
     },
     {
@@ -78237,6 +78228,15 @@
       "norm_label": "edge cases"
     },
     {
+      "label": "RadialLayoutNode",
+      "file_type": "code",
+      "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
+      "source_location": "L473",
+      "community": 287,
+      "norm_label": "radiallayoutnode",
+      "id": "industrytopology_topologycanvas_radiallayoutnode"
+    },
+    {
       "label": "groupBySectorForLayout()",
       "file_type": "code",
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
@@ -79150,7 +79150,7 @@
       "file_type": "rationale",
       "source_file": "scheduled_daily_job.py",
       "source_location": "L758",
-      "community": 95,
+      "community": 0,
       "norm_label": "shared passed-stock csv, main-force risk, and ai report processing.",
       "id": "stock_screener_scheduled_daily_job_rationale_758"
     },
@@ -79285,7 +79285,7 @@
       "file_type": "rationale",
       "source_file": "stock_pool.py",
       "source_location": "L154",
-      "community": 403,
+      "community": 92,
       "norm_label": "parse cli/interactive pool type input.",
       "id": "stock_screener_stock_pool_rationale_154"
     },
@@ -79456,7 +79456,7 @@
       "file_type": "code",
       "source_file": "web/stock_terminal.py",
       "source_location": "L21",
-      "community": 92,
+      "community": 309,
       "norm_label": "stockterminalservice",
       "id": "stockterminalservice"
     },
@@ -80437,7 +80437,7 @@
       "file_type": "rationale",
       "source_file": "stock_pool.py",
       "source_location": "L120",
-      "community": 403,
+      "community": 92,
       "norm_label": "parse cli/interactive pool type input.",
       "id": "stock_screener_stock_pool_rationale_120"
     },
@@ -80914,7 +80914,7 @@
       "file_type": "rationale",
       "source_file": "stock_pool.py",
       "source_location": "L116",
-      "community": 403,
+      "community": 92,
       "norm_label": "parse cli/interactive pool type input.",
       "id": "stock_screener_stock_pool_rationale_116"
     },
@@ -260045,19 +260045,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L464",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_radialsectornodedata",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
-      "source_location": "L473",
-      "weight": 1.0,
-      "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_radiallayoutnode",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_radialsectornodedata"
     },
     {
       "relation": "contains",
@@ -260065,9 +260055,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L474",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_sectorband",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_sectorband"
     },
     {
       "relation": "contains",
@@ -260215,9 +260205,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L660",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_computeg6radialsectorpositions",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_computeg6radialsectorpositions"
     },
     {
       "relation": "contains",
@@ -260225,9 +260215,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L735",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_buildsectorrank",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_buildsectorrank"
     },
     {
       "relation": "contains",
@@ -260235,9 +260225,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L748",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_stableradiallayoutnodecompare",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_stableradiallayoutnodecompare"
     },
     {
       "relation": "contains",
@@ -260245,9 +260235,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L756",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_computeradialunitradius",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_computeradialunitradius"
     },
     {
       "relation": "contains",
@@ -260255,9 +260245,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L765",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_normalizesectorradialrings",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_normalizesectorradialrings"
     },
     {
       "relation": "contains",
@@ -260265,9 +260255,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L813",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_allocateglobalsectorbands",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_allocateglobalsectorbands"
     },
     {
       "relation": "contains",
@@ -260275,9 +260265,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L847",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_groupnodesbysector",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_groupnodesbysector"
     },
     {
       "relation": "contains",
@@ -260285,9 +260275,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L857",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_insetinterval",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_insetinterval"
     },
     {
       "relation": "contains",
@@ -260295,9 +260285,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L863",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_median",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_median"
     },
     {
       "relation": "contains",
@@ -260305,9 +260295,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L870",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_anglefromposition",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_anglefromposition"
     },
     {
       "relation": "contains",
@@ -260315,9 +260305,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L875",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
-      "target": "industrytopology_topologycanvas_computefallbackradialpositions",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_computefallbackradialpositions"
     },
     {
       "relation": "contains",
@@ -260548,6 +260538,16 @@
       "confidence_score": 1.0,
       "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
       "target": "industrytopology_topologycanvas_topologycanvas"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
+      "source_location": "L473",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "web_frontend_src_features_industrytopology_topologycanvas_tsx",
+      "target": "industrytopology_topologycanvas_radiallayoutnode"
     },
     {
       "relation": "contains",
@@ -260792,9 +260792,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L860",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_insetinterval",
-      "target": "industrytopology_topologycanvas_makeinterval",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_makeinterval"
     },
     {
       "relation": "calls",
@@ -260803,9 +260803,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L858",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_insetinterval",
-      "target": "industrytopology_topologycanvas_anglesize",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_anglesize"
     },
     {
       "relation": "calls",
@@ -260847,9 +260847,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L753",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_stableradiallayoutnodecompare",
-      "target": "industrytopology_topologycanvas_stablenodecompare",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_stablenodecompare"
     },
     {
       "relation": "calls",
@@ -260902,9 +260902,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L757",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_computeradialunitradius",
-      "target": "industrytopology_topologycanvas_buildrings",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_buildrings"
     },
     {
       "relation": "calls",
@@ -260924,9 +260924,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L649",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_ringsectoredlayout",
-      "target": "industrytopology_topologycanvas_computeg6radialsectorpositions",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_computeg6radialsectorpositions"
     },
     {
       "relation": "calls",
@@ -261012,9 +261012,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L666",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_computeg6radialsectorpositions",
-      "target": "industrytopology_topologycanvas_buildsectorrank",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_buildsectorrank"
     },
     {
       "relation": "calls",
@@ -261023,9 +261023,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L700",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_computeg6radialsectorpositions",
-      "target": "industrytopology_topologycanvas_computeradialunitradius",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_computeradialunitradius"
     },
     {
       "relation": "calls",
@@ -261034,9 +261034,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L721",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_computeg6radialsectorpositions",
-      "target": "industrytopology_topologycanvas_computefallbackradialpositions",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_computefallbackradialpositions"
     },
     {
       "relation": "calls",
@@ -261045,9 +261045,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L732",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_computeg6radialsectorpositions",
-      "target": "industrytopology_topologycanvas_normalizesectorradialrings",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_normalizesectorradialrings"
     },
     {
       "relation": "calls",
@@ -261056,9 +261056,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L877",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_computefallbackradialpositions",
-      "target": "industrytopology_topologycanvas_buildsectorrank",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_buildsectorrank"
     },
     {
       "relation": "calls",
@@ -261067,9 +261067,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L790",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_normalizesectorradialrings",
-      "target": "industrytopology_topologycanvas_allocateglobalsectorbands",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_allocateglobalsectorbands"
     },
     {
       "relation": "calls",
@@ -261078,9 +261078,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L795",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_normalizesectorradialrings",
-      "target": "industrytopology_topologycanvas_groupnodesbysector",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_groupnodesbysector"
     },
     {
       "relation": "calls",
@@ -261089,9 +261089,9 @@
       "source_file": "web_frontend/src/features/industryTopology/TopologyCanvas.tsx",
       "source_location": "L878",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "industrytopology_topologycanvas_computefallbackradialpositions",
-      "target": "industrytopology_topologycanvas_normalizesectorradialrings",
-      "confidence_score": 1.0
+      "target": "industrytopology_topologycanvas_normalizesectorradialrings"
     },
     {
       "relation": "calls",
@@ -330150,5 +330150,5 @@
     }
   ],
   "hyperedges": [],
-  "built_at_commit": "0b727cd178af75e2aafe0adabe9f28c002aa0531"
+  "built_at_commit": "eb9b0077925bfd90868a725a11e0ea5f38937eab"
 }

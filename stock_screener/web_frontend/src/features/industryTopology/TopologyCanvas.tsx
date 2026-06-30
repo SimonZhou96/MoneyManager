@@ -178,7 +178,7 @@ function sectorHullGroups(nodes: TopologyRenderNodeData[]): SectorHullGroup[] {
       memberIds: [...members],
       zone: sectorZone.get(sector),
     }))
-    .filter((group) => group.memberIds.length >= 2)
+    .filter((group) => group.memberIds.length >= 1)
 }
 
 function sectorHullPlugins(nodes: TopologyRenderNodeData[]): GraphPluginOption[] {
