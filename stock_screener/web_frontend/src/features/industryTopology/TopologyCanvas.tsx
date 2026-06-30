@@ -36,6 +36,7 @@ export interface TopologyCanvasHandle {
 
 type G6Graph = InstanceType<typeof Graph>
 type GraphDatum = { id: string; data?: Record<string, unknown>; style?: Record<string, unknown> }
+type GraphPluginOption = Record<string, unknown> & { type: string; key?: string }
 type RenderedEdgeData = TopologyRenderEdgeData & { edgeKey?: string; visualSource?: string; visualTarget?: string }
 type ToolbarAction = 'start-topology' | 'refresh-topology'
 type NodeDegreeStats = { out: number; in: number; total: number }
@@ -85,6 +86,8 @@ const CENTER_OUT_EDGE = '#60a5fa'
 const CENTER_IN_EDGE = '#fbbf24'
 const DEFAULT_EDGE = '#64748b'
 const TOPOLOGY_ACTION_TOOLBAR_KEY = 'topology-action-toolbar'
+const TOPOLOGY_TOOLTIP_KEY = 'topo-tooltip'
+const SECTOR_HULL_KEY_PREFIX = 'topo-sector-hull:'
 const CENTER_NODE_FILL = '#fbbf24'
 const DEGREE_GOLD_MIN = { r: 254, g: 243, b: 199 }
 const DEGREE_GOLD_MAX = { r: 180, g: 83, b: 9 }
@@ -123,6 +126,62 @@ function nodeSize(node: TopologyRenderNodeData) {
 
 function shortText(text: string, maxLength: number) {
   return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text
+}
+
+function sectorHullKey(sector: string) {
+  return `${SECTOR_HULL_KEY_PREFIX}${encodeURIComponent(sector)}`
+}
+
+function sectorHullFill(index: number) {
+  const fills = [
+    'rgba(96, 165, 250, 0.09)',
+    'rgba(45, 212, 191, 0.08)',
+    'rgba(251, 191, 36, 0.08)',
+    'rgba(167, 139, 250, 0.08)',
+    'rgba(248, 113, 113, 0.07)',
+  ]
+  return fills[index % fills.length]
+}
+
+function sectorHullStroke(index: number) {
+  const strokes = ['#60a5fa', '#2dd4bf', '#fbbf24', '#a78bfa', '#f87171']
+  return strokes[index % strokes.length]
+}
+
+function sectorHullPlugins(nodes: TopologyRenderNodeData[]): GraphPluginOption[] {
+  const visibleNodeIds = new Set(nodes.map((node) => node.id))
+  const plugins: GraphPluginOption[] = []
+  nodes.filter(isAggregateNode).forEach((node, index) => {
+    const members = [node.id, ...node.visible_representative_ids]
+      .filter((id, memberIndex, list) => visibleNodeIds.has(id) && list.indexOf(id) === memberIndex)
+
+    if (members.length < 2) return
+
+    plugins.push({
+      type: 'hull',
+      key: sectorHullKey(node.aggregate_sector),
+      members,
+      padding: 38,
+      concavity: 120,
+      corner: 'rounded',
+      fill: sectorHullFill(index),
+      stroke: sectorHullStroke(index),
+      lineWidth: 1.6,
+      lineDash: [8, 6],
+      label: true,
+      labelText: node.aggregate_sector,
+      labelPlacement: node.zone === 'downstream' ? 'bottom' : 'top',
+      labelCloseToPath: false,
+      labelFill: '#dbeafe',
+      labelFontSize: 11,
+      labelFontWeight: 800,
+      labelBackground: true,
+      labelBackgroundFill: 'rgba(15, 23, 42, 0.84)',
+      labelBackgroundRadius: 5,
+      labelPadding: [3, 7, 3, 7],
+    })
+  })
+  return plugins
 }
 
 function nodeLabel(node: TopologyRenderNodeData, view: ViewState) {
@@ -831,6 +890,44 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   const viewRef = useRef(view)
   viewRef.current = view
 
+  const graphPlugins = useCallback((nodes: TopologyRenderNodeData[]): GraphPluginOption[] => [
+    {
+      type: 'toolbar',
+      key: TOPOLOGY_ACTION_TOOLBAR_KEY,
+      className: 'topo-g6-toolbar',
+      position: 'top-right',
+      style: { top: '14px', right: '14px' },
+      getItems: () => topologyToolbarItems(toolbarStateRef.current),
+      onClick: (value: string) => {
+        const action = toolbarActionFromValue(value)
+        const state = toolbarStateRef.current
+        if (action === 'start-topology' && state.canStartTopology) {
+          onStartTopologyRef.current()
+        }
+        if (action === 'refresh-topology' && state.canRefreshTopology) {
+          onRefreshTopologyRef.current()
+        }
+      },
+    },
+    { type: 'minimap', size: [180, 120], position: 'right-bottom' },
+    {
+      type: 'tooltip',
+      key: TOPOLOGY_TOOLTIP_KEY,
+      trigger: 'hover',
+      getContent: (event: unknown, items: Array<{ data?: Record<string, unknown>; source?: string; target?: string }>) => {
+        // G6 5.1.1: items[0] = { id, source?, target?, data: actualElementData, style }
+        // The actual node/edge data is at items[0].data (single nesting)
+        const item = items?.[0]?.data as TopologyRenderNodeData | RenderedEdgeData | undefined
+        if (!item) return ''
+        if ('source' in item && 'target' in item) {
+          return edgeTooltip(item as RenderedEdgeData, rawNodesRef.current)
+        }
+        return quoteTooltip(item as TopologyRenderNodeData)
+      },
+    },
+    ...sectorHullPlugins(nodes),
+  ], [])
+
   // ---- imperative node update (bypasses React re-render) ----
   const applyNodePatches = useCallback((items: TopologyNodePatch[]) => {
     const graph = graphRef.current
@@ -928,42 +1025,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
           { type: 'drag-element', enable: (event: { targetType?: string }) => event.targetType === 'node' },
           'hover-activate',
         ],
-      plugins: [
-        {
-          type: 'toolbar',
-          key: TOPOLOGY_ACTION_TOOLBAR_KEY,
-          className: 'topo-g6-toolbar',
-          position: 'top-right',
-          style: { top: '14px', right: '14px' },
-          getItems: () => topologyToolbarItems(toolbarStateRef.current),
-          onClick: (value: string) => {
-            const action = toolbarActionFromValue(value)
-            const state = toolbarStateRef.current
-            if (action === 'start-topology' && state.canStartTopology) {
-              onStartTopologyRef.current()
-            }
-            if (action === 'refresh-topology' && state.canRefreshTopology) {
-              onRefreshTopologyRef.current()
-            }
-          },
-        },
-        { type: 'minimap', size: [180, 120], position: 'right-bottom' },
-        {
-          type: 'tooltip',
-          key: 'topo-tooltip',
-          trigger: 'hover',
-          getContent: (event: unknown, items: Array<{ data?: Record<string, unknown>; source?: string; target?: string }>) => {
-            // G6 5.1.1: items[0] = { id, source?, target?, data: actualElementData, style }
-            // The actual node/edge data is at items[0].data (single nesting)
-            const item = items?.[0]?.data as TopologyRenderNodeData | RenderedEdgeData | undefined
-            if (!item) return ''
-            if ('source' in item && 'target' in item) {
-              return edgeTooltip(item as RenderedEdgeData, rawNodesRef.current)
-            }
-            return quoteTooltip(item as TopologyRenderNodeData)
-          },
-        },
-      ],
+      plugins: graphPlugins(rawNodes) as never,
     })
 
     graph.on('node:dblclick', (event: unknown) => {
@@ -1040,7 +1102,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       if (!key) return
       // Toggle pin: pin makes the hover tooltip sticky; unpin hides it
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const tooltip = graphRef.current?.getPluginInstance('topo-tooltip') as any
+      const tooltip = graphRef.current?.getPluginInstance(TOPOLOGY_TOOLTIP_KEY) as any
       setPinnedEdgeKeys((prev) => {
         const next = new Set(prev)
         if (next.has(key)) {
@@ -1063,7 +1125,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       // Clear all pinned edges and hide tooltip on canvas click
       if (pinnedEdgeKeysRef.current.size > 0) {
         setPinnedEdgeKeys(new Set())
-        const tooltip = graphRef.current?.getPluginInstance('topo-tooltip') as any
+        const tooltip = graphRef.current?.getPluginInstance(TOPOLOGY_TOOLTIP_KEY) as any
         tooltip?.hide()
       }
     })
@@ -1088,7 +1150,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       previousNodeIdsRef.current = new Set()
       previousEdgeIdsRef.current = new Set()
     }
-  }, [])
+  }, [graphPlugins])
 
   useEffect(() => {
     const graph = graphRef.current
@@ -1125,13 +1187,15 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
 
     if (!initializedRef.current || hasStructuralChange) {
       destroyParticle(graph, particleMapRef.current)
+      graph.setPlugins(graphPlugins(rawNodes) as never)
+      tooltipPatchedRef.current = false
       graph.setData(graphData as never)
       void graph.render().then(() => {
         fitGraphView(graph, rawNodes.length)
         // Patch tooltip plugin for pin support (must run after async render completes)
         if (!tooltipPatchedRef.current) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const tp = graph.getPluginInstance('topo-tooltip') as any
+          const tp = graph.getPluginInstance(TOPOLOGY_TOOLTIP_KEY) as any
           if (tp) {
             graph.off('canvas:pointermove', tp.onCanvasMove)
             graph.off('node:drag', tp.onPointerLeave)
@@ -1169,7 +1233,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     void graph.draw()
     previousNodeIdsRef.current = nextNodeIds
     previousEdgeIdsRef.current = nextEdgeIds
-  }, [graphData, nodeColorMetric, rawEdges, rawNodes, view])
+  }, [graphData, graphPlugins, nodeColorMetric, rawEdges, rawNodes, view])
 
   // --- 节点选中粒子动画 ---
   // 选中节点时，在所有关联边上显示方向性粒子流
