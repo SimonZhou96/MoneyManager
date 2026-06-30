@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from 'react'
 import { Circle } from '@antv/g'
 import { Graph } from '@antv/g6'
-import type { TopologyEdgeData, TopologyNodeColorMetric, TopologyNodeData, TopologyNodePatch, TopologyQuoteItem } from './types'
+import type { TopologyEdgeData, TopologyNodeColorMetric, TopologyNodeData, TopologyNodePatch, TopologyQuoteItem, TopologyRenderEdgeData, TopologyRenderNodeData } from './types'
+import { isAggregateEdge, isAggregateNode } from './topologyAggregation'
 
 interface Props {
-  rawNodes: TopologyNodeData[]
-  rawEdges: TopologyEdgeData[]
+  rawNodes: TopologyRenderNodeData[]
+  rawEdges: TopologyRenderEdgeData[]
   onExpand: (code: string, market: string) => void
+  onExpandAggregate?: (sector: string) => void
+  onCollapseAggregate?: (sector: string) => void
   onStartTopology: () => void
   onRefreshTopology: () => void
   canStartTopology: boolean
@@ -22,8 +25,8 @@ interface Props {
   normalEdgeKeys?: Set<string> | string[]
   flowEdgeKeys?: Set<string> | string[]
   highlightCycles?: boolean
-  onSelectNode?: (node: TopologyNodeData | null) => void
-  onSelectEdge?: (edge: TopologyEdgeData | null, edgeKey?: string) => void
+  onSelectNode?: (node: TopologyRenderNodeData | null) => void
+  onSelectEdge?: (edge: TopologyRenderEdgeData | null, edgeKey?: string) => void
 }
 
 export interface TopologyCanvasHandle {
@@ -33,7 +36,7 @@ export interface TopologyCanvasHandle {
 
 type G6Graph = InstanceType<typeof Graph>
 type GraphDatum = { id: string; data?: Record<string, unknown>; style?: Record<string, unknown> }
-type RenderedEdgeData = TopologyEdgeData & { edgeKey?: string; visualSource?: string; visualTarget?: string }
+type RenderedEdgeData = TopologyRenderEdgeData & { edgeKey?: string; visualSource?: string; visualTarget?: string }
 type ToolbarAction = 'start-topology' | 'refresh-topology'
 type NodeDegreeStats = { out: number; in: number; total: number }
 
@@ -113,7 +116,8 @@ function nodeRadiusFromMarketCap(marketCap: number | null | undefined): number {
   return R_MIN + t * (R_MAX - R_MIN)
 }
 
-function nodeSize(node: TopologyNodeData) {
+function nodeSize(node: TopologyRenderNodeData) {
+  if (isAggregateNode(node)) return Math.min(54, 28 + node.hidden_node_ids.length * 1.2)
   return node.is_center ? 42 : nodeRadiusFromMarketCap(node.market_cap)
 }
 
@@ -121,7 +125,8 @@ function shortText(text: string, maxLength: number) {
   return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text
 }
 
-function nodeLabel(node: TopologyNodeData, view: ViewState) {
+function nodeLabel(node: TopologyRenderNodeData, view: ViewState) {
+  if (isAggregateNode(node)) return `${node.aggregate_sector}\n+${node.hidden_node_ids.length}`
   const text = node.name || node.code
   if (node.is_center) return `${text}\n${node.id}`
   const isActive = node.id === view.hoveredNodeId || node.id === view.selectedNodeId || node.id === view.focusNodeId
@@ -134,11 +139,11 @@ function nodeLabel(node: TopologyNodeData, view: ViewState) {
   return `${name}\n${shortText(sector, 8)}`
 }
 
-function hasMarketCap(node: TopologyNodeData) {
+function hasMarketCap(node: TopologyRenderNodeData) {
   return node.market_cap !== null && node.market_cap !== undefined && node.market_cap_str !== '未知' && node.market_cap_str !== '--'
 }
 
-function buildNodeDegreeMap(nodes: TopologyNodeData[], edges: TopologyEdgeData[]): Map<string, NodeDegreeStats> {
+function buildNodeDegreeMap(nodes: TopologyRenderNodeData[], edges: TopologyRenderEdgeData[]): Map<string, NodeDegreeStats> {
   const degreeMap = new Map<string, NodeDegreeStats>()
   nodes.forEach((node) => degreeMap.set(node.id, { out: 0, in: 0, total: 0 }))
   edges.forEach((edge) => {
@@ -172,7 +177,7 @@ function interpolateGoldColor(value: number, maxValue: number): string {
   return `rgb(${r}, ${g}, ${b})`
 }
 
-function buildNodeFillMap(nodes: TopologyNodeData[], edges: TopologyEdgeData[], metric: TopologyNodeColorMetric): Map<string, string> {
+function buildNodeFillMap(nodes: TopologyRenderNodeData[], edges: TopologyRenderEdgeData[], metric: TopologyNodeColorMetric): Map<string, string> {
   const degreeMap = buildNodeDegreeMap(nodes, edges)
   const maxMetricValue = Math.max(0, ...nodes.map((node) => getDegreeMetricValue(degreeMap.get(node.id), metric)))
   const fillMap = new Map<string, string>()
@@ -183,7 +188,8 @@ function buildNodeFillMap(nodes: TopologyNodeData[], edges: TopologyEdgeData[], 
   return fillMap
 }
 
-function nodeStyle(node: TopologyNodeData, view: ViewState, degreeFill: string) {
+function nodeStyle(node: TopologyRenderNodeData, view: ViewState, degreeFill: string) {
+  const aggregate = isAggregateNode(node)
   const missingMarketCap = !hasMarketCap(node)
   const matched = view.matchedNodeIds.has(node.id)
   const fill = node.is_center ? CENTER_NODE_FILL : degreeFill
@@ -193,12 +199,13 @@ function nodeStyle(node: TopologyNodeData, view: ViewState, degreeFill: string) 
   const baseOpacity = missingMarketCap && !node.is_center ? 0.42 : node.quote_status === 'failed' || node.quote_status === 'error' ? 0.68 : 0.95
   return {
     size: matched && !node.is_center ? nodeSize(node) + 6 : nodeSize(node),
-    fill,
-    stroke: matched ? '#f8fafc' : stroke,
-    lineWidth: matched ? node.is_center ? 5 : 4 : active ? node.is_center ? 4 : 3 : 1.5,
+    fill: aggregate ? 'rgba(96, 165, 250, 0.16)' : fill,
+    stroke: aggregate ? '#60a5fa' : matched ? '#f8fafc' : stroke,
+    lineWidth: aggregate ? 2.5 : matched ? node.is_center ? 5 : 4 : active ? node.is_center ? 4 : 3 : 1.5,
+    lineDash: aggregate ? [6, 4] : undefined,
     opacity: hasFocus && !active ? 0.16 : baseOpacity,
     labelText: nodeLabel(node, view),
-    labelFill: matched ? '#f8fafc' : node.is_center ? '#f8fafc' : '#cbd5e1',
+    labelFill: aggregate ? '#dbeafe' : matched ? '#f8fafc' : node.is_center ? '#f8fafc' : '#cbd5e1',
     labelFontSize: matched ? node.is_center ? 14 : 11 : node.is_center ? 13 : 10,
     labelFontWeight: matched || node.is_center ? 800 : 500,
     labelPlacement: 'bottom',
@@ -214,7 +221,7 @@ function nodeStyle(node: TopologyNodeData, view: ViewState, degreeFill: string) 
   }
 }
 
-function edgeLabel(edge: TopologyEdgeData) {
+function edgeLabel(edge: TopologyRenderEdgeData) {
   const text = edge.label || edge.evidence || edge.relation || ''
   return shortText(text, 22)
 }
@@ -227,31 +234,32 @@ function distToMaxLen(dist: number): number {
   return 0  // no truncation — show full text
 }
 
-function adaptiveEdgeLabel(edge: TopologyEdgeData, dist: number): string {
+function adaptiveEdgeLabel(edge: TopologyRenderEdgeData, dist: number): string {
   const fullText = edge.label || edge.evidence || edge.relation || ''
   const maxLen = distToMaxLen(dist)
   if (maxLen === 0) return fullText
   return shortText(fullText, maxLen)
 }
 
-function edgeKey(edge: Pick<TopologyEdgeData, 'source' | 'target' | 'relation'>) {
+function edgeKey(edge: Pick<TopologyRenderEdgeData, 'source' | 'target' | 'relation'>) {
   return `${edge.source}->${edge.target}:${edge.relation}`
 }
 
-function visualEdge(edge: TopologyEdgeData) {
+function visualEdge(edge: TopologyRenderEdgeData) {
   if (edge.direction === 'upstream') {
     return { ...edge, source: edge.target, target: edge.source }
   }
   return edge
 }
 
-function edgeStroke(edge: TopologyEdgeData, centerId: string | undefined) {
+function edgeStroke(edge: TopologyRenderEdgeData, centerId: string | undefined) {
   if (centerId && edge.source === centerId) return CENTER_OUT_EDGE
   if (centerId && edge.target === centerId) return CENTER_IN_EDGE
   return EDGE_COLOR[edge.direction] || DEFAULT_EDGE
 }
 
-function edgeStyle(edge: TopologyEdgeData, centerId: string | undefined, view: ViewState, key: string) {
+function edgeStyle(edge: TopologyRenderEdgeData, centerId: string | undefined, view: ViewState, key: string) {
+  const aggregate = isAggregateEdge(edge)
   const stroke = edgeStroke(edge, centerId)
   const touchesCenter = Boolean(centerId && (edge.source === centerId || edge.target === centerId))
   const active = key === view.selectedEdgeKey || key === view.hoveredEdgeKey || view.relatedEdgeKeys.has(key)
@@ -262,15 +270,15 @@ function edgeStyle(edge: TopologyEdgeData, centerId: string | undefined, view: V
   const showLabel = active || (view.zoom > 1.35 && touchesCenter)
   return {
     stroke: cyclic ? '#f8fafc' : stroke,
-    lineWidth: cyclic ? 3 : (active || isPinned) ? 2.5 : normal ? 1.4 : 1,
-    strokeOpacity: hasFocus && !active && !cyclic && !isPinned && !normal ? 0.03 : (active || cyclic || isPinned) ? 0.9 : normal ? 0.32 : 0.15,
-    lineDash: cyclic ? [6, 4] : undefined,
+    lineWidth: aggregate ? 2 : cyclic ? 3 : (active || isPinned) ? 2.5 : normal ? 1.4 : 1,
+    strokeOpacity: aggregate ? 0.55 : hasFocus && !active && !cyclic && !isPinned && !normal ? 0.03 : (active || cyclic || isPinned) ? 0.9 : normal ? 0.32 : 0.15,
+    lineDash: aggregate ? [8, 5] : cyclic ? [6, 4] : undefined,
     endArrow: false,
     shadowBlur: cyclic ? 16 : (active || isPinned) ? 10 : 0,
     shadowColor: cyclic ? '#fbbf24' : (active || isPinned) ? stroke : 'transparent',
     shadowOffsetX: 0,
     shadowOffsetY: 0,
-    labelText: showLabel ? (cyclic ? `环路 · ${edgeLabel(edge)}` : edgeLabel(edge)) : '',
+    labelText: aggregate ? `${edge.direction} ${isAggregateEdge(edge) ? edge.relation_count : ''}` : showLabel ? (cyclic ? `环路 · ${edgeLabel(edge)}` : edgeLabel(edge)) : '',
     labelFill: '#dbeafe',
     labelFontSize: 9,
     labelBackground: true,
@@ -296,7 +304,7 @@ interface Sector {
 }
 
 function ringSectoredLayout(
-  nodes: TopologyNodeData[],
+  nodes: TopologyRenderNodeData[],
   existingPositions?: Map<string, { x: number; y: number }>,
 ): Map<string, { x: number; y: number }> {
   const positions = new Map<string, { x: number; y: number }>()
@@ -319,7 +327,7 @@ function ringSectoredLayout(
   if (center) positions.set(center.id, { x: 0, y: 0 })
 
   // 3. Collect unplaced nodes, group by zone
-  const unplaced: Record<'upstream' | 'downstream' | 'peer', TopologyNodeData[]> = { upstream: [], downstream: [], peer: [] }
+  const unplaced: Record<'upstream' | 'downstream' | 'peer', TopologyRenderNodeData[]> = { upstream: [], downstream: [], peer: [] }
   for (const node of nodes) {
     if (positions.has(node.id) || node.is_center) continue
     const zone = node.zone === 'upstream' || node.zone === 'downstream' ? node.zone : 'peer'
@@ -346,12 +354,12 @@ function ringSectoredLayout(
 
 /** Sort within zone+depth: largest market_cap → center of sector. */
 function placeInSector(
-  nodes: TopologyNodeData[],
+  nodes: TopologyRenderNodeData[],
   positions: Map<string, { x: number; y: number }>,
   sector: Sector,
 ) {
   // Group by depth; sort each depth by market_cap descending
-  const byDepth = new Map<number, TopologyNodeData[]>()
+  const byDepth = new Map<number, TopologyRenderNodeData[]>()
   for (const node of nodes) {
     const depth = node.depth || 1
     const group = byDepth.get(depth) || []
@@ -383,7 +391,7 @@ function placeInSector(
 
 /** Peers in two vertical columns, sorted by market_cap, center-aligned vertically. */
 function placePeers(
-  nodes: TopologyNodeData[],
+  nodes: TopologyRenderNodeData[],
   positions: Map<string, { x: number; y: number }>,
 ) {
   nodes.sort((a, b) => (b.market_cap ?? 0) - (a.market_cap ?? 0))
@@ -406,7 +414,7 @@ function placePeers(
   }
 }
 
-function detectCycleEdges(edges: TopologyEdgeData[]) {
+function detectCycleEdges(edges: TopologyRenderEdgeData[]) {
   const adjacency = new Map<string, string[]>()
   for (const edge of edges) {
     if (!adjacency.has(edge.source)) adjacency.set(edge.source, [])
@@ -460,8 +468,8 @@ function detectCycleEdges(edges: TopologyEdgeData[]) {
 }
 
 function toG6Data(
-  nodes: TopologyNodeData[],
-  edges: TopologyEdgeData[],
+  nodes: TopologyRenderNodeData[],
+  edges: TopologyRenderEdgeData[],
   view: ViewState,
   positions: Map<string, { x: number; y: number }>,
   nodeColorMetric: TopologyNodeColorMetric,
@@ -497,7 +505,19 @@ function toG6Data(
   }
 }
 
-function quoteTooltip(node: TopologyNodeData, edge?: TopologyEdgeData) {
+function quoteTooltip(node: TopologyRenderNodeData, edge?: TopologyRenderEdgeData) {
+  if (isAggregateNode(node)) {
+    return `
+      <div class="topo-g6-tip topo-g6-tip--aggregate">
+        <div class="topo-g6-tip-title">${node.aggregate_sector}</div>
+        <div class="topo-g6-tip-row"><span>折叠公司</span><strong>${node.hidden_node_ids.length}</strong></div>
+        <div class="topo-g6-tip-row"><span>上游</span><strong>${node.relation_counts.upstream || 0}</strong></div>
+        <div class="topo-g6-tip-row"><span>下游</span><strong>${node.relation_counts.downstream || 0}</strong></div>
+        <div class="topo-g6-tip-row"><span>同业</span><strong>${node.relation_counts.peer || 0}</strong></div>
+        <div class="topo-g6-tip-hint">双击展开板块</div>
+      </div>
+    `
+  }
   const pct = node.pct_chg === null || node.pct_chg === undefined ? '--' : `${node.pct_chg > 0 ? '+' : ''}${node.pct_chg}%`
   const sector = node.sector && node.sector !== '--' ? node.sector : '板块未知'
   const relation = edge ? `<div class="topo-g6-tip-row"><span>关系</span><strong>${edge.label}</strong></div>` : ''
@@ -517,7 +537,18 @@ function quoteTooltip(node: TopologyNodeData, edge?: TopologyEdgeData) {
   `
 }
 
-function edgeTooltip(edge: RenderedEdgeData, nodes: TopologyNodeData[]) {
+function edgeTooltip(edge: RenderedEdgeData, nodes: TopologyRenderNodeData[]) {
+  if (isAggregateEdge(edge)) {
+    const examples = edge.source_edges.slice(0, 5).map((item) => item.label || item.evidence || item.relation).filter(Boolean).join('；')
+    return `
+      <div class="topo-g6-tip topo-g6-tip--aggregate">
+        <div class="topo-g6-tip-title">${edge.aggregate_sector} · 聚合关系</div>
+        <div class="topo-g6-tip-row"><span>方向</span><strong>${edge.direction}</strong></div>
+        <div class="topo-g6-tip-row"><span>关系数</span><strong>${edge.relation_count}</strong></div>
+        <div class="topo-g6-tip-evidence">${examples || '展开板块查看完整关系证据。'}</div>
+      </div>
+    `
+  }
   const sourceNode = nodes.find((node) => node.id === edge.source)
   const targetNode = nodes.find((node) => node.id === edge.target)
   const sourceName = sourceNode ? `${sourceNode.name || sourceNode.code}（${sourceNode.id}）` : edge.source
@@ -535,7 +566,7 @@ function edgeTooltip(edge: RenderedEdgeData, nodes: TopologyNodeData[]) {
   `
 }
 
-function relatedSets(nodes: TopologyNodeData[], edges: TopologyEdgeData[], anchorId?: string | null, edgeAnchor?: string | null) {
+function relatedSets(nodes: TopologyRenderNodeData[], edges: TopologyRenderEdgeData[], anchorId?: string | null, edgeAnchor?: string | null) {
   const relatedNodeIds = new Set<string>()
   const relatedEdgeKeys = new Set<string>()
   if (anchorId) relatedNodeIds.add(anchorId)
@@ -678,6 +709,8 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   rawNodes,
   rawEdges,
   onExpand,
+  onExpandAggregate,
+  onCollapseAggregate,
   onStartTopology,
   onRefreshTopology,
   canStartTopology,
@@ -708,6 +741,8 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   const flowParticleKeysRef = useRef<Set<string>>(new Set())
   const tooltipPatchedRef = useRef(false)
   const onExpandRef = useRef(onExpand)
+  const onExpandAggregateRef = useRef<Props['onExpandAggregate']>(onExpandAggregate)
+  const onCollapseAggregateRef = useRef<Props['onCollapseAggregate']>(onCollapseAggregate)
   const onStartTopologyRef = useRef(onStartTopology)
   const onRefreshTopologyRef = useRef(onRefreshTopology)
   const toolbarStateRef = useRef<ToolbarState>({ canStartTopology, canRefreshTopology, isTopologyBusy, startTopologyLabel })
@@ -721,6 +756,8 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
   const [pinnedEdgeKeys, setPinnedEdgeKeys] = useState<Set<string>>(new Set())
   const pinnedEdgeKeysRef = useRef<Set<string>>(new Set())
   onExpandRef.current = onExpand
+  onExpandAggregateRef.current = onExpandAggregate
+  onCollapseAggregateRef.current = onCollapseAggregate
   onStartTopologyRef.current = onStartTopology
   onRefreshTopologyRef.current = onRefreshTopology
   toolbarStateRef.current = { canStartTopology, canRefreshTopology, isTopologyBusy, startTopologyLabel }
@@ -768,7 +805,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
 
     rawNodesRef.current = rawNodesRef.current.map((node) => {
       const patch = bySymbol.get(node.id)
-      if (!patch) return node
+      if (!patch || isAggregateNode(node)) return node
       return {
         ...node,
         ...patch,
@@ -781,7 +818,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     const nodeFillMap = buildNodeFillMap(rawNodesRef.current, rawEdgesRef.current, nodeColorMetric)
     for (const node of rawNodesRef.current) {
       const patch = bySymbol.get(node.id)
-      if (!patch) continue
+      if (!patch || isAggregateNode(node)) continue
       updates.push({
         id: node.id,
         data: node as unknown as Record<string, unknown>,
@@ -842,7 +879,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       data: { nodes: [], edges: [] },
       node: {
         type: 'circle',
-        style: ((datum: GraphDatum) => datum.style || nodeStyle(datum.data as unknown as TopologyNodeData, view, CENTER_NODE_FILL)) as never,
+        style: ((datum: GraphDatum) => datum.style || nodeStyle(datum.data as unknown as TopologyRenderNodeData, view, CENTER_NODE_FILL)) as never,
       },
       edge: {
         type: 'line',
@@ -881,12 +918,12 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
           getContent: (event: unknown, items: Array<{ data?: Record<string, unknown>; source?: string; target?: string }>) => {
             // G6 5.1.1: items[0] = { id, source?, target?, data: actualElementData, style }
             // The actual node/edge data is at items[0].data (single nesting)
-            const item = items?.[0]?.data as TopologyNodeData | RenderedEdgeData | undefined
+            const item = items?.[0]?.data as TopologyRenderNodeData | RenderedEdgeData | undefined
             if (!item) return ''
             if ('source' in item && 'target' in item) {
               return edgeTooltip(item as RenderedEdgeData, rawNodesRef.current)
             }
-            return quoteTooltip(item as TopologyNodeData)
+            return quoteTooltip(item as TopologyRenderNodeData)
           },
         },
       ],
@@ -895,6 +932,11 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
     graph.on('node:dblclick', (event: unknown) => {
       const id = (event as { target?: { id?: string } }).target?.id
       const node = rawNodesRef.current.find((item) => item.id === id)
+      if (!node) return
+      if (isAggregateNode(node)) {
+        onExpandAggregateRef.current?.(node.aggregate_sector)
+        return
+      }
       if (node && !node.expanded) onExpandRef.current(node.code, node.market)
     })
 
@@ -909,7 +951,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       const id = (event as { target?: { id?: string } }).target?.id
       if (!id || graph.destroyed) return
       const edgeDatum = graph.getEdgeData(id)
-      const data = edgeDatum?.data as (TopologyEdgeData & { edgeKey?: string; visualSource?: string; visualTarget?: string; stroke?: string }) | undefined
+      const data = edgeDatum?.data as (TopologyRenderEdgeData & { edgeKey?: string; visualSource?: string; visualTarget?: string; stroke?: string }) | undefined
       const key = data?.edgeKey || null
       setHoveredEdgeKey(key)
       if (data && data.visualSource && data.visualTarget && data.stroke && key) {
@@ -925,7 +967,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       const id = (event as { target?: { id?: string } }).target?.id
       if (!id || graph.destroyed) return
       const edgeDatum = graph.getEdgeData(id)
-      const data = edgeDatum?.data as (TopologyEdgeData & { edgeKey?: string }) | undefined
+      const data = edgeDatum?.data as (TopologyRenderEdgeData & { edgeKey?: string }) | undefined
       const leavingKey = data?.edgeKey || null
       if (leavingKey && !nodeParticleKeysRef.current.has(leavingKey)) {
         destroyParticle(graph, particleMapRef.current, leavingKey)
@@ -955,7 +997,7 @@ export const TopologyCanvas = forwardRef<TopologyCanvasHandle, Props>(function T
       const id = (event as { target?: { id?: string } }).target?.id
       if (!id || graph.destroyed) return
       const edgeDatum = graph.getEdgeData(id)
-      const data = edgeDatum?.data as (TopologyEdgeData & { edgeKey?: string }) | undefined
+      const data = edgeDatum?.data as (TopologyRenderEdgeData & { edgeKey?: string }) | undefined
       if (!data) return
       const key = data.edgeKey
       if (!key) return
