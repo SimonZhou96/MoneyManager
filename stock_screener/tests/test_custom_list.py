@@ -1,8 +1,5 @@
 import unittest
-from types import SimpleNamespace
 from unittest.mock import patch
-
-import local_agent
 from custom_list import (
     CustomListCodeParser,
     CustomListJobService,
@@ -255,77 +252,6 @@ class CustomListTests(unittest.TestCase):
         self.assertEqual(sections["strategy_process"]["items"][1]["title"], "market_intel_macro_score")
         self.assertIn("宏观分数未达阈值", sections["score_breakdown"]["summary"])
         self.assertEqual(sections["macro_evidence"]["items"][0]["label"], "证据时效")
-
-    def test_upload_market_result_can_upload_all_custom_list_rows(self):
-        class FakeDB:
-            instances = []
-
-            def __init__(self, mysql_config):
-                self.queries = []
-                FakeDB.instances.append(self)
-
-            def get_task_by_id(self, task_id):
-                return {
-                    "task_id": task_id,
-                    "check_date": "2026-05-15",
-                    "total_count": 2,
-                    "params_json": {},
-                }
-
-            def count_screening_results_by_task(self, task_id, passed_only=None):
-                return 1 if passed_only else 2
-
-            def get_screening_results_by_task(self, task_id, limit=1000, offset=0, passed_only=False):
-                self.queries.append(passed_only)
-                if offset:
-                    return []
-                return [
-                    {"code": "HK.00700", "is_passed": True, "filter_details": []},
-                    {"code": "HK.09988", "is_passed": False, "filter_details": []},
-                ]
-
-            def get_signal_analysis_results_by_task(self, task_id):
-                return []
-
-            def close(self):
-                pass
-
-        class FakeClient:
-            def __init__(self):
-                self.task = None
-                self.rows = []
-
-            def push_screening_task(self, job_id, task):
-                self.task = task
-
-            def push_screening_results(self, task_id, check_date, rows):
-                self.rows.extend(rows)
-
-            def push_signal_analysis(self, rows):
-                pass
-
-            def upload_artifact(self, task_id, market, path):
-                pass
-
-        client = FakeClient()
-        args = SimpleNamespace(result_batch_size=1000, result_batch_max_bytes=2 * 1024 * 1024)
-
-        with patch.object(local_agent, "MarketDatabase", FakeDB):
-            local_agent.upload_market_result(
-                args=args,
-                client=client,
-                mysql_config=object(),
-                job_id="job-1",
-                market="HK",
-                task_id="task-1",
-                csv_paths=[],
-                result_upload_scope="all",
-            )
-
-        self.assertEqual(client.task["uploaded_result_scope"], "all")
-        self.assertEqual(len(client.rows), 2)
-        self.assertIn(False, [row["is_passed"] for row in client.rows])
-        self.assertEqual(FakeDB.instances[0].queries[0], False)
 
 
 if __name__ == "__main__":

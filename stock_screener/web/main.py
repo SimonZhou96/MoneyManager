@@ -118,7 +118,7 @@ class SingleStockApiRequest(BaseModel):
     code: str
     timeframe: str = "1d"
     chain_key: Optional[str] = None
-    mode: Optional[str] = None  # "web" = run in background thread immediately; None/absent = queued for agent
+    mode: Optional[str] = None  # "web" = run in background thread immediately
 
 
 class CustomListScreeningTaskRequest(BaseModel):
@@ -798,7 +798,7 @@ def single_stock(payload: SingleStockApiRequest, user: CurrentUser = Depends(req
         raise BusinessError("INVALID_SINGLE_STOCK", f"单股参数不合法：{exc}") from exc
     chain = resolve_rule_chain(db, [market], timeframe=timeframe, chain_key=payload.chain_key)
     run_id = str(uuid.uuid4())
-    web_mode = (payload.mode or "").strip().lower() == "web"
+    web_mode = (payload.mode or "web").strip().lower() == "web"
     db.create_single_stock_run({
         "run_id": run_id,
         "user_id": user.id,
@@ -815,7 +815,7 @@ def single_stock(payload: SingleStockApiRequest, user: CurrentUser = Depends(req
     return {
         "run_id": run_id,
         "status": "running" if web_mode else "queued",
-        "runner": "web_backend" if web_mode else "local_agent",
+        "runner": "web_backend" if web_mode else "external_agent",
         "market": market,
         "code": normalized_code,
         "timeframe": timeframe,

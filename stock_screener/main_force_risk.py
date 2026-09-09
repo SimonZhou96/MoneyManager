@@ -1005,6 +1005,13 @@ class MainForceRiskService:
         close = getattr(self.data_provider, "close", None)
         if callable(close):
             close()
+        for fetcher in self.kline_fetchers:
+            close = getattr(fetcher, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
 
     def analyze_records(
         self,

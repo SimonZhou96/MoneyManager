@@ -49,7 +49,7 @@ class CodeScreeningFrontendTest(unittest.TestCase):
         self.assertIn(".compact-form-grid .field", styles)
         self.assertIn("grid-column: span 2", styles)
 
-    def test_code_screening_copy_uses_task_queue_terms_not_local_agent(self):
+    def test_code_screening_copy_uses_task_queue_terms(self):
         source = self.read_main()
 
         self.assertNotIn("本地 Agent", source)

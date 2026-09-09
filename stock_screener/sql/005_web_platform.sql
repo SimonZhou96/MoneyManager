@@ -1,4 +1,4 @@
--- Web stock screener, local Agent ingestion, K-line cache, artifacts, and single-stock analysis.
+-- Web stock screener, external Agent ingestion, K-line cache, artifacts, and single-stock analysis.
 -- Safe to run multiple times.
 
 CREATE TABLE IF NOT EXISTS web_users (
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS web_screening_jobs (
     status VARCHAR(32) NOT NULL DEFAULT 'queued',
     task_ids JSON NULL,
     error_message TEXT NULL,
-    execution_mode VARCHAR(32) NOT NULL DEFAULT 'local_agent',
+    execution_mode VARCHAR(32) NOT NULL DEFAULT 'web_backend',
     agent_id VARCHAR(128) NULL,
     claimed_at DATETIME(6) NULL,
     heartbeat_at DATETIME(6) NULL,
@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS data_sync_runs (
     UNIQUE KEY uk_data_sync_runs_id (sync_run_id),
     KEY idx_data_sync_status (status),
     KEY idx_data_sync_started (started_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Local Agent sync runs';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='External Agent sync runs';
 
 CREATE TABLE IF NOT EXISTS stock_kline_cache (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

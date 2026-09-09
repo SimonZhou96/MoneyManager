@@ -51,10 +51,6 @@ Available commands:
   option           Start Option Lab shell
   quant            Start Quant Lab in the Web UI
   rules            Start rule-chain editor in the Web UI
-  local-agent      Start Python local agent
-  go-agent         Start Go agent worker
-  go-agent-once    Run Go agent once
-  go-agent-test    Run Go agent tests
   backend          Start backend API service
   frontend         Start frontend web service
 EOF
@@ -146,18 +142,6 @@ dispatch() {
     quant|quant-lab|rules|rule-chains|overview|dashboard)
       run_fullstack "$@"
       ;;
-    local-agent|python-agent)
-      exec "${SCRIPTS_DIR}/run_local_agent.sh" "$@"
-      ;;
-    go-agent|agent)
-      exec "${SCRIPTS_DIR}/run_go_agent.sh" "$@"
-      ;;
-    go-agent-once|agent-once)
-      exec "${SCRIPTS_DIR}/run_go_agent_once.sh" "$@"
-      ;;
-    go-agent-test|test-go-agent)
-      exec "${SCRIPTS_DIR}/test_go_agent.sh" "$@"
-      ;;
     backend|api)
       run_backend "$@"
       ;;
@@ -202,10 +186,6 @@ MoneyManager 启动菜单
   7) 后端 API 服务
   8) 前端 Web 服务
   9) 前后端一起启动
-  10) Python 本地 Agent
-  11) Go Agent 常驻 worker
-  12) Go Agent 单次执行
-  13) Go Agent 测试
   0) 退出
 
 EOF
@@ -220,10 +200,6 @@ EOF
       7) dispatch backend ;;
       8) dispatch frontend ;;
       9) dispatch web ;;
-      10) dispatch local-agent ;;
-      11) dispatch go-agent ;;
-      12) dispatch go-agent-once ;;
-      13) dispatch go-agent-test ;;
       0|q|Q|exit) exit 0 ;;
       *) echo "无效选择：${choice}" ;;
     esac

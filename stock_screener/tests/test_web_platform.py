@@ -93,7 +93,7 @@ class WebPlatformTests(unittest.TestCase):
             def get_screening_run_locks(self, run_date, markets, timeframe, chain_key=None, pool_scope=None):
                 return []
 
-            def create_web_screening_job(self, job_id, user_id, markets, timeframe, options, execution_mode="local_agent"):
+            def create_web_screening_job(self, job_id, user_id, markets, timeframe, options, execution_mode="web_backend"):
                 self.created_job = {
                     "job_id": job_id,
                     "user_id": user_id,

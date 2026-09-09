@@ -1002,6 +1002,17 @@ def run_screening_task(
             except Exception:
                 pass
     finally:
+        # fetchers may own persistent HTTP sessions (for example yfinance).
+        # Release them even when screening exits through an exception.
+        if 'fetchers' in locals() and fetchers:
+            for fetcher in fetchers:
+                close = getattr(fetcher, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:
+                        pass
+
         # 关闭 Futu quote_ctx
         if 'quote_ctx' in locals() and quote_ctx is not None:
             try:

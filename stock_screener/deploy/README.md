@@ -316,71 +316,7 @@ set +a
 echo "$MYSQL_ROOT_PASSWORD" | wc -c
 ```
 
-## 9. 本地 OpenD Agent 同步数据与执行筛选
-
-这一步在你本地电脑执行，不在云服务器执行。前提：
-
-- 本地已启动 Futu OpenD。
-- 本地能访问 `https://mmmcashlife.top`。
-- 本地代码与云端代码版本一致。
-
-创建本地 Agent 配置：
-
-```bash
-cd /Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener
-cat > .agent.env <<'EOF'
-CLOUD_API_BASE=https://mmmcashlife.top
-AGENT_TOKEN=<和云端 .env 一致的 AGENT_TOKEN>
-AGENT_MARKETS=HK,US,A
-AGENT_TIMEFRAMES=1d
-AGENT_API_RETRIES=3
-AGENT_BATCH_SIZE=1000
-AGENT_MODE=sync
-AGENT_POLL_INTERVAL_SEC=30
-AGENT_RESULT_BATCH_SIZE=1000
-AGENT_RESULT_BATCH_MAX_BYTES=2097152
-AGENT_MAX_CODES_PER_MARKET=100
-AGENT_MAX_KLINE_COUNT=500
-AGENT_API_TIMEOUT_SEC=120
-FUTU_HOST=127.0.0.1
-FUTU_PORT=11111
-EOF
-```
-
-先 dry-run，确认 OpenD 和本地抓取正常：
-
-```bash
-scripts/run_local_agent.sh --markets HK,US,A --timeframes 1d --dry-run
-```
-
-正式推送：
-
-```bash
-scripts/run_local_agent.sh --markets HK,US,A --timeframes 1d
-```
-
-云端页面的 Dashboard 会显示最近同步批次。云端筛选优先使用 `stock_kline_cache`；缓存缺失时才使用 YFinance/AKShare 兜底。
-
-全市场筛选和单股筛选不在大陆 ECS 上执行。网页只创建任务，真正执行需要在本地启动 Agent worker：
-
-```bash
-scripts/run_local_agent.sh --mode worker
-```
-
-小规模验证可以只领取一次任务：
-
-```bash
-scripts/run_local_agent.sh --mode worker-once
-```
-
-Agent worker 会：
-
-- 轮询云端 `queued` 任务并领取。
-- 在本地使用 OpenD、本地 MySQL、现有规则链执行筛选。
-- 只上传通过股票明细、全量统计、CSV/Markdown 文件，避免把全市场 K 线和失败明细传到云端。
-- 本地执行 AI 分析和飞书发送；失败只记录 warning，不影响 CSV 上传。
-
-## 10. 启动筛选任务
+## 9. 启动筛选任务
 
 登录网页后：
 
@@ -389,18 +325,16 @@ Agent worker 会：
 3. 选择周期，例如 `1d`。
 4. 按需启用 AI 分析和飞书发送。
 5. 点击“启动筛选”。
-6. 页面会显示任务等待本地 Agent 领取；到“总览”或“任务详情”查看进度和导出文件。
+6. 到“总览”或“任务详情”查看进度和导出文件。
 
 注意：
 
 - Web API 需要登录态。
-- Agent API 使用 `Authorization: Bearer <AGENT_TOKEN>`。
 - 每天每个 `market + timeframe` 只允许成功跑一次；运行中的重复请求会复用同一个任务，已成功的重复请求会返回中文提示。
 - Web API 业务错误统一返回 HTTP 200 + `ok=false + message`，前端会弹出中文错误。
 - 搜索/LLM/飞书属于 best-effort，失败不应影响原始 CSV 生成。
-- 中国大陆 ECS 不执行全量筛选，也不直接连接 OpenD。
 
-## 11. 日常维护
+## 10. 日常维护
 
 升级代码：
 
@@ -444,7 +378,7 @@ cd /opt/MoneyManager/stock_screener/deploy
 podman compose -f podman-compose.yml down
 ```
 
-## 12. 常见问题
+## 11. 常见问题
 
 ### 域名打不开
 
@@ -488,39 +422,3 @@ Caddy 自动 HTTPS 需要：
 podman compose -f deploy/podman-compose.yml exec web-api \
   python -m web.bootstrap_user --username <你的登录账号>
 ```
-
-### 本地 Agent 推送失败
-
-检查：
-
-```bash
-curl -s https://mmmcashlife.top/healthz
-grep AGENT_TOKEN .agent.env
-scripts/run_local_agent.sh --markets HK --timeframes 1d --dry-run
-```
-
-如果返回“Agent 未授权或 token 无效”，确认本地 `.agent.env` 和云端 `.env` 的 `AGENT_TOKEN` 完全一致。
-
-### 筛选无 K 线数据
-
-先确认本地 Agent 已推送 K 线：
-
-```bash
-podman compose -f deploy/podman-compose.yml exec mysql \
-  mysql -uroot -p market_data \
-  -e "SELECT market, timeframe, COUNT(*) FROM stock_kline_cache GROUP BY market, timeframe;"
-```
-
-若为空，重新运行本地 Agent，并检查 Futu OpenD 是否正常。
-
-### 任务一直排队
-
-任务排队通常表示本地 Agent worker 没有运行或 token 不一致：
-
-```bash
-curl -s https://mmmcashlife.top/healthz
-grep AGENT_TOKEN .agent.env
-scripts/run_local_agent.sh --mode worker-once
-```
-
-云端 ECS 不会 fallback 执行全量筛选；必须保持本地 OpenD 和 Agent worker 可用。

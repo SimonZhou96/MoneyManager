@@ -1080,7 +1080,7 @@ class MarketDatabase:
                     status VARCHAR(32) NOT NULL DEFAULT 'queued',
                     task_ids JSON NULL,
                     error_message TEXT NULL,
-                    execution_mode VARCHAR(32) NOT NULL DEFAULT 'local_agent',
+                    execution_mode VARCHAR(32) NOT NULL DEFAULT 'web_backend',
                     agent_id VARCHAR(128) NULL,
                     claimed_at DATETIME(6) NULL,
                     heartbeat_at DATETIME(6) NULL,
@@ -1099,7 +1099,7 @@ class MarketDatabase:
                 """
             )
             web_job_alters = [
-                ("execution_mode", "ALTER TABLE web_screening_jobs ADD COLUMN execution_mode VARCHAR(32) NOT NULL DEFAULT 'local_agent' AFTER error_message"),
+                ("execution_mode", "ALTER TABLE web_screening_jobs ADD COLUMN execution_mode VARCHAR(32) NOT NULL DEFAULT 'web_backend' AFTER error_message"),
                 ("agent_id", "ALTER TABLE web_screening_jobs ADD COLUMN agent_id VARCHAR(128) NULL AFTER execution_mode"),
                 ("claimed_at", "ALTER TABLE web_screening_jobs ADD COLUMN claimed_at DATETIME(6) NULL AFTER agent_id"),
                 ("heartbeat_at", "ALTER TABLE web_screening_jobs ADD COLUMN heartbeat_at DATETIME(6) NULL AFTER claimed_at"),
@@ -2124,7 +2124,7 @@ class MarketDatabase:
         markets: List[str],
         timeframe: str,
         options: Optional[dict] = None,
-        execution_mode: str = "local_agent",
+        execution_mode: str = "web_backend",
     ) -> None:
         sql = """
             INSERT INTO web_screening_jobs

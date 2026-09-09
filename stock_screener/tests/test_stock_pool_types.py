@@ -6,7 +6,6 @@ from pathlib import Path
 import pandas as pd
 
 import akshare as ak
-import local_agent
 from stock_pool import CANONICAL_POOL_TYPES, StockPoolFetcher
 
 
@@ -71,29 +70,6 @@ class StockPoolTypesTest(unittest.TestCase):
         )
         for legacy in ("index", "industry", "ipo", "etf"):
             self.assertNotIn(legacy, CANONICAL_POOL_TYPES)
-
-    def test_local_agent_uploads_and_collects_new_pool_keys(self):
-        self.assertEqual(
-            local_agent.POOL_MAP,
-            {
-                "best": "best_stocks",
-                "major_index": "major_index_constituents",
-                "industry_top5": "industry_top5",
-                "recent_ipo_2y": "recent_ipo_2y",
-                "all_etf": "all_etf",
-            },
-        )
-
-        codes = local_agent.collect_codes_from_pools({
-            "best_stocks": [{"code": "HK.00001"}],
-            "major_index_constituents": [{"code": "HK.00700"}],
-            "industry_top5": [{"code": "HK.00941"}],
-            "recent_ipo_2y": [{"code": "HK.09880"}],
-            "all_etf": [{"code": "HK.02800"}],
-            "index_constituents": [{"code": "HK.LEGACY"}],
-        })
-
-        self.assertEqual(codes, ["HK.00001", "HK.00700", "HK.00941", "HK.09880", "HK.02800"])
 
     def test_a_share_major_index_constituents_are_normalized_from_akshare(self):
         def fake_cons(symbol):

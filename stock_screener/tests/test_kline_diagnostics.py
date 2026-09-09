@@ -15,6 +15,9 @@ TDD: K 线数据获取诊断信息流测试。
 import os
 import sys
 import unittest
+from unittest import mock
+
+import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -50,6 +53,51 @@ class KlineFetcherFactoryTest(unittest.TestCase):
         names = [f.get_name() for f in chain]
         self.assertNotIn("DatabaseKlineCache", names)
         self.assertIn("YFinance", names, "应始终包含 YFinance")
+
+
+class YFinanceKlineFetcherLifecycleTest(unittest.TestCase):
+    """Protect the session lifecycle that prevents per-symbol FD growth."""
+
+    @staticmethod
+    def _download_frame():
+        return pd.DataFrame({
+            "Date": pd.date_range("2026-01-01", periods=2, freq="D"),
+            "Open": [10.0, 11.0],
+            "High": [11.0, 12.0],
+            "Low": [9.0, 10.0],
+            "Close": [10.5, 11.5],
+            "Volume": [100, 110],
+        })
+
+    def test_sequential_fetches_reuse_the_supplied_session_without_worker_threads(self):
+        """Would fail if a fetch creates a new yfinance session or worker thread."""
+        session = object()
+        fetcher = YFinanceKlineFetcher(session=session)
+        with mock.patch.object(fetcher.yf, "download", return_value=self._download_frame()) as download:
+            self.assertIsNotNone(fetcher.fetch("US.TEST", market="US", timeframe="1d"))
+            self.assertIsNotNone(fetcher.fetch("US.TEST2", market="US", timeframe="1d"))
+
+        self.assertEqual(download.call_count, 2)
+        for call in download.call_args_list:
+            self.assertIs(call.kwargs["session"], session)
+            self.assertFalse(call.kwargs["threads"])
+
+    def test_close_releases_only_the_session_owned_by_the_fetcher(self):
+        """Would fail if a completed job leaves the fetcher's HTTP session open."""
+        class Session:
+            def __init__(self):
+                self.close_calls = 0
+
+            def close(self):
+                self.close_calls += 1
+
+        session = Session()
+        fetcher = YFinanceKlineFetcher(session=session, owns_session=True)
+
+        fetcher.close()
+        fetcher.close()
+
+        self.assertEqual(session.close_calls, 1)
 
 
 class OpenDQuotedKlineFetcherTest(unittest.TestCase):

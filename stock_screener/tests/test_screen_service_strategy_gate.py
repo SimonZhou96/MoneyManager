@@ -304,6 +304,87 @@ class ScreenServiceStrategyGateTest(unittest.TestCase):
         self.assertEqual(record["score_details"]["technical_weight"], 0.6)
         self.assertEqual(record["filter_details"][2]["strategy_category"], "macro")
 
+    def test_run_screening_task_closes_fetchers_created_for_kline_screening(self):
+        """Would fail if a full-market task leaves its shared data-source session open."""
+        class FakeDB:
+            def __init__(self, config):
+                self.records = []
+
+            def init_schema(self, timeframe):
+                pass
+
+            def get_stocks_by_codes(self, market, codes, include_fundamentals=True):
+                return []
+
+            def update_task_progress(self, *args, **kwargs):
+                pass
+
+            def upsert_screening_results(self, check_date, results):
+                self.records.extend(results)
+
+            def update_task_status(self, task_id, status):
+                pass
+
+            def close(self):
+                pass
+
+        class FakeRuleEngine:
+            class ChainConfig:
+                chain_key = "fake_chain"
+
+            chain_config = ChainConfig()
+            metadata = []
+            metadata_by_key = {}
+
+            def has_rules(self):
+                return True
+
+            def requires_kline(self):
+                return True
+
+            def requires_signal_analysis(self):
+                return False
+
+            def requires_market_intel_macro_score(self):
+                return False
+
+            def evaluate_stock(self, stock, context, **kwargs):
+                return StockFilterResult(stock=stock, passed=False)
+
+        class ClosableFetcher:
+            def __init__(self):
+                self.close_calls = 0
+
+            def fetch(self, *args, **kwargs):
+                return None
+
+            def get_name(self):
+                return "closable"
+
+            def close(self):
+                self.close_calls += 1
+
+        class FakeMarketCache:
+            def get_or_compute(self, market):
+                return object()
+
+        fetcher = ClosableFetcher()
+        with patch.object(screen_service, "MarketDatabase", FakeDB), \
+                patch.object(screen_service, "create_rule_engine_from_db", return_value=FakeRuleEngine()), \
+                patch.object(screen_service.KlineFetcherFactory, "create_fetcher_chain", return_value=[fetcher]), \
+                patch.object(screen_service, "MarketCache", FakeMarketCache), \
+                patch.dict("os.environ", {"KLINE_USE_FUTU_OPEND": "0"}):
+            screen_service.run_screening_task(
+                mysql_config=object(),
+                task_id="task-close-fetchers",
+                market="HK",
+                timeframe="1d",
+                params={},
+                watchlist=[{"code": "HK.00001", "name": "Test"}],
+            )
+
+        self.assertEqual(fetcher.close_calls, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

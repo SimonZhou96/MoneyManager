@@ -1,0 +1,15 @@
+# Local secrets and runtime output
+.env
+.agent.env
+logs/
+
+# Generated Python and operating-system files
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Local IDE settings
+.idea/
+
+# Regenerable Graphify cache
+graphify-out/cache/

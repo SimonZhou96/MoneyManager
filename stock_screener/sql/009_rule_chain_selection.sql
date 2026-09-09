@@ -1,4 +1,4 @@
--- Rule-chain selection support for Web tasks and local Agent execution.
+-- Rule-chain selection support for Web tasks and external Agent execution.
 -- The full-market daily lock scope must include chain_key, otherwise a test
 -- chain would be blocked by a completed default-chain run on the same day.
 

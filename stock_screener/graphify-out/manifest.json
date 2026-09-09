@@ -1,7 +1,7 @@
 {
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/db.py": {
-    "mtime": 1782454089.1876159,
-    "ast_hash": "81f7776030df7d0c8e1890a9aec843d7",
+    "mtime": 1788934535.7751172,
+    "ast_hash": "d9bdc16d0b25b97cd01806c6e0f3d153",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/stock_name_resolver.py": {
@@ -10,8 +10,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/main_force_risk.py": {
-    "mtime": 1782443872.1327841,
-    "ast_hash": "0aa56b59a342ff7c6af88778397b8692",
+    "mtime": 1785922895.2825563,
+    "ast_hash": "646d218752d4d070a3cf8ae74ccda712",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/custom_list.py": {
@@ -45,8 +45,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/kline_fetcher.py": {
-    "mtime": 1782443872.1323411,
-    "ast_hash": "23608c6cdd464deacd26ee83e3674397",
+    "mtime": 1785922895.2822058,
+    "ast_hash": "31717b3a9942febcb9c1b1d704c2ef82",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/feishu_app_client.py": {
@@ -84,14 +84,9 @@
     "ast_hash": "1cdf8934a095818d30e2f6edbc3e8f4f",
     "semantic_hash": ""
   },
-  "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/local_agent.py": {
-    "mtime": 1779266442.8609974,
-    "ast_hash": "980a0e6e992b90f08a4cadd04c73da78",
-    "semantic_hash": ""
-  },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/run_moneymanager.sh": {
-    "mtime": 1779766573.8475478,
-    "ast_hash": "5cdeb4e9517f8f12b2de5c456d1f9d7d",
+    "mtime": 1788935733.7423732,
+    "ast_hash": "ae71f3416538245c7a9f4f4d089fe31e",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/fetch_stock_pools.py": {
@@ -200,8 +195,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/web/main.py": {
-    "mtime": 1782443872.1514058,
-    "ast_hash": "e93969025cac75a06c590480e45f793f",
+    "mtime": 1788934535.7737002,
+    "ast_hash": "b10d2b5675db28a95bfaf490dfe0b790",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/web/market_intel.py": {
@@ -305,8 +300,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_web_platform.py": {
-    "mtime": 1779939759.3600159,
-    "ast_hash": "edce3a553db12eb55800284ce98cff83",
+    "mtime": 1788934535.7778594,
+    "ast_hash": "882bc5164963d66790e3c8c3a86b8938",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_quant_service.py": {
@@ -385,8 +380,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_custom_list.py": {
-    "mtime": 1780151481.8107414,
-    "ast_hash": "f3091bb251118e1c4844cb078dc13551",
+    "mtime": 1788934696.0084639,
+    "ast_hash": "bb65b778a933f48af0eb8f1dc0458b87",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_zuoyi_strategy.py": {
@@ -435,8 +430,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_main_force_risk.py": {
-    "mtime": 1778836642.4329915,
-    "ast_hash": "43388684e6cec86ac4980a26cced10d6",
+    "mtime": 1785922863.4154198,
+    "ast_hash": "7277c7f04be4af0c03e1ca40ebd27016",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_technical_patterns.py": {
@@ -445,8 +440,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_screen_service_strategy_gate.py": {
-    "mtime": 1780655716.12082,
-    "ast_hash": "a0fbb20ec5aa437e6770b9597cb3f332",
+    "mtime": 1785923532.5039163,
+    "ast_hash": "4946638fc1286c05a1670d0147c9b51b",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_market_intel_repository.py": {
@@ -460,8 +455,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_stock_pool_types.py": {
-    "mtime": 1780467933.2526834,
-    "ast_hash": "673055a1cbbfdbddedc07f723e019a62",
+    "mtime": 1788934459.0819283,
+    "ast_hash": "1d0e7b8e32acdf6f7e743db0a286145a",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_feishu_app_client.py": {
@@ -470,8 +465,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_code_screening_frontend.py": {
-    "mtime": 1781757116.4079688,
-    "ast_hash": "bbdc04c9ce48191e2c52bce3252327dc",
+    "mtime": 1788934734.0104928,
+    "ast_hash": "16220ed0fc9f179136519423a0cf1f11",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_stock_terminal_api.py": {
@@ -694,26 +689,6 @@
     "ast_hash": "b54889a694b692826f687f7fec76203e",
     "semantic_hash": ""
   },
-  "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/scripts/run_local_agent.sh": {
-    "mtime": 1778489779.9602377,
-    "ast_hash": "53c556c622af6017881527aff76b547e",
-    "semantic_hash": ""
-  },
-  "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/scripts/run_go_agent_once.sh": {
-    "mtime": 1778830686.3686335,
-    "ast_hash": "293cbc9fed86b2081086a43ec70c2ab1",
-    "semantic_hash": ""
-  },
-  "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/scripts/test_go_agent.sh": {
-    "mtime": 1778830703.5375288,
-    "ast_hash": "a170e6fb70ae28f6e99d169c2bb98fd3",
-    "semantic_hash": ""
-  },
-  "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/scripts/go_agent_common.sh": {
-    "mtime": 1778830715.8011088,
-    "ast_hash": "b4e7616977adf8e3c531102fa538f909",
-    "semantic_hash": ""
-  },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/scripts/run_screening.sh": {
     "mtime": 1779766632.541831,
     "ast_hash": "bdd57d3ccd1c8e41f663379ae2b93929",
@@ -724,14 +699,9 @@
     "ast_hash": "40bed2973d3e57ff3c57aae45af2069c",
     "semantic_hash": ""
   },
-  "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/scripts/run_go_agent.sh": {
-    "mtime": 1778830755.9190564,
-    "ast_hash": "ce5015705c783051f2b8fe50e56bbb95",
-    "semantic_hash": ""
-  },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/api/screen_service.py": {
-    "mtime": 1781753746.8608637,
-    "ast_hash": "1b56ab6338947c699b7596c87eda5e7f",
+    "mtime": 1785923541.671305,
+    "ast_hash": "bbce313ef7256860487e1e76d6266d91",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/api/__init__.py": {
@@ -900,8 +870,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/sql/008_agent_screening_locks.sql": {
-    "mtime": 1779266516.2187893,
-    "ast_hash": "b66416e9fe52518283f2a3b3f9638971",
+    "mtime": 1788934535.7766085,
+    "ast_hash": "b3728dc45d1fdf1e67c5012f94439581",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/sql/001_screening_rules.sql": {
@@ -940,8 +910,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/sql/005_web_platform.sql": {
-    "mtime": 1780640562.085815,
-    "ast_hash": "054eca184aea6644d012156b3c9e21b6",
+    "mtime": 1788934535.775837,
+    "ast_hash": "f3d703cbee56dd64f77eb9ec2b7064c5",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/sql/003_sector_memberships.sql": {
@@ -950,8 +920,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/sql/009_rule_chain_selection.sql": {
-    "mtime": 1779266521.744577,
-    "ast_hash": "f0f4abffbfde86a267c574d421a1caa9",
+    "mtime": 1788934535.7771933,
+    "ast_hash": "4982f26a40a642c424ab4caa4e5598b3",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/requirements.txt": {
@@ -965,8 +935,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/deploy/README.md": {
-    "mtime": 1779722620.2113233,
-    "ast_hash": "79c1209ac0f7f684f722fa0679a806dc",
+    "mtime": 1788934497.036896,
+    "ast_hash": "24f0f429889c6338a1eeccd10065bbda",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/deploy/podman-compose.yml": {
@@ -1670,8 +1640,8 @@
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_kline_diagnostics.py": {
-    "mtime": 1781282120.6909485,
-    "ast_hash": "e977d1963ef266080577a15ec0b0e535",
+    "mtime": 1785922907.0948007,
+    "ast_hash": "bfe65120e93a5d05206b8bdc91a2f55d",
     "semantic_hash": ""
   },
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_energy_phase_classifier.py": {
@@ -2347,6 +2317,21 @@
   "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/.superpowers/brainstorm/43271-1782813527/content/g6-layout-options.html": {
     "mtime": 1782813608.3507588,
     "ast_hash": "d7cc0e564eb4268a0897898c2d6b199a",
+    "semantic_hash": ""
+  },
+  "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/tests/test_docker_deployment.py": {
+    "mtime": 1788936013.155153,
+    "ast_hash": "1a96e6661ab600e787088c29464bf640",
+    "semantic_hash": ""
+  },
+  "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/deploy/README.docker.md": {
+    "mtime": 1788936048.9900365,
+    "ast_hash": "9b37b54c4caa44fa2841045a96148a6e",
+    "semantic_hash": ""
+  },
+  "/Users/meng.zhou/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/stock_screener/deploy/docker-compose.yml": {
+    "mtime": 1788936048.9896207,
+    "ast_hash": "818295040c9244fc583c24944a5c06fa",
     "semantic_hash": ""
   }
 }

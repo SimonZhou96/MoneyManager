@@ -116,12 +116,38 @@ def _log_fetch_warning(source: str, action: str, error: Exception) -> None:
 class YFinanceKlineFetcher(KlineFetcherBase):
     """YFinance K 线获取器 - 支持全 timeframe、港股 / 美股 / A 股"""
 
-    def __init__(self):
+    def __init__(self, session=None, owns_session: Optional[bool] = None):
         try:
             import yfinance as yf
             self.yf = yf
         except ImportError:
             raise ImportError("请安装 yfinance: pip install yfinance")
+        self._session = session
+        self._owns_session = session is None if owns_session is None else bool(owns_session)
+
+    def _get_session(self):
+        if self._session is None:
+            # yfinance.download() otherwise creates a new curl_cffi session on
+            # every single-symbol request and never closes the replaced session.
+            from yfinance._http import new_session
+            self._session = new_session()
+            self._owns_session = True
+        return self._session
+
+    def _renew_owned_session(self) -> None:
+        if not self._owns_session:
+            return
+        self.close()
+        self._owns_session = True
+
+    def close(self) -> None:
+        """Release the HTTP session when this fetcher created it."""
+        session = self._session
+        self._session = None
+        if self._owns_session and session is not None:
+            close = getattr(session, "close", None)
+            if callable(close):
+                close()
 
     def get_name(self) -> str:
         return "YFinance"
@@ -185,6 +211,10 @@ class YFinanceKlineFetcher(KlineFetcherBase):
                         interval=timeframe,
                         auto_adjust=True,
                         progress=False,
+                        # Each fetch() handles one symbol; worker threads add
+                        # no throughput but do allocate extra descriptors.
+                        threads=False,
+                        session=self._get_session(),
                     )
 
                 self._suppress_yfinance_warnings()
@@ -194,6 +224,7 @@ class YFinanceKlineFetcher(KlineFetcherBase):
                     # crumb 过期 → 重置 YfData 单例后重试一次
                     if _is_crumb_error(dl_exc):
                         reset_yf_session()
+                        self._renew_owned_session()
                         data = _download()
                     else:
                         raise

@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS screening_run_locks (
 COMMENT='全市场筛选每日分布式锁';
 
 ALTER TABLE web_screening_jobs
-    ADD COLUMN IF NOT EXISTS execution_mode VARCHAR(32) NOT NULL DEFAULT 'local_agent' AFTER error_message,
+    ADD COLUMN IF NOT EXISTS execution_mode VARCHAR(32) NOT NULL DEFAULT 'web_backend' AFTER error_message,
     ADD COLUMN IF NOT EXISTS agent_id VARCHAR(128) NULL AFTER execution_mode,
     ADD COLUMN IF NOT EXISTS claimed_at DATETIME(6) NULL AFTER agent_id,
     ADD COLUMN IF NOT EXISTS heartbeat_at DATETIME(6) NULL AFTER claimed_at,

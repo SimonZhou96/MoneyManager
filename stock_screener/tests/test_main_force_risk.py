@@ -24,6 +24,15 @@ class StaticKlineFetcher(KlineFetcherBase):
         return "static"
 
 
+class ClosableStaticKlineFetcher(StaticKlineFetcher):
+    def __init__(self, df):
+        super().__init__(df)
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
+
+
 def make_drop_kline():
     dates = pd.date_range("2026-01-01", periods=80, freq="D")
     close = [100.0 + (i % 5) for i in range(79)] + [90.0]
@@ -79,6 +88,18 @@ class MainForceRiskAnalyzerTest(unittest.TestCase):
         self.assertIn("样本80日", records[0]["main_force_market_data_observation_text"])
         self.assertNotIn("筹码观察", records[0]["main_force_market_data_observation_text"])
         self.assertNotIn("筹码分布使用成交量分布近似", records[0]["main_force_missing_data_text"])
+
+    def test_service_close_releases_owned_kline_fetchers(self):
+        """Would fail if a job leaves a stateful K-line fetcher alive after completion."""
+        fetcher = ClosableStaticKlineFetcher(make_drop_kline())
+        service = MainForceRiskService(
+            kline_fetchers=[fetcher],
+            data_provider=NullMainForceDataProvider(),
+        )
+
+        service.close()
+
+        self.assertEqual(fetcher.close_calls, 1)
 
     def test_futu_provider_subscribes_before_order_book_and_broker_queue_for_minute_timeframe(self):
         class FakeSubType:
