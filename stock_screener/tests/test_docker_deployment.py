@@ -5,16 +5,16 @@ import unittest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = PROJECT_ROOT.parent
 DOCKER_COMPOSE = PROJECT_ROOT / "deploy" / "docker-compose.yml"
-DOCKERFILE = PROJECT_ROOT / "Dockerfile"
-CONTAINERFILE = PROJECT_ROOT / "deploy" / "Containerfile"
+DOCKERFILE = REPOSITORY_ROOT / "Dockerfile"
 
 
 class DockerDeploymentTests(unittest.TestCase):
-    def test_root_dockerfile_matches_the_podman_containerfile(self):
-        self.assertEqual(
-            DOCKERFILE.read_text(encoding="utf-8"),
-            CONTAINERFILE.read_text(encoding="utf-8"),
+    def test_repository_root_has_dockerfile_for_ci_build(self):
+        self.assertTrue(
+            DOCKERFILE.is_file(),
+            "Docker Image CI builds from the repository root and requires Dockerfile there.",
         )
 
     def test_docker_compose_defines_the_full_web_stack_without_podman_labels(self):
