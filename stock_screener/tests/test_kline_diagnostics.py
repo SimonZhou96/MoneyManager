@@ -82,6 +82,15 @@ class YFinanceKlineFetcherLifecycleTest(unittest.TestCase):
 
         self.assertEqual(session.close_calls, 1)
 
+    def test_owned_session_is_available_with_current_yfinance(self):
+        """Would fail when the removed yfinance._http private module is imported."""
+        fetcher = YFinanceKlineFetcher()
+
+        session = fetcher._get_session()
+
+        self.assertTrue(callable(getattr(session, "close", None)))
+        fetcher.close()
+
 
 class EastmoneyProviderDiagnosticTest(unittest.TestCase):
     """验证 eastmoney provider 的错误诊断信息流。"""

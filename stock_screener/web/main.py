@@ -43,7 +43,7 @@ from .errors import (
     request_validation_exception_handler,
 )
 from .market_intel import router as market_intel_router
-from .jobs import run_web_screening_job
+from .jobs import resume_web_screening_job, run_web_screening_job
 from .options import router as options_router
 from .quant import router as quant_router
 from .sectors import router as sectors_router
@@ -203,11 +203,20 @@ _single_stock_progress: Dict[str, dict] = {}
 _single_stock_progress_lock = threading.Lock()
 
 
-def _set_progress(run_id: str, step: str, pct: int, status: str = "running", detail: str = "") -> None:
+def _set_progress(
+    run_id: str,
+    step: str,
+    pct: int,
+    status: str = "running",
+    detail: str = "",
+    rule_type: str = "",
+    strategy_category: str = "",
+) -> None:
     with _single_stock_progress_lock:
         _single_stock_progress[run_id] = {
             "step": step, "pct": pct, "status": status,
-            "detail": detail, "updated_at": datetime.now(ZoneInfo("UTC")).isoformat(),
+            "detail": detail, "rule_type": rule_type, "strategy_category": strategy_category,
+            "updated_at": datetime.now(ZoneInfo("UTC")).isoformat(),
         }
 
 
@@ -249,6 +258,7 @@ def run_single_stock_web_job(run_id: str) -> None:
         from scheduled_daily_job import get_default_screening_params, load_passed_screening_records
 
         params = get_default_screening_params()
+        params["single_stock_mode"] = True
         if chain_key:
             params["chain_key"] = chain_key
 
@@ -264,6 +274,28 @@ def run_single_stock_web_job(run_id: str) -> None:
 
         # Step 4: rule evaluation (run_screening_task with 1-stock watchlist)
         _set_progress(run_id, "rule_eval", 40, detail=f"执行筛选规则: {name}")
+
+        def _report_rule_execution(metadata: dict) -> None:
+            rule_type = str(metadata.get("rule_type") or "")
+            category = str(metadata.get("strategy_category") or "")
+            if rule_type == "filter":
+                kind = "筛选条件"
+            elif category == "technical":
+                kind = "技术策略"
+            elif category == "market":
+                kind = "市场策略"
+            elif category == "macro":
+                kind = "宏观策略"
+            else:
+                kind = "策略规则"
+            _set_progress(
+                run_id,
+                "rule_eval",
+                55,
+                detail=f"{kind}: {metadata.get('rule_name') or metadata.get('rule_key') or '未命名规则'}",
+                rule_type=rule_type,
+                strategy_category=category,
+            )
 
         # Patch: override progress update to track single-stock progress
         original_update = db.update_task_progress
@@ -298,6 +330,7 @@ def run_single_stock_web_job(run_id: str) -> None:
                 watchlist=watchlist,
                 progress_log=True,
                 chain_key=chain_key,
+                rule_progress_callback=_report_rule_execution,
             )
         finally:
             db.update_task_progress = original_update
@@ -583,11 +616,12 @@ def create_screening_task(
             "chain_timeframe": chain.get("chain_timeframe"),
             "chain_name": chain.get("chain_name"),
         }
+    output_dir = str(artifact_dir())
     job_id = str(uuid.uuid4())
     options = {
         "enable_ai_analysis": bool(payload.enable_ai_analysis),
         "send_feishu": bool(payload.send_feishu),
-        "result_upload_scope": "passed_only",
+        "result_upload_scope": "all_results",
         "pool_types": pool_types,
         "pool_scope": pool_scope,
         "chain_key": chain_key,
@@ -641,7 +675,7 @@ def create_screening_task(
         job_id,
         markets,
         timeframe,
-        str(artifact_dir()),
+        output_dir,
         bool(payload.enable_ai_analysis),
         bool(payload.send_feishu),
         chain_key,
@@ -713,6 +747,62 @@ def list_tasks(_: CurrentUser = Depends(require_read_user), db: MarketDatabase =
         "tasks": db.list_screening_tasks(limit=50),
         "single_stock_runs": db.list_single_stock_runs(limit=50),
     }
+
+
+@app.get("/api/screening/jobs/{job_id}")
+def get_screening_job(job_id: str, _: CurrentUser = Depends(require_read_user), db: MarketDatabase = Depends(get_db)):
+    job = db.get_web_screening_job(job_id)
+    if not job:
+        raise BusinessError("SCREENING_JOB_NOT_FOUND", "任务组不存在")
+    tasks = [db.get_task_by_id(task_id) for task_id in job.get("task_ids") or []]
+    tasks = [item for item in tasks if item]
+    task_ids = job.get("task_ids") or []
+    item_summary = db.summarize_screening_task_items(task_ids)
+    if item_summary["total_count"]:
+        total_count = item_summary["total_count"]
+        completed_count = item_summary["completed_count"]
+        passed_count = item_summary["passed_count"]
+        error_count = item_summary["error_count"]
+    else:
+        total_count = sum(int(item.get("total_count") or 0) for item in tasks)
+        completed_count = sum(int(item.get("completed_count") or 0) for item in tasks)
+        passed_count = sum(int(item.get("passed_count") or 0) for item in tasks)
+        error_count = 0
+    return {**job, "tasks": tasks, "total_count": total_count, "completed_count": completed_count,
+            "passed_count": passed_count, "error_count": error_count}
+
+
+@app.get("/api/screening/jobs/{job_id}/stocks")
+def get_screening_job_stocks(
+    job_id: str, market: Optional[str] = None, processing_status: Optional[str] = None,
+    passed: Optional[bool] = None, limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0), _: CurrentUser = Depends(require_read_user),
+    db: MarketDatabase = Depends(get_db),
+):
+    job = db.get_web_screening_job(job_id)
+    if not job:
+        raise BusinessError("SCREENING_JOB_NOT_FOUND", "任务组不存在")
+    task_ids = job.get("task_ids") or []
+    rows = db.list_screening_task_items(task_ids, market, processing_status, passed, limit, offset)
+    return {"rows": rows, "total_count": db.count_screening_task_items(task_ids), "limit": limit, "offset": offset}
+
+
+@app.post("/api/screening/jobs/{job_id}/resume")
+def resume_screening_job(
+    job_id: str, background_tasks: BackgroundTasks, _: CurrentUser = Depends(require_user),
+    db: MarketDatabase = Depends(get_db),
+):
+    job = db.get_web_screening_job(job_id)
+    if not job:
+        raise BusinessError("SCREENING_JOB_NOT_FOUND", "任务组不存在")
+    if job.get("status") not in {"failed", "completed"}:
+        raise BusinessError("SCREENING_JOB_NOT_RESUMABLE", "仅失败或中断的任务可以继续")
+    pending = db.count_screening_task_items(job.get("task_ids") or [], "queued") + db.count_screening_task_items(job.get("task_ids") or [], "running")
+    if pending <= 0:
+        raise BusinessError("SCREENING_JOB_NOT_RESUMABLE", "没有待处理股票")
+    db.update_web_screening_job(job_id, "queued", error_message=None)
+    background_tasks.add_task(resume_web_screening_job, mysql_config_from_env(), job_id, str(artifact_dir()))
+    return {"job_id": job_id, "status": "queued", "pending_count": pending}
 
 
 @app.get("/api/screening/tasks/{task_id}")

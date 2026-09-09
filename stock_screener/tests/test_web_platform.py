@@ -6,7 +6,7 @@ from db import hash_password, verify_password
 from kline_fetcher import KlineFetcherFactory
 from web.business import BusinessError
 from web.auth import CurrentUser
-from web.main import BulkStockPoolRequest, ScreeningTaskRequest, bulk_stock_pool, create_screening_task
+from web.main import BulkStockPoolRequest, ScreeningTaskRequest, bulk_stock_pool, create_screening_task, get_screening_job
 from web.rate_limit import InMemorySlidingWindowRateLimiter, RateLimitRule, rate_limiter
 from web.rule_chains import parse_rule_expression, resolve_rule_chain, validate_rule_expression_against_market
 from signal_analysis.models import SignalAnalysisResult
@@ -131,6 +131,106 @@ class WebPlatformTests(unittest.TestCase):
         self.assertEqual(db.created_locks["pool_scope"], "major_index,all_etf")
         self.assertEqual(len(background.tasks), 1)
         self.assertEqual(background.tasks[0][1][2], ["HK"])
+
+    def test_create_screening_task_checks_artifact_directory_before_persisting_job(self):
+        class FakeBackgroundTasks:
+            def add_task(self, *args, **kwargs):
+                raise AssertionError("background task must not be scheduled")
+
+        class FakeDB:
+            def __init__(self):
+                self.created_job = False
+                self.created_locks = False
+
+            def get_screening_run_locks(self, *args, **kwargs):
+                return []
+
+            def create_web_screening_job(self, *args, **kwargs):
+                self.created_job = True
+
+            def create_screening_run_locks(self, **kwargs):
+                self.created_locks = True
+
+        db = FakeDB()
+        with mock.patch("web.main.resolve_rule_chain", return_value={
+            "chain_key": "default_zuoyi_and_other",
+            "chain_timeframe": "*",
+            "chain_name": "默认链",
+        }), mock.patch("web.main.artifact_dir", side_effect=OSError("只读目录")):
+            with self.assertRaisesRegex(OSError, "只读目录"):
+                create_screening_task(
+                    ScreeningTaskRequest(markets=["HK"], pool_types=["best"]),
+                    FakeBackgroundTasks(),
+                    CurrentUser(id=801, username="artifact-test", role="admin"),
+                    db,
+                )
+
+        self.assertFalse(db.created_job)
+        self.assertFalse(db.created_locks)
+
+    def test_web_job_records_market_task_id_before_market_screening_finishes(self):
+        from types import SimpleNamespace
+        from web.jobs import run_web_screening_job
+
+        events = []
+
+        class FakeDB:
+            def __init__(self, _config):
+                pass
+
+            def init_web_schema(self):
+                pass
+
+            def update_web_screening_job(self, _job_id, status, task_ids=None, **_kwargs):
+                events.append(("job_updated", status, task_ids))
+
+            def close(self):
+                pass
+
+        def run_market(**kwargs):
+            events.append(("market_started",))
+            kwargs["on_task_created"]("task-hk-1")
+            events.append(("market_finishing",))
+            return SimpleNamespace(task_id="task-hk-1", csv_paths=[], market="HK", passed=[])
+
+        with mock.patch("web.jobs.MarketDatabase", FakeDB), \
+             mock.patch("web.jobs.get_default_screening_params", return_value={}), \
+             mock.patch("web.jobs.run_market_screening_worker", side_effect=run_market), \
+             mock.patch("web.jobs._record_artifacts"):
+            run_web_screening_job(
+                mysql_config=object(), job_id="job-1", markets=["HK"], timeframe="1d",
+                artifact_root="/tmp/moneymanager-test-artifacts", enable_ai_analysis=False,
+            )
+
+        callback_update = ("job_updated", "running", ["task-hk-1"])
+        self.assertIn(callback_update, events)
+        self.assertLess(events.index(callback_update), events.index(("market_finishing",)))
+
+    def test_screening_job_uses_task_item_summary_when_task_counter_is_missing(self):
+        class FakeDB:
+            def get_web_screening_job(self, job_id):
+                return {"job_id": job_id, "task_ids": ["task-hk-1"]}
+
+            def get_task_by_id(self, task_id):
+                return {
+                    "task_id": task_id,
+                    "market": "HK",
+                    "total_count": 401,
+                    "completed_count": 401,
+                    "passed_count": None,
+                }
+
+            def summarize_screening_task_items(self, task_ids):
+                if task_ids != ["task-hk-1"]:
+                    raise AssertionError("expected the linked market task")
+                return {"total_count": 401, "completed_count": 401, "passed_count": 24, "error_count": 0}
+
+        result = get_screening_job("job-hk-1", None, FakeDB())
+
+        self.assertEqual(result["total_count"], 401)
+        self.assertEqual(result["completed_count"], 401)
+        self.assertEqual(result["passed_count"], 24)
+        self.assertEqual(result["error_count"], 0)
 
     def test_rule_chain_expression_validation_checks_shape_and_refs(self):
         class FakeDB:

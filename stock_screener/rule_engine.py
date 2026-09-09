@@ -49,6 +49,7 @@ if __package__:
         StrategizerOutput,
         TechnicalPatternStrategizer,
         TodayVolumeExceedsPrior3MaxStrategizer,
+        MarketTemperatureStrategizer,
         ZuoYiStrategizer,
     )
 else:
@@ -84,12 +85,15 @@ else:
         StrategizerOutput,
         TechnicalPatternStrategizer,
         TodayVolumeExceedsPrior3MaxStrategizer,
+        MarketTemperatureStrategizer,
         ZuoYiStrategizer,
     )
 
 
 RULE_TYPE_FILTER = "filter"
 RULE_TYPE_STRATEGY = "strategy"
+RUNTIME_DEPENDENCY_RESOLVER_CACHE_KEY = "runtime_dependency_resolver"
+RULE_EXECUTION_CALLBACK_CACHE_KEY = "rule_execution_callback"
 SIGNAL_GROUP_BULLISH = "bullish"
 SIGNAL_GROUP_REBOUND = "rebound"
 SIGNAL_GROUP_ZUOYI_BULLISH = "zuoyi_bullish"
@@ -286,6 +290,12 @@ class RuleRegistry:
             ),
         )
 
+        registry.register_strategy(
+            "MarketTemperatureStrategizer",
+            lambda params: MarketTemperatureStrategizer(
+                min_score=float(params.get("min_score", 50)),
+            ),
+        )
         registry.register_strategy(
             "ZuoYiStrategizer",
             lambda params: ZuoYiStrategizer(
@@ -485,6 +495,30 @@ class RuleRegistry:
         return registry
 
 
+class RuntimeDependencyResolver:
+    """Resolve rule-declared runtime dependencies lazily and once per context."""
+
+    def __init__(self, loaders: Optional[Dict[str, Callable[[FilterContext], Any]]] = None):
+        self._loaders = dict(loaders or {})
+
+    @staticmethod
+    def cache_key(name: str) -> str:
+        return f"runtime_dependency:{name}"
+
+    def ensure(self, names: Iterable[str], context: FilterContext) -> None:
+        for name in names:
+            dependency = str(name or "").strip()
+            if not dependency:
+                continue
+            cache_key = self.cache_key(dependency)
+            if cache_key in context._cache:
+                continue
+            loader = self._loaders.get(dependency)
+            if not callable(loader):
+                raise RuntimeError(f"未配置规则运行时依赖: {dependency}")
+            context.set_cache(cache_key, loader(context))
+
+
 class RuleExecutionContext:
     """单只股票的规则执行状态。"""
 
@@ -512,8 +546,23 @@ class RuleExecutionContext:
             self.truth_by_key[rule_key] = False
             return False
 
+        callback = self.filter_context.get_cache(RULE_EXECUTION_CALLBACK_CACHE_KEY)
+        if callable(callback):
+            callback({
+                "rule_key": metadata.rule_key,
+                "rule_name": metadata.rule_name,
+                "rule_type": metadata.rule_type,
+                "strategy_category": metadata.strategy_category,
+            })
+
         try:
             implementation = self.registry.create(metadata)
+            required_dependencies = getattr(implementation, "required_dependencies", ())
+            resolver = self.filter_context.get_cache(RUNTIME_DEPENDENCY_RESOLVER_CACHE_KEY)
+            if required_dependencies:
+                if not isinstance(resolver, RuntimeDependencyResolver):
+                    raise RuntimeError("规则需要运行时依赖，但当前任务未配置依赖解析器")
+                resolver.ensure(required_dependencies, self.filter_context)
             if metadata.rule_type == RULE_TYPE_FILTER:
                 output = implementation.apply(self.stock, self.filter_context)
                 truth = output.result in (FilterResult.PASS, FilterResult.SKIP)
@@ -602,15 +651,19 @@ class RuleExpressionEvaluator:
             rule_keys = self._enabled_keys(expression["all_enabled"])
             if not rule_keys:
                 return True
-            values = [context.execute(rule_key) for rule_key in rule_keys]
-            return all(values)
+            for rule_key in rule_keys:
+                if not context.execute(rule_key):
+                    return False
+            return True
 
         if "any_enabled" in expression:
             rule_keys = self._enabled_keys(expression["any_enabled"])
             if not rule_keys:
                 return False
-            values = [context.execute(rule_key) for rule_key in rule_keys]
-            return any(values)
+            for rule_key in rule_keys:
+                if context.execute(rule_key):
+                    return True
+            return False
 
         return False
 

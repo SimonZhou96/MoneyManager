@@ -372,6 +372,8 @@ DEFAULT_RULE_METADATA = (
     ("market_intel_macro_score_link", "市场情报宏观评分", "strategy", "macro", "MarketIntelMacroScoreStrategizer",
      {"threshold": 60, "refresh_policy": "cache_or_refresh", "technical_weight": 0.6, "macro_weight": 0.4},
      True, 230, "基于公司事件、热点板块与新闻证据生成时间感知宏观评分"),
+    ("market_temperature", "市场温度", "strategy", "market", "MarketTemperatureStrategizer",
+     {"min_score": 50}, False, 235, "按需计算市场级温度；只有规则链引用且执行到该规则时才请求外部数据"),
 
     # ── 持有层宏观规则（strategy_category=macro，不参与 technical 筛选） ──
     ("credit_risk_regime", "信用风险环境", "strategy", "macro", "CreditRiskRegimeStrategizer",
@@ -731,6 +733,10 @@ class MarketDatabase:
                     market_cap DECIMAL(28,2) NULL,
                     pe_ratio DECIMAL(20,6) NULL,
                     close_price DECIMAL(20,6) NULL,
+                    processing_status VARCHAR(16) NOT NULL DEFAULT 'completed',
+                    processing_error VARCHAR(512) NULL,
+                    matched_conditions JSON NULL,
+                    rejected_conditions JSON NULL,
                     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
                     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
                     PRIMARY KEY (id),
@@ -744,6 +750,7 @@ class MarketDatabase:
             )
             self._ensure_screening_results_task_scope(cursor)
             self._ensure_screening_result_score_columns(cursor)
+            self._ensure_screening_result_task_detail_columns(cursor)
             self._migrate_add_scoring_columns(cursor)
 
             # watchlist_cache 表（自选股缓存，Futu 失败时兜底）
@@ -800,6 +807,25 @@ class MarketDatabase:
                         cursor.execute(alter_sql)
                     except Exception:
                         pass
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS screening_task_items (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    task_id VARCHAR(36) NOT NULL,
+                    market VARCHAR(8) NOT NULL,
+                    code VARCHAR(32) NOT NULL,
+                    name VARCHAR(255) NULL,
+                    processing_status VARCHAR(16) NOT NULL DEFAULT 'queued',
+                    is_passed TINYINT(1) NULL,
+                    error_message VARCHAR(512) NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_screening_task_item (task_id, code),
+                    KEY idx_screening_task_item_status (task_id, processing_status)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
         self.init_rule_schema()
 
     def _ensure_screening_results_task_scope(self, cursor):
@@ -836,6 +862,22 @@ class MarketDatabase:
             ),
         ]
         for column, alter_sql in score_alters:
+            try:
+                cursor.execute(f"SELECT `{column}` FROM screening_results LIMIT 1")
+            except Exception:
+                try:
+                    cursor.execute(alter_sql)
+                except Exception:
+                    pass
+
+    def _ensure_screening_result_task_detail_columns(self, cursor):
+        columns = [
+            ("processing_status", "ALTER TABLE screening_results ADD COLUMN processing_status VARCHAR(16) NOT NULL DEFAULT 'completed' AFTER close_price"),
+            ("processing_error", "ALTER TABLE screening_results ADD COLUMN processing_error VARCHAR(512) NULL AFTER processing_status"),
+            ("matched_conditions", "ALTER TABLE screening_results ADD COLUMN matched_conditions JSON NULL AFTER processing_error"),
+            ("rejected_conditions", "ALTER TABLE screening_results ADD COLUMN rejected_conditions JSON NULL AFTER matched_conditions"),
+        ]
+        for column, alter_sql in columns:
             try:
                 cursor.execute(f"SELECT `{column}` FROM screening_results LIMIT 1")
             except Exception:
@@ -1505,6 +1547,10 @@ class MarketDatabase:
                 _mysql_safe_float(item.get("market_cap")),
                 _mysql_safe_float(item.get("pe_ratio")),
                 _mysql_safe_float(item.get("close_price")),
+                item.get("processing_status") or "completed",
+                item.get("processing_error"),
+                _json_or_none(item.get("matched_conditions") or []),
+                _json_or_none(item.get("rejected_conditions") or []),
             ))
         rows = [r for r in rows if r[2]]  # code at index 2
         if not rows:
@@ -1513,8 +1559,9 @@ class MarketDatabase:
             INSERT INTO screening_results
                 (task_id, market, code, name, check_date, is_passed, filter_summary,
                  technical_score, macro_score, final_score, score_details, filter_details,
-                 sector, industry, market_cap, pe_ratio, close_price)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 sector, industry, market_cap, pe_ratio, close_price, processing_status,
+                 processing_error, matched_conditions, rejected_conditions)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
                 task_id=VALUES(task_id),
                 name=VALUES(name), is_passed=VALUES(is_passed),
@@ -1526,7 +1573,9 @@ class MarketDatabase:
                 filter_details=VALUES(filter_details),
                 sector=VALUES(sector), industry=VALUES(industry),
                 market_cap=VALUES(market_cap), pe_ratio=VALUES(pe_ratio),
-                close_price=VALUES(close_price)
+                close_price=VALUES(close_price), processing_status=VALUES(processing_status),
+                processing_error=VALUES(processing_error),
+                matched_conditions=VALUES(matched_conditions), rejected_conditions=VALUES(rejected_conditions)
         """
         def operation():
             with self.conn.cursor() as cursor:
@@ -1707,6 +1756,120 @@ class MarketDatabase:
                 cursor.execute(sql, (status, task_id))
 
         self._execute_with_retry(operation, label="update_task_status")
+
+    def complete_screening_task(self, task_id: str, passed_count: int, failed_count: int) -> None:
+        """标记筛选完成并持久化最终通过/拒绝统计。"""
+        sql = """
+            UPDATE screening_tasks
+            SET status='completed', passed_count=%s, failed_count=%s
+            WHERE task_id=%s
+        """
+
+        def operation():
+            with self.conn.cursor() as cursor:
+                cursor.execute(sql, (int(passed_count), int(failed_count), task_id))
+
+        self._execute_with_retry(operation, label="complete_screening_task")
+
+    def create_screening_task_items(self, task_id: str, market: str, stocks: Iterable[dict]) -> None:
+        rows = [
+            (task_id, market, str(item.get("code") or "").strip(), item.get("name") or item.get("code"))
+            for item in stocks if str(item.get("code") or "").strip()
+        ]
+        if not rows:
+            return
+        with self.conn.cursor() as cursor:
+            cursor.executemany(
+                """INSERT IGNORE INTO screening_task_items (task_id, market, code, name)
+                   VALUES (%s,%s,%s,%s)""",
+                rows,
+            )
+
+    def update_screening_task_item(
+        self, task_id: str, code: str, status: str, is_passed: Optional[bool] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """UPDATE screening_task_items
+                   SET processing_status=%s, is_passed=%s, error_message=%s
+                   WHERE task_id=%s AND code=%s""",
+                (status, None if is_passed is None else int(is_passed), error_message, task_id, code),
+            )
+
+    def get_pending_screening_task_items(self, task_id: str) -> List[dict]:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """SELECT code, name FROM screening_task_items
+                   WHERE task_id=%s AND processing_status IN ('queued', 'running') ORDER BY id""",
+                (task_id,),
+            )
+            rows = cursor.fetchall() or []
+        return [{"code": row[0], "name": row[1]} for row in rows]
+
+    def list_screening_task_items(
+        self, task_ids: List[str], market: Optional[str] = None, processing_status: Optional[str] = None,
+        passed: Optional[bool] = None, limit: int = 100, offset: int = 0,
+    ) -> List[dict]:
+        if not task_ids:
+            return []
+        conditions = [f"i.task_id IN ({','.join(['%s'] * len(task_ids))})"]
+        params: List[Any] = list(task_ids)
+        if market:
+            conditions.append("i.market=%s"); params.append(market)
+        if processing_status:
+            conditions.append("i.processing_status=%s"); params.append(processing_status)
+        if passed is not None:
+            conditions.append("i.is_passed=%s"); params.append(int(passed))
+        sql = f"""SELECT i.task_id, i.market, i.code, i.name, i.processing_status, i.is_passed,
+                         i.error_message, r.filter_summary, r.matched_conditions, r.rejected_conditions
+                  FROM screening_task_items i
+                  LEFT JOIN screening_results r ON r.task_id=i.task_id AND r.market=i.market AND r.code=i.code
+                  WHERE {' AND '.join(conditions)} ORDER BY i.updated_at DESC, i.code ASC LIMIT %s OFFSET %s"""
+        params.extend([int(limit), int(offset)])
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall() or []
+        return [{"task_id": r[0], "market": r[1], "code": r[2], "name": r[3],
+                 "processing_status": r[4], "is_passed": None if r[5] is None else bool(r[5]),
+                 "error_message": r[6], "filter_summary": r[7],
+                 "matched_conditions": _decode_json_field(r[8], []),
+                 "rejected_conditions": _decode_json_field(r[9], [])} for r in rows]
+
+    def count_screening_task_items(self, task_ids: List[str], processing_status: Optional[str] = None) -> int:
+        if not task_ids:
+            return 0
+        clauses = [f"task_id IN ({','.join(['%s'] * len(task_ids))})"]
+        params: List[Any] = list(task_ids)
+        if processing_status:
+            clauses.append("processing_status=%s"); params.append(processing_status)
+        with self.conn.cursor() as cursor:
+            cursor.execute(f"SELECT COUNT(*) FROM screening_task_items WHERE {' AND '.join(clauses)}", params)
+            row = cursor.fetchone()
+        return int(row[0] or 0) if row else 0
+
+    def summarize_screening_task_items(self, task_ids: List[str]) -> dict:
+        """Return live task-group progress from immutable task-item snapshots."""
+        if not task_ids:
+            return {"total_count": 0, "completed_count": 0, "passed_count": 0, "error_count": 0}
+        placeholders = ",".join(["%s"] * len(task_ids))
+        sql = f"""
+            SELECT COUNT(*),
+                   SUM(processing_status IN ('completed', 'error')),
+                   SUM(is_passed=1),
+                   SUM(processing_status='error')
+            FROM screening_task_items
+            WHERE task_id IN ({placeholders})
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, task_ids)
+            row = cursor.fetchone() or (0, 0, 0, 0)
+        return {
+            "total_count": int(row[0] or 0),
+            "completed_count": int(row[1] or 0),
+            "passed_count": int(row[2] or 0),
+            "error_count": int(row[3] or 0),
+        }
 
     def get_task_by_id(self, task_id: str) -> Optional[dict]:
         """根据 task_id 获取任务"""
@@ -1904,7 +2067,7 @@ class MarketDatabase:
             SELECT market, code, name, check_date, is_passed, filter_summary,
                    technical_score, macro_score, final_score, score_details,
                    filter_details, sector, industry, market_cap, pe_ratio, close_price,
-                   created_at
+                   processing_status, processing_error, matched_conditions, rejected_conditions, created_at
             FROM screening_results
             WHERE {where_clause}
             ORDER BY is_passed DESC, code ASC
@@ -1932,7 +2095,11 @@ class MarketDatabase:
                 "market_cap": float(row[13]) if row[13] is not None else None,
                 "pe_ratio": float(row[14]) if row[14] is not None else None,
                 "close_price": float(row[15]) if row[15] is not None else None,
-                "created_at": str(row[16]) if row[16] else None,
+                "processing_status": row[16] or "completed",
+                "processing_error": row[17],
+                "matched_conditions": _decode_json_field(row[18], []),
+                "rejected_conditions": _decode_json_field(row[19], []),
+                "created_at": str(row[20]) if row[20] else None,
             }
             for row in rows
         ]

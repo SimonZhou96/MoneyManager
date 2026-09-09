@@ -29,6 +29,17 @@ def run_web_screening_job(
     db.close()
 
     task_ids: List[str] = []
+
+    def record_market_task(task_id: str) -> None:
+        if task_id in task_ids:
+            return
+        task_ids.append(task_id)
+        progress_db = MarketDatabase(mysql_config)
+        try:
+            progress_db.update_web_screening_job(job_id, "running", task_ids=task_ids)
+        finally:
+            progress_db.close()
+
     try:
         root = Path(artifact_root)
         root.mkdir(parents=True, exist_ok=True)
@@ -52,9 +63,10 @@ def run_web_screening_job(
                 enable_ai_analysis=enable_ai_analysis,
                 chain_key=chain_key,
                 pool_types=pool_types,
+                on_task_created=record_market_task,
             )
             if result.task_id:
-                task_ids.append(result.task_id)
+                record_market_task(result.task_id)
             _record_artifacts(mysql_config, result.task_id or job_id, market, result.csv_paths)
 
             if send_feishu and webhook_url and result.csv_paths:
@@ -74,6 +86,43 @@ def run_web_screening_job(
             finished=True,
         )
         db3.close()
+        raise
+
+
+def resume_web_screening_job(mysql_config: MySqlConfig, job_id: str, artifact_root: str) -> None:
+    """Continue only unfinished child-task items for a previously interrupted web job."""
+    db = MarketDatabase(mysql_config)
+    job = db.get_web_screening_job(job_id)
+    if not job:
+        db.close()
+        return
+    db.update_web_screening_job(job_id, "running")
+    db.close()
+    options = job.get("options") or {}
+    params = get_default_screening_params()
+    if options.get("chain_key"):
+        params["chain_key"] = options["chain_key"]
+    try:
+        for task_id in job.get("task_ids") or []:
+            task_db = MarketDatabase(mysql_config)
+            task = task_db.get_task_by_id(task_id)
+            pending = task_db.get_pending_screening_task_items(task_id)
+            task_db.close()
+            if not task or not pending:
+                continue
+            run_market_screening_worker(
+                mysql_config=mysql_config, market=task["market"], timeframe=task["timeframe"],
+                default_params=params, csv_base=str(Path(artifact_root) / "screening_result"),
+                today_str=date.today().strftime("%Y-%m-%d"), chain_key=options.get("chain_key"),
+                pool_types=options.get("pool_types"), task_id=task_id,
+            )
+        final_db = MarketDatabase(mysql_config)
+        final_db.update_web_screening_job(job_id, "completed", finished=True)
+        final_db.close()
+    except Exception as exc:
+        failed_db = MarketDatabase(mysql_config)
+        failed_db.update_web_screening_job(job_id, "failed", error_message=f"{type(exc).__name__}: {exc}")
+        failed_db.close()
         raise
 
 

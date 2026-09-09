@@ -104,6 +104,39 @@ class Strategizer(ABC):
         pass
 
 
+class MarketTemperatureStrategizer(Strategizer):
+    """Market-level strategy backed by a lazily resolved runtime dependency."""
+
+    required_dependencies = ("market_temperature",)
+
+    def __init__(self, min_score: float = 50.0, name: str = "MarketTemperatureStrategizer", enabled: bool = True):
+        super().__init__(name=name, enabled=enabled)
+        self.min_score = float(min_score)
+
+    def apply(self, stock: StockInfo, context: FilterContext) -> StrategizerOutput:
+        temperature = context.get_cache("runtime_dependency:market_temperature")
+        dimensions = [
+            getattr(temperature, field, None)
+            for field in ("credit_risk", "market_breadth", "liquidity", "policy_event", "commodity_shock")
+        ]
+        scores = [float(item.score) for item in dimensions if item is not None and getattr(item, "score", None) is not None]
+        if not scores:
+            return StrategizerOutput(
+                name=self.name,
+                satisfied=False,
+                reason="市场温度数据不可用",
+                details={"min_score": self.min_score},
+            )
+        score = sum(scores) / len(scores)
+        satisfied = score >= self.min_score
+        return StrategizerOutput(
+            name=self.name,
+            satisfied=satisfied,
+            reason=f"市场温度 {score:.1f} 分（门槛 {self.min_score:.1f} 分）",
+            details={"score": round(score, 2), "min_score": self.min_score},
+        )
+
+
 class StrategizerChain:
     """
     策略器链：依次执行多个策略器，任意一个满足则整链视为满足。

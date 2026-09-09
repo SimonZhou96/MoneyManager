@@ -48,7 +48,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 # 添加项目根目录到 path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -584,6 +584,8 @@ def run_screening_for_market(
     verbose: bool = False,
     chain_key: Optional[str] = None,
     pool_types: Optional[List[str]] = None,
+    task_id: Optional[str] = None,
+    on_task_created: Optional[Callable[[str], None]] = None,
 ) -> Tuple[Optional[str], List[dict]]:
     """
     对指定市场的合并股票池执行筛选。
@@ -596,23 +598,37 @@ def run_screening_for_market(
 
     pool_types = normalize_pool_types(pool_types or CANONICAL_POOL_TYPES)
     watchlist = get_merged_pool_stocks(db, market, pool_types=pool_types)
+    if task_id:
+        pending = db.get_pending_screening_task_items(task_id)
+        if pending:
+            pending_codes = {item["code"] for item in pending}
+            watchlist = [item for item in watchlist if item.get("code") in pending_codes]
+        else:
+            db.close()
+            return task_id, load_passed_screening_records(mysql_config, task_id, market)
     if not watchlist:
         db.close()
         return None, []
 
-    task_id = str(uuid.uuid4())
     task_params = dict(default_params or {})
     task_params["pool_types"] = pool_types
     if chain_key:
         task_params["chain_key"] = chain_key
-    db.create_screening_task(
-        task_id=task_id,
-        market=market,
-        timeframe=timeframe,
-        total_count=len(watchlist),
-        params_json=task_params,
-        check_date=date.today(),
-    )
+    if task_id is None:
+        task_id = str(uuid.uuid4())
+        db.create_screening_task(
+            task_id=task_id,
+            market=market,
+            timeframe=timeframe,
+            total_count=len(watchlist),
+            params_json=task_params,
+            check_date=date.today(),
+        )
+        db.create_screening_task_items(task_id, market, watchlist)
+        if on_task_created:
+            on_task_created(task_id)
+    else:
+        db.update_task_status(task_id, "running")
     db.close()
 
     run_screening_task(
@@ -921,6 +937,8 @@ def run_market_screening_worker(
     enable_ai_analysis: bool = False,
     chain_key: Optional[str] = None,
     pool_types: Optional[List[str]] = None,
+    task_id: Optional[str] = None,
+    on_task_created: Optional[Callable[[str], None]] = None,
 ) -> MarketScreeningResult:
     """
     Execute screening and CSV export for one market.
@@ -950,6 +968,10 @@ def run_market_screening_worker(
         )
         if chain_key:
             screening_kwargs["chain_key"] = chain_key
+        if task_id:
+            screening_kwargs["task_id"] = task_id
+        if on_task_created:
+            screening_kwargs["on_task_created"] = on_task_created
         task_id, passed = run_screening_for_market(**screening_kwargs)
         if not task_id:
             print(f"  {market_label(market)} 未创建筛选任务，跳过")

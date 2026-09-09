@@ -194,8 +194,8 @@ class YFinanceKlineFetcher(KlineFetcherBase):
         if self._session is None:
             # yfinance.download() otherwise creates a new curl_cffi session on
             # every single-symbol request and never closes the replaced session.
-            from yfinance._http import new_session
-            self._session = new_session()
+            from curl_cffi import requests
+            self._session = requests.Session(impersonate="chrome")
             self._owns_session = True
         return self._session
 

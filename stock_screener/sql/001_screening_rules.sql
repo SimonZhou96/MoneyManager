@@ -102,6 +102,14 @@ FROM (
 
 INSERT IGNORE INTO screening_rule_metadata
     (market, rule_key, rule_name, rule_type, strategy_category, implementation, params_json, enabled, display_order, description)
+SELECT markets.market, 'market_temperature', '市场温度', 'strategy', 'market', 'MarketTemperatureStrategizer',
+       '{"min_score":50}', 0, 235, '按需计算市场级温度；只有规则链引用且执行到该规则时才请求外部数据'
+FROM (
+    SELECT 'HK' AS market UNION ALL SELECT 'US' UNION ALL SELECT 'A'
+) AS markets;
+
+INSERT IGNORE INTO screening_rule_metadata
+    (market, rule_key, rule_name, rule_type, strategy_category, implementation, params_json, enabled, display_order, description)
 SELECT markets.market, rules.rule_key, rules.rule_name, 'strategy', 'technical', 'TechnicalPatternStrategizer',
        rules.params_json, 1, rules.display_order, rules.description
 FROM (

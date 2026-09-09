@@ -14,6 +14,7 @@ from rule_engine import (
     RuleMetadata,
     RuleRegistry,
     RuleRepository,
+    RuntimeDependencyResolver,
 )
 from strategizers import Strategizer, StrategizerOutput
 
@@ -47,6 +48,18 @@ class StaticStrategizer(Strategizer):
             satisfied=self.satisfied,
             result=self.result,
             reason="strategy pass" if self.satisfied else "strategy fail",
+        )
+
+
+class MarketDependentStrategizer(Strategizer):
+    required_dependencies = ("market_temperature",)
+
+    def apply(self, stock, context):
+        temperature = context.get_cache("runtime_dependency:market_temperature")
+        return StrategizerOutput(
+            name=self.name,
+            satisfied=temperature == "warm",
+            reason="市场温度满足" if temperature == "warm" else "市场温度不满足",
         )
 
 
@@ -90,6 +103,10 @@ def registry():
             name=params.get("name", "StaticStrategizer"),
             result=params.get("result", ""),
         ),
+    )
+    r.register_strategy(
+        "MarketDependentStrategizer",
+        lambda params: MarketDependentStrategizer(name="MarketDependentStrategizer"),
     )
     return r
 
@@ -174,6 +191,79 @@ class FakeMacroScorer:
 
 
 class RuleEngineTest(unittest.TestCase):
+    def test_any_enabled_short_circuits_before_later_rule(self):
+        engine = RuleEngine(
+            [
+                metadata("first", "strategy", "StaticStrategizer", params={"satisfied": True, "name": "第一规则"}),
+                metadata("later", "strategy", "StaticStrategizer", params={"satisfied": False, "name": "后续规则"}),
+            ],
+            chain({"any_enabled": ["first", "later"]}),
+            registry=registry(),
+        )
+
+        result = engine.evaluate_stock(
+            StockInfo(market="HK", code="HK.00001", name="Test"),
+            FilterContext(check_date=date(2026, 1, 1), market="HK"),
+        )
+
+        self.assertTrue(result.passed)
+        self.assertEqual([output.filter_name for output in result.filter_outputs], ["第一规则"])
+
+    def test_runtime_dependency_is_loaded_lazily_once_when_rule_executes(self):
+        calls = []
+        resolver = RuntimeDependencyResolver({
+            "market_temperature": lambda context: calls.append(context.market) or "warm",
+        })
+        engine = RuleEngine(
+            [metadata("market_temperature", "strategy", "MarketDependentStrategizer")],
+            chain({"ref": "market_temperature"}),
+            registry=registry(),
+        )
+        context = FilterContext(check_date=date(2026, 1, 1), market="HK")
+        context.set_cache("runtime_dependency_resolver", resolver)
+
+        first = engine.evaluate_stock(StockInfo(market="HK", code="HK.00001", name="One"), context)
+        second = engine.evaluate_stock(StockInfo(market="HK", code="HK.00002", name="Two"), context)
+
+        self.assertTrue(first.passed)
+        self.assertTrue(second.passed)
+        self.assertEqual(calls, ["HK"])
+
+    def test_unexecuted_runtime_dependency_is_never_loaded(self):
+        calls = []
+        resolver = RuntimeDependencyResolver({
+            "market_temperature": lambda context: calls.append(context.market) or "warm",
+        })
+        engine = RuleEngine(
+            [
+                metadata("first", "strategy", "StaticStrategizer", params={"satisfied": True, "name": "第一规则"}),
+                metadata("market_temperature", "strategy", "MarketDependentStrategizer"),
+            ],
+            chain({"any_enabled": ["first", "market_temperature"]}),
+            registry=registry(),
+        )
+        context = FilterContext(check_date=date(2026, 1, 1), market="HK")
+        context.set_cache("runtime_dependency_resolver", resolver)
+
+        result = engine.evaluate_stock(StockInfo(market="HK", code="HK.00001", name="Test"), context)
+
+        self.assertTrue(result.passed)
+        self.assertEqual(calls, [])
+
+    def test_rule_execution_callback_reports_rule_type_and_category(self):
+        events = []
+        engine = RuleEngine(
+            [metadata("technical", "strategy", "StaticStrategizer", params={"satisfied": True}, strategy_category="technical")],
+            chain({"ref": "technical"}),
+            registry=registry(),
+        )
+        context = FilterContext(check_date=date(2026, 1, 1), market="HK")
+        context.set_cache("rule_execution_callback", events.append)
+
+        result = engine.evaluate_stock(StockInfo(market="HK", code="HK.00001", name="Test"), context)
+
+        self.assertTrue(result.passed)
+        self.assertEqual(events, [{"rule_key": "technical", "rule_name": "technical", "rule_type": "strategy", "strategy_category": "technical"}])
     def evaluate(self, metadata_items, expression):
         engine = RuleEngine(metadata_items, chain(expression), registry=registry())
         return engine.evaluate_stock(

@@ -10,7 +10,7 @@ from filters import FilterContext, StockInfo
 from rule_engine import RuleMetadata, RuleRegistry
 from strategizers import TechnicalPatternStrategizer
 from strategy import analyze_technical_pattern
-from api.screen_service import get_strategy_condition_labels
+from api.screen_service import build_condition_labels, get_strategy_condition_labels
 
 
 def _df(rows):
@@ -30,6 +30,19 @@ def _df(rows):
 
 
 class TechnicalPatternTest(unittest.TestCase):
+    def test_condition_labels_use_rule_names_and_never_leak_internal_keys(self):
+        labels = build_condition_labels([
+            {"rule_key": "ema_breakout", "rule_name": "均线突破", "filter_name": "EMABreakoutStrategizer", "result": "pass", "reason": "收盘价突破均线"},
+            {"rule_key": "profitability", "rule_name": "盈利能力", "filter_name": "ProfitabilityFilter", "result": "fail", "reason": "净利润为负"},
+            {"rule_key": "unknown_rule", "filter_name": "UnknownRule", "result": "error", "reason": "数据缺失"},
+        ])
+
+        self.assertEqual(labels["matched_conditions"], [{"label": "均线突破", "reason": "收盘价突破均线"}])
+        self.assertEqual(labels["rejected_conditions"], [
+            {"label": "盈利能力", "reason": "净利润为负"},
+            {"label": "未命名规则", "reason": "数据缺失"},
+        ])
+
     def test_analyze_bullish_engulfing_detects_latest_two_candles(self):
         df = _df([
             (10.0, 10.3, 9.7, 9.8),

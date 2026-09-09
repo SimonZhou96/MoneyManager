@@ -28,7 +28,7 @@ from filters import (
 from kline_fetcher import KlineFetcherFactory
 from market import normalize_market, market_label
 from market_intel.macro_scoring import aggregate_rule_scores
-from rule_engine import RuleEngine, RuleRegistry, RuleRepository
+from rule_engine import RuleEngine, RuleRegistry, RuleRepository, RuntimeDependencyResolver
 from strategizers import (
     StrategizerChain,
     ZuoYiStrategizer,
@@ -110,6 +110,31 @@ def get_strategy_condition_labels(filter_name: str, details: Optional[dict] = No
 
     label = STRATEGY_NAME_MAP.get(filter_name)
     return [label] if label else []
+
+
+def build_condition_labels(filter_details: list[dict]) -> dict:
+    """Build API-safe Chinese condition labels from rule evaluation details."""
+    matched_conditions = []
+    rejected_conditions = []
+    for item in filter_details or []:
+        result = str(item.get("result") or "").lower()
+        if result not in {"pass", "fail", "error"}:
+            continue
+        label = str(item.get("rule_name") or "").strip()
+        if not label:
+            strategy_labels = get_strategy_condition_labels(
+                str(item.get("filter_name") or ""), item.get("details") or {},
+            )
+            label = strategy_labels[0] if strategy_labels else "未命名规则"
+        payload = {"label": label, "reason": str(item.get("reason") or "")}
+        if result == "pass":
+            matched_conditions.append(payload)
+        else:
+            rejected_conditions.append(payload)
+    return {
+        "matched_conditions": matched_conditions,
+        "rejected_conditions": rejected_conditions,
+    }
 
 
 def _json_safe_value(value):
@@ -323,6 +348,7 @@ def run_screening_task(
     watchlist: Optional[list] = None,
     progress_log: bool = False,
     chain_key: Optional[str] = None,
+    rule_progress_callback: Optional[Callable[[dict], None]] = None,
 ):
     """
     执行筛选任务（后台运行）
@@ -336,6 +362,7 @@ def run_screening_task(
         verbose: 是否输出详细日志
         watchlist: 自选股列表 [{"code", "name", ...}]，非空时仅筛选此列表不查 DB
         progress_log: 是否输出进度日志（当前处理到哪只股票）
+        rule_progress_callback: 每次实际开始执行原子规则时接收其元数据
     """
     db = None
     try:
@@ -432,7 +459,10 @@ def run_screening_task(
                     print("警告：数据库规则链未引用任何规则")
                 db.update_task_status(task_id, "completed")
                 return
-            is_unified_bullish_top20 = rule_engine.chain_config.chain_key == UNIFIED_BULLISH_TOP20_CHAIN_KEY
+            is_unified_bullish_top20 = (
+                rule_engine.chain_config.chain_key == UNIFIED_BULLISH_TOP20_CHAIN_KEY
+                and not bool(params.get("single_stock_mode"))
+            )
             needs_kline = rule_engine.requires_kline()
             if is_unified_bullish_top20:
                 needs_kline = True
@@ -487,6 +517,16 @@ def run_screening_task(
         )
         # 注入 timeframe 供 AvgDailyVolumeFilter 使用
         context.timeframe = timeframe
+        if callable(rule_progress_callback):
+            context.set_cache("rule_execution_callback", rule_progress_callback)
+        context.set_cache(
+            "runtime_dependency_resolver",
+            RuntimeDependencyResolver({
+                "market_temperature": lambda dependency_context: MarketCache().get_or_compute(
+                    dependency_context.market
+                ),
+            }),
+        )
         requires_market_intel_macro_score = (
             rule_engine is not None
             and hasattr(rule_engine, "requires_market_intel_macro_score")
@@ -551,9 +591,9 @@ def run_screening_task(
         macro_analysis_cache: Dict[str, object] = {}
         macro_warning_cache: Dict[str, list[str]] = {}
 
-        # ── Pre-compute MarketTemperature for scoring ──
-        market_cache = MarketCache()
-        market_temp = market_cache.get_or_compute(market)
+        # Market-level data is resolved lazily by the rule that declares it.
+        market_cache = None
+        market_temp = None
         entry_scorer = EntryScorer()
         holding_scorer = HoldingScorer()
 
@@ -565,6 +605,7 @@ def run_screening_task(
         
         for i, si in enumerate(stock_infos, 1):
             live_stocks[si.code] = si
+            db.update_screening_task_item(task_id, si.code, "running")
             if progress_log:
                 print(f"[{i}/{total_count}] 处理中: {si.code} - {si.name or si.code}")
             # 更新进度
@@ -822,6 +863,7 @@ def run_screening_task(
                 "market_cap": stock.market_cap,
                 "pe_ratio": stock.pe_ratio,
                 "close_price": close_price,
+                **build_condition_labels(filter_details),
             }
             
             if is_unified_bullish_top20:
@@ -835,6 +877,7 @@ def run_screening_task(
             else:
                 # 立即写入数据库
                 db.upsert_screening_results(check_date=context.check_date, results=[db_record])
+                db.update_screening_task_item(task_id, stock.code, "completed", result.passed)
 
         if is_unified_bullish_top20:
             selected = select_unified_bullish_top_candidates(unified_candidates, top_n=UNIFIED_BULLISH_TOP_N)
@@ -956,6 +999,8 @@ def run_screening_task(
                         "satisfied_strategies": labels,
                     })
             db.upsert_screening_results(check_date=context.check_date, results=pending_screening_records)
+            for record in pending_screening_records:
+                db.update_screening_task_item(task_id, record["code"], "completed", bool(record.get("is_passed")))
         
         # 所有股票处理完成后的总结
         if verbose:
@@ -990,8 +1035,8 @@ def run_screening_task(
                 print(f"  ... 其余 {len(failed_stocks) - detail_limit} 只略")
             print()
         
-        # 更新任务状态为完成
-        db.update_task_status(task_id, "completed")
+        # 更新任务状态和最终统计，供任务详情接口直接展示。
+        db.complete_screening_task(task_id, passed_count, failed_count)
     
     except Exception as e:
         print(f"筛选任务失败: {str(e)}")
