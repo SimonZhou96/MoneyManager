@@ -11,6 +11,7 @@ stock_screener/web_frontend/dist/
 stock_screener/web_frontend/.npm-cache/
 stock_screener/web_frontend/.vite/
 .worktrees/
+.claude/worktrees/
 
 # Regenerable Graphify cache
 graphify-out/cache/
