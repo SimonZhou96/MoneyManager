@@ -2,7 +2,7 @@
 
 ## Goal
 
-Provide one interactive shell entrypoint for MoneyManager stock screener, option lab, agent, and Quant Lab web startup scenarios.
+Provide one interactive shell entrypoint for MoneyManager stock screener, option lab, and Quant Lab web startup scenarios.
 
 ## Scope
 
@@ -14,10 +14,6 @@ The root user-facing entrypoint is `stock_screener/run_moneymanager.sh`. Existin
 
 - Stock screener: `scripts/run_screening.sh`
 - Option Lab shell: `scripts/run_option_lab_shell.sh`
-- Python local agent: `scripts/run_local_agent.sh`
-- Go agent worker: `scripts/run_go_agent.sh`
-- Go agent one-shot worker: `scripts/run_go_agent_once.sh`
-- Go agent tests: `scripts/test_go_agent.sh`
 - Backend API: `python -m uvicorn web.main:app`
 - Frontend web: `npm run dev` in `web_frontend`
 - Full stack web: starts backend in the background and frontend in the foreground, with cleanup on exit

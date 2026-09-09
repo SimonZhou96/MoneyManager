@@ -8,20 +8,7 @@
       <change beforePath="$PROJECT_DIR$/.claude/worktrees/dynamic-dazzling-charm" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/worktrees/dynamic-dazzling-charm" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.claude/worktrees/p0-kline-fixes" beforeDir="false" afterPath="$PROJECT_DIR$/.claude/worktrees/p0-kline-fixes" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/canvas-verify.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/fix-verify-final.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/fix-verify-initial.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/step1-initial.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/step2-chain-selected.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/step3-new-chain.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/step4-reselect.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/graphify-out/.graphify_labels.json" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/graphify-out/.graphify_labels.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/graphify-out/GRAPH_REPORT.md" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/graphify-out/GRAPH_REPORT.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/graphify-out/graph.json" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/graphify-out/graph.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/graphify-out/manifest.json" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/graphify-out/manifest.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/industryTopology/IndustryTopologyPanel.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/industryTopology/IndustryTopologyPanel.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/industryTopology/TopologyCanvas.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/features/industryTopology/TopologyCanvas.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_screener/web_frontend/src/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/stock_screener/web_frontend/src/styles.css" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_screener/.superpowers/brainstorm/43271-1782813527/state/server-info" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -198,7 +185,7 @@
       <workItem from="1781143829969" duration="6008000" />
       <workItem from="1781662028858" duration="597000" />
       <workItem from="1782214942611" duration="17846000" />
-      <workItem from="1782716618593" duration="5211000" />
+      <workItem from="1782716618593" duration="11811000" />
     </task>
     <servers />
   </component>

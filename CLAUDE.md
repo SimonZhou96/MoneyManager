@@ -540,3 +540,23 @@ Detailed context lives in the memory directory. Read the relevant files before w
 - 修改 `industry_relations` 字段时必须同时更新 `sql/industry_topology.sql` 和 `MarketDatabase.init_industry_topology_schema()`，并考虑旧库 ALTER。
 - 关系轮询期间不要全量刷新行情；只刷新新节点或显式 force refresh。
 - 图谱接口当前 graph payload 里的 quote 字段仍可能是 pending，前端依赖 `/quotes` 批量接口补齐；如要服务端直接返回 cached quote，需要在 `TopologyService` 聚合层处理。
+
+### 2026-08-05 — 进程复用与运行时资源生命周期（每次改动必检）
+
+**适用范围**：任何代码改动都必须考虑当前代码是在一次性 CLI、长时间筛选任务、后台 worker、Web 服务进程、桌面进程，还是多线程/多进程环境中运行。不要默认“函数返回后进程状态会自动恢复”。
+
+**本次根因**：全市场筛选会顺序处理 1,000+ 标的。旧的 `YFinanceKlineFetcher` 对每只标的调用 `yf.download()` 时都让 yfinance 新建 HTTP session；yfinance 的进程级 `YfData` 单例替换 session 时未关闭旧 session，文件描述符随标的数增长，最终导致 yfinance SQLite cache 报 `OperationalError('unable to open database file')`，并可能继续演变为 `Errno 24: Too many open files`。
+
+**已建立的所有权边界**：
+- `YFinanceKlineFetcher` 懒创建并复用一个 session，fetcher 自己拥有的 session 由 `close()` 释放。
+- `api.screen_service.run_screening_task()` 与 `MainForceRiskService.close()` 必须在 `finally`/收尾路径关闭其创建的 fetcher 链；异常路径同样适用。
+- 单标的 K 线接口不应创建无收益 worker；传入受管理 session，并使用 `threads=False`。
+
+**后续改动强制检查项**：
+1. 写代码前，列出新增或修改对象的生命周期与所有者：HTTP/DB session、文件、线程池、Futu context、缓存、定时器、子进程等由谁创建、复用、关闭。
+2. 长循环、后台任务和 Web/桌面常驻进程中，禁止每次迭代隐式新建资源；必须复用受所有者管理的实例，并在最外层 `finally` 清理。
+3. 新增入口点、worker 或并发路径时，确认资源初始化是否线程安全，关闭是否幂等，并补充成功与异常退出的释放测试；必要时采样 FD/连接/线程数验证不会随请求或标的数线性增长。
+4. 源码修改不会热加载到已经运行的 Python 进程。涉及运行时资源、配置或依赖初始化的修复，交付时必须明确需要重启哪些 worker/筛选任务/服务；旧进程输出不能作为新代码的验证证据。
+5. 排障时先区分“旧进程仍在执行旧代码”“资源泄漏”“缓存/权限路径错误”“外部网络故障”，不要仅根据相同错误文本直接归因。
+
+**验证基线**：连续 5 个 yfinance 单标的请求在首次初始化后 FD 保持稳定；覆盖 session 复用、fetcher 关闭、主力风险收尾和全市场筛选收尾的回归测试必须保持通过。

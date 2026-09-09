@@ -6,7 +6,7 @@
 
 **Architecture:** Implement the backend as a new `stock_screener/option_lab` package with models, market data adapters, strategy/risk logic, persistence helpers, service orchestration, and monitoring. Add `/api/options/*` routes via a focused `web/options.py` router, add a Chinese `interactive_option_lab.py` CLI implementation that reuses the same service layer, and expose it through a user-facing `run_option_lab_shell.sh` interactive shell entrypoint. Add a compact `期权实验室` page to the existing React single-file frontend, with all user-facing copy in Chinese.
 
-**Tech Stack:** Python 3, unittest, PyMySQL, pandas-compatible normalized data, FastAPI/Pydantic, React + TypeScript + Vite, existing MoneyManager MySQL/Feishu/local-agent conventions.
+**Tech Stack:** Python 3, unittest, PyMySQL, pandas-compatible normalized data, FastAPI/Pydantic, React + TypeScript + Vite, existing MoneyManager MySQL/Feishu conventions.
 
 ---
 

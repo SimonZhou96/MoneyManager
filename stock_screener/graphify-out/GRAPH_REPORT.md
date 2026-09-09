@@ -1,16 +1,16 @@
 # Graph Report - stock_screener  (2026-09-09)
 
 ## Corpus Check
-- 428 files · ~444,374 words
+- 428 files · ~444,392 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 9071 nodes · 23940 edges · 414 communities (341 shown, 73 thin omitted)
+- 9072 nodes · 23941 edges · 431 communities (357 shown, 74 thin omitted)
 - Extraction: 77% EXTRACTED · 23% INFERRED · 0% AMBIGUOUS · INFERRED: 5577 edges (avg confidence: 0.51)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `bfa8681d`
+- Built from commit: `d4a14837`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -344,6 +344,7 @@
 - [[_COMMUNITY_Community 330|Community 330]]
 - [[_COMMUNITY_Community 331|Community 331]]
 - [[_COMMUNITY_Community 332|Community 332]]
+- [[_COMMUNITY_Community 333|Community 333]]
 - [[_COMMUNITY_Community 334|Community 334]]
 - [[_COMMUNITY_Community 335|Community 335]]
 - [[_COMMUNITY_Community 336|Community 336]]
@@ -411,17 +412,34 @@
 - [[_COMMUNITY_Community 400|Community 400]]
 - [[_COMMUNITY_Community 401|Community 401]]
 - [[_COMMUNITY_Community 402|Community 402]]
+- [[_COMMUNITY_Community 403|Community 403]]
+- [[_COMMUNITY_Community 404|Community 404]]
 - [[_COMMUNITY_Community 405|Community 405]]
+- [[_COMMUNITY_Community 406|Community 406]]
 - [[_COMMUNITY_Community 407|Community 407]]
 - [[_COMMUNITY_Community 408|Community 408]]
 - [[_COMMUNITY_Community 409|Community 409]]
+- [[_COMMUNITY_Community 410|Community 410]]
+- [[_COMMUNITY_Community 411|Community 411]]
 - [[_COMMUNITY_Community 412|Community 412]]
 - [[_COMMUNITY_Community 413|Community 413]]
 - [[_COMMUNITY_Community 414|Community 414]]
 - [[_COMMUNITY_Community 415|Community 415]]
+- [[_COMMUNITY_Community 416|Community 416]]
+- [[_COMMUNITY_Community 417|Community 417]]
 - [[_COMMUNITY_Community 418|Community 418]]
 - [[_COMMUNITY_Community 419|Community 419]]
 - [[_COMMUNITY_Community 420|Community 420]]
+- [[_COMMUNITY_Community 421|Community 421]]
+- [[_COMMUNITY_Community 422|Community 422]]
+- [[_COMMUNITY_Community 423|Community 423]]
+- [[_COMMUNITY_Community 424|Community 424]]
+- [[_COMMUNITY_Community 425|Community 425]]
+- [[_COMMUNITY_Community 426|Community 426]]
+- [[_COMMUNITY_Community 427|Community 427]]
+- [[_COMMUNITY_Community 428|Community 428]]
+- [[_COMMUNITY_Community 429|Community 429]]
+- [[_COMMUNITY_Community 430|Community 430]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `MarketDatabase` - 420 edges
@@ -447,27 +465,27 @@
 - `float` --uses--> `MarketDatabase`  [INFERRED]
   tests/debug_topology.py → db.py
 
-## Communities (414 total, 73 thin omitted)
+## Communities (431 total, 74 thin omitted)
 
 ### Community 0 - "Community 0"
-Cohesion: 0.31
-Nodes (17): int, MarketDatabase, str, fetch_and_save_all_etf(), fetch_and_save_best_stocks(), fetch_and_save_industry_top5(), fetch_and_save_major_index_constituents(), fetch_and_save_recent_ipo_2y() (+9 more)
+Cohesion: 0.19
+Nodes (24): int, MarketDatabase, MySqlConfig, str, Any, fetch_and_save_all_etf(), fetch_and_save_best_stocks(), fetch_and_save_industry_top5() (+16 more)
 
 ### Community 1 - "Community 1"
-Cohesion: 0.11
-Nodes (23): KlineFetcherBase, int, KlineFetcherBase, KlineFetcherBase, _env_int(), from_env(), FutuOpenDMainForceDataProvider, MainForceDataProvider (+15 more)
+Cohesion: 0.13
+Nodes (18): KlineFetcherBase, int, KlineFetcherBase, KlineFetcherBase, FutuOpenDMainForceDataProvider, MainForceRiskAnalyzer, MainForceRiskService, NullMainForceDataProvider (+10 more)
 
 ### Community 2 - "Community 2"
 Cohesion: 0.09
 Nodes (106): _build_macro_signal_row(), create_and_start_screening_task(), create_filter_chain_from_params(), create_rule_engine_from_db(), create_strategizer_chain_from_params(), _json_safe_value(), bool, FilterOutput (+98 more)
 
 ### Community 3 - "Community 3"
-Cohesion: 0.08
-Nodes (80): ManualHotNewsConfig, NullOptionMacroAnalysisProvider, AnalysisSettings, datetime, float, SignalAnalysisResult, StrategyCandidate, SignalOptionMacroAnalysisProvider (+72 more)
+Cohesion: 0.13
+Nodes (73): ManualHotNewsConfig, AnalysisSettings, float, SignalAnalysisResult, StrategyCandidate, ScreeningSignalRow, AnalysisStep, ApplyManualHotNewsStep (+65 more)
 
 ### Community 4 - "Community 4"
-Cohesion: 0.10
-Nodes (52): cache_row_is_valid(), _dedupe(), _dict_of_link_lists(), _direction_label(), expand_option_company_documents(), from_cache_row(), _instrument_type_for_market(), _list() (+44 more)
+Cohesion: 0.17
+Nodes (34): apply_evidence_to_result(), build_company_source_queries(), build_data_gaps(), build_evidence_links(), build_factor_citations(), clean_factor_list(), clean_result_factors(), dedupe() (+26 more)
 
 ### Community 5 - "Community 5"
 Cohesion: 0.09
@@ -478,12 +496,12 @@ Cohesion: 0.02
 Nodes (68): analyzeErrorSuggestions(), Artifact, AtomicRule, CodePreviewRow, codeScreeningStatusLabel(), COLUMN_LABELS, commonRuleChains(), compactFailureReasonItems() (+60 more)
 
 ### Community 7 - "Community 7"
-Cohesion: 0.06
-Nodes (71): _analyze_candlestick_pattern(), _analyze_indicator_pattern(), analyze_stock_ema_breakout(), analyze_technical_pattern(), _body_midpoint(), _build_zuoyi_signal(), calculate_atr(), calculate_bollinger_bands() (+63 more)
+Cohesion: 0.05
+Nodes (84): _analyze_candlestick_pattern(), _analyze_indicator_pattern(), analyze_stock_ema_breakout(), analyze_technical_pattern(), _body_midpoint(), _build_zuoyi_signal(), calculate_atr(), calculate_bollinger_bands() (+76 more)
 
 ### Community 8 - "Community 8"
-Cohesion: 0.10
-Nodes (31): Any, bool, str, AkshareStockNameProvider, _code_aliases(), _contains_chinese(), DatabaseStockNameProvider, default() (+23 more)
+Cohesion: 0.11
+Nodes (33): Any, bool, str, AkshareStockNameProvider, _code_aliases(), _contains_chinese(), DatabaseStockNameProvider, default() (+25 more)
 
 ### Community 9 - "Community 9"
 Cohesion: 0.07
@@ -491,43 +509,43 @@ Nodes (51): Any, bool, int, str, AkshareSectorProvider, _clean(), DatabaseSector
 
 ### Community 10 - "Community 10"
 Cohesion: 0.09
-Nodes (10): cache_key_for_macro_analysis(), screening_row_from_snapshot(), FakeOptionMarketDataProvider, InMemoryOptionLabRepository, FailingMacroProvider, OptionLabMacroAnalysisTests, RecordingMacroProvider, RecordingSearchProvider (+2 more)
+Nodes (11): cache_key_for_macro_analysis(), FakeOptionMarketDataProvider, InMemoryOptionLabRepository, strategy_label(), FailingMacroProvider, OptionLabMacroAnalysisTests, RecordingMacroProvider, RecordingSearchProvider (+3 more)
 
 ### Community 11 - "Community 11"
 Cohesion: 0.06
 Nodes (71): bool, date, MarketDatabase, MySqlConfig, str, SectorInfo, env_flag(), MainForceRiskServiceFactory (+63 more)
 
 ### Community 12 - "Community 12"
-Cohesion: 0.06
-Nodes (93): _append_main_force_detail(), _apply_sentiment_to_company_documents(), _brief_conclusion(), _build_data_source_status(), _build_etf_theme_query(), _build_hot_sectors(), _build_stock_dict(), _cache_min_company_events() (+85 more)
+Cohesion: 0.07
+Nodes (87): _append_main_force_detail(), _apply_sentiment_to_company_documents(), _brief_conclusion(), _build_data_source_status(), _build_etf_theme_query(), _build_hot_sectors(), _build_stock_dict(), _cache_min_company_events() (+79 more)
 
 ### Community 13 - "Community 13"
-Cohesion: 0.29
-Nodes (7): 根据通用技术形态定义生成默认原子规则元数据。, 根据通用技术形态定义生成默认原子规则元数据。, 根据通用技术形态定义生成默认原子规则元数据。, 根据通用技术形态定义生成默认原子规则元数据。, 根据通用技术形态定义生成默认原子规则元数据。, _signal_group_for_rule(), _technical_pattern_rule_rows()
+Cohesion: 0.07
+Nodes (17): DataFrame, datetime, _default_rule_chain_expression_for_market(), _default_rule_description_for_market(), _default_rule_name_for_market(), _default_rule_params_for_market(), _progress_log_entry(), 根据通用技术形态定义生成默认原子规则元数据。 (+9 more)
 
 ### Community 14 - "Community 14"
-Cohesion: 0.07
-Nodes (95): BaseModel, CustomListCodeParser, CustomListJobService, CustomListScreeningRunner, Create and read custom-list web screening jobs., Run a custom watchlist through the existing screening service., Run a custom watchlist through the existing screening service., Parse and normalize single-market custom stock-code inputs. (+87 more)
+Cohesion: 0.09
+Nodes (62): client_ip(), Request, artifact_dir(), agent_bulk_screening_results(), agent_bulk_signal_analysis(), agent_claim_job(), agent_complete_job(), agent_complete_single_stock() (+54 more)
 
 ### Community 15 - "Community 15"
 Cohesion: 0.14
 Nodes (16): CompositeUniverseReducer, create(), create_composite(), get_name(), MarketCapUniverseReducer, PEUniverseReducer, 组合缩减器 - 串联多个缩减器（AND 逻辑）, 股票池缩减器基类          在筛选链执行前对股票列表进行预过滤，仅使用 StockInfo 已有字段，     不触发 K 线获取或数据库查询，用于快速 (+8 more)
 
 ### Community 16 - "Community 16"
-Cohesion: 0.06
-Nodes (74): _build_browser_company_batch_query(), _get_global_browser(), is_available(), _is_news_quality_result(), bool, int, SearchDocument, str (+66 more)
+Cohesion: 0.15
+Nodes (43): _a_share_exchange_from_code(), _assign_documents_to_stocks(), _build_company_batch_query(), _build_single_company_query(), _build_zhipu_company_batch_query(), _company_batch_max_results(), _company_query_base_terms(), _company_query_item() (+35 more)
 
 ### Community 17 - "Community 17"
-Cohesion: 0.08
-Nodes (17): EastmoneyStockTerminalProvider, build_stock_terminal_providers(), FutuStockTerminalProvider, YFinanceStockTerminalProvider, InMemoryStockTerminalRepository, FakeStockTerminalDb, StockTerminalRepositoryTest, EastmoneyLikeProvider (+9 more)
+Cohesion: 0.06
+Nodes (27): EastmoneyStockTerminalProvider, build_stock_terminal_providers(), _difference(), _futu_code(), FutuStockTerminalProvider, YFinanceStockTerminalProvider, float, FundFlowPoint (+19 more)
 
 ### Community 18 - "Community 18"
-Cohesion: 0.09
-Nodes (37): bool, DataFrame, Exception, int, str, _a_code(), AKShareKlineFetcher, create_fetcher_chain() (+29 more)
+Cohesion: 0.10
+Nodes (31): DataFrame, Exception, int, str, _a_code(), AKShareKlineFetcher, _estimate_days_back(), fetch() (+23 more)
 
 ### Community 19 - "Community 19"
 Cohesion: 0.14
-Nodes (44): MetricSnapshot, Order, BacktestResult, _bars_to_frame(), _is_base_strategy(), _market_value(), Bar, bool (+36 more)
+Nodes (45): MetricSnapshot, Order, BacktestResult, _bars_to_frame(), _is_base_strategy(), _market_value(), Bar, bool (+37 more)
 
 ### Community 20 - "Community 20"
 Cohesion: 0.15
@@ -538,40 +556,40 @@ Cohesion: 0.10
 Nodes (9): Filter, chain(), FakeMacroScorer, FakeMarketIntelService, metadata(), registry(), RuleEngineTest, StaticFilter (+1 more)
 
 ### Community 22 - "Community 22"
-Cohesion: 0.07
-Nodes (33): Build a first-paint topology snapshot from LLM + search., TopologyEnrichmentService, TopologyEdge, TopologyNode, RelationEngineError, NodeResolver, 聚合单只股票的行情/板块/市值/涨跌幅。行情失败不抛，返回 None 字段。, AliasAwareResolver (+25 more)
+Cohesion: 0.06
+Nodes (30): TopologyEdge, TopologyNode, AliasAwareResolver, FakeBackgroundTasks, FakeQuoteKlineService, FakeQuoteRepository, FakeTaskService, int (+22 more)
 
 ### Community 23 - "Community 23"
 Cohesion: 0.17
-Nodes (25): bytes, MySqlConfig, Any, bool, int, str, get_db_config(), chunk_rows_by_payload_budget() (+17 more)
+Nodes (24): bytes, bool, int, str, is_custom_list_job(), get_db_config(), FutuKlineFetcher, chunk_rows_by_payload_budget() (+16 more)
 
 ### Community 24 - "Community 24"
 Cohesion: 0.07
 Nodes (28): Aggregate Summary Edges, Canvas Rendering, code:ts (function displaySector(node: TopologyNodeData): string {), code:ts (type TopologyRenderNode = TopologyNodeData | TopologyAggrega), code:ts (`aggregate:${sector}:${zone}`), code:ts (interface AggregateEdgeData extends TopologyEdgeData {), code:text (Semiconductors · 同业关系 3 条), code:ts (const [viewMode, setViewMode] = useState<'summary' | 'full'>) (+20 more)
 
 ### Community 25 - "Community 25"
-Cohesion: 0.16
-Nodes (28): OptionLabService, OptionLabApiTests, RecordingMacroProvider, assert_candidate_owner(), assert_plan_owner(), _display_contract_rows(), evaluate_options(), evaluate_options_batch() (+20 more)
+Cohesion: 0.24
+Nodes (23): OptionLabService, assert_candidate_owner(), assert_plan_owner(), _display_contract_rows(), evaluate_options(), evaluate_options_batch(), evaluation_item_to_response(), fill_order_plan() (+15 more)
 
 ### Community 26 - "Community 26"
 Cohesion: 0.18
 Nodes (24): apply_macro_analysis_to_candidates(), build_default_option_macro_analysis_provider(), OptionMacroAnalysis, OptionMacroAnalysisProvider, OptionMarketDataProvider, OptionEvaluationResult, OrderPlan, RiskProfile (+16 more)
 
 ### Community 27 - "Community 27"
-Cohesion: 0.11
+Cohesion: 0.12
 Nodes (28): build(), build_enterprise_evidence(), CompanySnapshotBuilder, _fill_company_snapshot_from_futu(), fill_snapshots_from_futu(), _fill_trading_snapshot_from_futu(), _fill_valuation_snapshot_from_futu(), _float_or_none() (+20 more)
 
 ### Community 28 - "Community 28"
 Cohesion: 0.03
-Nodes (92): str, Any, bool, float, int, str, normalize_market(), parse_markets() (+84 more)
+Nodes (85): Any, bool, float, int, str, _a_index_fetch_timeout_sec(), _call_akshare_index_cons_with_timeout(), DbIndexConstituentSnapshotProvider (+77 more)
 
 ### Community 29 - "Community 29"
-Cohesion: 0.17
-Nodes (20): MacroDataProvider, available(), build_fred_provider(), FredMacroProvider, markets(), name(), bool, MacroSnapshot (+12 more)
+Cohesion: 0.16
+Nodes (21): ABC, MacroDataProvider, available(), build_fred_provider(), FredMacroProvider, markets(), name(), bool (+13 more)
 
 ### Community 30 - "Community 30"
-Cohesion: 0.03
-Nodes (56): Any, bool, DataFrame, date, datetime, Exception, float, int (+48 more)
+Cohesion: 0.06
+Nodes (22): Any, _json_or_none(), MarketDatabase, _mysql_datetime_or_none(), _mysql_safe_float(), _mysql_safe_value(), _option_candidate_macro_fields(), _option_payload() (+14 more)
 
 ### Community 31 - "Community 31"
 Cohesion: 0.18
@@ -579,7 +597,7 @@ Nodes (38): _bullet_list(), _conclusion(), _conditions_text(), _confidence_label
 
 ### Community 32 - "Community 32"
 Cohesion: 0.11
-Nodes (23): MarketIntelService, build_watchlist(), main(), 将原始代码规范化为 watchlist 格式。, FakeMarketIntelService, MarketIntelApiTest, EvidencePackPreviewRequest, get_market_digest() (+15 more)
+Nodes (24): str, MarketIntelService, normalize_market(), parse_markets(), build_watchlist(), main(), 将原始代码规范化为 watchlist 格式。, FakeMarketIntelService (+16 more)
 
 ### Community 33 - "Community 33"
 Cohesion: 0.10
@@ -590,8 +608,8 @@ Cohesion: 0.15
 Nodes (9): bool, float, int, str, InteractiveOptionLabApp, InteractiveOptionLabOptions, main(), _split_csv_values() (+1 more)
 
 ### Community 35 - "Community 35"
-Cohesion: 0.05
-Nodes (63): BaseStrategy, PositionSnapshot, 策略配置（JSON-serializable，对前端暴露）, StrategyConfig, DataFrame, Signal, str, DataFrame (+55 more)
+Cohesion: 0.06
+Nodes (50): BaseStrategy, 策略配置（JSON-serializable，对前端暴露）, StrategyConfig, DataFrame, Signal, str, DataFrame, Signal (+42 more)
 
 ### Community 36 - "Community 36"
 Cohesion: 0.10
@@ -599,34 +617,34 @@ Nodes (23): AggregatedTopology, aggregateLabel(), aggregateNodeId(), aggregateTo
 
 ### Community 37 - "Community 37"
 Cohesion: 0.11
-Nodes (28): PaperTradingService, float, int, str, QuantLabService, InMemoryQuantRepository, QuantApiTest, QuantDbTest (+20 more)
+Nodes (24): PaperTradingService, float, int, str, QuantLabService, InMemoryQuantRepository, QuantApiTest, QuantDbTest (+16 more)
 
 ### Community 38 - "Community 38"
-Cohesion: 0.11
-Nodes (17): EarningsRevisionMomentumStrategizer, 盈利预期修正策略器（个股级）—— 判断公司未来盈利预期是否改善。      数据源：Tavily（搜索业绩预告/财报/券商观点）。     Phase 3 实现, _make_stock(), StockInfo, str, Tavily 返回含负面关键词 → score < 50, trend=deteriorating。, 正面关键词多于负面 → trend=improving, score=55~70。, EarningsRevision tests when Tavily is not configured. (+9 more)
+Cohesion: 0.10
+Nodes (22): StockInfo, print_header(), status_icon(), test_batch_mode(), test_macro_factors(), test_single_stock(), str, _make_stock() (+14 more)
 
 ### Community 39 - "Community 39"
 Cohesion: 0.09
 Nodes (22): getStockTerminalFundFlow(), getStockTerminalKlines(), getStockTerminalMinute(), getStockTerminalSummary(), query(), stockTerminalEndpoint(), EMPTY_LOAD_STATE, formatPercent() (+14 more)
 
 ### Community 40 - "Community 40"
-Cohesion: 0.19
-Nodes (22): _cache_status(), _empty_status(), _error_status(), _fund_flow_from_payload(), _kline_from_frame(), _kline_from_payload(), _market_timezone(), _minute_from_payload() (+14 more)
+Cohesion: 0.22
+Nodes (16): _cache_status(), _empty_status(), _error_status(), _fund_flow_from_payload(), _kline_from_payload(), _market_timezone(), _minute_from_payload(), _minute_trade_date() (+8 more)
 
 ### Community 41 - "Community 41"
 Cohesion: 0.12
-Nodes (4): CodexResponsesLLMProvider, OpenAI Codex model implementation using the Responses API., OpenAI Codex model implementation using the Responses API., MacroJsonProviderAdapterTests
+Nodes (30): _bing_baidu_from_env(), _codex_responses_from_env(), _dedupe_provider_names(), _deepseek_from_env(), _env_int(), from_env(), _openai_compatible_from_env(), _provider_from_env() (+22 more)
 
 ### Community 42 - "Community 42"
-Cohesion: 0.04
-Nodes (53): EnergyPhaseClassifier, 六态物理能量相位分类器。      将价格运动映射为六种物理状态：         COMPRESS   — 势能积蓄，低动能 → 观望 (WATCH), analyze_energy_phases(), compute_daily_volume_vs_prior3_and_pct_change(), get_market_energy_params(), _prepare_kline_data(), 基于日线 K 线（最后一根视为当日）计算：     - 当日成交量 vs 前三日成交量最大值     - 当日涨跌幅（相对前一日收盘，百分比）      Ret, 基于日线 K 线（最后一根视为当日）计算：     - 当日成交量 vs 前三日成交量最大值     - 当日涨跌幅（相对前一日收盘，百分比）      Ret (+45 more)
+Cohesion: 0.05
+Nodes (42): EnergyPhaseClassifier, 六态物理能量相位分类器。      将价格运动映射为六种物理状态：         COMPRESS   — 势能积蓄，低动能 → 观望 (WATCH), analyze_energy_phases(), get_market_energy_params(), 六态物理能量框架分析。      计算价格运动的势能（PE，偏离均线的平方）和动能（KE，有向价格变化平方），     并导出 KE_decay（动能衰减率）、, 获取指定市场的能量相位参数预设。      Args:         market: 市场代码（"HK"/"US"/"A"），None 或未识别时返回空 di, _df(), EnergyPhaseClassifierTest (+34 more)
 
 ### Community 43 - "Community 43"
-Cohesion: 0.19
+Cohesion: 0.18
 Nodes (20): AKShareOptionMarketDataProvider, build_default_option_market_data_provider(), _contract_type_from_text(), _currency_for_market(), _fake_quote(), _float_or_none(), FutuOptionMarketDataProvider, OptionMarketDataProviderChain (+12 more)
 
 ### Community 44 - "Community 44"
-Cohesion: 0.15
+Cohesion: 0.16
 Nodes (17): _eastmoney_number(), _eastmoney_percent(), _eastmoney_price(), _parse_dt(), parse_eastmoney_fund_flow_rows(), parse_eastmoney_minute_rows(), parse_eastmoney_quote(), _strip_market_prefix() (+9 more)
 
 ### Community 45 - "Community 45"
@@ -638,8 +656,8 @@ Cohesion: 0.06
 Nodes (20): _build_csv_row(), _build_merged_filter_details(), E2EUnifiedScoringConsistencyTest, _json_safe(), UNIFIED_SCORE_WEIGHTS 应与统一口径一致。, DB 层默认权重：技术 0%，宏观 100%。, 合并后 filter_details 应有 21 技术 + 4 宏观 = 25 条。, 前 21 条规则 strategy_category 应为 'technical'（移除 rsi_oversold 后）。 (+12 more)
 
 ### Community 47 - "Community 47"
-Cohesion: 0.11
-Nodes (30): EnterprisePotentialResult, bool, FilterContext, float, SignalAnalysisResult, StockInfo, str, StrategizerOutput (+22 more)
+Cohesion: 0.14
+Nodes (21): EnterprisePotentialResult, EnterprisePotentialResult, EnterprisePotentialScorer, EnterprisePotentialEvidencePackage, 企业潜力综合分析评分器。      两种模式：     1. 规则型（默认）— 各模块独立打分 + 加权求和     2. LLM 评分 — 将 Evidenc, 单只股票评分（批量模式也走这里，当 N=1）, 统一决策、建议持有周期与摘要文案（规则与 LLM 两路共用）。, analyze_enterprise_potential() (+13 more)
 
 ### Community 48 - "Community 48"
 Cohesion: 0.07
@@ -650,12 +668,12 @@ Cohesion: 0.21
 Nodes (24): _bundle_data_gaps(), _bundle_payload(), _bundle_source_status(), _canonical_title(), _canonical_url(), _coerce_intel_item(), _dedupe_citations(), _dedupe_strings() (+16 more)
 
 ### Community 50 - "Community 50"
-Cohesion: 0.09
-Nodes (35): Any, bool, int, MarketDatabase, MySqlConfig, str, build_custom_list_report_sections(), CustomListParseResult (+27 more)
+Cohesion: 0.10
+Nodes (26): Any, bool, int, MarketDatabase, MySqlConfig, str, build_custom_list_report_sections(), CustomListParseResult (+18 more)
 
 ### Community 51 - "Community 51"
-Cohesion: 0.23
-Nodes (18): Selected-stock terminal data layer., BlockStatus, FundFlowPoint, KlinePoint, MinutePoint, QuoteSnapshot, StockTerminalSummary, int (+10 more)
+Cohesion: 0.27
+Nodes (21): Selected-stock terminal data layer., BlockStatus, FundFlowPoint, KlinePoint, MinutePoint, QuoteSnapshot, StockTerminalSummary, _kline_from_frame() (+13 more)
 
 ### Community 52 - "Community 52"
 Cohesion: 0.14
@@ -674,8 +692,8 @@ Cohesion: 0.40
 Nodes (4): 补写已生成筛选结果的 sector/industry 字段。, 补写已生成筛选结果的 sector/industry 字段。, 补写已生成筛选结果的 sector/industry 字段。, 补写已生成筛选结果的 sector/industry 字段。
 
 ### Community 56 - "Community 56"
-Cohesion: 0.16
-Nodes (26): CachedKlineDataProvider, OptimizationResult, ParamGrid, BacktestRequest, BacktestRunner, Args:             data_provider: 有 bars_for(market, symbol, start, end) 方法, OptimizationResult, ParamGrid (+18 more)
+Cohesion: 0.12
+Nodes (35): CachedKlineDataProvider, OptimizationResult, ParamGrid, BacktestRequest, BacktestRunner, Args:             data_provider: 有 bars_for(market, symbol, start, end) 方法, OptimizationResult, ParamGrid (+27 more)
 
 ### Community 57 - "Community 57"
 Cohesion: 0.24
@@ -706,7 +724,7 @@ Cohesion: 0.29
 Nodes (12): Any, bool, datetime, IntelItem, str, eastmoney_secu_code(), EastmoneyMarketIntelProvider, _extract_rows() (+4 more)
 
 ### Community 65 - "Community 65"
-Cohesion: 0.14
+Cohesion: 0.13
 Nodes (3): FakeConnection, FakeCursor, OptionLabDbTests
 
 ### Community 66 - "Community 66"
@@ -715,7 +733,7 @@ Nodes (5): EvidencePackBuilder, intel_items_to_search_documents(), MarketIntelBu
 
 ### Community 67 - "Community 67"
 Cohesion: 0.06
-Nodes (48): Any, bool, float, int, str, apply(), create_default_filter_chain(), CustomFilter (+40 more)
+Nodes (44): Any, bool, float, int, str, apply(), create_default_filter_chain(), CustomFilter (+36 more)
 
 ### Community 68 - "Community 68"
 Cohesion: 0.20
@@ -726,12 +744,12 @@ Cohesion: 0.07
 Nodes (26): dependencies, @antv/g6, @codemirror/lang-json, dagre, echarts, echarts-for-react, lightweight-charts, react (+18 more)
 
 ### Community 70 - "Community 70"
-Cohesion: 0.13
-Nodes (8): RelationEngine, FakeCache, FakeDB, FakeLLMProvider, FakeResolver2, _make_relation(), TestRelationEngine, TestTopologyService
+Cohesion: 0.12
+Nodes (14): Build a first-paint topology snapshot from LLM + search., TopologyEnrichmentService, RelationEngine, FakeCache, FakeDB, FakeLLMProvider, FakeResolver, FakeResolver2 (+6 more)
 
 ### Community 71 - "Community 71"
 Cohesion: 0.06
-Nodes (46): Tavily-backed search implementation., Tavily-backed search implementation., Tavily-backed search implementation.      Tracks quota exhaustion to avoid hamme, TavilySearchProvider, apply(), BreakoutQualityStrategizer, _coalesce(), CommodityShockStrategizer (+38 more)
+Nodes (49): Tavily-backed search implementation., Tavily-backed search implementation., Tavily-backed search implementation.      Tracks quota exhaustion to avoid hamme, TavilySearchProvider, apply(), BreakoutQualityStrategizer, _coalesce(), CommodityShockStrategizer (+41 more)
 
 ### Community 72 - "Community 72"
 Cohesion: 0.05
@@ -750,8 +768,8 @@ Cohesion: 0.25
 Nodes (10): bool, object, str, config_by_provider(), _dedupe_provider_names(), enabled_provider_order(), _env_flag(), list_source_configs() (+2 more)
 
 ### Community 76 - "Community 76"
-Cohesion: 0.08
-Nodes (33): CachedKlineDataProvider, _code_candidates(), _has_ohlc(), Bar, bool, DataFrame, date, int (+25 more)
+Cohesion: 0.11
+Nodes (15): CachedKlineDataProvider, _code_candidates(), _has_ohlc(), Bar, bool, DataFrame, date, int (+7 more)
 
 ### Community 77 - "Community 77"
 Cohesion: 0.11
@@ -771,27 +789,27 @@ Nodes (12): float, Any, bool, datetime, float, int, IntelItem, str (+4 more)
 
 ### Community 81 - "Community 81"
 Cohesion: 0.14
-Nodes (42): ABC, IndustrySnapshotBuilder, bool, EnterprisePotentialEvidencePackage, IndustrySnapshot, int, MacroSnapshot, TradingSnapshot (+34 more)
+Nodes (24): IndustrySnapshotBuilder, 估值快照构建器 — 主要用 yfinance info + 自算, TradingSnapshotBuilder, ValuationSnapshotBuilder, BatchCompanyFetcher, BatchFetcher, BatchIndustryFetcher, BatchTradingFetcher (+16 more)
 
 ### Community 82 - "Community 82"
 Cohesion: 0.12
 Nodes (4): FailedMarketIntelAlterCursor, FakeConnection, FakeCursor, MarketIntelRepositoryTests
 
 ### Community 83 - "Community 83"
-Cohesion: 0.31
-Nodes (15): parse_timeframe(), 校验并标准化 timeframe 字符串      Args:         s: 用户传入的 timeframe（如 "1h", "1d"）      Re, _analysis_to_response_dict(), _build_macro_signal_row(), _conditions_met(), _fetch_single_kline(), _load_stock_info(), MarketDatabase (+7 more)
+Cohesion: 0.20
+Nodes (23): MySqlConfig, parse_timeframe(), 校验并标准化 timeframe 字符串      Args:         s: 用户传入的 timeframe（如 "1h", "1d"）      Re, bool, MySqlConfig, Path, str, _record_artifacts() (+15 more)
 
 ### Community 84 - "Community 84"
-Cohesion: 0.15
-Nodes (35): ContractDetail, ContractDetail, MarketSnapshot, OptionContractType, OptionSide, StrategyCandidate, _adjust_candidate(), apply_risk_profile() (+27 more)
+Cohesion: 0.25
+Nodes (27): ContractDetail, Enum, ContractDetail, OptionContractType, OptionSide, StrategyCandidate, _breakeven(), _detail() (+19 more)
 
 ### Community 85 - "Community 85"
 Cohesion: 0.23
 Nodes (10): Any, bool, datetime, float, IntelItem, str, is_available(), _parse_datetime() (+2 more)
 
 ### Community 87 - "Community 87"
-Cohesion: 0.05
-Nodes (35): 获取 EMA 信号表名：ema_breakout_signals_{timeframe}, 确保指定 timeframe 的 EMA 信号表存在（幂等）, 初始化数据库化规则引擎表，并写入默认市场规则。, 初始化数据库化规则引擎表，并写入默认市场规则。, 兼容旧库：为规则链补齐 timeframe 维度和索引。, 初始化数据库化规则引擎表，并写入默认市场规则。, 初始化数据库化规则引擎表，并写入默认市场规则。, 兼容旧库：为规则链补齐 timeframe 维度和索引。 (+27 more)
+Cohesion: 0.07
+Nodes (21): 初始化数据库化规则引擎表，并写入默认市场规则。, 初始化数据库化规则引擎表，并写入默认市场规则。, 兼容旧库：为规则链补齐 timeframe 维度和索引。, 初始化数据库化规则引擎表，并写入默认市场规则。, 初始化数据库化规则引擎表，并写入默认市场规则。, 兼容旧库：为规则链补齐 timeframe 维度和索引。, 兼容旧库：为规则链补齐 timeframe 维度和索引。, 兼容旧库：为规则链补齐 timeframe 维度和索引。 (+13 more)
 
 ### Community 88 - "Community 88"
 Cohesion: 0.21
@@ -810,8 +828,8 @@ Cohesion: 0.05
 Nodes (39): A1: Fetch and compute, A2: Fetch peer comparison, A3: Interpret the result, Always caveat, Always include, B1: Fetch and rank, B2: Present as a ranked table, C1: Define the universe and scan (+31 more)
 
 ### Community 92 - "Community 92"
-Cohesion: 0.10
-Nodes (11): 初始化主力流出风险分析表和筛选结果摘要列。, 初始化主力流出风险分析表和筛选结果摘要列。, 初始化主力流出风险分析表和筛选结果摘要列。, 初始化主力流出风险分析表和筛选结果摘要列。, 初始化主力流出风险分析表和筛选结果摘要列。, 初始化主力流出风险分析表和筛选结果摘要列。, 初始化 Web、Agent、K 线缓存和 artifact 相关表。, 初始化 Web、Agent、K 线缓存和 artifact 相关表。 (+3 more)
+Cohesion: 0.07
+Nodes (16): 初始化主力流出风险分析表和筛选结果摘要列。, 初始化主力流出风险分析表和筛选结果摘要列。, 初始化主力流出风险分析表和筛选结果摘要列。, 初始化主力流出风险分析表和筛选结果摘要列。, 初始化主力流出风险分析表和筛选结果摘要列。, 写入核心指数成分股快照，用于在线来源失败时兜底。, 写入核心指数成分股快照，用于在线来源失败时兜底。, 写入核心指数成分股快照，用于在线来源失败时兜底。 (+8 more)
 
 ### Community 93 - "Community 93"
 Cohesion: 0.27
@@ -850,8 +868,8 @@ Cohesion: 0.23
 Nodes (11): _as_aware_utc(), _effective_time(), has_scoreable_evidence(), _looks_negative(), _looks_positive(), MacroEvidenceRow, bool, datetime (+3 more)
 
 ### Community 102 - "Community 102"
-Cohesion: 0.09
-Nodes (36): Exception, Any, bool, int, MarketDatabase, MySqlConfig, str, Any (+28 more)
+Cohesion: 0.11
+Nodes (33): Exception, Any, bool, int, MarketDatabase, MySqlConfig, str, Step (+25 more)
 
 ### Community 103 - "Community 103"
 Cohesion: 0.22
@@ -874,12 +892,12 @@ Cohesion: 0.06
 Nodes (34): Best Practices, code:bash (# macOS), code:bash (# Navigate to the target channel in Discord first, then:), code:bash (opencli discord-app search "BTC pump" -f json), code:bash (opencli discord-app search "earnings call" -f json), code:bash (# 1. List servers), code:bash (# CSV for spreadsheet analysis), code:bash (export OPENCLI_CDP_ENDPOINT="http://127.0.0.1:9232") (+26 more)
 
 ### Community 108 - "Community 108"
-Cohesion: 0.12
-Nodes (31): CommodityShockResult, CreditRiskResult, LiquidityNowcastResult, PolicyEventResult, MarketCache, _policy_queries_for_market(), MarketBreadthResult, MarketTemperature (+23 more)
+Cohesion: 0.09
+Nodes (34): CommodityShockResult, CreditRiskResult, LiquidityNowcastResult, PolicyEventResult, MarketCache, _policy_queries_for_market(), MarketBreadthResult, MarketTemperature (+26 more)
 
 ### Community 109 - "Community 109"
-Cohesion: 0.15
-Nodes (30): _build_node_markets(), _build_node_meta(), _completed_depth(), _contains_cjk(), _default_llm(), _depth_batch_size(), _has_value(), _llm_node_data_from_relations() (+22 more)
+Cohesion: 0.14
+Nodes (31): _build_node_markets(), _build_node_meta(), _completed_depth(), _contains_cjk(), _default_llm(), _default_search(), _depth_batch_size(), _has_value() (+23 more)
 
 ### Community 112 - "Community 112"
 Cohesion: 0.29
@@ -1118,12 +1136,12 @@ Cohesion: 0.12
 Nodes (16): code:bash (# NVDA suppliers (2-level deep)), Examples, GET /v1/supply-chain/kg-edges, GET /v1/supply-chain/kg-edges/graph/competitors/{ticker}, GET /v1/supply-chain/kg-edges/graph/customers/{ticker}, GET /v1/supply-chain/kg-edges/graph/neighbors/{ticker}, GET /v1/supply-chain/kg-edges/graph/partners/{ticker}, GET /v1/supply-chain/kg-edges/graph/suppliers/{ticker} (+8 more)
 
 ### Community 206 - "Community 206"
-Cohesion: 0.18
-Nodes (14): F, _is_crumb_error(), _is_fatal_http_error(), _is_rate_limit_error(), 重置 YfData 单例，强制下次调用创建全新的 HTTP 会话。      Yahoo Finance 在处理大量请求后会主动使 cookie/crumb 失, 装饰器：捕获 YFRateLimitError / HTTP 429，指数退避重试。      用法:         @retry_on_rate_limit, 检测不可重试的 HTTP 401/403 错误（会话配额耗尽/权限拒绝）。      与 429（可重试）不同，401/403 重试不会恢复，应直接降级到备选数, 检测是否为 Yahoo Finance crumb 过期导致的 401（可恢复）。      与 IP 级封禁（"User is unable to acces (+6 more)
+Cohesion: 0.16
+Nodes (18): F, fail_count(), ok_count(), int, _is_crumb_error(), _is_fatal_http_error(), _is_rate_limit_error(), per_ticker_sleep() (+10 more)
 
 ### Community 207 - "Community 207"
-Cohesion: 0.13
-Nodes (19): bool, str, _a_code(), AkShareMainForceDataProvider, DataStatus, disabled(), env_enabled(), ExternalRiskSnapshot (+11 more)
+Cohesion: 0.23
+Nodes (9): AkShareMainForceDataProvider, DataStatus, disabled(), ExternalRiskSnapshot, _futu_error_status(), _is_ret_ok(), Availability status for one evidence category., Provider-normalized optional market microstructure evidence. (+1 more)
 
 ### Community 208 - "Community 208"
 Cohesion: 0.04
@@ -1414,8 +1432,8 @@ Cohesion: 0.17
 Nodes (20): bool, DataFrame, date, float, Signal, str, _compute_metrics(), _get_price() (+12 more)
 
 ### Community 284 - "Community 284"
-Cohesion: 0.13
-Nodes (51): Apply provider results to records with Chinese-name preference., StockNameResolver, MySqlStockTerminalRepository, TopologyService, cancel_graph_task(), _contains_chinese(), create_graph_task(), _enrich_quote_item_fundamentals() (+43 more)
+Cohesion: 0.16
+Nodes (39): cancel_graph_task(), _contains_chinese(), create_graph_task(), _enrich_quote_item_fundamentals(), _enrich_quote_item_known_chinese_names(), _enrich_quote_item_names(), _enrich_quote_item_pct_chg_from_klines(), expand() (+31 more)
 
 ### Community 285 - "Community 285"
 Cohesion: 0.05
@@ -1434,28 +1452,28 @@ Cohesion: 0.09
 Nodes (27): GateNode(), Props, OutputNode(), Props, Props, RuleNode(), setRuleMetaRegistry(), ExpressionValidation (+19 more)
 
 ### Community 289 - "Community 289"
-Cohesion: 0.14
-Nodes (25): EnterprisePotentialEvidencePackage, 五模块统一证据包 — 对接 LLM 评分的核心数据结构, EnterprisePotentialParser, EnterprisePotentialPromptBuilder, Any, EnterprisePotentialEvidencePackage, str, 单只股票的评分提示词（批量 N=1 特殊情况） (+17 more)
+Cohesion: 0.20
+Nodes (34): bool, EnterprisePotentialEvidencePackage, IndustrySnapshot, int, MacroSnapshot, TradingSnapshot, ValuationSnapshot, SnapshotBuilder (+26 more)
 
 ### Community 290 - "Community 290"
-Cohesion: 0.10
-Nodes (35): Verify PBKDF2-SHA256 password hashes created by hash_password., Verify PBKDF2-SHA256 password hashes created by hash_password., Verify PBKDF2-SHA256 password hashes created by hash_password., Verify PBKDF2-SHA256 password hashes created by hash_password., verify_password(), authenticate(), clear_login_session(), client_ip() (+27 more)
+Cohesion: 0.12
+Nodes (30): authenticate(), clear_login_session(), create_login_session(), get_db(), optional_user(), bool, int, MarketDatabase (+22 more)
 
 ### Community 291 - "Community 291"
 Cohesion: 0.19
 Nodes (19): bool, float, int, str, _dns_retry_attempts(), _dns_retry_delay_sec(), _env_float(), _env_int() (+11 more)
 
 ### Community 292 - "Community 292"
-Cohesion: 0.18
-Nodes (9): _difference(), _futu_code(), float, FundFlowPoint, int, KlinePoint, MinutePoint, QuoteSnapshot (+1 more)
+Cohesion: 0.14
+Nodes (42): BaseModel, CustomListCodeParser, CustomListJobService, CustomListScreeningRunner, Create and read custom-list web screening jobs., Run a custom watchlist through the existing screening service., Run a custom watchlist through the existing screening service., Parse and normalize single-market custom stock-code inputs. (+34 more)
 
 ### Community 293 - "Community 293"
-Cohesion: 0.09
+Cohesion: 0.10
 Nodes (21): _make_kline_rows(), _mock_db_with_rows(), MarketBreadthResult, str, 5 个市场级结果全部可用时，生成 5 条 filter_detail。, _compute_market_breadth 实现的全面测试。, 应用 patch，让 MarketDatabase(config) 返回 mock DB。, 4 只股票全线走强 → score=100（所有加分项触发）。 (+13 more)
 
 ### Community 294 - "Community 294"
 Cohesion: 0.04
-Nodes (44): DatabaseKlineFetcher, OpenDQuotedKlineFetcher, YFinance K 线获取器 - 支持全 timeframe、港股 / 美股 / A 股, Release the HTTP session when this fetcher created it., K 线缓存获取器：优先读取本地 Agent 推送到 MySQL 的缓存。, K 线缓存获取器：优先读取本地 Agent 推送到 MySQL 的缓存。      新增 freshness 检查：如果缓存中最新的 K 线距今超过     m, K 线缓存获取器：优先读取本地 Agent 推送到 MySQL 的缓存。      新增 freshness 检查：如果缓存中最新的 K 线距今超过     m, 通过环境变量自动连接 Futu OpenD 的 K 线获取器。      与 FutuKlineFetcher 不同，此类自行管理 OpenD 连接生命周期： (+36 more)
+Nodes (47): bool, create_fetcher_chain(), DatabaseKlineFetcher, _env_enabled(), OpenDQuotedKlineFetcher, YFinance K 线获取器 - 支持全 timeframe、港股 / 美股 / A 股, Release the HTTP session when this fetcher created it., K 线缓存获取器：优先读取本地 Agent 推送到 MySQL 的缓存。 (+39 more)
 
 ### Community 295 - "Community 295"
 Cohesion: 0.06
@@ -1474,8 +1492,8 @@ Cohesion: 0.07
 Nodes (30): dependencies, class-variance-authority, clsx, framer-motion, @hookform/resolvers, immer, lucide-react, @monaco-editor/react (+22 more)
 
 ### Community 299 - "Community 299"
-Cohesion: 0.10
-Nodes (24): decision_from_total_score(), dominant_module(), format_band(), normalize_holding_period(), float, int, str, 将 LLM/历史英文持有周期统一为中文展示格式。 (+16 more)
+Cohesion: 0.13
+Nodes (17): decision_from_total_score(), dominant_module(), format_band(), normalize_holding_period(), float, int, str, 将 LLM/历史英文持有周期统一为中文展示格式。 (+9 more)
 
 ### Community 300 - "Community 300"
 Cohesion: 0.14
@@ -1506,16 +1524,16 @@ Cohesion: 0.24
 Nodes (23): appendUnique(), aShareExchange(), assignDocumentsToStocks(), buildCompanyBatchQuery(), composeCompanyBatchQuery(), contains(), containsTerm(), dedupeDocuments() (+15 more)
 
 ### Community 307 - "Community 307"
-Cohesion: 0.19
-Nodes (25): Any, DataFrame, float, Series, _broker_queue_observation(), _dedupe(), _extract_bid_ask_metrics(), _extract_futu_order_book_metrics() (+17 more)
+Cohesion: 0.15
+Nodes (30): Any, bool, str, _a_code(), _broker_queue_observation(), _dedupe(), env_enabled(), _env_int() (+22 more)
 
 ### Community 308 - "Community 308"
 Cohesion: 0.12
 Nodes (12): _fd(), formula 字符串包含 5 个模块分和最终分。, macro 类规则不参与 entry_score 计算。, 快捷构造一条 filter_detail。, 无规则命中 → 所有模块 50 分，entry_score=50。, zuoyi_bullish_signal 命中 → trend + breakout 两个模块均加分。, 5 个模块各命中一条 x1.0 规则 → 各模块约 62 分。, energy_phase_bullish 是动量模块的 x1.5 高权重规则。 (+4 more)
 
 ### Community 309 - "Community 309"
-Cohesion: 0.05
-Nodes (51): BusinessError, JSONResponse, RequestValidationError, StarletteHTTPException, hash_password(), Return a PBKDF2-SHA256 password hash string., Return a PBKDF2-SHA256 password hash string., Return a PBKDF2-SHA256 password hash string. (+43 more)
+Cohesion: 0.13
+Nodes (13): StockTerminalService, FakeStockTerminalService, StockTerminalApiTest, get_fund_flow(), get_klines(), get_minute(), get_stock_terminal_service(), get_summary() (+5 more)
 
 ### Community 310 - "Community 310"
 Cohesion: 0.10
@@ -1523,14 +1541,14 @@ Nodes (20): 1. Remove Global Edge Label Toggle, 2. Hover Tooltip (existing, poli
 
 ### Community 311 - "Community 311"
 Cohesion: 0.14
-Nodes (18): Props, StockSearchInput(), topologyApi, ExpandResult, Market, QuoteStatus, SearchResult, TopologyAggregateNodeData (+10 more)
+Nodes (18): Props, StockSearchInput(), topologyApi, ExpandResult, Market, QuoteStatus, SearchResult, TopologyAggregateEdgeData (+10 more)
 
 ### Community 313 - "Community 313"
 Cohesion: 0.10
 Nodes (11): _fd(), 快捷构造一条 filter_detail。, 无输入 → 所有维度 50，holding_score=50。, enterprise_score 从 enterprise_potential_analysis 的 total_score 读取。, enterprise_potential_analysis 缺失 → enterprise_score=50。, 市场级 liquidity 分数从 MarketTemperature 读取。, macro_credit 综合信用风险 + 宏观评分。, 高 enterprise + 高 liquidity → WORTH_HOLDING。 (+3 more)
 
 ### Community 314 - "Community 314"
-Cohesion: 0.28
+Cohesion: 0.26
 Nodes (12): build_skeleton_graph(), depth_progress_pct(), max_graph_depth(), merge_node_patches(), Any, bool, datetime, int (+4 more)
 
 ### Community 315 - "Community 315"
@@ -1559,7 +1577,7 @@ Nodes (9): HoldingScoreBreakdown, Any, float, MarketTemperature, str, 从 compan
 
 ### Community 321 - "Community 321"
 Cohesion: 0.09
-Nodes (23): compute_size_level(), format_market_cap(), _normalize_market(), Any, bool, float, int, str (+15 more)
+Nodes (27): compute_size_level(), format_market_cap(), NodeResolver, _normalize_market(), Any, bool, float, int (+19 more)
 
 ### Community 322 - "Community 322"
 Cohesion: 0.25
@@ -1570,8 +1588,8 @@ Cohesion: 0.23
 Nodes (7): Any, bool, str, config_path(), load_last_config(), save_last_config(), ScreeningConfigStoreTests
 
 ### Community 324 - "Community 324"
-Cohesion: 0.06
-Nodes (98): int, SearchProvider, _default_search(), MacroScoreJsonClient, MacroScoreLLMScorer, float, int, str (+90 more)
+Cohesion: 0.07
+Nodes (63): _filter_existing_patches(), _patch_payload(), Any, SearchProvider, MacroScoreJsonClient, MacroScoreLLMScorer, float, int (+55 more)
 
 ### Community 325 - "Community 325"
 Cohesion: 0.12
@@ -1586,8 +1604,8 @@ Cohesion: 0.24
 Nodes (10): baseConfidence(), TradingBiasCard(), ZONE_COLORS, ZONE_LABELS, ZONE_PCT, generateExplanation(), scoreToBias(), chainDisplay() (+2 more)
 
 ### Community 328 - "Community 328"
-Cohesion: 0.15
-Nodes (6): _make_db_mock(), Create a real MarketDatabase instance (bypass __init__) with mocked conn., Create a real MarketDatabase instance (bypass __init__) with mocked conn., Create a real MarketDatabase instance (bypass __init__) with mocked conn., Create a real MarketDatabase instance (bypass __init__) with mocked conn., Create a real MarketDatabase instance (bypass __init__) with mocked conn.
+Cohesion: 0.17
+Nodes (7): _make_db_mock(), Create a real MarketDatabase instance (bypass __init__) with mocked conn., Create a real MarketDatabase instance (bypass __init__) with mocked conn., Create a real MarketDatabase instance (bypass __init__) with mocked conn., Create a real MarketDatabase instance (bypass __init__) with mocked conn., Create a real MarketDatabase instance (bypass __init__) with mocked conn., TestGraphCache
 
 ### Community 329 - "Community 329"
 Cohesion: 0.21
@@ -1605,13 +1623,17 @@ Nodes (14): bool, float, int, Path, str, _ensure_dotenv(), _is_packaged(), main(
 Cohesion: 0.12
 Nodes (21): MonitorEvent, MonitorEventSeverity, FillRecord, from_input(), label(), mid_price(), MonitorEvent, MonitorEventSeverity (+13 more)
 
+### Community 333 - "Community 333"
+Cohesion: 0.05
+Nodes (17): Append or refresh AI analysis columns in an existing CSV.      The write uses a, Append or refresh AI analysis columns in an existing CSV.      The write uses a, Runs analysis steps and converts failures into warnings., Runs analysis steps and converts failures into warnings., Runs analysis steps and converts failures into warnings., Append or refresh AI analysis columns in an existing CSV.      The write uses a, run(), SignalAnalysisChain (+9 more)
+
 ### Community 334 - "Community 334"
 Cohesion: 0.19
 Nodes (8): _compute_commodity_shock 实现测试。, 构建 commodity history mock DataFrame。, Patch yfinance.Ticker 返回映射好的 mock，并 mock yf_sleep。, 所有商品 abs(5d) < 2% → score=55（无显著波动 +5）。, 一个商品 abs(5d) > 10% → score=40（50 - 10）。, 多个冲击 + 一条严重 → score=35（50 - 10 - 5）。, YFinance 异常 → score=50，不崩溃。, TestCommodityShockComputation
 
 ### Community 335 - "Community 335"
-Cohesion: 0.18
-Nodes (6): 验证 evaluate_macro_rules_for_top20() 的正确行为。, evaluate_macro_rules_for_top20 应恰好执行 4 条规则。, 宏观规则不应出现在 evaluate_bullish_technical_rules 的结果中。, total_match_count 仍只统计技术规则命中，不受宏观规则影响。, 宏观规则结果 passed=True（不参与阻断）。, UnifiedBullishTop20MacroRulesForTop20Test
+Cohesion: 0.14
+Nodes (7): 验证 evaluate_macro_rules_for_top20() 的正确行为。, evaluate_macro_rules_for_top20 应恰好执行 4 条规则。, 宏观规则不应出现在 evaluate_bullish_technical_rules 的结果中。, total_match_count 仍只统计技术规则命中，不受宏观规则影响。, 宏观规则结果 passed=True（不参与阻断）。, setUpClass(), UnifiedBullishTop20MacroRulesForTop20Test
 
 ### Community 336 - "Community 336"
 Cohesion: 0.23
@@ -1630,8 +1652,8 @@ Cohesion: 0.12
 Nodes (16): code:ts (import type {), code:ts (rawNodes: TopologyRenderNodeData[]), code:ts (if (isAggregateNode(node)) return Math.min(54, 28 + node.hid), code:ts (if (isAggregateNode(node)) return `${node.aggregate_sector}\), code:ts (const aggregate = isAggregateNode(node)), code:ts (fill: aggregate ? 'rgba(96, 165, 250, 0.16)' : fill,), code:ts (const aggregate = isAggregateEdge(edge)), code:ts (lineWidth: aggregate ? 2 : cyclic ? 3 : (active || isPinned)) (+8 more)
 
 ### Community 341 - "Community 341"
-Cohesion: 0.31
-Nodes (4): get_strategy_condition_labels(), _zuoyi_direction_label(), _df(), TechnicalPatternTest
+Cohesion: 0.05
+Nodes (26): bool, Exception, int, hash_password(), _is_mysql_retryable_error(), Return a PBKDF2-SHA256 password hash string., Verify PBKDF2-SHA256 password hashes created by hash_password., Return a PBKDF2-SHA256 password hash string. (+18 more)
 
 ### Community 343 - "Community 343"
 Cohesion: 0.47
@@ -1686,8 +1708,8 @@ Cohesion: 0.22
 Nodes (8): 6.1 基本信息, 6.2 输入, 6.3 处理流程, 6.4 输出, 6.5 pass 的必要条件, code:block14 (FilterContext.cache →), code:block15 (1. _load_signal_analysis(stock, context)  # 同规则3), 六、规则4：`company_event_hot_news_link` — 公司时事×热点新闻验证
 
 ### Community 358 - "Community 358"
-Cohesion: 0.19
-Nodes (26): bar_to_dict(), Any, float, str, signal_to_dict(), trade_to_dict(), _bars_frame(), _chart_payload() (+18 more)
+Cohesion: 0.15
+Nodes (31): bar_to_dict(), Any, float, str, signal_to_dict(), trade_to_dict(), RuleChainStrategyAdapter, _bars_frame() (+23 more)
 
 ### Community 360 - "Community 360"
 Cohesion: 0.39
@@ -1698,8 +1720,8 @@ Cohesion: 0.36
 Nodes (6): BuildGlobalQueries(), BuildMarketQueries(), BuildQueries(), TestBuildContextQueries(), TestBuildGlobalQueriesUsesConfiguredQueries(), QuerySpec
 
 ### Community 362 - "Community 362"
-Cohesion: 0.09
-Nodes (23): date, int, Signal, StockInfo, str, RuleChainStrategyAdapter, _build_rule_chain_strategy(), RuleChainConfig (+15 more)
+Cohesion: 0.07
+Nodes (15): get_strategy_condition_labels(), _zuoyi_direction_label(), int, RuleChainConfig, from_row(), RuleChainConfig, RuleMetadata, RuleRegistry should instantiate EnergyPhaseClassifier from metadata. (+7 more)
 
 ### Community 364 - "Community 364"
 Cohesion: 0.43
@@ -1723,7 +1745,7 @@ Nodes (5): exports, ./style.css, import, require, types
 
 ### Community 370 - "Community 370"
 Cohesion: 0.11
-Nodes (41): DiGraph, Enum, GraphCache, Any, CachedRelation, datetime, float, int (+33 more)
+Nodes (41): DiGraph, GraphCache, Any, CachedRelation, datetime, float, int, str (+33 more)
 
 ### Community 371 - "Community 371"
 Cohesion: 0.40
@@ -1734,8 +1756,8 @@ Cohesion: 0.50
 Nodes (4): repository, directory, type, url
 
 ### Community 373 - "Community 373"
-Cohesion: 0.29
-Nodes (6): 插入或更新股票池数据          Args:             market: HK/US/A             pool_type: bes, 插入或更新股票池数据          Args:             market: HK/US/A             pool_type: bes, 插入或更新股票池数据          Args:             market: HK/US/A             pool_type: bes, 插入或更新股票池数据          Args:             market: HK/US/A             pool_type: bes, 插入或更新股票池数据          Args:             market: HK/US/A             pool_type: bes, 插入或更新股票池数据          Args:             market: HK/US/A             pool_type: bes
+Cohesion: 0.08
+Nodes (8): date, float, str, _decode_json_field(), 模糊搜索股票名称，支持中英文。按匹配精度 + 市值降序排列。, 兼容 PyMySQL 返回 JSON 字符串或已解析对象两种情况。, 兼容 PyMySQL 返回 JSON 字符串或已解析对象两种情况。, 兼容 PyMySQL 返回 JSON 字符串或已解析对象两种情况。
 
 ### Community 374 - "Community 374"
 Cohesion: 0.50
@@ -1750,32 +1772,60 @@ Cohesion: 0.67
 Nodes (3): peerDependencies, react, react-dom
 
 ### Community 400 - "Community 400"
-Cohesion: 0.33
-Nodes (5): 写入核心指数成分股快照，用于在线来源失败时兜底。, 写入核心指数成分股快照，用于在线来源失败时兜底。, 写入核心指数成分股快照，用于在线来源失败时兜底。, 写入核心指数成分股快照，用于在线来源失败时兜底。, 写入核心指数成分股快照，用于在线来源失败时兜底。
+Cohesion: 0.15
+Nodes (24): cache_row_is_valid(), _dedupe(), _dict_of_link_lists(), _direction_label(), expand_option_company_documents(), from_cache_row(), _instrument_type_for_market(), _list() (+16 more)
 
 ### Community 401 - "Community 401"
 Cohesion: 0.29
 Nodes (6): code:ts (function refreshSectorHulls(graph: G6Graph, nodes: TopologyR), code:bash (git add web_frontend/src/features/industryTopology/TopologyC), Task 1: Add Hull Refresh Helpers, Task 2: Sector-Aware Initial Layout, Task 3: Project Graph and Commit, Topology Sector Hull Interaction Implementation Plan
 
+### Community 403 - "Community 403"
+Cohesion: 0.14
+Nodes (21): BingBaiduSearchProvider, _build_browser_company_batch_query(), _get_global_browser(), is_available(), _is_news_quality_result(), bool, int, SearchDocument (+13 more)
+
+### Community 404 - "Community 404"
+Cohesion: 0.11
+Nodes (10): WebPlatformTests, create_rule_chain(), _collect_rule_keys(), parse_rule_expression(), MarketDatabase, str, Resolve the chain used by a Web-created job.      Explicit chain_key may point t, resolve_rule_chain() (+2 more)
+
 ### Community 405 - "Community 405"
 Cohesion: 0.29
 Nodes (6): code:ts (import type {), code:bash (cd web_frontend && npm run build), code:bash (git add web_frontend/src/features/industryTopology/topologyA), File Structure, Task 2: Implement Pure Sector Aggregation Helpers, Topology Sector Aggregation Implementation Plan
+
+### Community 406 - "Community 406"
+Cohesion: 0.22
+Nodes (15): bool, FilterContext, float, SignalAnalysisResult, StockInfo, str, StrategizerOutput, _analysis_cache_key() (+7 more)
 
 ### Community 407 - "Community 407"
 Cohesion: 0.29
 Nodes (6): 获取股票池数据          Args:             market: HK/US/A             pool_type: best/m, 获取股票池数据          Args:             market: HK/US/A             pool_type: best/m, 获取股票池数据          Args:             market: HK/US/A             pool_type: best/m, 获取股票池数据          Args:             market: HK/US/A             pool_type: best/m, 获取股票池数据          Args:             market: HK/US/A             pool_type: best/m, 获取股票池数据          Args:             market: HK/US/A             pool_type: best/m
 
 ### Community 408 - "Community 408"
-Cohesion: 0.25
-Nodes (3): 无缓存时 is_stale() 返回 True。, 缓存命中：TTL 内直接返回，不重新计算。, TestMarketCacheTTL
+Cohesion: 0.20
+Nodes (20): KlineFetcherFactory, K 线获取器工厂 - 按优先级创建 fetcher 链, K 线获取器工厂 - 按优先级创建 fetcher 链, K 线获取器工厂 - 按优先级创建 fetcher 链, backtest(), BacktestResult, fetch_kline(), main() (+12 more)
 
 ### Community 409 - "Community 409"
-Cohesion: 0.42
-Nodes (5): _filter_existing_patches(), _patch_payload(), Any, SearchDocument, str
+Cohesion: 0.46
+Nodes (3): int, SearchDocument, str
+
+### Community 410 - "Community 410"
+Cohesion: 0.12
+Nodes (15): 获取 EMA 信号表名：ema_breakout_signals_{timeframe}, 确保指定 timeframe 的 EMA 信号表存在（幂等）, 将 timeframe 转为安全的表名后缀（仅字母数字）, 将 timeframe 转为安全的表名后缀（仅字母数字）, 将 timeframe 转为安全的表名后缀（仅字母数字）, 将 timeframe 转为安全的表名后缀（仅字母数字）, 获取 EMA 信号表名：ema_breakout_signals_{timeframe}, 确保指定 timeframe 的 EMA 信号表存在（幂等） (+7 more)
+
+### Community 411 - "Community 411"
+Cohesion: 0.30
+Nodes (5): OptionLabApiTests, RecordingMacroProvider, OptionBatchEvaluateRequest, OptionEvaluateRequest, risk_profile_from_request()
 
 ### Community 412 - "Community 412"
 Cohesion: 0.40
 Nodes (5): code:css (.topo-view-mode {), code:css (.topo-detail-panel--aggregate {), code:bash (cd web_frontend && npm run build), code:bash (git add web_frontend/src/styles.css), Task 5: Add Styles For Summary Controls And Aggregate Detail
+
+### Community 416 - "Community 416"
+Cohesion: 0.27
+Nodes (12): BusinessError, JSONResponse, RequestValidationError, StarletteHTTPException, business_error(), business_error_handler(), http_exception_handler(), Any (+4 more)
+
+### Community 417 - "Community 417"
+Cohesion: 0.27
+Nodes (8): enforce_rate_limit(), _format_retry_after(), InMemorySlidingWindowRateLimiter, int, str, RateLimitDecision, RateLimitRule, Process-local sliding-window limiter for the single web-api instance.
 
 ### Community 418 - "Community 418"
 Cohesion: 0.50
@@ -1785,20 +1835,56 @@ Nodes (4): code:ts (export interface TopologyAggregateNodeData extends TopologyN
 Cohesion: 0.50
 Nodes (4): code:bash (cd web_frontend && npm run dev), code:bash (cd web_frontend && npm run build), code:bash (git add docs/superpowers/plans/2026-06-30-topology-sector-ag), Task 6: Manual Verification With US.NVDA
 
+### Community 421 - "Community 421"
+Cohesion: 0.36
+Nodes (8): DataFrame, float, Series, One human-facing risk signal., RiskSignal, _safe_pct(), _score(), _top_volume_price_interval()
+
+### Community 422 - "Community 422"
+Cohesion: 0.24
+Nodes (7): _http_retry(), Any, float, Call *send_fn*() with exponential backoff on rate-limit errors.          **All n, Called after a failing 429 response. After consecutive failures         exceed t, Reset consecutive error counter on a successful call., Call *send_fn*() with exponential backoff on rate-limit errors (429/432/5xx).
+
+### Community 423 - "Community 423"
+Cohesion: 0.64
+Nodes (3): BlockStatus, str, StockTerminalService
+
+### Community 424 - "Community 424"
+Cohesion: 0.53
+Nodes (3): Any, int, str
+
+### Community 425 - "Community 425"
+Cohesion: 0.36
+Nodes (4): Any, EnterprisePotentialEvidencePackage, str, 单只股票的评分提示词（批量 N=1 特殊情况）
+
+### Community 426 - "Community 426"
+Cohesion: 0.50
+Nodes (4): date, Signal, StockInfo, str
+
+### Community 427 - "Community 427"
+Cohesion: 0.36
+Nodes (5): _format_provider_error(), _log_fallback_exhausted(), _log_fallback_step(), Return providers that are currently available (respects dynamic is_available)., Batch-first, then per-stock fallback for unmatched stocks.          Phase 1: Try
+
+### Community 428 - "Community 428"
+Cohesion: 0.43
+Nodes (6): _adjust_candidate(), apply_risk_profile(), float, RiskProfile, str, StrategyCandidate
+
+### Community 429 - "Community 429"
+Cohesion: 0.33
+Nodes (5): 读取某个市场和周期优先级最高的启用规则链，精确周期优先。, 读取某个市场和周期优先级最高的启用规则链，精确周期优先。, 读取某个市场和周期优先级最高的启用规则链，精确周期优先。, 读取某个市场和周期优先级最高的启用规则链，精确周期优先。, 读取某个市场和周期优先级最高的启用规则链，精确周期优先。
+
 ## Knowledge Gaps
 - **1781 isolated node(s):** `Exception`, `DataFrame`, `bool`, `int`, `float` (+1776 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **73 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **74 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `MarketDatabase` connect `Community 30` to `Community 0`, `Community 2`, `Community 5`, `Community 11`, `Community 14`, `Community 400`, `Community 276`, `Community 21`, `Community 22`, `Community 407`, `Community 23`, `Community 281`, `Community 284`, `Community 290`, `Community 37`, `Community 294`, `Community 295`, `Community 46`, `Community 50`, `Community 309`, `Community 55`, `Community 317`, `Community 65`, `Community 321`, `Community 324`, `Community 70`, `Community 335`, `Community 82`, `Community 83`, `Community 87`, `Community 88`, `Community 92`, `Community 350`, `Community 96`, `Community 102`, `Community 362`, `Community 108`, `Community 373`?**
-  _High betweenness centrality (0.118) - this node is a cross-community bridge._
-- **Why does `MarketCache` connect `Community 108` to `Community 280`, `Community 2`, `Community 3`, `Community 293`, `Community 71`, `Community 297`, `Community 12`, `Community 334`, `Community 50`, `Community 408`, `Community 30`?**
+- **Why does `MarketDatabase` connect `Community 30` to `Community 0`, `Community 2`, `Community 5`, `Community 11`, `Community 13`, `Community 14`, `Community 276`, `Community 404`, `Community 22`, `Community 407`, `Community 23`, `Community 281`, `Community 410`, `Community 408`, `Community 284`, `Community 21`, `Community 290`, `Community 292`, `Community 37`, `Community 294`, `Community 295`, `Community 429`, `Community 46`, `Community 50`, `Community 55`, `Community 317`, `Community 65`, `Community 321`, `Community 324`, `Community 70`, `Community 328`, `Community 330`, `Community 335`, `Community 82`, `Community 83`, `Community 341`, `Community 87`, `Community 88`, `Community 92`, `Community 350`, `Community 96`, `Community 102`, `Community 362`, `Community 108`, `Community 373`?**
+  _High betweenness centrality (0.119) - this node is a cross-community bridge._
+- **Why does `MarketCache` connect `Community 108` to `Community 2`, `Community 3`, `Community 293`, `Community 71`, `Community 297`, `Community 12`, `Community 333`, `Community 334`, `Community 83`, `Community 280`, `Community 30`?**
   _High betweenness centrality (0.037) - this node is a cross-community bridge._
-- **Why does `normalize_market()` connect `Community 28` to `Community 32`, `Community 0`, `Community 2`, `Community 1`, `Community 102`, `Community 8`, `Community 9`, `Community 11`, `Community 109`, `Community 14`, `Community 207`, `Community 50`, `Community 307`, `Community 83`, `Community 309`, `Community 23`, `Community 88`, `Community 25`?**
-  _High betweenness centrality (0.027) - this node is a cross-community bridge._
+- **Why does `normalize_market()` connect `Community 32` to `Community 0`, `Community 2`, `Community 102`, `Community 8`, `Community 9`, `Community 11`, `Community 109`, `Community 14`, `Community 207`, `Community 50`, `Community 307`, `Community 83`, `Community 309`, `Community 404`, `Community 23`, `Community 88`, `Community 25`, `Community 28`?**
+  _High betweenness centrality (0.032) - this node is a cross-community bridge._
 - **Are the 204 inferred relationships involving `MarketDatabase` (e.g. with `CustomListParseResult` and `CustomListCodeParser`) actually correct?**
   _`MarketDatabase` has 204 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 141 inferred relationships involving `StockInfo` (e.g. with `RuleMetadata` and `RuleChainConfig`) actually correct?**

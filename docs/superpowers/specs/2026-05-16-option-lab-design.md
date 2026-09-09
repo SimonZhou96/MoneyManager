@@ -5,7 +5,7 @@
 MoneyManager already has a stock screening platform under `stock_screener`.
 It includes FastAPI endpoints, a React frontend, MySQL persistence, Futu
 OpenD integration, yfinance/AKShare K-line fallback, Feishu notifications,
-single-stock analysis, custom-list screening, and local-agent execution.
+single-stock analysis and custom-list screening.
 
 The new requirement is to evaluate whether options for a specific stock, ETF,
 or index are worth trading, what price range is reasonable, how long to hold,
