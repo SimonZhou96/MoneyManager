@@ -2,17 +2,13 @@
 # -*- coding: utf-8 -*-
 
 import unittest
+from contextlib import contextmanager
 from datetime import date
 from unittest.mock import patch
 
 import pandas as pd
 
 from quant_lab.data_provider import CachedKlineDataProvider
-
-
-class EmptyRepository:
-    def get_kline_cache(self, market, code, timeframe, max_count=500):
-        return pd.DataFrame()
 
 
 class EmptyFetcher:
@@ -36,15 +32,6 @@ class WorkingFetcher:
         )
 
 
-class CacheRepository:
-    def get_kline_cache(self, market, code, timeframe, max_count=500):
-        return pd.DataFrame(
-            [
-                {"date": "2026-05-18", "open": 20, "high": 21, "low": 19, "close": 20.5, "volume": 10},
-            ]
-        )
-
-
 class FutuFetcher:
     def get_name(self):
         return "FutuOpenAPI"
@@ -59,36 +46,32 @@ class FutuFetcher:
 
 class CachedKlineDataProviderTest(unittest.TestCase):
     def test_network_fallback_uses_fetcher_chain_until_one_returns_data(self):
-        provider = CachedKlineDataProvider(repository=EmptyRepository(), timeframe="1d")
+        provider = CachedKlineDataProvider(repository=None, timeframe="1d")
 
-        with patch("quant_lab.data_provider.KlineFetcherFactory.create_fetcher_chain", return_value=[EmptyFetcher(), WorkingFetcher()]):
+        with patch("quant_lab.data_provider.managed_fetcher_chain", _chain([EmptyFetcher(), WorkingFetcher()])):
             bars = provider.bars_for("HK", "HK.01810", date(2026, 5, 1), date(2026, 5, 18))
 
         self.assertEqual(len(bars), 2)
         self.assertEqual(bars[-1].ts, date(2026, 5, 18))
         self.assertEqual(bars[-1].close, 30.66)
 
-    def test_database_cache_is_used_before_futu_quote_context(self):
+    def test_explicit_futu_context_is_used_without_database_cache(self):
         quote_ctx = object()
-        provider = CachedKlineDataProvider(repository=CacheRepository(), timeframe="1d", quote_ctx=quote_ctx)
+        provider = CachedKlineDataProvider(repository=None, timeframe="1d", quote_ctx=quote_ctx)
 
-        with patch("quant_lab.data_provider.KlineFetcherFactory.create_fetcher_chain", return_value=[FutuFetcher()]) as factory:
+        with patch.object(provider, "_futu_fetcher", return_value=FutuFetcher()) as futu:
             bars = provider.bars_for("HK", "HK.01810", date(2026, 5, 1), date(2026, 5, 18))
 
-        factory.assert_not_called()
-        self.assertEqual(len(bars), 1)
-        self.assertEqual(bars[0].close, 20.5)
-
-    def test_empty_database_cache_falls_back_to_futu_before_public_sources(self):
-        quote_ctx = object()
-        provider = CachedKlineDataProvider(repository=EmptyRepository(), timeframe="1d", quote_ctx=quote_ctx)
-
-        with patch("quant_lab.data_provider.KlineFetcherFactory.create_fetcher_chain", return_value=[FutuFetcher()]) as factory:
-            bars = provider.bars_for("HK", "HK.01810", date(2026, 5, 1), date(2026, 5, 18))
-
-        factory.assert_called_with(quote_ctx=quote_ctx)
+        futu.assert_called_once()
         self.assertEqual(len(bars), 1)
         self.assertEqual(bars[0].close, 31.5)
+
+
+def _chain(fetchers):
+    @contextmanager
+    def context():
+        yield fetchers
+    return context
 
 
 if __name__ == "__main__":

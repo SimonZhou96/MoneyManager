@@ -520,10 +520,12 @@ class ScreeningInteractiveApp:
         using_stale_pools = not options.fetch_pools
         if options.fetch_pools:
             try:
-                import futu as ft
+                from kline_fetcher import _ready_opend_quote_context
                 from stock_pool import StockPoolFetcher
 
-                quote_ctx = ft.OpenQuoteContext(host=options.futu_host, port=options.futu_port)
+                quote_ctx = _ready_opend_quote_context()
+                if quote_ctx is None:
+                    raise RuntimeError("Futu OpenD is disabled or not READY/qot_logined")
                 try:
                     fetcher = StockPoolFetcher(quote_ctx=quote_ctx, db=db)
                     fetch_all_markets_pools(db, fetcher, options.markets, options.pools)

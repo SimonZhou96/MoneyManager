@@ -128,15 +128,15 @@ class NodeResolver:
     def _fetch_pct_chg(self, code: str, market: str) -> Optional[float]:
         """取最近一日涨跌幅（%）。失败返回 None，不抛。"""
         try:
-            from kline_fetcher import KlineFetcherFactory
-            fetchers = KlineFetcherFactory.create_fetcher_chain(db=self.db)
-            for fetcher in fetchers:
-                df = fetcher.fetch(code, market=market, timeframe="1d", max_count=2)
-                if df is not None and not df.empty and "change_rate" in df.columns:
-                    last = df["change_rate"].dropna()
-                    if len(last):
-                        return round(float(last.iloc[-1]), 2)
-                    break
+            from kline_fetcher import managed_fetcher_chain
+            with managed_fetcher_chain() as fetchers:
+                for fetcher in fetchers:
+                    df = fetcher.fetch(code, market=market, timeframe="1d", max_count=2)
+                    if df is not None and not df.empty and "change_rate" in df.columns:
+                        last = df["change_rate"].dropna()
+                        if len(last):
+                            return round(float(last.iloc[-1]), 2)
+                        break
             return None
         except Exception:
             return None

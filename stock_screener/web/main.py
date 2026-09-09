@@ -416,19 +416,11 @@ class BulkSectorRequest(BaseModel):
     rows: List[Dict[str, Any]]
 
 
-class BulkKlineRequest(BaseModel):
-    sync_run_id: str
-    rows: List[Dict[str, Any]]
-    prune: bool = True
-    max_bars: int = 500
-
-
 class CompleteSyncRunRequest(BaseModel):
     status: str = "success"
     error_message: Optional[str] = None
     stock_pool_rows: Optional[int] = None
     sector_rows: Optional[int] = None
-    kline_rows: Optional[int] = None
 
 
 class AgentJobClaimRequest(BaseModel):
@@ -1152,22 +1144,6 @@ def bulk_sector(payload: BulkSectorRequest, db: MarketDatabase = Depends(get_db)
     return {"written": len(rows)}
 
 
-@app.post("/api/agent/klines/bulk-upsert", dependencies=[Depends(require_agent)])
-def bulk_klines(payload: BulkKlineRequest, db: MarketDatabase = Depends(get_db)):
-    validate_agent_bulk_size(payload.rows)
-    rows = [dict(row, sync_run_id=payload.sync_run_id, source=row.get("source") or "opend_cache") for row in payload.rows]
-    written = db.upsert_kline_cache(rows)
-    if payload.prune:
-        seen = set()
-        for row in rows:
-            key = (row.get("market"), row.get("code"), row.get("timeframe"))
-            if None in key or key in seen:
-                continue
-            seen.add(key)
-            db.prune_kline_cache(key[0], key[1], key[2], payload.max_bars)
-    return {"written": written}
-
-
 @app.post("/api/agent/sync-runs/{sync_run_id}/complete", dependencies=[Depends(require_agent)])
 def complete_sync_run(sync_run_id: str, payload: CompleteSyncRunRequest, db: MarketDatabase = Depends(get_db)):
     db.complete_data_sync_run(
@@ -1176,6 +1152,5 @@ def complete_sync_run(sync_run_id: str, payload: CompleteSyncRunRequest, db: Mar
         error_message=payload.error_message,
         stock_pool_rows=payload.stock_pool_rows,
         sector_rows=payload.sector_rows,
-        kline_rows=payload.kline_rows,
     )
     return {"sync_run_id": sync_run_id, "status": payload.status}

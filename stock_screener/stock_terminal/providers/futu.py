@@ -19,12 +19,14 @@ class FutuStockTerminalProvider:
         futu_code = self._futu_code(market, code)
         try:
             import futu as ft
+            from kline_fetcher import _ready_opend_quote_context
         except Exception as exc:
             raise RuntimeError(f"futu unavailable: {exc}") from exc
 
-        quote_ctx = None
+        quote_ctx = _ready_opend_quote_context()
+        if quote_ctx is None:
+            raise RuntimeError("Futu OpenD is disabled or not READY/qot_logined")
         try:
-            quote_ctx = ft.OpenQuoteContext(host=self.host, port=self.port)
             ret, data = quote_ctx.get_market_snapshot([futu_code])
             if ret != ft.RET_OK:
                 raise RuntimeError(str(data))

@@ -462,13 +462,14 @@ def enrich_records_with_main_force_risks(
     service = None
     try:
         db.init_main_force_risk_schema()
-        fetchers = KlineFetcherFactory.create_fetcher_chain(db=db)
-        service = MainForceRiskServiceFactory.from_env(kline_fetchers=fetchers, market=market)
-        results = service.analyze_records(
-            market=market,
-            timeframe=timeframe,
-            records=records,
-        )
+        from kline_fetcher import managed_fetcher_chain
+        with managed_fetcher_chain() as fetchers:
+            service = MainForceRiskServiceFactory.from_env(kline_fetchers=fetchers, market=market)
+            results = service.analyze_records(
+                market=market,
+                timeframe=timeframe,
+                records=records,
+            )
         detail_rows = [
             result.to_db_row(
                 task_id=task_id,
@@ -1029,9 +1030,11 @@ def main():
     fetch_failed = False
     if not args.no_fetch:
         try:
-            import futu as ft
+            from kline_fetcher import _ready_opend_quote_context
             from stock_pool import StockPoolFetcher
-            quote_ctx = ft.OpenQuoteContext(host=args.futu_host, port=args.futu_port)
+            quote_ctx = _ready_opend_quote_context()
+            if quote_ctx is None:
+                raise RuntimeError("Futu OpenD is disabled or not READY/qot_logined")
             fetcher = StockPoolFetcher(quote_ctx=quote_ctx, db=db)
             fetch_all_markets_pools(db, fetcher, markets, pools)
             sync_sector_memberships_for_markets(db, fetcher, markets)

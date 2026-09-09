@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
 
@@ -197,9 +197,7 @@ def _query_sector_heat(
 ) -> tuple:
     """从 DB 查询板块热度。返回 (sectors, data_date)。
 
-    数据源:
-      - stock_pools: 当日价格/市值/成交额
-      - stock_kline_cache: 前日收盘价（计算涨跌幅）
+    价格与涨跌幅来自实时日 K 线；只在本次计算中复用同一个受管数据源链路。
     """
     # Step 1: stock_pools JOIN 板块成员 → 价格、市值、成交额。用 pool_type='best' 命中唯一索引。
     sql_pool = """
@@ -217,32 +215,8 @@ def _query_sector_heat(
     if not pool_rows:
         return [], None
 
-    # Step 2: stock_kline_cache → 前一日收盘价（计算涨跌幅）+ 最新交易日
     data_date: Optional[str] = None
-    prev_close_by_code: Dict[str, float] = {}
-    with db.conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT MAX(bar_time) FROM stock_kline_cache WHERE market=%s AND timeframe='1d'",
-            [market],
-        )
-        latest = (cursor.fetchone() or [None])[0]
-        if latest:
-            data_date = str(latest)[:10]  # YYYY-MM-DD
-        if latest:
-            cursor.execute(
-                "SELECT MAX(bar_time) FROM stock_kline_cache "
-                "WHERE market=%s AND timeframe='1d' AND bar_time < %s",
-                [market, latest],
-            )
-            prev_date = (cursor.fetchone() or [None])[0]
-            if prev_date:
-                cursor.execute(
-                    "SELECT code, close FROM stock_kline_cache "
-                    "WHERE market=%s AND timeframe='1d' AND bar_time=%s",
-                    [market, prev_date],
-                )
-                for code, close in cursor.fetchall() or []:
-                    prev_close_by_code[code] = float(close or 0)
+    bars_by_code = _fetch_daily_bars(market, {row[1] for row in pool_rows}, max_count=2)
 
     # Step 3: Python 聚合（换手率 + 涨跌幅 + 市值 + 广度）
     sector_agg: Dict[str, Dict[str, Any]] = defaultdict(
@@ -250,13 +224,18 @@ def _query_sector_heat(
                  "sum_cap": 0.0, "count": 0, "up": 0}
     )
     for sector_name, code, price, market_cap, turnover in pool_rows:
-        cur = float(price or 0)
+        bars = bars_by_code.get(code, [])
+        if len(bars) < 2:
+            continue
+        latest, previous = bars[-1], bars[-2]
+        cur = float(latest.get("close") or price or 0)
         cap = float(market_cap or 0)
         t = float(turnover or 0)
         if cur <= 0:
             continue
-        prev = prev_close_by_code.get(code, 0)
+        prev = float(previous.get("close") or 0)
         change_pct = (cur - prev) / prev * 100 if prev > 0 else 0
+        data_date = data_date or str(latest.get("date") or "")[:10] or None
 
         agg = sector_agg[sector_name]
         agg["codes"].add(code)
@@ -416,10 +395,8 @@ def get_sector_stocks(
         raise BusinessError("SECTORS_STOCKS_FAILED", f"查询板块成分股失败: {exc}") from exc
 
     stocks = []
-    missing_codes = []
     for item in members:
         code = item.get("code", "")
-        has_price = item.get("close") is not None
         stocks.append({
             "code": code,
             "name": item.get("name") or code,
@@ -429,13 +406,6 @@ def get_sector_stocks(
             "market_cap": item.get("market_cap"),
             "date": item.get("date"),
         })
-        if not has_price:
-            missing_codes.append(code)
-
-    # 对没有 K 线缓存的股票，并发实时获取（最多 3 只，单只 5s 超时）
-    if missing_codes:
-        _fill_missing_klines(db, normalized, stocks, missing_codes, timeout_per_stock=5.0, max_workers=3)
-
     return {
         "market": normalized,
         "sector": sector_name,
@@ -444,94 +414,36 @@ def get_sector_stocks(
     }
 
 
-def _fill_missing_klines(
-    db: MarketDatabase,
+def _fetch_daily_bars(
     market: str,
-    stocks: list,
-    missing_codes: list,
-    timeout_per_stock: float = 5.0,
-    max_workers: int = 3,
-) -> None:
-    """对缺失 K 线数据的股票，从 fallback 链实时获取并写回缓存。"""
-    import sys
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    from kline_fetcher import KlineFetcherFactory
+    codes: set[str],
+    max_count: int,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Fetch bounded daily bars without writing a persistent K-line cache."""
+    from kline_fetcher import managed_fetcher_chain
 
-    fetchers = KlineFetcherFactory.create_fetcher_chain(db=db)
-
-    def _fetch_one(code: str) -> dict | None:
-        import math
-        for fetcher in fetchers:
-            try:
-                df = fetcher.fetch(code, market=market, timeframe="1d", max_count=5)
-            except Exception:
-                continue
-            if df is None or getattr(df, "empty", True) or len(df) < 1:
-                continue
-            latest = df.iloc[-1]
-            close = float(latest.get("close") or 0)
-            open_val = float(latest.get("open") or 0)
-            volume_val = float(latest.get("volume") or 0)
-            date_val = str(latest.get("date") or "")
-            if close <= 0:
-                continue
-            # 计算前一日收盘价（用于涨跌幅）
-            prev_close = None
-            if len(df) >= 2:
-                prev_close = float(df.iloc[-2].get("close") or 0)
-            return {
-                "code": code,
-                "close": close,
-                "open": open_val if open_val > 0 else None,
-                "volume": volume_val if volume_val > 0 else None,
-                "date": date_val,
-                "prev_close": prev_close if prev_close and prev_close > 0 else None,
-                "source": fetcher.get_name(),
-            }
-        return None
-
-    codes_to_fetch = missing_codes[:max(1, min(len(missing_codes), 5))]  # 最多并发 5 只
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_fetch_one, code): code for code in codes_to_fetch}
-        for future in as_completed(futures, timeout=timeout_per_stock * 2):
-            code = futures[future]
-            try:
-                result = future.result(timeout=timeout_per_stock)
-            except Exception:
-                continue
-            if result is None:
-                continue
-
-            # 写回 stock_kline_cache
-            try:
-                db.upsert_kline_cache([{
-                    "market": market,
-                    "code": result["code"],
-                    "timeframe": "1d",
-                    "bar_time": result["date"],
-                    "open": result.get("open"),
-                    "high": result.get("close"),  # fallback: 只用 close 近似
-                    "low": result.get("close"),
-                    "close": result["close"],
-                    "volume": result.get("volume"),
-                    "source": result.get("source", "sector_fallback"),
-                }])
-            except Exception as exc:
-                print(f"[sectors] cache write failed for {result['code']}: {exc}", file=sys.stderr)
-
-            # 更新返回结果中的对应股票
-            for stock in stocks:
-                if stock["code"] != result["code"]:
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    with managed_fetcher_chain() as fetchers:
+        for code in sorted(codes):
+            for fetcher in fetchers:
+                try:
+                    frame = fetcher.fetch(code, market=market, timeframe="1d", max_count=max_count)
+                except Exception:
                     continue
-                stock["price"] = result["close"]
-                if result["date"]:
-                    stock["date"] = result["date"]
-                stock["volume"] = result.get("volume")
-                change = None
-                if result.get("prev_close") and result["prev_close"] > 0:
-                    change = round((result["close"] - result["prev_close"]) / result["prev_close"] * 100, 2)
-                stock["change_pct"] = change
-                break
+                if frame is None or getattr(frame, "empty", True):
+                    continue
+                bars = []
+                for _, row in frame.tail(max_count).iterrows():
+                    bars.append({
+                        "date": str(row.get("date") or ""),
+                        "open": row.get("open"), "high": row.get("high"),
+                        "low": row.get("low"), "close": row.get("close"),
+                        "volume": row.get("volume"), "source": fetcher.get_name(),
+                    })
+                if bars:
+                    result[code] = bars
+                    break
+    return result
 
 
 def _reverse_lookup_cn(cn_name: str) -> str:
@@ -545,49 +457,28 @@ def _reverse_lookup_cn(cn_name: str) -> str:
 def _query_sector_stocks(
     db: MarketDatabase, market: str, sector_name: str, limit: int
 ) -> List[dict]:
-    """从 stock_kline_cache + stocks 查询板块成分股"""
-    # 找最新两个交易日
-    with db.conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT MAX(bar_time) FROM stock_kline_cache "
-            "WHERE market = %s AND timeframe = '1d'",
-            [market],
-        )
-        latest_date = (cursor.fetchone() or [None])[0]
-        if not latest_date:
-            return []
-        cursor.execute(
-            "SELECT MAX(bar_time) FROM stock_kline_cache "
-            "WHERE market = %s AND timeframe = '1d' AND bar_time < %s",
-            [market, latest_date],
-        )
-        prev_date = (cursor.fetchone() or [None])[0]
-
-    # 用 LEFT JOIN 确保没有 K 线数据的股票也能展示（价格/涨跌为空）
-    # DISTINCT 去重（同一只股票可能属于同一板块的多个子分类）
+    """查询成分股，并在当前请求中实时读取最近两根日 K。"""
     sql = """
-        SELECT DISTINCT m.code, s.name, s.market_cap,
-               k1.close, k1.volume, k1.bar_time,
-               k2.close AS prev_close
+        SELECT DISTINCT m.code, s.name, s.market_cap
         FROM stock_sector_memberships m
         LEFT JOIN stocks s
             ON s.market = m.market AND s.code = m.code
-        LEFT JOIN stock_kline_cache k1
-            ON k1.market = m.market AND k1.code = m.code
-            AND k1.timeframe = '1d' AND k1.bar_time = %s
-        LEFT JOIN stock_kline_cache k2
-            ON k2.market = m.market AND k2.code = m.code
-            AND k2.timeframe = '1d' AND k2.bar_time = %s
         WHERE m.market = %s AND m.sector_name = %s
         ORDER BY s.market_cap DESC
         LIMIT %s
     """
     with db.conn.cursor() as cursor:
-        cursor.execute(sql, [latest_date, prev_date, market, sector_name, limit])
+        cursor.execute(sql, [market, sector_name, limit])
         rows = cursor.fetchall() or []
 
+    bars_by_code = _fetch_daily_bars(market, {row[0] for row in rows}, max_count=2)
     result = []
-    for code, name, market_cap, close, volume, bar_time, prev_close in rows:
+    for code, name, market_cap in rows:
+        bars = bars_by_code.get(code, [])
+        latest = bars[-1] if bars else {}
+        previous = bars[-2] if len(bars) >= 2 else {}
+        close = latest.get("close")
+        prev_close = previous.get("close")
         change = None
         if prev_close and close and float(prev_close) > 0:
             change = round((float(close) - float(prev_close)) / float(prev_close) * 100, 2)
@@ -596,8 +487,8 @@ def _query_sector_stocks(
             "name": name or code,
             "close": float(close) if close is not None else None,
             "change_percent": change,
-            "volume": volume,
+            "volume": latest.get("volume"),
             "market_cap": market_cap,
-            "date": str(bar_time) if bar_time else None,
+            "date": str(latest.get("date") or "") or None,
         })
     return result

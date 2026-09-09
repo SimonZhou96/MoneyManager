@@ -15,6 +15,8 @@ import warnings
 import sys
 import os
 import traceback
+from contextlib import contextmanager
+from typing import Iterator
 
 try:
     from .timeframe import (
@@ -107,6 +109,69 @@ def _normalize_dataframe(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 def _log_fetch_warning(source: str, action: str, error: Exception) -> None:
     """对预期网络失败输出简短日志，避免刷整屏 traceback。"""
     print(f"[{source}] {action} failed: {error}", file=sys.stderr)
+
+
+def _env_enabled(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ready_opend_quote_context():
+    """Return a verified OpenD quote context, or None when direct OpenD is unavailable."""
+    if not _env_enabled("KLINE_USE_FUTU_OPEND", default=False):
+        return None
+
+    quote_ctx = None
+    try:
+        import futu as ft
+
+        host = os.getenv("FUTU_HOST", "127.0.0.1")
+        port = int(os.getenv("FUTU_PORT", "11111"))
+        quote_ctx = ft.OpenQuoteContext(host=host, port=port)
+        ret, state = quote_ctx.get_global_state()
+        is_ready = (
+            ret == ft.RET_OK
+            and str((state or {}).get("program_status_type") or "").upper() == "READY"
+            and bool((state or {}).get("qot_logined"))
+        )
+        if is_ready:
+            return quote_ctx
+    except Exception as exc:
+        _log_fetch_warning("FutuOpenD", "health check", exc)
+
+    if quote_ctx is not None:
+        try:
+            quote_ctx.close()
+        except Exception:
+            pass
+    return None
+
+
+@contextmanager
+def managed_fetcher_chain(rate_limiter=None) -> Iterator[List["KlineFetcherBase"]]:
+    """Build one task-scoped K-line chain and release all owned resources."""
+    quote_ctx = _ready_opend_quote_context()
+    fetchers = KlineFetcherFactory.create_fetcher_chain(
+        quote_ctx=quote_ctx,
+        rate_limiter=rate_limiter,
+    )
+    try:
+        yield fetchers
+    finally:
+        for fetcher in fetchers:
+            close = getattr(fetcher, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+        if quote_ctx is not None:
+            try:
+                quote_ctx.close()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -408,69 +473,6 @@ class AKShareKlineFetcher(KlineFetcherBase):
 
 
 # ---------------------------------------------------------------------------
-# Database cache
-# ---------------------------------------------------------------------------
-
-class DatabaseKlineFetcher(KlineFetcherBase):
-    """K 线缓存获取器：优先读取本地 Agent 推送到 MySQL 的缓存。
-
-    新增 freshness 检查：如果缓存中最新的 K 线距今超过
-    max_staleness_days 天，拒绝返回，让链降级到实时数据源。
-    """
-
-    def __init__(self, db, min_rows: int = 20, max_staleness_days: int = 4):
-        self.db = db
-        self.min_rows = max(1, int(min_rows))
-        self.max_staleness_days = max(1, int(max_staleness_days))
-
-    def get_name(self) -> str:
-        return "DatabaseKlineCache"
-
-    def fetch(
-        self,
-        stock_code: str,
-        market: str = "HK",
-        timeframe: str = "1d",
-        max_count: int = 2000,
-    ) -> Optional[pd.DataFrame]:
-        try:
-            df = self.db.get_kline_cache(market=market, code=stock_code, timeframe=timeframe, max_count=max_count)
-            if df is None or df.empty or len(df) < self.min_rows:
-                return None
-            normalized = _normalize_dataframe(df)
-            if normalized is None or normalized.empty:
-                return None
-
-            # ── 数据新鲜度检查 ──
-            # 如果缓存中最新 bar 的日期距今超过 max_staleness_days 天，
-            # 说明 Agent 已停止推送或者这只股票的数据更新延迟了。
-            # 此时返回 None，让链降级到 YFinance/AKShare 等实时数据源。
-            from datetime import date, timedelta
-            try:
-                latest_date = normalized["date"].max()
-                if hasattr(latest_date, "date"):
-                    latest_date = latest_date.date()
-                elif hasattr(latest_date, "to_pydatetime"):
-                    latest_date = latest_date.to_pydatetime().date()
-                cutoff = date.today() - timedelta(days=self.max_staleness_days)
-                if latest_date < cutoff:
-                    print(
-                        f"[DatabaseKlineCache] stale cache for {stock_code}: "
-                        f"latest={latest_date} > {self.max_staleness_days}d old, "
-                        f"falling through to live source",
-                        file=sys.stderr,
-                    )
-                    return None
-            except Exception:
-                pass  # 日期解析失败时保守放行
-
-            return normalized.tail(max_count).reset_index(drop=True)
-        except Exception as e:
-            _log_fetch_warning("DatabaseKlineCache", f"fetch code={stock_code} market={market} timeframe={timeframe}", e)
-            return None
-
-
-# ---------------------------------------------------------------------------
 # Futu
 # ---------------------------------------------------------------------------
 
@@ -604,58 +606,6 @@ class FutuKlineFetcher(KlineFetcherBase):
 
 
 # ---------------------------------------------------------------------------
-# Futu OpenD 自动连接（通过环境变量配置，每次 fetch 创建临时连接）
-# ---------------------------------------------------------------------------
-
-class OpenDQuotedKlineFetcher(KlineFetcherBase):
-    """通过环境变量自动连接 Futu OpenD 的 K 线获取器。
-
-    与 FutuKlineFetcher 不同，此类自行管理 OpenD 连接生命周期：
-    每次 fetch() 时创建临时 quote_ctx，用完即释放。
-    适用于 web 后端多请求并发场景（每个请求独立连接，避免连接池耗尽）。
-
-    配置：
-        FUTU_OPEN_HOST — OpenD 主机地址（默认不设置，不启用）
-        FUTU_OPEN_PORT — OpenD 端口（默认 11111）
-
-    安全提示：
-        OpenD 默认仅监听 127.0.0.1。如需远程访问，应通过 SSH tunnel，
-        不要将 OpenD 直接暴露在公网上。
-    """
-
-    def __init__(self, host: str = "127.0.0.1", port: int = 11111, rate_limiter=None):
-        self.host = host
-        self.port = port
-        self.rate_limiter = rate_limiter
-
-    def get_name(self) -> str:
-        return f"FutuOpenD({self.host}:{self.port})"
-
-    def fetch(
-        self,
-        stock_code: str,
-        market: str = "HK",
-        timeframe: str = "1d",
-        max_count: int = 2000,
-    ) -> Optional[pd.DataFrame]:
-        import futu as ft
-        quote_ctx = None
-        try:
-            quote_ctx = ft.OpenQuoteContext(host=self.host, port=self.port)
-            inner = FutuKlineFetcher(quote_ctx, self.rate_limiter)
-            return inner.fetch(stock_code, market=market, timeframe=timeframe, max_count=max_count)
-        except Exception as e:
-            _log_fetch_warning(f"FutuOpenD({self.host}:{self.port})", f"fetch code={stock_code}", e)
-            return None
-        finally:
-            if quote_ctx is not None:
-                try:
-                    quote_ctx.close()
-                except Exception:
-                    pass
-
-
-# ---------------------------------------------------------------------------
 # 工厂
 # ---------------------------------------------------------------------------
 
@@ -672,53 +622,30 @@ class KlineFetcherFactory:
     @staticmethod
     def create_fetcher_chain(
         quote_ctx=None,
-        db=None,
         rate_limiter=None,
-        skip_db_cache: bool = False,
     ) -> List[KlineFetcherBase]:
         """
         创建获取器链。
         默认优先级：
-        - DB 缓存 > OpenD(如有) > YFinance > AKShare
-
-        Args:
-            skip_db_cache: True 时跳过 DatabaseKlineFetcher（调用方已自行查过 DB 缓存时使用，
-                           避免同一 (market, code, timeframe) 被查两次）
+        - 已健康验证的 OpenD（如有）> YFinance > AKShare
         """
         fetchers: List[KlineFetcherBase] = []
         disable_akshare = KlineFetcherFactory._env_enabled("KLINE_DISABLE_AKSHARE", default=False)
 
-        # 1. Database cache（云端优先使用本地 Agent 推送的 OpenD 缓存）
-        if db is not None and not skip_db_cache:
-            try:
-                fetchers.append(DatabaseKlineFetcher(db))
-            except Exception:
-                pass
-
-        # 2. Futu OpenD：显式传入 quote_ctx 或通过 FUTU_OPEN_HOST 环境变量自动连接
+        # 1. OpenD is injected only after managed_fetcher_chain verifies readiness.
         if quote_ctx is not None:
             try:
                 fetchers.append(FutuKlineFetcher(quote_ctx, rate_limiter))
             except Exception:
                 pass
-        else:
-            futu_host = os.getenv("FUTU_OPEN_HOST", "").strip()
-            if futu_host:
-                futu_port = int(os.getenv("FUTU_OPEN_PORT", "11111") or "11111")
-                try:
-                    fetchers.append(OpenDQuotedKlineFetcher(
-                        host=futu_host, port=futu_port, rate_limiter=rate_limiter,
-                    ))
-                except Exception:
-                    pass
 
-        # 3. YFinance（全 timeframe）
+        # 2. YFinance（全 timeframe）
         try:
             fetchers.append(YFinanceKlineFetcher())
         except ImportError:
             pass
 
-        # 4. AKShare（日线 + A 股分钟线）。可通过 .env 禁用，避免 DNS/外站问题刷屏。
+        # 3. AKShare（日线 + A 股分钟线）。可通过 .env 禁用，避免 DNS/外站问题刷屏。
         if not disable_akshare:
             try:
                 fetchers.append(AKShareKlineFetcher())

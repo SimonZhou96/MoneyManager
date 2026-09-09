@@ -45,28 +45,26 @@ class EastmoneyStockTerminalProvider:
     def fetch_klines(self, market: str, code: str, timeframe: str, limit: int) -> List[KlinePoint]:
         import sys
         try:
-            from ...kline_fetcher import KlineFetcherFactory
+            from ...kline_fetcher import managed_fetcher_chain
         except ImportError:
-            from kline_fetcher import KlineFetcherFactory
+            from kline_fetcher import managed_fetcher_chain
 
-        # 跳过 DB 缓存——MySqlStockTerminalRepository.get_klines() 已经查过同一张表了
-        fetchers = KlineFetcherFactory.create_fetcher_chain(db=self.db, skip_db_cache=True)
         failures: list[str] = []
-        for fetcher in fetchers:
-            source = fetcher.get_name()
-            try:
-                frame = fetcher.fetch(code, market=market, timeframe=timeframe, max_count=limit)
-            except Exception as exc:
-                msg = f"{source}: {exc}"
-                print(f"[eastmoney] {msg}", file=sys.stderr)
-                failures.append(msg)
-                continue
-            rows = self._rows_from_frame(frame, limit)
-            if rows:
-                self.last_source = source
-                print(f"[eastmoney] OK {len(rows)} bars via {source} code={code} timeframe={timeframe}", file=sys.stderr)
-                return rows
-            else:
+        with managed_fetcher_chain() as fetchers:
+            for fetcher in fetchers:
+                source = fetcher.get_name()
+                try:
+                    frame = fetcher.fetch(code, market=market, timeframe=timeframe, max_count=limit)
+                except Exception as exc:
+                    msg = f"{source}: {exc}"
+                    print(f"[eastmoney] {msg}", file=sys.stderr)
+                    failures.append(msg)
+                    continue
+                rows = self._rows_from_frame(frame, limit)
+                if rows:
+                    self.last_source = source
+                    print(f"[eastmoney] OK {len(rows)} bars via {source} code={code} timeframe={timeframe}", file=sys.stderr)
+                    return rows
                 msg = f"{source}: returned empty"
                 print(f"[eastmoney] {msg} code={code} timeframe={timeframe}", file=sys.stderr)
                 failures.append(msg)

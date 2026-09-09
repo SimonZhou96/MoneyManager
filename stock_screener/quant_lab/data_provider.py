@@ -5,7 +5,7 @@ from typing import Iterable
 
 import pandas as pd
 
-from kline_fetcher import KlineFetcherFactory
+from kline_fetcher import managed_fetcher_chain
 
 from .models import Bar
 
@@ -53,32 +53,24 @@ class CachedKlineDataProvider:
         ]
 
     def _load_frame(self, market: str, symbol: str) -> pd.DataFrame:
-        for code in _code_candidates(market, symbol):
-            df = self.repository.get_kline_cache(market=market, code=code, timeframe=self.timeframe, max_count=self.max_count)
-            if df is not None and not df.empty:
-                return df
         if self.quote_ctx is not None:
-            df = self._fetch_futu_frame(market, symbol)
-            if df is not None and not df.empty:
-                return df
+            return self._fetch_from_fetchers(
+                [self._futu_fetcher()], market, symbol
+            )
         if self.allow_network_fallback:
             return self._fetch_network_frame(market, symbol)
         return pd.DataFrame()
 
+    def _futu_fetcher(self):
+        from kline_fetcher import FutuKlineFetcher
+        return FutuKlineFetcher(self.quote_ctx)
+
     def _fetch_futu_frame(self, market: str, symbol: str) -> pd.DataFrame:
-        try:
-            fetchers = KlineFetcherFactory.create_fetcher_chain(quote_ctx=self.quote_ctx)
-        except Exception:
-            fetchers = []
-        futu_fetchers = [fetcher for fetcher in fetchers if getattr(fetcher, "get_name", lambda: "")() == "FutuOpenAPI"]
-        return self._fetch_from_fetchers(futu_fetchers, market, symbol)
+        return self._fetch_from_fetchers([self._futu_fetcher()], market, symbol)
 
     def _fetch_network_frame(self, market: str, symbol: str) -> pd.DataFrame:
-        try:
-            fetchers = KlineFetcherFactory.create_fetcher_chain()
-        except Exception:
-            fetchers = []
-        return self._fetch_from_fetchers(fetchers, market, symbol)
+        with managed_fetcher_chain() as fetchers:
+            return self._fetch_from_fetchers(fetchers, market, symbol)
 
     def _fetch_from_fetchers(self, fetchers, market: str, symbol: str) -> pd.DataFrame:
         for code in _code_candidates(market, symbol):

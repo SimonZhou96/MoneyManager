@@ -220,7 +220,10 @@ def main():
 
     # 连接 Futu OpenD
     print(f"\n连接 Futu OpenD ({args.host}:{args.port})...")
-    quote_ctx = ft.OpenQuoteContext(host=args.host, port=args.port)
+    from kline_fetcher import _ready_opend_quote_context
+    quote_ctx = _ready_opend_quote_context()
+    if quote_ctx is None:
+        raise RuntimeError("Futu OpenD is disabled or not READY/qot_logined")
 
     # 连接数据库
     print("连接数据库...")

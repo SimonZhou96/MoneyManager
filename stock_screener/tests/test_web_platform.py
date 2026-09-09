@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest import mock
 
 from db import hash_password, verify_password
-from kline_fetcher import DatabaseKlineFetcher, KlineFetcherFactory
+from kline_fetcher import KlineFetcherFactory
 from web.business import BusinessError
 from web.auth import CurrentUser
 from web.main import BulkStockPoolRequest, ScreeningTaskRequest, bulk_stock_pool, create_screening_task
@@ -55,13 +55,10 @@ class WebPlatformTests(unittest.TestCase):
         self.assertEqual(normalize_stock_code("A", "000001"), "SZ.000001")
         self.assertEqual(normalize_stock_code("A", "688001"), "SH.688001")
 
-    def test_fetcher_chain_puts_database_cache_first_when_db_is_provided(self):
-        class FakeDB:
-            pass
-
-        fetchers = KlineFetcherFactory.create_fetcher_chain(db=FakeDB())
+    def test_fetcher_chain_never_includes_database_cache(self):
+        fetchers = KlineFetcherFactory.create_fetcher_chain()
         self.assertGreater(len(fetchers), 0)
-        self.assertIsInstance(fetchers[0], DatabaseKlineFetcher)
+        self.assertNotIn("DatabaseKlineCache", [fetcher.get_name() for fetcher in fetchers])
 
     def test_validate_screening_task_write_inputs(self):
         self.assertEqual(validate_markets(["hk", "US", "HK"]), ["HK", "US"])

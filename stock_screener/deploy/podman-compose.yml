@@ -29,7 +29,6 @@ services:
       MYSQL_PORT: 3306
       REDIS_URL: redis://redis:6379/0
       ARTIFACT_DIR: /data/moneymanager/artifacts
-      KLINE_USE_FUTU_OPEND: "0"
     volumes:
       - ${ARTIFACT_DIR:-/data/moneymanager/artifacts}:/data/moneymanager/artifacts:Z
     depends_on: [mysql, redis]
@@ -47,7 +46,6 @@ services:
       MYSQL_PORT: 3306
       REDIS_URL: redis://redis:6379/0
       ARTIFACT_DIR: /data/moneymanager/artifacts
-      KLINE_USE_FUTU_OPEND: "0"
     volumes:
       - ${ARTIFACT_DIR:-/data/moneymanager/artifacts}:/data/moneymanager/artifacts:Z
     depends_on: [mysql, redis]

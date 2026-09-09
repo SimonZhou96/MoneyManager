@@ -95,29 +95,20 @@ class StockTerminalService:
     def get_klines(self, market: str, code: str, timeframe: str, limit: int = 500,
                    before: Optional[datetime] = None) -> dict:
         current = self.now()
-
-        # 分页模式：仅走缓存，不触发外部 provider（避免对历史数据发起慢速 yfinance/AKShare 请求）
-        if before is not None:
-            rows, status = self.repository.get_klines(
-                market, code, timeframe, limit=limit, now=current, before=before,
-            )
-            return self._series_payload(market, code, rows, "kline", status, timeframe=timeframe)
-
-        rows, status = self.repository.get_klines(market, code, timeframe, limit=limit, now=current)
-        if rows and status.status == "cached":
-            return self._series_payload(market, code, rows, "kline", status, timeframe=timeframe)
-
-        expires_at = current + timedelta(minutes=30)
         try:
             fresh, provider = self._fetch_first(
                 lambda item: item.fetch_klines(market, code, timeframe, limit)
             )
         except RuntimeError as exc:
-            return self._series_error_payload(market, code, rows, "kline", status, exc, timeframe=timeframe)
+            return self._series_error_payload(
+                market, code, [], "kline", BlockStatus("empty", source="live"), exc, timeframe=timeframe,
+            )
 
+        if before is not None:
+            fresh = [row for row in fresh if row.at < before]
+            fresh = fresh[-limit:]
         source = self._last_provider_name(provider)
-        self.repository.save_klines(market, code, timeframe, fresh, source=source, expires_at=expires_at)
-        fresh_status = BlockStatus("fresh", source=source, fetched_at=current, expires_at=expires_at)
+        fresh_status = BlockStatus("fresh", source=source, fetched_at=current)
         return self._series_payload(market, code, fresh, "kline", fresh_status, timeframe=timeframe)
 
     def get_minute(self, market: str, code: str) -> dict:

@@ -396,13 +396,10 @@ def _build_default_data_provider(repository, payload: dict) -> CachedKlineDataPr
 def _open_futu_quote_context():
     if not _env_enabled("QUANT_ENABLE_FUTU_OPEND", default=_env_enabled("KLINE_USE_FUTU_OPEND", default=False)):
         return None
-    context_cls = OpenQuoteContext
-    if context_cls is None:
-        return None
     try:
-        host = os.getenv("FUTU_HOST", "127.0.0.1")
-        port = int(os.getenv("FUTU_PORT", "11111"))
-        return context_cls(host=host, port=port)
+        from kline_fetcher import _ready_opend_quote_context
+
+        return _ready_opend_quote_context()
     except Exception:
         return None
 

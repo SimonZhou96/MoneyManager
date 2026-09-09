@@ -4,9 +4,7 @@
 TDD: K 线数据获取诊断信息流测试。
 
 验证点:
-1. KlineFetcherFactory.create_fetcher_chain(db=db, skip_db_cache=True) 不包含 DatabaseKlineFetcher
-2. KlineFetcherFactory.create_fetcher_chain(db=db, skip_db_cache=False) 包含 DatabaseKlineFetcher
-3. OpenDQuotedKlineFetcher 在 FUTU_OPEN_HOST 设置时被包含
+1. 默认链不包含数据库 K 线缓存
 4. eastmoney fetch_klines() 在全部失败时抛出包含"K-line fetch failed:"和源名的异常
 5. eastmoney fetch_klines() 在成功时返回数据并记录来源
 6. HK.00700 (腾讯) 通过至少一个数据源能获取到 K 线数据
@@ -21,35 +19,20 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kline_fetcher import (
-    DatabaseKlineFetcher,
-    KlineFetcherFactory,
-    OpenDQuotedKlineFetcher,
-    YFinanceKlineFetcher,
-)
+from kline_fetcher import KlineFetcherFactory, YFinanceKlineFetcher
 
 
 class KlineFetcherFactoryTest(unittest.TestCase):
-    """验证 KlineFetcherFactory 的优先级和 skip_db_cache 行为。"""
+    """验证工厂不再接受数据库缓存配置。"""
 
-    def test_skip_db_cache_excludes_database_fetcher(self):
-        """skip_db_cache=True 时不应包含 DatabaseKlineFetcher"""
-        # 用一个假的 db 对象（仅需通过 None 检查）
-        chain = KlineFetcherFactory.create_fetcher_chain(db="fake_db", skip_db_cache=True)
+    def test_default_excludes_database_fetcher(self):
+        chain = KlineFetcherFactory.create_fetcher_chain()
         names = [f.get_name() for f in chain]
-        self.assertNotIn("DatabaseKlineCache", names,
-                         "skip_db_cache=True 时不应包含 DatabaseKlineFetcher")
-
-    def test_default_includes_database_fetcher(self):
-        """默认情况下 DatabaseKlineFetcher 应在第一位"""
-        chain = KlineFetcherFactory.create_fetcher_chain(db="fake_db", skip_db_cache=False)
-        names = [f.get_name() for f in chain]
-        self.assertIn("DatabaseKlineCache", names,
-                      "skip_db_cache=False 时应包含 DatabaseKlineFetcher")
+        self.assertNotIn("DatabaseKlineCache", names)
 
     def test_no_db_includes_only_yfinance_and_akshare(self):
-        """db=None 时不应包含 DatabaseKlineFetcher，但应有 YFinance"""
-        chain = KlineFetcherFactory.create_fetcher_chain(db=None)
+        """默认链不含数据库来源，且始终包含 YFinance。"""
+        chain = KlineFetcherFactory.create_fetcher_chain()
         names = [f.get_name() for f in chain]
         self.assertNotIn("DatabaseKlineCache", names)
         self.assertIn("YFinance", names, "应始终包含 YFinance")
@@ -98,34 +81,6 @@ class YFinanceKlineFetcherLifecycleTest(unittest.TestCase):
         fetcher.close()
 
         self.assertEqual(session.close_calls, 1)
-
-
-class OpenDQuotedKlineFetcherTest(unittest.TestCase):
-    """验证 OpenDQuotedKlineFetcher 的创建和命名。"""
-
-    def test_get_name_includes_host_and_port(self):
-        fetcher = OpenDQuotedKlineFetcher(host="127.0.0.1", port=11111)
-        name = fetcher.get_name()
-        self.assertIn("127.0.0.1", name)
-        self.assertIn("11111", name)
-
-    def test_factory_includes_opend_when_env_set(self):
-        """当设置 FUTU_OPEN_HOST 环境变量时，工厂自动包含 OpenDQuotedKlineFetcher"""
-        with unittest.mock.patch.dict(os.environ, {"FUTU_OPEN_HOST": "192.168.1.100", "FUTU_OPEN_PORT": "11112"}):
-            chain = KlineFetcherFactory.create_fetcher_chain(db=None)
-            names = [f.get_name() for f in chain]
-            opend_names = [n for n in names if "FutuOpenD" in n]
-            self.assertTrue(len(opend_names) > 0,
-                            f"设置 FUTU_OPEN_HOST 时应包含 OpenD fetcher, 实际: {names}")
-
-    def test_factory_excludes_opend_when_env_not_set(self):
-        """未设置 FUTU_OPEN_HOST 时不包含 OpenD fetcher"""
-        with unittest.mock.patch.dict(os.environ, {"FUTU_OPEN_HOST": ""}):
-            chain = KlineFetcherFactory.create_fetcher_chain(db=None)
-            names = [f.get_name() for f in chain]
-            opend_names = [n for n in names if "FutuOpenD" in n]
-            self.assertEqual(len(opend_names), 0,
-                             f"未设置 FUTU_OPEN_HOST 时不应包含 OpenD fetcher, 实际: {names}")
 
 
 class EastmoneyProviderDiagnosticTest(unittest.TestCase):
@@ -207,14 +162,6 @@ class HK00700KlineIntegrationTest(unittest.TestCase):
     def setUp(self):
         if self.db is None:
             self.skipTest("MySQL 不可用，跳过集成测试")
-
-    def test_db_cache_has_kline_for_hk00700(self):
-        """stock_kline_cache 中应有 HK.00700 的日线数据（由 Agent 推送）"""
-        df = self.db.get_kline_cache("HK", "HK.00700", "1d", max_count=10)
-        if df is None or df.empty:
-            self.skipTest("HK.00700 在 stock_kline_cache 中无数据（Agent 未运行或数据已过期）")
-        self.assertGreaterEqual(len(df), 1,
-                                f"HK.00700 应有至少 1 条 K 线, 实际: {len(df) if df is not None else 0}")
 
     def test_eastmoney_provider_returns_diagnostic_on_failure(self):
         """即使所有数据源失败，eastmoney provider 也应抛出包含诊断信息的异常"""

@@ -237,11 +237,13 @@ def _load_stock_info(db: MarketDatabase, market: str, code: str) -> StockInfo:
 
 
 def _fetch_single_kline(db: MarketDatabase, stock: StockInfo, timeframe: str):
-    fetchers = KlineFetcherFactory.create_fetcher_chain(db=db)
-    for fetcher in fetchers:
-        df = fetcher.fetch(stock.code, market=stock.market, timeframe=timeframe, max_count=500)
-        if df is not None and not df.empty:
-            return df, fetcher.get_name()
+    from kline_fetcher import managed_fetcher_chain
+
+    with managed_fetcher_chain() as fetchers:
+        for fetcher in fetchers:
+            df = fetcher.fetch(stock.code, market=stock.market, timeframe=timeframe, max_count=500)
+            if df is not None and not df.empty:
+                return df, fetcher.get_name()
     return None, "failed"
 
 

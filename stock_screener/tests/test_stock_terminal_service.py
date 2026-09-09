@@ -385,9 +385,9 @@ class StockTerminalServiceTest(unittest.TestCase):
         self.assertEqual(payload["rows"][0]["close"], 10.0)
         self.assertEqual(payload["source_status"]["kline"]["status"], "fresh")
         self.assertEqual(provider.kline_calls, [("US", "US.AAPL", "1d", 50)])
-        self.assertEqual(len(db.saved_kline_rows), 1)
+        self.assertEqual(len(db.saved_kline_rows), 0)
 
-    def test_fresh_mysql_kline_cache_skips_provider(self):
+    def test_mysql_kline_data_does_not_skip_live_provider(self):
         now = datetime(2026, 5, 25, 9, 30, tzinfo=timezone.utc)
         db = FakeKlineDb(
             pd.DataFrame(
@@ -411,9 +411,9 @@ class StockTerminalServiceTest(unittest.TestCase):
 
         payload = service.get_klines("US", "US.AAPL", "1d", 50)
 
-        self.assertEqual(payload["rows"][0]["close"], 1.5)
-        self.assertEqual(payload["source_status"]["kline"]["status"], "cached")
-        self.assertEqual(provider.kline_calls, [])
+        self.assertEqual(payload["rows"][0]["close"], 10.0)
+        self.assertEqual(payload["source_status"]["kline"]["status"], "fresh")
+        self.assertEqual(provider.kline_calls, [("US", "US.AAPL", "1d", 50)])
         self.assertEqual(db.saved_kline_rows, [])
 
     def test_lazy_blocks_use_cache_without_provider_call(self):
@@ -454,10 +454,10 @@ class StockTerminalServiceTest(unittest.TestCase):
         self.assertNotIn("klines", kline)
         self.assertNotIn("minute", minute)
         self.assertNotIn("fund_flow", flow)
-        self.assertEqual(kline["source_status"]["kline"]["status"], "cached")
+        self.assertEqual(kline["source_status"]["kline"]["status"], "fresh")
         self.assertEqual(minute["source_status"]["minute"]["status"], "cached")
         self.assertEqual(flow["source_status"]["fund_flow"]["status"], "cached")
-        self.assertEqual(provider.kline_calls, [])
+        self.assertEqual(provider.kline_calls, [("US", "US.AAPL", "1d", 50)])
         self.assertEqual(provider.minute_calls, [])
         self.assertEqual(provider.fund_flow_calls, [])
 

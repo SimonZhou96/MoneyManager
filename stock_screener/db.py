@@ -7,7 +7,6 @@ MySQL 存储层
 - stocks：股票主数据，(market, code) 唯一约束
 - ema_breakout_signals_{timeframe}：按 timeframe 分表，每张表只存一种周期的信号
 - screening_results：筛选结果
-- stock_kline_cache：云端 Web 模式下的 K 线缓存，优先由本地 OpenD Agent 推送
 """
 
 from __future__ import annotations
@@ -867,7 +866,7 @@ class MarketDatabase:
                     raise
 
     def init_web_schema(self):
-        """初始化 Web、Agent、K 线缓存和 artifact 相关表。"""
+        """初始化 Web、Agent 和 artifact 相关表。"""
         self.init_schema("1d")
         self.init_option_lab_schema()
         self.init_quant_lab_schema()
@@ -938,7 +937,6 @@ class MarketDatabase:
                     finished_at DATETIME(6) NULL,
                     stock_pool_rows INT NOT NULL DEFAULT 0,
                     sector_rows INT NOT NULL DEFAULT 0,
-                    kline_rows INT NOT NULL DEFAULT 0,
                     error_message TEXT NULL,
                     metadata_json JSON NULL,
                     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
@@ -950,35 +948,6 @@ class MarketDatabase:
                     KEY idx_data_sync_started (started_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 COMMENT='本地 Agent 数据同步批次'
-                """
-            )
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS stock_kline_cache (
-                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    market VARCHAR(8) NOT NULL,
-                    code VARCHAR(32) NOT NULL,
-                    timeframe VARCHAR(8) NOT NULL,
-                    bar_time DATETIME(6) NOT NULL,
-                    open DECIMAL(20,6) NULL,
-                    high DECIMAL(20,6) NULL,
-                    low DECIMAL(20,6) NULL,
-                    close DECIMAL(20,6) NULL,
-                    volume DECIMAL(28,6) NULL,
-                    turnover DECIMAL(28,6) NULL,
-                    source VARCHAR(32) NOT NULL DEFAULT 'opend_cache',
-                    sync_run_id VARCHAR(64) NULL,
-                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-                        ON UPDATE CURRENT_TIMESTAMP(6),
-                    PRIMARY KEY (id),
-                    UNIQUE KEY uk_kline_cache_bar (market, code, timeframe, bar_time),
-                    KEY idx_kline_cache_lookup (market, code, timeframe, bar_time),
-                    KEY idx_kline_cache_source (source),
-                    KEY idx_kline_cache_sync_run (sync_run_id),
-                    KEY idx_kline_cache_updated (updated_at)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-                COMMENT='云端 K 线缓存'
                 """
             )
             cursor.execute(
@@ -2660,7 +2629,7 @@ class MarketDatabase:
         }
 
     # ------------------------------------------------------------------
-    # Agent sync and K line cache
+    # Agent sync
     # ------------------------------------------------------------------
 
     def create_data_sync_run(
@@ -2698,7 +2667,6 @@ class MarketDatabase:
         error_message: Optional[str] = None,
         stock_pool_rows: Optional[int] = None,
         sector_rows: Optional[int] = None,
-        kline_rows: Optional[int] = None,
     ) -> None:
         sql = """
             UPDATE data_sync_runs
@@ -2706,8 +2674,7 @@ class MarketDatabase:
                 finished_at=%s,
                 error_message=%s,
                 stock_pool_rows=COALESCE(%s, stock_pool_rows),
-                sector_rows=COALESCE(%s, sector_rows),
-                kline_rows=COALESCE(%s, kline_rows)
+                sector_rows=COALESCE(%s, sector_rows)
             WHERE sync_run_id=%s
         """
         with self.conn.cursor() as cursor:
@@ -2717,14 +2684,13 @@ class MarketDatabase:
                 error_message,
                 stock_pool_rows,
                 sector_rows,
-                kline_rows,
                 sync_run_id,
             ))
 
     def latest_data_sync_runs(self, limit: int = 10) -> List[dict]:
         sql = """
             SELECT sync_run_id, agent_id, markets, timeframes, status, started_at,
-                   finished_at, stock_pool_rows, sector_rows, kline_rows, error_message
+                   finished_at, stock_pool_rows, sector_rows, error_message
             FROM data_sync_runs
             ORDER BY started_at DESC
             LIMIT %s
@@ -2743,122 +2709,10 @@ class MarketDatabase:
                 "finished_at": str(row[6]) if row[6] else None,
                 "stock_pool_rows": int(row[7] or 0),
                 "sector_rows": int(row[8] or 0),
-                "kline_rows": int(row[9] or 0),
-                "error_message": row[10],
+                "error_message": row[9],
             }
             for row in rows
         ]
-
-    def upsert_kline_cache(self, rows: Iterable[dict]) -> int:
-        values = []
-        for item in rows:
-            market = str(item.get("market") or "").strip()
-            code = str(item.get("code") or "").strip()
-            timeframe = str(item.get("timeframe") or "").strip()
-            bar_time = item.get("bar_time") or item.get("date")
-            if not (market and code and timeframe and bar_time):
-                continue
-            values.append((
-                market,
-                code,
-                timeframe,
-                bar_time,
-                _mysql_safe_float(item.get("open")),
-                _mysql_safe_float(item.get("high")),
-                _mysql_safe_float(item.get("low")),
-                _mysql_safe_float(item.get("close")),
-                _mysql_safe_float(item.get("volume")),
-                _mysql_safe_float(item.get("turnover")),
-                item.get("source") or "opend_cache",
-                item.get("sync_run_id"),
-            ))
-        if not values:
-            return 0
-        sql = """
-            INSERT INTO stock_kline_cache
-                (market, code, timeframe, bar_time, open, high, low, close,
-                 volume, turnover, source, sync_run_id)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON DUPLICATE KEY UPDATE
-                open=VALUES(open),
-                high=VALUES(high),
-                low=VALUES(low),
-                close=VALUES(close),
-                volume=VALUES(volume),
-                turnover=VALUES(turnover),
-                source=VALUES(source),
-                sync_run_id=VALUES(sync_run_id),
-                updated_at=CURRENT_TIMESTAMP(6)
-        """
-        def operation():
-            with self.conn.cursor() as cursor:
-                cursor.executemany(sql, values)
-
-        self._execute_with_retry(operation, label="upsert_kline_cache")
-        return len(values)
-
-    def get_kline_cache(self, market: str, code: str, timeframe: str, max_count: int = 500,
-                         before: Optional[datetime] = None) -> pd.DataFrame:
-        """获取缓存的 K 线数据。
-
-        Args:
-            before: 可选，只返回严格早于此时间的 bar。用于分页加载更早的历史数据。
-        """
-        if before is not None:
-            sql = """
-                SELECT bar_time, open, high, low, close, volume, turnover, source, updated_at
-                FROM stock_kline_cache
-                WHERE market=%s AND code=%s AND timeframe=%s AND bar_time < %s
-                ORDER BY bar_time DESC
-                LIMIT %s
-            """
-            params = (market, code, timeframe, before, int(max_count))
-        else:
-            sql = """
-                SELECT bar_time, open, high, low, close, volume, turnover, source, updated_at
-                FROM stock_kline_cache
-                WHERE market=%s AND code=%s AND timeframe=%s
-                ORDER BY bar_time DESC
-                LIMIT %s
-            """
-            params = (market, code, timeframe, int(max_count))
-        with self.conn.cursor() as cursor:
-            cursor.execute(sql, params)
-            rows = cursor.fetchall() or []
-        if not rows:
-            return pd.DataFrame()
-        data = [
-            {
-                "date": row[0],
-                "open": float(row[1]) if row[1] is not None else None,
-                "high": float(row[2]) if row[2] is not None else None,
-                "low": float(row[3]) if row[3] is not None else None,
-                "close": float(row[4]) if row[4] is not None else None,
-                "volume": float(row[5]) if row[5] is not None else None,
-                "turnover": float(row[6]) if row[6] is not None else None,
-                "source": row[7],
-                "updated_at": row[8],
-            }
-            for row in rows
-        ]
-        return pd.DataFrame(data).sort_values("date").reset_index(drop=True)
-
-    def prune_kline_cache(self, market: str, code: str, timeframe: str, max_bars: int = 500) -> None:
-        sql = """
-            DELETE FROM stock_kline_cache
-            WHERE market=%s AND code=%s AND timeframe=%s
-              AND id NOT IN (
-                  SELECT id FROM (
-                      SELECT id
-                      FROM stock_kline_cache
-                      WHERE market=%s AND code=%s AND timeframe=%s
-                      ORDER BY bar_time DESC
-                      LIMIT %s
-                  ) keep_rows
-              )
-        """
-        with self.conn.cursor() as cursor:
-            cursor.execute(sql, (market, code, timeframe, market, code, timeframe, int(max_bars)))
 
     # ------------------------------------------------------------------
     # Stock Terminal JSON TTL Cache

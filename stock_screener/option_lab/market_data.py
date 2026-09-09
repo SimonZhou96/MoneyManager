@@ -241,15 +241,11 @@ def build_default_option_market_data_provider() -> OptionMarketDataProviderChain
 
 def _try_build_futu_provider() -> Optional[FutuOptionMarketDataProvider]:
     try:
-        import futu as ft
+        from kline_fetcher import _ready_opend_quote_context
     except Exception:
         return None
-    host = os.getenv("FUTU_HOST", "127.0.0.1")
-    port = int(os.getenv("FUTU_PORT", "11111"))
-    try:
-        return FutuOptionMarketDataProvider(ft.OpenQuoteContext(host=host, port=port))
-    except Exception:
-        return None
+    quote_ctx = _ready_opend_quote_context()
+    return FutuOptionMarketDataProvider(quote_ctx) if quote_ctx is not None else None
 
 
 def _fake_quote(code: str, contract_type: OptionContractType, strike: float, expiration: str, mid: float, currency: str, now: str) -> OptionQuote:

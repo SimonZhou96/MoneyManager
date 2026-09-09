@@ -461,21 +461,22 @@ def run_screening_task(
         fetchers = None
         quote_ctx = None
         if needs_kline:
-            use_futu = os.getenv("KLINE_USE_FUTU_OPEND", "1").strip().lower() in {"1", "true", "yes", "on"}
+            use_futu = os.getenv("KLINE_USE_FUTU_OPEND", "0").strip().lower() in {"1", "true", "yes", "on"}
             if use_futu:
                 try:
-                    from futu import OpenQuoteContext
-                    futu_host = os.getenv("FUTU_HOST", "127.0.0.1")
-                    futu_port = int(os.getenv("FUTU_PORT", "11111"))
-                    quote_ctx = OpenQuoteContext(host=futu_host, port=futu_port)
-                    if verbose:
-                        print(f"✓ 已连接 Futu OpenD ({futu_host}:{futu_port})")
+                    from kline_fetcher import _ready_opend_quote_context
+
+                    quote_ctx = _ready_opend_quote_context()
+                    if verbose and quote_ctx is not None:
+                        print("✓ Futu OpenD 已就绪")
+                    elif verbose:
+                        print("ℹ️ Futu OpenD 未就绪，使用 YFinance/AKShare")
                 except Exception as e:
                     if verbose:
-                        print(f"⚠️  无法连接 Futu OpenD: {e}，将使用 DB/YFinance/AKShare")
+                        print(f"⚠️  无法连接 Futu OpenD: {e}，将使用 YFinance/AKShare")
                     quote_ctx = None
 
-            fetchers = KlineFetcherFactory.create_fetcher_chain(quote_ctx=quote_ctx, db=db)
+            fetchers = KlineFetcherFactory.create_fetcher_chain(quote_ctx=quote_ctx)
         
         # 创建筛选器上下文
         context = FilterContext(

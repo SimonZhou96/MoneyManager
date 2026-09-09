@@ -1,4 +1,4 @@
--- Web stock screener, external Agent ingestion, K-line cache, artifacts, and single-stock analysis.
+-- Web stock screener, external Agent ingestion, artifacts, and single-stock analysis.
 -- Safe to run multiple times.
 
 CREATE TABLE IF NOT EXISTS web_users (
@@ -72,7 +72,6 @@ CREATE TABLE IF NOT EXISTS data_sync_runs (
     finished_at DATETIME(6) NULL,
     stock_pool_rows INT NOT NULL DEFAULT 0,
     sector_rows INT NOT NULL DEFAULT 0,
-    kline_rows INT NOT NULL DEFAULT 0,
     error_message TEXT NULL,
     metadata_json JSON NULL,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
@@ -82,30 +81,6 @@ CREATE TABLE IF NOT EXISTS data_sync_runs (
     KEY idx_data_sync_status (status),
     KEY idx_data_sync_started (started_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='External Agent sync runs';
-
-CREATE TABLE IF NOT EXISTS stock_kline_cache (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    market VARCHAR(8) NOT NULL,
-    code VARCHAR(32) NOT NULL,
-    timeframe VARCHAR(8) NOT NULL,
-    bar_time DATETIME(6) NOT NULL,
-    open DECIMAL(20,6) NULL,
-    high DECIMAL(20,6) NULL,
-    low DECIMAL(20,6) NULL,
-    close DECIMAL(20,6) NULL,
-    volume DECIMAL(28,6) NULL,
-    turnover DECIMAL(28,6) NULL,
-    source VARCHAR(32) NOT NULL DEFAULT 'opend_cache',
-    sync_run_id VARCHAR(64) NULL,
-    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-    PRIMARY KEY (id),
-    UNIQUE KEY uk_kline_cache_bar (market, code, timeframe, bar_time),
-    KEY idx_kline_cache_lookup (market, code, timeframe, bar_time),
-    KEY idx_kline_cache_source (source),
-    KEY idx_kline_cache_sync_run (sync_run_id),
-    KEY idx_kline_cache_updated (updated_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Cloud K-line cache';
 
 CREATE TABLE IF NOT EXISTS screening_artifacts (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

@@ -348,64 +348,6 @@ class MySqlStockTerminalRepository:
         status = _cache_status(row.get("source") or quote.source, row.get("fetched_at"), row.get("expires_at"), now=now)
         return quote, status
 
-    def save_klines(
-        self,
-        market: str,
-        code: str,
-        timeframe: str,
-        rows: Iterable[KlinePoint],
-        source: str,
-        expires_at: datetime,
-    ) -> None:
-        payload = []
-        for row in rows:
-            payload.append({
-                "market": market,
-                "code": code,
-                "timeframe": timeframe,
-                "bar_time": row.at,
-                "open": row.open,
-                "high": row.high,
-                "low": row.low,
-                "close": row.close,
-                "volume": row.volume,
-                "turnover": row.turnover,
-                "source": source,
-            })
-        self.db.upsert_kline_cache(payload)
-
-    def get_klines(
-        self,
-        market: str,
-        code: str,
-        timeframe: str,
-        limit: int = 500,
-        now: Optional[datetime] = None,
-        before: Optional[datetime] = None,
-    ) -> Tuple[List[KlinePoint], BlockStatus]:
-        frame = self.db.get_kline_cache(market, code, timeframe, max_count=limit, before=before)
-        rows = _kline_from_frame(frame, limit)
-        if not rows:
-            return [], _empty_status()
-        source = ""
-        if "source" in frame.columns and not frame["source"].empty:
-            source = str(frame["source"].iloc[-1] or "")
-        fetched_at = None
-        if "updated_at" in frame.columns:
-            updated_values = [_parse_dt(value) for value in frame["updated_at"].tolist()]
-            updated_values = [value for value in updated_values if value is not None]
-            if updated_values:
-                fetched_at = max(updated_values)
-        if fetched_at is None:
-            return rows, BlockStatus(
-                status="stale",
-                source=source,
-                stale=True,
-                error_message="missing kline updated_at",
-            )
-        expires_at = fetched_at + self.kline_ttl
-        return rows, _cache_status(source, fetched_at, expires_at, now=now)
-
     def save_minute(
         self,
         market: str,

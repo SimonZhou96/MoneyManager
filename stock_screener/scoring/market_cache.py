@@ -181,7 +181,7 @@ class MarketCache:
             )
 
     def _compute_market_breadth(self, market: str) -> Optional[MarketBreadthResult]:
-        """从 stock_kline_cache 表查询全市场 K 线数据，计算市场宽度指标。
+        """实时读取去重后的全市场股票池，计算市场宽度指标。
 
         指标：
         - advance_decline_ratio: 最新一根 K 线上涨/下跌股票数比值
@@ -201,7 +201,7 @@ class MarketCache:
         try:
             import os
 
-            import pandas as pd
+            from kline_fetcher import managed_fetcher_chain
 
             config = MySqlConfig(
                 host=os.getenv("MYSQL_HOST", "127.0.0.1"),
@@ -212,37 +212,20 @@ class MarketCache:
             )
             db = MarketDatabase(config)
             try:
-                # 获取每个股票最近 250 根日 K 线收盘价（约 52 个交易周）
-                # 用 ROW_NUMBER() 窗口函数取 TOP N
-                sql = """
-                    SELECT code, bar_time, close
-                    FROM (
-                        SELECT code, bar_time, close,
-                               ROW_NUMBER() OVER (
-                                   PARTITION BY code ORDER BY bar_time DESC
-                               ) AS rn
-                        FROM stock_kline_cache
-                        WHERE market = %s AND timeframe = '1d'
-                    ) ranked
-                    WHERE rn <= 250
-                    ORDER BY code, bar_time ASC
-                """
                 with db.conn.cursor() as cursor:
-                    cursor.execute(sql, (market,))
-                    rows = cursor.fetchall()
+                    cursor.execute(
+                        "SELECT DISTINCT code FROM stock_pools WHERE market = %s",
+                        (market,),
+                    )
+                    codes = [row[0] for row in (cursor.fetchall() or []) if row and row[0]]
             finally:
                 db.close()
 
-            if not rows:
+            if not codes:
                 return MarketBreadthResult(
                     score=50.0,
-                    explanation=f"市场 {market} 暂无缓存 K 线数据",
+                    explanation=f"市场 {market} 暂无股票池，市场宽度使用中性结果",
                 )
-
-            df = pd.DataFrame(rows, columns=["code", "bar_time", "close"])
-            df["close"] = df["close"].astype(float)
-
-            total_stocks = df["code"].nunique()
 
             advance = 0
             decline = 0
@@ -250,46 +233,71 @@ class MarketCache:
             above_ma200 = 0
             new_high = 0
             new_low = 0
+            covered = 0
+            failed = 0
 
-            for _code, grp in df.groupby("code"):
-                closes = grp["close"].values
-                n = len(closes)
+            # One managed chain per market computation: OpenD health is checked once.
+            with managed_fetcher_chain() as fetchers:
+                for code in codes:
+                    closes = None
+                    for fetcher in fetchers:
+                        try:
+                            frame = fetcher.fetch(code, market=market, timeframe="1d", max_count=250)
+                        except Exception:
+                            continue
+                        if frame is None or getattr(frame, "empty", True):
+                            continue
+                        values = [float(value) for value in frame["close"].tolist() if value is not None]
+                        if values:
+                            closes = values[-250:]
+                            break
+                    if closes is None:
+                        failed += 1
+                        continue
+                    covered += 1
+                    n = len(closes)
 
-                if n < 2:
-                    continue
+                    if n < 2:
+                        continue
 
-                last_close = closes[-1]
-                prev_close = closes[-2]
+                    last_close = closes[-1]
+                    prev_close = closes[-2]
 
-                # 涨跌比
-                if last_close > prev_close:
-                    advance += 1
-                elif last_close < prev_close:
-                    decline += 1
+                    # 涨跌比
+                    if last_close > prev_close:
+                        advance += 1
+                    elif last_close < prev_close:
+                        decline += 1
 
-                # MA50
-                if n >= 50:
-                    ma50 = closes[-50:].mean()
-                    if last_close > ma50:
-                        above_ma50 += 1
+                    # MA50
+                    if n >= 50:
+                        ma50 = sum(closes[-50:]) / 50
+                        if last_close > ma50:
+                            above_ma50 += 1
 
-                # MA200
-                if n >= 200:
-                    ma200 = closes[-200:].mean()
-                    if last_close > ma200:
-                        above_ma200 += 1
+                    # MA200
+                    if n >= 200:
+                        ma200 = sum(closes[-200:]) / 200
+                        if last_close > ma200:
+                            above_ma200 += 1
 
-                # 52 周新高 / 新低
-                window = closes[-min(250, n):]
-                if last_close >= window.max():
-                    new_high += 1
-                if last_close <= window.min():
-                    new_low += 1
+                    # 52 周新高 / 新低
+                    window = closes[-min(250, n):]
+                    if last_close >= max(window):
+                        new_high += 1
+                    if last_close <= min(window):
+                        new_low += 1
+
+            if covered == 0:
+                return MarketBreadthResult(
+                    score=50.0,
+                    explanation=f"市场 {market} 实时 K 线全部拉取失败（0/{len(codes)}），使用中性结果",
+                )
 
             # 标准化为比例
             advance_decline_ratio = advance / max(decline, 1)
-            above_ma50_pct = above_ma50 / max(total_stocks, 1)
-            above_ma200_pct = above_ma200 / max(total_stocks, 1)
+            above_ma50_pct = above_ma50 / covered
+            above_ma200_pct = above_ma200 / covered
 
             # 评分：基线 50，按阈值加减
             score = 50.0
@@ -322,7 +330,7 @@ class MarketCache:
                     f"市场宽度={above_ma50_pct:.0%}站上MA50、"
                     f"涨跌比={advance_decline_ratio:.2f}、"
                     f"新高={new_high}只/新低={new_low}只，"
-                    f"综合评分={score:.1f}"
+                    f"综合评分={score:.1f}，覆盖={covered}/{len(codes)}（失败={failed}）"
                 ),
             )
         except Exception as e:

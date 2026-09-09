@@ -160,63 +160,6 @@ class StockTerminalRepositoryTest(unittest.TestCase):
         self.assertEqual(cached[0].price, 190.0)
         self.assertEqual(status.status, "cached")
 
-    def test_mysql_kline_cache_uses_updated_at_for_freshness(self):
-        db = FakeStockTerminalDb()
-        db.kline_frame = pd.DataFrame(
-            [
-                {
-                    "date": datetime(2026, 5, 25, tzinfo=timezone.utc),
-                    "open": 9.0,
-                    "high": 11.0,
-                    "low": 8.0,
-                    "close": 10.0,
-                    "volume": 100.0,
-                    "turnover": None,
-                    "source": "mysql-cache",
-                    "updated_at": datetime(2026, 5, 25, 9, 20, tzinfo=timezone.utc),
-                }
-            ]
-        )
-        repo = MySqlStockTerminalRepository(db, kline_ttl=timedelta(minutes=30))
-
-        rows, status = repo.get_klines(
-            "US",
-            "US.AAPL",
-            "1d",
-            now=datetime(2026, 5, 25, 9, 40, tzinfo=timezone.utc),
-        )
-
-        self.assertEqual(rows[0].close, 10.0)
-        self.assertEqual(status.status, "cached")
-        self.assertFalse(status.stale)
-
-    def test_mysql_kline_cache_without_updated_at_forces_refresh(self):
-        db = FakeStockTerminalDb()
-        db.kline_frame = pd.DataFrame(
-            [
-                {
-                    "date": datetime(2026, 5, 25, tzinfo=timezone.utc),
-                    "open": 9.0,
-                    "high": 11.0,
-                    "low": 8.0,
-                    "close": 10.0,
-                    "volume": 100.0,
-                    "source": "mysql-cache",
-                }
-            ]
-        )
-        repo = MySqlStockTerminalRepository(db, kline_ttl=timedelta(minutes=30))
-
-        _, status = repo.get_klines(
-            "US",
-            "US.AAPL",
-            "1d",
-            now=datetime(2026, 5, 25, 9, 40, tzinfo=timezone.utc),
-        )
-
-        self.assertEqual(status.status, "stale")
-        self.assertTrue(status.stale)
-
 
 if __name__ == "__main__":
     unittest.main()

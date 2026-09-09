@@ -551,9 +551,11 @@ class FutuOpenDMainForceDataProvider:
             self.quote_ctx = quote_ctx
             self.ft = sys.modules.get("futu")
         else:
-            import futu as ft
-            self.ft = ft
-            self.quote_ctx = ft.OpenQuoteContext(host=host, port=port)
+            from kline_fetcher import _ready_opend_quote_context
+            self.quote_ctx = _ready_opend_quote_context()
+            if self.quote_ctx is None:
+                raise RuntimeError("Futu OpenD is disabled or not READY/qot_logined")
+            self.ft = sys.modules.get("futu")
 
     def close(self) -> None:
         if self._owns_context and self.quote_ctx is not None:
@@ -1072,12 +1074,10 @@ class MainForceRiskServiceFactory:
             except Exception:
                 return NullMainForceDataProvider()
         if normalized in {"HK", "US"}:
-            if not env_enabled("MAIN_FORCE_ENABLE_FUTU_OPEND", True):
+            if not env_enabled("MAIN_FORCE_ENABLE_FUTU_OPEND", False):
                 return NullMainForceDataProvider()
             try:
-                host = os.getenv("FUTU_HOST", "127.0.0.1")
-                port = _env_int("FUTU_PORT", 11111)
-                return FutuOpenDMainForceDataProvider(host=host, port=port)
+                return FutuOpenDMainForceDataProvider()
             except Exception:
                 return NullMainForceDataProvider()
         return NullMainForceDataProvider()

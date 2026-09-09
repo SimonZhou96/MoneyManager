@@ -5,7 +5,7 @@
 - 云服务器：Alibaba Cloud 中国大陆 ECS。
 - 部署方式：Podman Compose。
 - 云端服务：Caddy + frontend + web-api + web-worker + MySQL + Redis。
-- 数据流：云端不连接 OpenD；本地 Agent 主动 HTTPS 推送股票池、板块、K 线缓存。
+- 数据流：服务默认使用 YFinance/AKShare；仅在配置健康的远端 OpenD 后优先使用 OpenD 行情。
 
 > Redis 在当前 compose 中用于 RQ 后台任务队列，不用于 Web API 限流；Web API 限流是进程内滑动窗口。
 > 中国大陆 ECS 对外提供网站访问通常需要 ICP 备案。备案完成前，不要把域名正式解析到大陆 ECS 并开放 Web 访问。
@@ -144,7 +144,8 @@ AGENT_TOKEN=<长随机 token，建议 32 字节以上>
 DOMAIN_NAME=mmmcashlife.top
 
 KLINE_USE_FUTU_OPEND=0
-KLINE_CACHE_MAX_BARS=500
+FUTU_HOST=<内网 OpenD 地址，例如 10.0.0.8>
+FUTU_PORT=11111
 ```
 
 如果要启用飞书发送，再补充：
