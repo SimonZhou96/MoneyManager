@@ -38,7 +38,7 @@ jobs:
           #用户
           REMOTE_USER: "root"
           #目标地址
-          TARGET: "/root/university-selection_Backend"
+          TARGET: "/root/workspace/personal"
         with:
           REMOTE_HOST: ${{ secrets.ALIYUN_SERVER_HOST }}
           REMOTE_USER: ${{ secrets.ALIBABA_USER }}
