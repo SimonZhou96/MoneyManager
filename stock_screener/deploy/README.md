@@ -4,7 +4,7 @@
 
 - 云服务器：Alibaba Cloud 中国大陆 ECS。
 - 部署方式：Podman Compose。
-- 云端服务：Caddy + frontend + web-api + web-worker + MySQL + Redis。
+- 云端服务：Caddy + 前端静态站点 + web-api + web-worker + MySQL + Redis。
 - 数据流：服务默认使用 YFinance/AKShare；仅在配置健康的远端 OpenD 后优先使用 OpenD 行情。
 
 > Redis 在当前 compose 中用于 RQ 后台任务队列，不用于 Web API 限流；Web API 限流是进程内滑动窗口。
@@ -215,6 +215,22 @@ print(secrets.token_urlsafe(48))
 PY
 ```
 
+### GitHub Actions 自动部署
+
+仓库的 `.github/workflows/release.yml` 会在 `main` 分支更新后自动部署，也可以从 GitHub Actions 手动运行 `release`。Pull request 只执行构建检查，不会连接 ECS。
+
+在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 配置：
+
+- `ALIYUN_SERVER_HOST`：ECS 公网 IP 或 SSH 主机名。
+- `ALIBABA_USER`：SSH 用户。该用户需要能管理 Docker/Podman Compose 并写入部署目录。
+- `ALIBABA_DEPLOY`：该用户对应的 SSH 私钥。
+- `ALIYUN_SERVER_PORT`：可选，默认 `22`。
+- `ALIYUN_DEPLOY_PATH`：可选，默认 `/root/workspace/personal/stock_screener`。
+
+首次运行前，在 ECS 的部署目录创建 `.env`：从仓库的 `stock_screener/.env.example` 复制并填写生产配置，权限设为 `600`。可先通过 SSH/SCP 放置 `.env.example`，再复制为 `.env`。如果 `.env` 缺失，工作流会先同步部署文件，然后在启动前报错；创建并填写 `.env` 后重新运行即可。该文件由服务器保管，自动部署会保留它以及 `/data/moneymanager` 下的数据库、Redis 和导出文件。ECS 需要已安装 Docker Compose 或 Podman Compose；工作流会在缺少 `rsync` 时尝试安装。
+
+工作流在 GitHub runner 上构建后端和前端静态镜像，将压缩镜像归档传到 ECS，再加载镜像并以 `--no-build` 重启服务。Caddy 仍负责 HTTPS 和 API 反向代理，ECS 不需要在部署期间构建 Python 或 Node 镜像。若首次部署前还没有服务数据目录，可按上文创建 `/data/moneymanager/{mysql,redis,artifacts}`。
+
 ## 6. 启动云端服务
 
 ```bash
@@ -337,7 +353,9 @@ echo "$MYSQL_ROOT_PASSWORD" | wc -c
 
 ## 10. 日常维护
 
-升级代码：
+通过 GitHub Actions 部署时，合并到 `main` 会自动发布；也可以手动运行 `release` 工作流。该流程在 runner 构建镜像并传输到 ECS。
+
+手动升级代码并在 ECS 本机重新构建镜像：
 
 ```bash
 cd /opt/MoneyManager

@@ -47,47 +47,140 @@ jobs:
       - name: Validate backend Python syntax
         run: python -m compileall -q stock_screener
 
-  deploy:
-    name: Deploy and restart services
+  build-images:
+    name: Build ${{ matrix.image }} image
     needs: build
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: web
+            dockerfile: stock_screener/deploy/Containerfile
+          - image: frontend
+            dockerfile: stock_screener/deploy/Containerfile.frontend
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Upload application files
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./stock_screener
+          file: ./${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          tags: moneymanager/${{ matrix.image }}:latest
+          load: true
+          provenance: false
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }},ignore-error=true
+
+      - name: Export image archive
+        run: docker save "moneymanager/${{ matrix.image }}:latest" | gzip -6 > "moneymanager-${{ matrix.image }}.tar.gz"
+
+      - name: Upload image archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.image }}
+          path: moneymanager-${{ matrix.image }}.tar.gz
+          retention-days: 1
+          compression-level: 0
+
+  deploy:
+    name: Load images and restart services
+    needs: [build, build-images]
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ALIYUN_DEPLOY_PATH: ${{ secrets.ALIYUN_DEPLOY_PATH || '/root/workspace/personal/stock_screener' }}
+      ALIYUN_SSH_PORT: ${{ secrets.ALIYUN_SERVER_PORT || '22' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download image archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: image-*
+          merge-multiple: true
+          path: dist
+
+      - name: Prepare deployment host
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.ALIYUN_SERVER_HOST }}
+          port: ${{ env.ALIYUN_SSH_PORT }}
+          username: ${{ secrets.ALIBABA_USER }}
+          key: ${{ secrets.ALIBABA_DEPLOY }}
+          script: |
+            set -eu
+            if ! command -v rsync >/dev/null 2>&1; then
+              if command -v dnf >/dev/null 2>&1; then
+                dnf install -y rsync
+              elif command -v yum >/dev/null 2>&1; then
+                yum install -y rsync
+              elif command -v apt-get >/dev/null 2>&1; then
+                apt-get update
+                apt-get install -y rsync
+              else
+                echo "rsync is required but no supported package manager was found" >&2
+                exit 1
+              fi
+            fi
+            mkdir -p "${{ env.ALIYUN_DEPLOY_PATH }}"
+
+      - name: Sync deployment configuration
         uses: easingthemes/ssh-deploy@v5.1.0
-        env:
+        with:
           SSH_PRIVATE_KEY: ${{ secrets.ALIBABA_DEPLOY }}
-          ARGS: '-rltgoDzvO --delete'
-          SOURCE: './stock_screener'
           REMOTE_HOST: ${{ secrets.ALIYUN_SERVER_HOST }}
+          REMOTE_PORT: ${{ env.ALIYUN_SSH_PORT }}
           REMOTE_USER: ${{ secrets.ALIBABA_USER }}
-          TARGET: '/root/workspace/personal'
-          # .env and runtime data belong to the server and must survive rsync --delete.
-          EXCLUDE: '.env,.venv,.runtime_home,logs,__pycache__,*.pyc,web_frontend/node_modules,web_frontend/dist,web_frontend/.npm-cache'
+          TARGET: ${{ env.ALIYUN_DEPLOY_PATH }}
+          SOURCE: ./stock_screener/
+          ARGS: -rlgoDzv --delete
+          EXCLUDE: /.env,/.venv/,/.runtime_home/,/logs/,/__pycache__/,/*.pyc,/web_frontend/node_modules/,/web_frontend/dist/,/web_frontend/.npm-cache/,/.deploy/
+
+      - name: Upload images and restart services
+        uses: easingthemes/ssh-deploy@v5.1.0
+        with:
+          SSH_PRIVATE_KEY: ${{ secrets.ALIBABA_DEPLOY }}
+          REMOTE_HOST: ${{ secrets.ALIYUN_SERVER_HOST }}
+          REMOTE_PORT: ${{ env.ALIYUN_SSH_PORT }}
+          REMOTE_USER: ${{ secrets.ALIBABA_USER }}
+          TARGET: ${{ env.ALIYUN_DEPLOY_PATH }}/.deploy/images/
+          SOURCE: dist/
+          ARGS: -rlgoDzv --delete
           SCRIPT_BEFORE_REQUIRED: 'true'
           SCRIPT_BEFORE: |
             set -eu
-            cd /root/workspace/personal
-            mkdir -p stock_screener
-            cd stock_screener
-            test -f .env || { echo 'Missing server-side .env'; exit 1; }
+            mkdir -p "${{ env.ALIYUN_DEPLOY_PATH }}/.deploy/images"
           SCRIPT_AFTER: |
             set -eu
-            cd /root/workspace/personal
-            cd stock_screener
+            cd "${{ env.ALIYUN_DEPLOY_PATH }}"
+            test -f .env || {
+              echo 'Missing server-side .env. Create stock_screener/.env from .env.example and set production secrets.'
+              exit 1
+            }
 
             if docker compose version >/dev/null 2>&1; then
+              IMAGE_RUNTIME=docker
               compose() { docker compose -f deploy/docker-compose.yml "$@"; }
               COMPOSE_NAME='docker compose'
             elif podman compose version >/dev/null 2>&1; then
+              IMAGE_RUNTIME=podman
               compose() { podman compose -f deploy/podman-compose.yml "$@"; }
               COMPOSE_NAME='podman compose'
             elif command -v podman-compose >/dev/null 2>&1; then
+              IMAGE_RUNTIME=podman
               compose() { podman-compose -f deploy/podman-compose.yml "$@"; }
               COMPOSE_NAME='podman-compose'
             else
@@ -96,14 +189,38 @@ jobs:
             fi
 
             echo "Using $COMPOSE_NAME"
+            image_count=0
+            for archive in .deploy/images/*.tar.gz; do
+              [ -f "$archive" ] || continue
+              "$IMAGE_RUNTIME" load -i "$archive"
+              image_count=$((image_count + 1))
+            done
+            test "$image_count" -eq 2
+
             compose config -q
-            compose up -d --build --remove-orphans
+            if ! compose up -d --no-build --remove-orphans; then
+              compose ps
+              compose logs --tail=200 web-api caddy
+              exit 1
+            fi
             compose ps
 
-            curl --fail --silent --show-error \
-              --retry 10 --retry-delay 3 --retry-connrefused \
-              http://127.0.0.1/healthz
-            curl --fail --silent --show-error \
-              --retry 10 --retry-delay 3 --retry-connrefused \
-              http://127.0.0.1/ | grep -q 'id="root"'
+            for attempt in $(seq 1 30); do
+              if compose exec -T web-api curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1 \
+                && compose exec -T frontend sh -c 'test -s /usr/share/nginx/html/index.html' \
+                && compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+                break
+              fi
+              sleep 5
+            done
+            if ! compose exec -T web-api curl -fsS http://127.0.0.1:8000/healthz \
+              || ! compose exec -T frontend sh -c 'test -s /usr/share/nginx/html/index.html' \
+              || ! compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile; then
+              compose ps
+              compose logs --tail=200 web-api frontend caddy
+              exit 1
+            fi
+
+            rm -rf .deploy/images
+            "$IMAGE_RUNTIME" image prune -f
           SCRIPT_AFTER_REQUIRED: 'true'

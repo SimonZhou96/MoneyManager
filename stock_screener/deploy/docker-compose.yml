@@ -17,6 +17,7 @@ services:
     networks: [moneymanager]
 
   web-api:
+    image: moneymanager/web:latest
     build:
       context: ..
       dockerfile: deploy/Containerfile
@@ -33,6 +34,7 @@ services:
     networks: [moneymanager]
 
   web-worker:
+    image: moneymanager/web:latest
     build:
       context: ..
       dockerfile: deploy/Containerfile
@@ -50,12 +52,10 @@ services:
     networks: [moneymanager]
 
   frontend:
-    image: docker.io/library/node:20-alpine
-    working_dir: /app
-    command: sh -c "npm install && npm run build && cp -r dist/* /srv"
-    volumes:
-      - ../web_frontend:/app
-      - frontend_dist:/srv
+    image: moneymanager/frontend:latest
+    build:
+      context: ..
+      dockerfile: deploy/Containerfile.frontend
     networks: [moneymanager]
 
   caddy:
@@ -67,7 +67,6 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
-      - frontend_dist:/srv:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on: [web-api, frontend]
@@ -77,6 +76,5 @@ networks:
   moneymanager:
 
 volumes:
-  frontend_dist:
   caddy_data:
   caddy_config:

@@ -1,9 +1,9 @@
 # Docker Compose 部署
 
 此目录的 `docker-compose.yml` 为 Docker Compose 准备，服务拓扑与
-`podman-compose.yml` 一致：Caddy、前端构建、Web API、后台 Worker、MySQL 和
-Redis。应用镜像复用 `Containerfile`；Docker 将它作为 `dockerfile` 正常构建，
-无需维护重复的 Dockerfile。
+`podman-compose.yml` 一致：Caddy、前端静态站点、Web API、后台 Worker、MySQL 和
+Redis。API 与 Worker 共用 `Containerfile` 构建；前端静态站点通过
+`Containerfile.frontend` 构建，Caddy 反向代理到前端和 API。
 
 ## 前置条件
 
@@ -11,6 +11,8 @@ Redis。应用镜像复用 `Containerfile`；Docker 将它作为 `dockerfile` �
 - 宿主机开放 TCP 80、443；不要向公网开放 MySQL 3306 或 Redis 6379。
 - 已准备 `stock_screener/.env`，可从 `.env.example` 复制，并设置强密码、
   `AGENT_TOKEN` 与 Web 登录凭据。
+- 仓库自带的 GitHub Actions 部署流程会在 runner 构建镜像归档，传到 ECS 后加载；
+  服务器本地运行 Compose 时仍可使用 `--build` 构建。
 
 在项目根目录创建持久化目录并配置权限：
 
