@@ -122,15 +122,14 @@ chmod 600 .env
 vim .env
 ```
 
-至少配置以下字段：
+首次上线至少配置数据库密码和初始管理员账号。生产域名也需要替换成实际域名：
 
 ```env
 MYSQL_HOST=mysql
 MYSQL_PORT=3306
 MYSQL_USER=root
-MYSQL_PASSWORD=<和 MYSQL_ROOT_PASSWORD 保持一致>
+MYSQL_PASSWORD=<强密码>
 MYSQL_DATABASE=market_data
-MYSQL_ROOT_PASSWORD=<强密码>
 
 WEB_SESSION_COOKIE=moneymanager_session
 WEB_SESSION_TTL_HOURS=24
@@ -140,13 +139,17 @@ WEB_BOOTSTRAP_PASSWORD=<你的登录密码>
 ARTIFACT_DIR=/data/moneymanager/artifacts
 
 REDIS_URL=redis://redis:6379/0
-AGENT_TOKEN=<长随机 token，建议 32 字节以上>
+AGENT_TOKEN=<使用 Agent API 时设置的长随机 token>
 DOMAIN_NAME=mmmcashlife.top
 
 KLINE_USE_FUTU_OPEND=0
 FUTU_HOST=<内网 OpenD 地址，例如 10.0.0.8>
 FUTU_PORT=11111
 ```
+
+Compose 会把 `MYSQL_PASSWORD` 同时传给应用和 MySQL 容器的 `MYSQL_ROOT_PASSWORD`，所以只需设置一个数据库密码。MySQL 仅在数据目录首次初始化时使用它；已有数据库要填写当前 root 密码，修改 `.env` 不会自动轮换数据库密码。
+
+`AGENT_TOKEN` 只在调用受保护的 Agent API 时需要；飞书凭据、搜索与模型 API 密钥也只在启用对应功能时需要。若不使用远端 OpenD，可保持 `KLINE_USE_FUTU_OPEND=0`，无需填写 `FUTU_HOST`。
 
 如果要启用飞书发送，再补充：
 

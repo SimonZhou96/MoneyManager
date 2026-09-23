@@ -3,7 +3,7 @@ services:
     image: docker.io/library/mysql:8.0
     command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-123456}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-market_data}
     volumes:
       - ${MYSQL_DATA_DIR:-/data/moneymanager/mysql}:/var/lib/mysql
