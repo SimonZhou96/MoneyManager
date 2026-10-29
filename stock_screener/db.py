@@ -2280,29 +2280,39 @@ class MarketDatabase:
     def update_web_screening_job(
         self,
         job_id: str,
-        status: str,
+        status: Optional[str],
         task_ids: Optional[List[str]] = None,
         error_message: Optional[str] = None,
         finished: bool = False,
         summary: Optional[dict] = None,
-    ) -> None:
+        options: Optional[dict] = None,
+        expected_status: Optional[str] = None,
+        lock_token: Optional[str] = None,
+        agent_only: bool = False,
+    ) -> bool:
         sql = """
             UPDATE web_screening_jobs
-            SET status=%s, task_ids=COALESCE(%s, task_ids), error_message=%s,
+            SET status=COALESCE(%s, status), task_ids=COALESCE(%s, task_ids), error_message=%s,
                 summary_json=COALESCE(%s, summary_json),
-                finished_at=CASE WHEN %s=1 THEN %s ELSE finished_at END
+                options_json=COALESCE(%s, options_json),
+                finished_at=CASE WHEN %s=1 THEN %s WHEN status='queued' THEN NULL ELSE finished_at END
             WHERE job_id=%s
         """
+        params = [status, _json_or_none(task_ids) if task_ids is not None else None,
+                  error_message, _json_or_none(summary) if summary is not None else None,
+                  _json_or_none(options) if options is not None else None,
+                  1 if finished else 0, _utcnow(), job_id]
+        if expected_status is not None:
+            sql += " AND status=%s"
+            params.append(expected_status)
+        if lock_token is not None:
+            sql += " AND JSON_UNQUOTE(JSON_EXTRACT(options_json, '$.screening_lock.token'))=%s"
+            params.append(lock_token)
+        if agent_only:
+            sql += " AND execution_mode<>'rq' AND JSON_EXTRACT(options_json, '$.rq_job_id') IS NULL"
         with self.conn.cursor() as cursor:
-            cursor.execute(sql, (
-                status,
-                _json_or_none(task_ids) if task_ids is not None else None,
-                error_message,
-                _json_or_none(summary) if summary is not None else None,
-                1 if finished else 0,
-                _utcnow(),
-                job_id,
-            ))
+            cursor.execute(sql, params)
+            return cursor.rowcount > 0
 
     def list_web_screening_jobs(self, limit: int = 50) -> List[dict]:
         sql = """
@@ -2425,6 +2435,83 @@ class MarketDatabase:
             for row in rows
         ]
 
+    def get_active_screening_jobs(self, run_date: date, markets: List[str], exclude_job_id: Optional[str] = None) -> List[dict]:
+        if not markets:
+            return []
+        placeholders = ",".join(["%s"] * len(markets))
+        sql = f"""
+            SELECT l.market, l.job_id FROM screening_run_locks l
+            JOIN web_screening_jobs j ON j.job_id=l.job_id
+            WHERE l.run_date=%s AND l.market IN ({placeholders})
+              AND l.status IN ('queued','running','cancelling')
+              AND j.status IN ('queued','running','cancelling')
+        """
+        params = [run_date, *markets]
+        if exclude_job_id:
+            sql += " AND l.job_id<>%s"
+            params.append(exclude_job_id)
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            return [{"market": row[0], "job_id": row[1]} for row in cursor.fetchall() or []]
+
+    def get_completed_screening_markets(self, job_id: str) -> List[str]:
+        with self.conn.cursor() as cursor:
+            cursor.execute("SELECT DISTINCT market FROM screening_run_locks WHERE job_id=%s AND status='completed'", (job_id,))
+            return [row[0] for row in cursor.fetchall() or []]
+
+    def get_task_report_checkpoint(self, task_type: str, task_id: str) -> dict:
+        table, column, id_column = ('single_stock_runs', 'result_json', 'run_id') if task_type == 'single_stock' else ('web_screening_jobs', 'summary_json', 'job_id')
+        with self.conn.cursor() as cursor:
+            cursor.execute(f"SELECT JSON_EXTRACT({column}, '$.report') FROM {table} WHERE {id_column}=%s", (task_id,))
+            row = cursor.fetchone()
+        return _decode_json_field(row[0], {}) if row else {}
+
+    def save_task_report_checkpoint(self, task_type: str, task_id: str, checkpoint: dict, lock_token: Optional[str] = None) -> bool:
+        table, column, id_column = ('single_stock_runs', 'result_json', 'run_id') if task_type == 'single_stock' else ('web_screening_jobs', 'summary_json', 'job_id')
+        sql = f"""UPDATE {table} SET {column}=JSON_SET(COALESCE({column}, JSON_OBJECT()), '$.report', CAST(%s AS JSON))
+                  WHERE {id_column}=%s AND status='running'"""
+        params = [_json_or_none(checkpoint), task_id]
+        if lock_token is not None:
+            sql += " AND JSON_UNQUOTE(JSON_EXTRACT(options_json, '$.screening_lock.token'))=%s"
+            params.append(lock_token)
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql, params)
+            # FOUND_ROWS is not enabled; an unchanged checkpoint still owns the attempt.
+            if cursor.rowcount:
+                return True
+            cursor.execute(f"SELECT status FROM {table} WHERE {id_column}=%s", (task_id,))
+            row = cursor.fetchone()
+            if not row or row[0] != 'running':
+                return False
+            if lock_token is not None:
+                cursor.execute("SELECT JSON_UNQUOTE(JSON_EXTRACT(options_json, '$.screening_lock.token')) FROM web_screening_jobs WHERE job_id=%s", (task_id,))
+                token_row = cursor.fetchone()
+                return bool(token_row and token_row[0] == lock_token)
+            return True
+
+    def claim_report_retry(self, task_type: str, task_id: str, expected_status: str, status: str = 'queued') -> bool:
+        table, id_column = ('single_stock_runs', 'run_id') if task_type == 'single_stock' else ('web_screening_jobs', 'job_id')
+        with self.conn.cursor() as cursor:
+            cursor.execute(f"UPDATE {table} SET status=%s, error_message=NULL, finished_at=NULL WHERE {id_column}=%s AND status=%s",
+                           (status, task_id, expected_status))
+            return cursor.rowcount > 0
+
+    def finish_report_retry(self, task_type: str, task_id: str, status: str, error_message: Optional[str] = None) -> None:
+        table, id_column = ('single_stock_runs', 'run_id') if task_type == 'single_stock' else ('web_screening_jobs', 'job_id')
+        with self.conn.cursor() as cursor:
+            cursor.execute(f"UPDATE {table} SET status=%s, error_message=%s, finished_at=%s WHERE {id_column}=%s AND status IN ('queued','running')",
+                           (status, error_message, _utcnow(), task_id))
+
+    def update_screening_run_lock(self, job_id: str, market: str, status: str,
+                                  task_id: Optional[str] = None, error_message: Optional[str] = None) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute("""
+                UPDATE screening_run_locks SET status=%s, task_id=COALESCE(%s, task_id),
+                    error_message=%s, completed_at=CASE WHEN %s IN ('completed','failed','cancelled')
+                    THEN %s ELSE NULL END
+                WHERE job_id=%s AND market=%s AND status<>'completed'
+            """, (status, task_id, error_message, status, _utcnow(), job_id, market))
+
     def create_screening_run_locks(
         self,
         job_id: str,
@@ -2441,6 +2528,12 @@ class MarketDatabase:
         if not rows:
             return
         with self.conn.cursor() as cursor:
+            for market in markets:
+                cursor.execute("""
+                    DELETE FROM screening_run_locks WHERE run_date=%s AND market=%s
+                    AND timeframe=%s AND chain_key=%s AND pool_scope=%s
+                    AND status IN ('failed','cancelled','expired')
+                """, (run_date, market, timeframe, chain_key, pool_scope))
             cursor.executemany(
                 """
                 INSERT INTO screening_run_locks
@@ -2459,6 +2552,8 @@ class MarketDatabase:
             JOIN screening_run_locks l ON l.job_id=j.job_id
             WHERE l.status IN ('queued','expired')
               AND j.status IN ('queued','running')
+              AND j.execution_mode<>'rq'
+              AND JSON_EXTRACT(j.options_json, '$.rq_job_id') IS NULL
             ORDER BY j.created_at ASC
             LIMIT %s
         """
@@ -2541,14 +2636,18 @@ class MarketDatabase:
         return jobs[: int(limit)]
 
     def claim_agent_job(self, job_id: str, agent_id: str) -> Optional[dict]:
+        job = self.get_web_screening_job(job_id)
+        if job and (job.get('execution_mode') == 'rq' or (job.get('options') or {}).get('rq_job_id')):
+            return None
         now = _utcnow()
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
-                UPDATE screening_run_locks
-                SET status='running', agent_id=%s, claimed_at=COALESCE(claimed_at,%s),
-                    heartbeat_at=%s, error_message=NULL
-                WHERE job_id=%s AND status IN ('queued','expired')
+                UPDATE screening_run_locks l JOIN web_screening_jobs j ON j.job_id=l.job_id
+                SET l.status='running', l.agent_id=%s, l.claimed_at=COALESCE(l.claimed_at,%s),
+                    l.heartbeat_at=%s, l.error_message=NULL
+                WHERE l.job_id=%s AND l.status IN ('queued','expired')
+                  AND j.execution_mode<>'rq' AND JSON_EXTRACT(j.options_json, '$.rq_job_id') IS NULL
                 """,
                 (agent_id, now, now, job_id),
             )
@@ -2592,13 +2691,17 @@ class MarketDatabase:
         return None
 
     def heartbeat_agent_job(self, job_id: str, agent_id: str, progress: Optional[dict] = None) -> None:
+        job = self.get_web_screening_job(job_id)
+        if job and (job.get('execution_mode') == 'rq' or (job.get('options') or {}).get('rq_job_id')):
+            return
         now = _utcnow()
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
-                UPDATE screening_run_locks
-                SET heartbeat_at=%s
-                WHERE job_id=%s AND agent_id=%s AND status='running'
+                UPDATE screening_run_locks l JOIN web_screening_jobs j ON j.job_id=l.job_id
+                SET l.heartbeat_at=%s
+                WHERE l.job_id=%s AND l.agent_id=%s AND l.status='running'
+                  AND j.execution_mode<>'rq' AND JSON_EXTRACT(j.options_json, '$.rq_job_id') IS NULL
                 """,
                 (now, job_id, agent_id),
             )
@@ -2607,6 +2710,7 @@ class MarketDatabase:
                 UPDATE web_screening_jobs
                 SET heartbeat_at=%s, summary_json=COALESCE(%s, summary_json)
                 WHERE job_id=%s AND agent_id=%s AND status='running'
+                  AND execution_mode<>'rq' AND JSON_EXTRACT(options_json, '$.rq_job_id') IS NULL
                 """,
                 (now, _json_or_none(progress) if progress else None, job_id, agent_id),
             )
@@ -2627,6 +2731,9 @@ class MarketDatabase:
         summary: Optional[dict] = None,
         error_message: Optional[str] = None,
     ) -> None:
+        job = self.get_web_screening_job(job_id)
+        if job and (job.get('execution_mode') == 'rq' or (job.get('options') or {}).get('rq_job_id')):
+            return
         now = _utcnow()
         with self.conn.cursor() as cursor:
             market_statuses = (summary or {}).get("market_statuses") if isinstance(summary, dict) else None
@@ -2640,6 +2747,8 @@ class MarketDatabase:
                         SET status=%s, task_id=COALESCE(%s, task_id), completed_at=%s,
                             error_message=%s
                         WHERE job_id=%s AND market=%s
+                          AND job_id IN (SELECT job_id FROM web_screening_jobs
+                            WHERE execution_mode<>'rq' AND JSON_EXTRACT(options_json, '$.rq_job_id') IS NULL)
                         """,
                         (lock_status, item.get("task_id"), now, item.get("error_message"), job_id, market),
                     )
@@ -2650,6 +2759,8 @@ class MarketDatabase:
                     UPDATE screening_run_locks
                     SET status=%s, completed_at=%s, error_message=%s
                     WHERE job_id=%s
+                      AND job_id IN (SELECT job_id FROM web_screening_jobs
+                        WHERE execution_mode<>'rq' AND JSON_EXTRACT(options_json, '$.rq_job_id') IS NULL)
                     """,
                     (lock_status, now, error_message, job_id),
                 )
@@ -2660,6 +2771,7 @@ class MarketDatabase:
             error_message=error_message,
             finished=True,
             summary=summary,
+            agent_only=True,
         )
 
     def expire_stale_agent_locks(self, stale_after_seconds: int = 1800) -> int:
@@ -2667,9 +2779,10 @@ class MarketDatabase:
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
-                UPDATE screening_run_locks
-                SET status='expired', error_message='Agent heartbeat timeout'
-                WHERE status='running' AND heartbeat_at IS NOT NULL AND heartbeat_at < %s
+                UPDATE screening_run_locks l JOIN web_screening_jobs j ON j.job_id=l.job_id
+                SET l.status='expired', l.error_message='Agent heartbeat timeout'
+                WHERE l.status='running' AND l.heartbeat_at IS NOT NULL AND l.heartbeat_at < %s
+                  AND j.execution_mode<>'rq' AND JSON_EXTRACT(j.options_json, '$.rq_job_id') IS NULL
                 """,
                 (cutoff,),
             )
@@ -2679,6 +2792,7 @@ class MarketDatabase:
                 UPDATE web_screening_jobs
                 SET status='queued', error_message='Agent heartbeat timeout'
                 WHERE status='running'
+                  AND execution_mode<>'rq' AND JSON_EXTRACT(options_json, '$.rq_job_id') IS NULL
                   AND heartbeat_at IS NOT NULL
                   AND heartbeat_at < %s
                   AND job_id IN (

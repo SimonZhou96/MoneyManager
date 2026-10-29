@@ -24,6 +24,7 @@ from feishu_notifier import send_screening_result
 from market import market_label, normalize_market
 from rule_engine import RuleRepository
 from stock_pool import CANONICAL_POOL_TYPES, normalize_pool_types, pool_scope_from_types
+from task_reports import notify_task_report, publish_task_report
 from .auth import (
     CurrentUser,
     authenticate,
@@ -44,9 +45,11 @@ from .errors import (
 )
 from .market_intel import router as market_intel_router
 from .macro import router as macro_router
-from .jobs import resume_web_screening_job, run_web_screening_job
+from .jobs import enqueue_web_screening_job, stop_web_screening_job
+from .queue import acquire_screening_locks, release_screening_locks, screening_queue
 from .options import router as options_router
 from .quant import router as quant_router
+from .reports import router as reports_router
 from .sectors import router as sectors_router
 from .stock_terminal import router as stock_terminal_router
 from .topology import router as topology_router
@@ -92,6 +95,7 @@ app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
 app.include_router(options_router)
 app.include_router(quant_router)
+app.include_router(reports_router)
 app.include_router(market_intel_router)
 app.include_router(macro_router)
 app.include_router(sectors_router)
@@ -140,15 +144,13 @@ def run_custom_list_backend_job(job_id: str) -> None:
         if not job:
             return
         options = job.get("options") or {}
+        db.update_web_screening_job(job_id, 'running')
         task_ids = job.get("task_ids") or []
         task_id = task_ids[0] if task_ids else options.get("task_id")
         market = normalize_market((job.get("markets") or [None])[0] or options.get("market") or "HK")
         timeframe = str(job.get("timeframe") or "1d")
         result = CustomListScreeningRunner(mysql_config).run(
             job=job,
-            csv_base=str(artifact_dir() / "screening_result"),
-            today_str=date.today().strftime("%Y-%m-%d"),
-            enable_ai_analysis=bool(options.get("enable_ai_analysis", True)),
             task_id=task_id,
         )
         summary = {
@@ -164,18 +166,20 @@ def run_custom_list_backend_job(job_id: str) -> None:
             "passed_count": len(result.passed),
             "total_count": result.total_count,
         }
-        db.update_web_screening_job(job_id, "completed", task_ids=[result.task_id], finished=True, summary=summary)
+        child = db.get_task_by_id(result.task_id)
+        if not child or child.get('status') != 'completed':
+            raise RuntimeError('自定义列表筛选未成功完成')
+        db.update_web_screening_job(job_id, 'running', task_ids=[result.task_id], summary=summary)
+        report = publish_task_report(mysql_config, db, 'custom_list', job_id, [market], timeframe,
+                                     {market: result.passed}, options.get('chain_key') or '')
+        db.update_web_screening_job(job_id, "completed", finished=True)
         webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
-        if options.get("send_feishu") and webhook_url and result.csv_paths:
+        if options.get("send_feishu") and webhook_url:
             try:
-                send_screening_result(
-                    webhook_url,
-                    f"【Web自定义列表筛选】{date.today()} - {market_label(market)}\n通过: {len(result.passed)} 只",
-                    result.csv_paths,
-                )
+                notify_task_report(report, job_id)
             except Exception as exc:
                 summary["warnings"] = [f"飞书发送失败：{type(exc).__name__}: {exc}"]
-                db.update_web_screening_job(job_id, "completed", task_ids=[result.task_id], summary=summary)
+                db.update_web_screening_job(job_id, "completed", error_message=str(exc))
     except Exception as exc:
         message = f"{type(exc).__name__}: {exc}"
         try:
@@ -359,6 +363,9 @@ def run_single_stock_web_job(run_id: str) -> None:
             }
 
         passed = bool(stock_result.get("is_passed"))
+        child = db.get_task_by_id(task_id)
+        if not child or child.get('status') != 'completed':
+            raise RuntimeError('单股筛选未成功完成')
         filter_details = stock_result.get("filter_details") or []
         filter_summary = stock_result.get("filter_summary") or ""
 
@@ -366,7 +373,7 @@ def run_single_stock_web_job(run_id: str) -> None:
         _set_progress(run_id, "save_result", 95, detail="保存筛选报告")
         result_data = {
             "passed": passed,
-            "status": "completed",
+            "status": "running",
             "data_source": "web_backend",
             "warnings": [],
             "name": name,
@@ -414,6 +421,9 @@ def run_single_stock_web_job(run_id: str) -> None:
                 "display_order": idx,
             })
         db.complete_single_stock_run_from_agent(run_id, result_data, rule_details)
+        publish_task_report(mysql_config, db, 'single_stock', run_id, [market], timeframe,
+                            {market: all_records if passed else []}, chain_key or '')
+        db.finish_single_stock_run(run_id, passed, 'completed', 'web_backend')
 
         _set_progress(run_id, "done", 100, status="completed", detail="筛选完成 ✓")
         # Keep progress for 60s so late-arriving SSE clients can read final state
@@ -569,12 +579,11 @@ def me(user: Optional[CurrentUser] = Depends(optional_user)):
     return {"id": user.id, "username": user.username, "role": user.role}
 
 
-@app.post("/api/screening/tasks")
-def create_screening_task(
+def create_full_market_task(
     payload: ScreeningTaskRequest,
-    background_tasks: BackgroundTasks,
-    user: CurrentUser = Depends(require_user),
-    db: MarketDatabase = Depends(get_db),
+    user: CurrentUser,
+    db: MarketDatabase,
+    *, task_type: str = 'market', chain_by_market: Optional[dict] = None, mysql_config=None,
 ):
     try:
         markets = validate_markets(payload.markets)
@@ -584,7 +593,12 @@ def create_screening_task(
         raise BusinessError("INVALID_SCREENING_TASK", str(exc)) from exc
     enforce_rate_limit(f"user:{user.id}:create_task", CREATE_TASK_RULE)
     run_date = _run_date()
-    chain = resolve_rule_chain(db, markets, timeframe=timeframe, chain_key=payload.chain_key)
+    if chain_by_market:
+        chain_by_market = {market: resolve_rule_chain(db, [market], timeframe=timeframe, chain_key=chain_by_market.get(market))['chain_key'] for market in markets}
+        chain = dict(chain_key='multi-' + hashlib.sha256(json.dumps(chain_by_market, sort_keys=True).encode()).hexdigest()[:24],
+                     chain_name='多市场规则链', chain_timeframe='*')
+    else:
+        chain = resolve_rule_chain(db, markets, timeframe=timeframe, chain_key=payload.chain_key)
     chain_key = chain["chain_key"]
     pool_scope = pool_scope_from_types(pool_types)
     existing_locks = db.get_screening_run_locks(
@@ -601,27 +615,14 @@ def create_screening_task(
             "SCREENING_ALREADY_COMPLETED",
             f"今日 {scopes} 已筛选成功，无需重复运行",
         )
-    active = [item for item in existing_locks if item.get("status") in {"queued", "running"}]
-    if active:
-        job_id = active[0]["job_id"]
-        job = db.get_web_screening_job(job_id) or {}
-        return {
-            "job_id": job_id,
-            "status": job.get("status") or active[0].get("status"),
-            "runner": job.get("execution_mode") or "web_backend",
-            "reused": True,
-            "message": "已有任务运行中，已为你复用该任务",
-            "markets": job.get("markets") or sorted({item["market"] for item in active}),
-            "timeframe": timeframe,
-            "pool_types": pool_types,
-            "chain_key": chain_key,
-            "chain_timeframe": chain.get("chain_timeframe"),
-            "chain_name": chain.get("chain_name"),
-        }
     output_dir = str(artifact_dir())
+    mysql_config = mysql_config or mysql_config_from_env()
     job_id = str(uuid.uuid4())
+    queue = screening_queue()
+    screening_lock = acquire_screening_locks(queue.connection, job_id, markets, run_date)
     options = {
-        "enable_ai_analysis": bool(payload.enable_ai_analysis),
+        "report_task_type": task_type,
+        "chain_by_market": chain_by_market or {},
         "send_feishu": bool(payload.send_feishu),
         "result_upload_scope": "all_results",
         "pool_types": pool_types,
@@ -629,16 +630,21 @@ def create_screening_task(
         "chain_key": chain_key,
         "chain_timeframe": chain.get("chain_timeframe"),
         "chain_name": chain.get("chain_name"),
+        "screening_lock": screening_lock,
+        "rq_job_id": f"screening-{job_id}-{screening_lock['token']}",
     }
-    db.create_web_screening_job(
-        job_id=job_id,
-        user_id=user.id,
-        markets=markets,
-        timeframe=timeframe,
-        options=options,
-        execution_mode="web_backend",
-    )
     try:
+        db.conn.begin()
+        active = db.get_active_screening_jobs(run_date, markets)
+        if active:
+            raise BusinessError('SCREENING_MARKET_BUSY', f"{active[0]['market']} 市场当日已有进行中的任务 {active[0]['job_id']}")
+        # Recheck after acquiring the market lock: another submission may have
+        # completed between the initial deduplication check and SET NX.
+        if any(item['status'] == 'completed' for item in db.get_screening_run_locks(
+                run_date, markets, timeframe, chain_key=chain_key, pool_scope=pool_scope)):
+            raise BusinessError('SCREENING_ALREADY_COMPLETED', '今日同条件已筛选成功，无需重复运行')
+        db.create_web_screening_job(job_id=job_id, user_id=user.id, markets=markets, timeframe=timeframe,
+                                    options=options, execution_mode='rq')
         db.create_screening_run_locks(
             job_id=job_id,
             run_date=run_date,
@@ -647,46 +653,18 @@ def create_screening_task(
             chain_key=chain_key,
             pool_scope=pool_scope,
         )
+        db.conn.commit()
     except Exception as exc:
-        locks = db.get_screening_run_locks(
-            run_date,
-            markets,
-            timeframe,
-            chain_key=chain_key,
-            pool_scope=pool_scope,
-        )
-        active_after_race = [item for item in locks if item.get("status") in {"queued", "running"}]
-        if active_after_race:
-            return {
-                "job_id": active_after_race[0]["job_id"],
-                "status": active_after_race[0]["status"],
-                "runner": "web_backend",
-                "reused": True,
-                "message": "已有任务运行中，已为你复用该任务",
-                "markets": sorted({item["market"] for item in active_after_race}),
-                "timeframe": timeframe,
-                "pool_types": pool_types,
-                "chain_key": chain_key,
-                "chain_timeframe": chain.get("chain_timeframe"),
-                "chain_name": chain.get("chain_name"),
-            }
+        db.conn.rollback()
+        release_screening_locks(queue.connection, job_id, screening_lock)
+        if isinstance(exc, BusinessError):
+            raise
         raise BusinessError("SCREENING_LOCK_CREATE_FAILED", f"创建筛选锁失败：{type(exc).__name__}: {exc}") from exc
-    background_tasks.add_task(
-        run_web_screening_job,
-        mysql_config_from_env(),
-        job_id,
-        markets,
-        timeframe,
-        output_dir,
-        bool(payload.enable_ai_analysis),
-        bool(payload.send_feishu),
-        chain_key,
-        pool_types,
-    )
+    enqueue_web_screening_job(queue, db, mysql_config, job_id, output_dir, screening_lock)
     return {
         "job_id": job_id,
         "status": "queued",
-        "runner": "web_backend",
+        "runner": "rq",
         "markets": markets,
         "timeframe": timeframe,
         "pool_types": pool_types,
@@ -694,6 +672,11 @@ def create_screening_task(
         "chain_timeframe": chain.get("chain_timeframe"),
         "chain_name": chain.get("chain_name"),
     }
+
+
+@app.post('/api/screening/tasks')
+def create_screening_task(payload: ScreeningTaskRequest, user: CurrentUser = Depends(require_user), db: MarketDatabase = Depends(get_db)):
+    return create_full_market_task(payload, user, db)
 
 
 @app.post("/api/screening/custom-list-tasks")
@@ -791,20 +774,63 @@ def get_screening_job_stocks(
 
 @app.post("/api/screening/jobs/{job_id}/resume")
 def resume_screening_job(
-    job_id: str, background_tasks: BackgroundTasks, _: CurrentUser = Depends(require_user),
+    job_id: str, user: CurrentUser = Depends(require_user),
     db: MarketDatabase = Depends(get_db),
 ):
     job = db.get_web_screening_job(job_id)
     if not job:
         raise BusinessError("SCREENING_JOB_NOT_FOUND", "任务组不存在")
-    if job.get("status") not in {"failed", "completed"}:
+    if (job.get('options') or {}).get('job_kind') == 'custom_list':
+        raise BusinessError('SCREENING_JOB_NOT_RESUMABLE', '此接口仅支持全市场任务')
+    if job.get("status") not in {"failed", "completed", "cancelled"}:
         raise BusinessError("SCREENING_JOB_NOT_RESUMABLE", "仅失败或中断的任务可以继续")
     pending = db.count_screening_task_items(job.get("task_ids") or [], "queued") + db.count_screening_task_items(job.get("task_ids") or [], "running")
-    if pending <= 0:
+    task_type = (job.get('options') or {}).get('report_task_type', 'market')
+    checkpoint = db.get_task_report_checkpoint(task_type, job_id) or {}
+    completed_markets = set(db.get_completed_screening_markets(job_id)) | set(checkpoint.get('records_by_market') or {})
+    remaining = [market for market in job['markets'] if market not in completed_markets]
+    if not remaining and not checkpoint:
         raise BusinessError("SCREENING_JOB_NOT_RESUMABLE", "没有待处理股票")
-    db.update_web_screening_job(job_id, "queued", error_message=None)
-    background_tasks.add_task(resume_web_screening_job, mysql_config_from_env(), job_id, str(artifact_dir()))
+    output_dir = str(artifact_dir())
+    mysql_config = mysql_config_from_env()
+    run_date = _run_date()
+    queue = screening_queue()
+    lock = acquire_screening_locks(queue.connection, job_id, job['markets'], run_date)
+    options = {**job['options'], 'screening_lock': lock, 'rq_job_id': f"screening-{job_id}-{lock['token']}"}
+    try:
+        db.conn.begin()
+        active = db.get_active_screening_jobs(run_date, job['markets'], exclude_job_id=job_id)
+        if active:
+            raise BusinessError('SCREENING_MARKET_BUSY', f"{active[0]['market']} 市场当日已有进行中的任务 {active[0]['job_id']}")
+        if not db.update_web_screening_job(job_id, 'queued', options=options, expected_status=job['status']):
+            raise BusinessError('SCREENING_JOB_NOT_RESUMABLE', '任务状态已变化，请刷新后重试')
+        db.create_screening_run_locks(job_id, run_date, job['markets'], job['timeframe'],
+                                      options['chain_key'], options['pool_scope'])
+        db.conn.commit()
+    except Exception as exc:
+        db.conn.rollback()
+        release_screening_locks(queue.connection, job_id, lock)
+        if isinstance(exc, BusinessError):
+            raise
+        raise BusinessError('SCREENING_RESUME_FAILED', '恢复任务失败，未启动筛选') from exc
+    enqueue_web_screening_job(queue, db, mysql_config, job_id, output_dir, lock, resume=True)
     return {"job_id": job_id, "status": "queued", "pending_count": pending}
+
+
+@app.post('/api/screening/jobs/{job_id}/cancel')
+def cancel_screening_job(job_id: str, user: CurrentUser = Depends(require_user), db: MarketDatabase = Depends(get_db)):
+    job = db.get_web_screening_job(job_id)
+    if not job:
+        raise BusinessError('SCREENING_JOB_NOT_FOUND', '任务组不存在')
+    if (job.get('options') or {}).get('job_kind') == 'custom_list':
+        raise BusinessError('SCREENING_JOB_NOT_CANCELLABLE', '此接口仅支持全市场任务')
+    try:
+        status = stop_web_screening_job(db, job, screening_queue().connection)
+    except BusinessError:
+        raise
+    except Exception as exc:
+        raise BusinessError('SCREENING_STOP_UNCONFIRMED', '尚未确认任务停止，保留任务锁，请稍后重试') from exc
+    return {'job_id': job_id, 'status': status}
 
 
 @app.get("/api/screening/tasks/{task_id}")
@@ -914,6 +940,14 @@ def get_single_stock(run_id: str, _: CurrentUser = Depends(require_read_user), d
     result = db.get_single_stock_run(run_id)
     if not result:
         raise BusinessError("SINGLE_STOCK_NOT_FOUND", "单股任务不存在")
+    result = dict(result)
+    result_json = dict(result.get('result_json') or {})
+    checkpoint = result.get('report') or result_json.get('report') or {}
+    if checkpoint:
+        result['report'] = {key: checkpoint[key] for key in ('status', 'report_id', 'reason') if key in checkpoint}
+        if 'report' in result_json:
+            result_json['report'] = result['report']
+            result['result_json'] = result_json
     return result
 
 

@@ -7,6 +7,7 @@ import { MarketAnalysisPage } from './features/marketAnalysis/MarketAnalysisPage
 import { StockTerminalPanel, type StockTerminalRow } from './features/stockTerminal/StockTerminalPanel'
 import { KlineChart } from './features/marketAnalysis/components/KlineChart'
 import { RuleChainEditor } from './features/ruleEditor/RuleChainEditor'
+import { ReportsPage } from './features/reports/ReportsPage'
 import type { ExpressionNode } from './features/ruleEditor/types'
 import {
   TradingBiasCard, ScoreBreakdownCards, FactorSummary,
@@ -353,6 +354,8 @@ const STATUS_LABELS: Record<string, string> = {
   passed: '通过',
   queued: '排队中',
   running: '运行中',
+  cancelling: '终止中',
+  cancelled: '已终止',
   skip: '跳过',
   valid: '待筛选',
   invalid: '无效输入',
@@ -430,9 +433,25 @@ function commonRuleChains(markets: string[], rulesByMarket: Record<string, Rules
 }
 
 function App() {
-  const [page, setPage] = useState('codeScreening')
+  const [page, setPage] = useState(() => new URLSearchParams(window.location.search).get('page') === 'reports' ? 'reports' : 'codeScreening')
   const [selectedTaskId, setSelectedTaskId] = useState('')
   const [selectedJobId, setSelectedJobId] = useState('')
+
+  function changePage(next: string) {
+    const url = new URL(window.location.href)
+    if (next === 'reports') url.searchParams.set('page', 'reports')
+    else {
+      for (const key of ['page', 'q', 'report_page', 'report_id']) url.searchParams.delete(key)
+    }
+    window.history.replaceState(null, '', url)
+    setPage(next)
+  }
+
+  useEffect(() => {
+    const onBack = () => setPage(new URLSearchParams(window.location.search).get('page') === 'reports' ? 'reports' : 'codeScreening')
+    window.addEventListener('popstate', onBack)
+    return () => window.removeEventListener('popstate', onBack)
+  }, [])
 
   return (
     <div className="app-shell">
@@ -442,13 +461,14 @@ function App() {
           <span>Stock Screener</span>
         </div>
         <nav>
-          <button className={page === 'dashboard' ? 'active' : ''} onClick={() => setPage('dashboard')}>总览</button>
-          <button className={page === 'marketScreening' ? 'active' : ''} onClick={() => setPage('marketScreening')}>全市场筛选</button>
-          <button className={page === 'codeScreening' ? 'active' : ''} onClick={() => setPage('codeScreening')}>个股筛选器</button>
+          <button className={page === 'dashboard' ? 'active' : ''} onClick={() => changePage('dashboard')}>总览</button>
+          <button className={page === 'marketScreening' ? 'active' : ''} onClick={() => changePage('marketScreening')}>全市场筛选</button>
+          <button className={page === 'codeScreening' ? 'active' : ''} onClick={() => changePage('codeScreening')}>个股筛选器</button>
+          <button className={page === 'reports' ? 'active' : ''} onClick={() => changePage('reports')}>报告查询</button>
           {/* 暂时隐藏，等个股实验室和规则链完善后再开放 */}
           {/* <button className={page === 'options' ? 'active' : ''} onClick={() => setPage('options')}>期权实验室</button> */}
           {/* <button className={page === 'marketAnalysis' ? 'active' : ''} onClick={() => setPage('marketAnalysis')}>大盘分析</button> */}
-          <button className={page === 'rules' ? 'active' : ''} onClick={() => setPage('rules')}>规则链</button>
+          <button className={page === 'rules' ? 'active' : ''} onClick={() => changePage('rules')}>规则链</button>
         </nav>
         <div className="sidebar-footer">
           <span>MoneyManager</span>
@@ -460,6 +480,7 @@ function App() {
         />}
         {page === 'codeScreening' && <CodeScreening openTask={(taskId) => { setSelectedTaskId(taskId); setPage('task') }} />}
         {page === 'marketScreening' && <MarketScreeningCenter openJob={(jobId) => { setSelectedJobId(jobId); setPage('job') }} />}
+        {page === 'reports' && <ReportsPage />}
         {page === 'options' && <OptionLab />}
         {/* 暂时隐藏，等大盘分析完善后再开放 */}
         {/* {page === 'marketAnalysis' && <MarketAnalysisPage />} */}
@@ -2336,10 +2357,14 @@ function MarketScreeningCenter({ openJob }: { openJob: (jobId: string) => void }
   const [timeframe, setTimeframe] = useState('1d')
   const [poolTypes, setPoolTypes] = useState(['best'])
   const [loading, setLoading] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   async function refresh() {
-    const data = await api<{ jobs: Job[] }>('/api/screening/tasks')
-    setJobs(data.jobs || [])
+    setRefreshing(true); setError('')
+    try {
+      const data = await api<{ jobs: Job[] }>('/api/screening/tasks')
+      setJobs(data.jobs || [])
+    } finally { setRefreshing(false) }
   }
   useEffect(() => { refresh().catch(err => setError(String(err))) }, [])
   async function submit(event: React.FormEvent) {
@@ -2362,7 +2387,12 @@ function MarketScreeningCenter({ openJob }: { openJob: (jobId: string) => void }
       <div className="screening-actions"><button className="primary" disabled={loading || !markets.length || !poolTypes.length}>{loading ? '创建中...' : '创建筛选任务'}</button></div>
     </form></Panel>
     {error && <div className="error">{error}</div>}
-    <Panel title="当前任务"><div className="toolbar"><button onClick={() => refresh().catch(err => setError(String(err)))}>刷新</button></div><Table rows={jobs} columns={['job_id', 'markets', 'timeframe', 'chain_name', 'status', 'created_at']} onRowClick={row => openJob(row.job_id)} /></Panel>
+    <Panel title="当前任务"><div className="toolbar">
+      <button type="button" className="secondary-button task-refresh-button" disabled={refreshing} aria-busy={refreshing} onClick={() => refresh().catch(err => setError(err instanceof Error ? err.message : '刷新失败，请重试'))}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5" /><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17" /></svg>
+        <span>{refreshing ? '刷新中…' : '刷新'}</span>
+      </button>
+    </div><Table rows={jobs} columns={['job_id', 'markets', 'timeframe', 'chain_name', 'status', 'created_at']} onRowClick={row => openJob(row.job_id)} /></Panel>
   </section>
 }
 
@@ -2370,6 +2400,7 @@ function ScreeningJobDetail({ jobId }: { jobId: string }) {
   const [job, setJob] = useState<any>(null); const [stocks, setStocks] = useState<JobStock[]>([])
   const [market, setMarket] = useState(''); const [status, setStatus] = useState(''); const [passed, setPassed] = useState('')
   const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
   async function refresh() {
     if (!jobId) return
     const params = new URLSearchParams(); if (market) params.set('market', market); if (status) params.set('processing_status', status); if (passed) params.set('passed', passed)
@@ -2377,15 +2408,26 @@ function ScreeningJobDetail({ jobId }: { jobId: string }) {
     setJob(jobData); setStocks(stockData.rows || [])
   }
   async function resume() {
+    setSubmitting(true); setError('')
     try { await api(`/api/screening/jobs/${jobId}/resume`, { method: 'POST' }); await refresh() }
     catch (err) { setError(err instanceof Error ? err.message : '继续任务失败') }
+    finally { setSubmitting(false) }
+  }
+  async function cancel() {
+    if (!window.confirm('确认终止任务？已完成结果将保留，确认执行进程停止后才会释放市场名额。')) return
+    setSubmitting(true); setError('')
+    try { await api(`/api/screening/jobs/${jobId}/cancel`, { method: 'POST' }); await refresh() }
+    catch (err) { setError(err instanceof Error ? err.message : '终止任务失败') }
+    finally { setSubmitting(false) }
   }
   useEffect(() => { refresh().catch(err => setError(String(err))) }, [jobId, market, status, passed])
   useEffect(() => { if (!job || isTerminalTaskStatus(job.status)) return; const timer = window.setInterval(() => refresh().catch(err => setError(String(err))), 3000); return () => window.clearInterval(timer) }, [job?.status, jobId, market, status, passed])
   return <section>
     <Header title="全市场筛选任务详情" subtitle={jobId} />
     {error && <div className="error">{error}</div>}
-    {job && <><div className="metric-grid task-summary-grid"><Metric label="状态" value={<StatusBadge value={job.status} />} /><Metric label="总进度" value={`${job.completed_count}/${job.total_count}`} /><Metric label="通过" value={job.passed_count} /><Metric label="处理错误" value={job.error_count} /></div>{job.status === 'failed' && <div className="toolbar"><button className="primary" onClick={() => resume().catch(console.error)}>继续任务</button></div>}</>}
+    {job && <><div className="metric-grid task-summary-grid"><Metric label="状态" value={<StatusBadge value={job.status} />} /><Metric label="总进度" value={`${job.completed_count}/${job.total_count}`} /><Metric label="通过" value={job.passed_count} /><Metric label="处理错误" value={job.error_count} /></div>
+      {['queued', 'running', 'cancelling'].includes(job.status) && <div className="toolbar"><button disabled={submitting} onClick={() => cancel().catch(console.error)}>{job.status === 'cancelling' ? '确认终止状态' : '终止任务'}</button>{job.status === 'cancelling' && <span>正在等待执行进程停止，市场名额尚未释放</span>}</div>}
+      {['failed', 'cancelled'].includes(job.status) && <div className="toolbar"><button className="primary" disabled={submitting} onClick={() => resume().catch(console.error)}>继续任务</button></div>}</>}
     <Panel title="市场任务"><Table rows={job?.tasks || []} columns={['market', 'status', 'completed_count', 'total_count', 'current_stock_code']} /></Panel>
     <Panel title="股票处理明细"><div className="toolbar toolbar-row"><Field label="市场"><select value={market} onChange={e => setMarket(e.target.value)}><option value="">全部</option>{MARKET_OPTIONS.map(item => <option key={item}>{item}</option>)}</select></Field><Field label="处理状态"><select value={status} onChange={e => setStatus(e.target.value)}><option value="">全部</option><option value="queued">等待处理</option><option value="running">处理中</option><option value="completed">已完成</option><option value="error">处理错误</option></select></Field><Field label="筛选结果"><select value={passed} onChange={e => setPassed(e.target.value)}><option value="">全部</option><option value="true">满足条件</option><option value="false">不满足条件</option></select></Field></div>
       <div className="task-stock-list">{stocks.map(stock => <article className="task-stock-row" key={`${stock.task_id}-${stock.code}`}><div><strong>{stock.code} {stock.name || ''}</strong><p><StatusBadge value={stock.processing_status} /> {stock.is_passed === null ? '未完成' : stock.is_passed ? '筛选通过' : '筛选未通过'}</p></div><ScreeningConditionTags stock={stock} /><small>{stock.error_message || readableFilterSummary(stock.filter_summary)}</small></article>)}</div>

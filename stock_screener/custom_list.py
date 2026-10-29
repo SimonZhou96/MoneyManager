@@ -527,9 +527,6 @@ class CustomListScreeningRunner:
     def run(
         self,
         job: dict,
-        csv_base: str,
-        today_str: str,
-        enable_ai_analysis: bool = True,
         task_id: Optional[str] = None,
     ) -> CustomListRunResult:
         options = job.get("options") or {}
@@ -576,15 +573,7 @@ class CustomListScreeningRunner:
         )
 
         passed = load_passed_screening_records(self.mysql_config, task_id, market)
-        processor = ScreeningPostProcessor(
-            mysql_config=self.mysql_config,
-            csv_base=f"{csv_base}_custom_{str(job.get('job_id') or task_id)[:8]}",
-            today_str=today_str,
-            enable_ai_analysis=enable_ai_analysis,
-            chain_key=chain_key,
-            chain_name=options.get("chain_name") or chain_key,
-        )
-        csv_paths = processor.process(
+        ScreeningPostProcessor(self.mysql_config).process(
             market=market,
             timeframe=timeframe,
             task_id=task_id,
@@ -594,7 +583,6 @@ class CustomListScreeningRunner:
             market=market,
             task_id=task_id,
             passed=passed,
-            csv_paths=csv_paths,
             total_count=len(watchlist),
         )
 

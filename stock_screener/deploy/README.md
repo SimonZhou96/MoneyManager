@@ -7,7 +7,8 @@
 - 云端服务：Caddy + 前端静态站点 + web-api + web-worker + MySQL + Redis。
 - 数据流：服务默认使用 YFinance/AKShare；仅在配置健康的远端 OpenD 后优先使用 OpenD 行情。
 
-> Redis 在当前 compose 中用于 RQ 后台任务队列，不用于 Web API 限流；Web API 限流是进程内滑动窗口。
+> Redis 用于 RQ 后台队列和同市场同日全市场任务锁；Web API 限流仍是进程内滑动窗口。
+> 首次切换 RQ 全市场执行前，先按[任务互斥与上线顺序](../docs/screening-task-locks.md)核对历史任务，停止旧执行器并确认进程退出。
 > 中国大陆 ECS 对外提供网站访问通常需要 ICP 备案。备案完成前，不要把域名正式解析到大陆 ECS 并开放 Web 访问。
 > OpenAI/Codex API 不建议从中国大陆 ECS 直连；大陆 ECS 上建议优先关闭 Codex/OpenAI provider，或把 AI worker 放到 OpenAI 支持地区。
 
