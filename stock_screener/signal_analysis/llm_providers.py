@@ -230,6 +230,8 @@ class SignalAnalysisPromptBuilder:
             "market": market,
             "task": (
                 "评估这些已经通过技术规则筛选的股票信号可靠性；不要改变筛选结果，只做辅助判断。"
+                "只依据宏观政策、公司信息与技术指标；个股主力资金、盘口、大单、龙虎榜和筹码估算"
+                "不得作为评分、方向判断或推荐依据，缺少这些数据也不得扣分。"
                 "每条 signal 都包含 instrument_type，取值为 股票 或 ETF。"
                 "若某股票附带了 stock_snapshot（实时行情快照，仅股票有效），请结合 price/change_pct/pe_ttm "
                 "等精确数字辅助判断信号可靠性，但不要替代新闻分析。"

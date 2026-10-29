@@ -2055,7 +2055,7 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertIn("本报告使用规则链 **`unified_bullish_top20`**", report)
         self.assertIn("- 恒指震荡走强，科技股和消费股活跃", report)
         self.assertIn("| # | 代码 | 名称 | 板块 | 方向 | 最终评分 | 命中规则 | 最终评分依据 | 热点 | 事件 |", report)
-        self.assertIn("最终统一评分 = 技术规则分(30%) + 宏观五模块分(30%) + 事件热点分(20%) + 资金风险分(10%) + LLM复核分(10%)", report)
+        self.assertIn("最终统一评分 = 技术规则分(0%) + 宏观五模块分(50%) + 事件热点分(37.5%) + LLM复核分(12.5%)", report)
         self.assertIn("左一看涨:左一战法-看涨<br>准备反弹:RSI超卖回升<br>看涨:放量突破", report)
         self.assertIn("⭐ 重点<br>匹配：AI<br><small>与AI应用和港股科技热点相关</small>", report)
         self.assertIn("公司事件：腾讯发布AI业务更新<br>公司热点：腾讯云大模型服务热度上升<br>关联热点：AI；与AI应用和港股科技热点相关", report)
@@ -2432,7 +2432,7 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertIn("技术", unified.formula)
         self.assertIn("五模块", unified.formula)
         self.assertIn("事件热点", unified.formula)
-        self.assertIn("资金风险", unified.formula)
+        self.assertNotIn("资金风险", unified.formula)
         self.assertIn("LLM复核", unified.formula)
         self.assertEqual(unified.missing_items, [])
 

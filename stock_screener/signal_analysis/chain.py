@@ -45,7 +45,6 @@ AI_CSV_COLUMNS = [
     "技术规则分",
     "宏观五模块分",
     "事件热点分",
-    "资金风险分",
     "LLM复核分",
     "评分缺失项",
     "宏观分",
@@ -416,7 +415,12 @@ class MarketIntelEvidenceStep(AnalysisStep):
                     row.code,
                     force_refresh=context.force_refresh,
                 )
-                context.market_intel_stock_bundles[row.code] = dict(stock_bundle or {})
+                stock_bundle = dict(stock_bundle or {})
+                stock_bundle["groups"] = {
+                    kind: items for kind, items in (stock_bundle.get("groups") or {}).items()
+                    if kind not in {"money_flow", "long_tiger", "order_book", "chip"}
+                }
+                context.market_intel_stock_bundles[row.code] = stock_bundle
                 stock_items = flatten_bundle_items(stock_bundle)
                 stock_documents = intel_items_to_search_documents(stock_items)
                 context.company_documents[row.code] = dedupe_documents([
@@ -1381,9 +1385,6 @@ def _build_stock_dict(
     risk_parts: list[str] = []
     if result.risk_factors:
         risk_parts.extend(result.risk_factors[:2])
-    risk_level = (row.main_force_risk_level or "").strip()
-    if risk_level:
-        risk_parts.append(f"主力风险: {risk_level}")
     main_risk = "；".join(risk_parts) if risk_parts else "市场系统性风险或个股不确定性"
 
     # Build buy reason
@@ -1606,10 +1607,6 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
     stock_ranked = [item for item in ranked if not _is_etf_result(item, rows_by_code)]
     hot_matched = [item for item in ranked if item.hot_sector_mark in {"重点", "相关"}]
     event_supported = [item for item in stock_ranked if _meaningful_company_items(item)]
-    main_force_rows = [row for row in report_rows if _has_main_force_risk(row)]
-    mf_high = [row for row in main_force_rows if row.main_force_risk_level == "高"]
-    mf_medium = [row for row in main_force_rows if row.main_force_risk_level == "中"]
-    mf_signal_text = _main_force_top_signal_text(main_force_rows)
     overall = _overall_strength_from_scores([unified_by_code[item.code].final_score for item in ranked])
     hot_sector_text = "；".join(context.hot_sectors) if context.hot_sectors else "暂未识别到明确市场热点"
     market_name = MARKET_NAMES.get(context.market, context.market)
@@ -1738,7 +1735,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         """Display unified score formula (delegates to compute_unified_score).
 
         技术规则决定 Top20 入围（权重 0%），最终评分口径：
-          五模块×40% + 事件热点×30% + 资金风险×20% + LLM复核×10%
+          五模块×50% + 事件热点×37.5% + LLM复核×12.5%
         """
         unified = unified_by_code.get(item.code)
         if unified is not None:
@@ -1871,7 +1868,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         f"本报告使用规则链 **`{report_chain_key}`**（{market_name}）的评分框架：",
         "",
         "```",
-        "最终统一评分 = 技术规则分(0%) + 宏观五模块分(40%) + 事件热点分(30%) + 资金风险分(20%) + LLM复核分(10%)",
+        "最终统一评分 = 技术规则分(0%) + 宏观五模块分(50%) + 事件热点分(37.5%) + LLM复核分(12.5%)",
         "```",
         "",
         "### 1.1 本期技术规则（用于入围，权重0%不纳入最终评分）",
@@ -1897,12 +1894,11 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         "| 分项 | 权重 | 说明 |",
         "|---|---|---|",
         "| 技术规则分 | 0% | 看涨、准备反弹、左一看涨命中数用于入围Top20，不纳入最终评分 |",
-        "| 宏观五模块分 | 40% | 宏观、行业、企业质量、估值、交易；缺失模块按50中性补齐 |",
-        "| 事件热点分 | 30% | 公司事件、公司热点新闻、市场热点新闻、热点板块匹配 |",
-        "| 资金风险分 | 20% | 主力风险分或主力风险等级；缺失按50中性补齐 |",
-        "| LLM复核分 | 10% | 信号可靠性、模型置信度、利好/风险因素和方向判断 |",
+        "| 宏观五模块分 | 50% | 宏观、行业、企业质量、估值、交易；缺失模块按50中性补齐 |",
+        "| 事件热点分 | 37.5% | 公司事件、公司热点新闻、市场热点新闻、热点板块匹配 |",
+        "| LLM复核分 | 12.5% | 信号可靠性、模型置信度、利好/风险因素和方向判断 |",
         "",
-        "### 1.3 宏观五模块（`enterprise_potential_analysis`，纳入最终统一评分40%）",
+        "### 1.3 宏观五模块（`enterprise_potential_analysis`，纳入最终统一评分50%）",
         "",
         "| 模块 | 权重 | 核心指标 |",
         "|---|---|---|",
@@ -1942,7 +1938,7 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         )
     lines.extend([
         "",
-        f"**综合信号强度**：{overall}　｜　热点匹配：{len(hot_matched)}/{len(ranked)}　｜　主力风险可评估：{len(main_force_rows)}/{len(ranked)}",
+        f"**综合信号强度**：{overall}　｜　热点匹配：{len(hot_matched)}/{len(ranked)}",
         "",
         "---",
         "",
@@ -1956,16 +1952,9 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
         macro_items = ["市场主线待识别"]
     macro_detail = "；".join(macro_items[:6])
 
-    mf_risk_note = (
-        f"⚠️ 主力数据：{len(main_force_rows)}/{len(report_rows)} 可评估"
-        if len(main_force_rows) < len(report_rows)
-        else "✅ 主力数据：全部可评估"
-    )
-
     lines.extend([
         f"- **热点方向**：{macro_detail}",
         f"- **信号强度**：{overall}（最终均分 {sum(unified_by_code[r.code].final_score for r in ranked) / max(1, len(ranked)):.1f}）",
-        f"- **主力风险**：高 {len(mf_high)} / 中 {len(mf_medium)} / 数据不足 {len(report_rows) - len(main_force_rows)}",
         f"- **公司催化**：{len(event_supported)}/{len(stock_ranked)} 只个股有明确事件支撑",
         "",
         "> 宏观因素仅作背景参考，不单独构成买入依据。",
@@ -2007,10 +1996,6 @@ def _render_markdown_report(context: SignalAnalysisContext) -> str:
     ])
 
     risks = []
-    if len(main_force_rows) == 0:
-        risks.append("1. **主力数据缺失** ⚠️ 全部标的主力流出风险数据不足，缺资金面验证")
-    elif len(main_force_rows) < len(report_rows):
-        risks.append(f"1. **主力数据部分缺失** ⚠️ {len(report_rows) - len(main_force_rows)}只主力流出风险数据不足")
     no_sector_count = sum(1 for row in report_rows if not (row.sector or "").strip())
     if no_sector_count > 0:
         risks.append(f"2. **板块数据缺失** {no_sector_count}只（{no_sector_count / max(1, len(report_rows)) * 100:.0f}%）CSV板块字段为空")

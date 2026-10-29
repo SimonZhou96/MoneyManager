@@ -152,8 +152,6 @@ def build_data_gaps(
         gaps.append("公司新闻及事件信息不足")
     elif generic_only_sources(source_documents, result.source_urls or result.news_sources):
         gaps.append("本次检索主要命中行情/公司概览页，缺少公告、年报或公司新闻级来源")
-    if not row or not has_main_force_context(row):
-        gaps.append("主力资金/盘口数据缺失或不足")
     if str(result.news_impact or "") in {"信息不足", "无明显新闻"} or any("公司新闻" in item for item in result.risk_factors):
         gaps.append("公司新闻及事件信息不足")
     uncited = [

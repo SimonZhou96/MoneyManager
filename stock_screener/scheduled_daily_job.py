@@ -869,15 +869,6 @@ class ScreeningPostProcessor:
         annotate_records_with_instrument_type(passed, etf_codes)
         csv_path = market_signal_report_path(self.csv_base, market, timeframe, self.today_str, ".csv")
         check_date = date.fromisoformat(self.today_str)
-        enrich_records_with_main_force_risks(
-            mysql_config=self.mysql_config,
-            task_id=task_id,
-            market=market,
-            timeframe=timeframe,
-            records=passed,
-            csv_path=csv_path,
-            check_date=check_date,
-        )
         write_screening_csv(passed, csv_path)
         csv_paths.append(csv_path)
         print(f"✓ CSV 已导出: {csv_path}")

@@ -16,6 +16,7 @@ from typing import List, Optional
 
 from .models import MacroFactorValue, MacroSnapshot
 from .providers import MacroDataProvider
+from .macro_timeseries import _fred_client, fred_series, enrich_macro_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,6 @@ logger = logging.getLogger(__name__)
 FRED_SERIES = {
     # 利率
     "FEDFUNDS":  ("policy_rate",    "联邦基金利率",       "%"),
-    "DGS10":     ("ten_year_yield",  "美国10年期国债收益率",  "%"),
-    "DGS2":      ("two_year_yield",  "美国2年期国债收益率",   "%"),
     # 通胀
     "CPIAUCSL":  ("cpi_index",      "CPI (All Urban)",    "指数"),
     "CPILFESL":  ("core_cpi_index", "核心 CPI",            "指数"),
@@ -67,8 +66,7 @@ class FredMacroProvider(MacroDataProvider):
             if not key:
                 self._init_error = "FRED_API_KEY 未设置"
                 return
-            from fredapi import Fred
-            self._fred = Fred(api_key=key)
+            self._fred = _fred_client(key)
         except ImportError:
             self._init_error = "fredapi 未安装 (pip install fredapi)"
         except Exception as e:
@@ -95,6 +93,7 @@ class FredMacroProvider(MacroDataProvider):
             return snap
 
         snap.provider_status[self.name] = "ok"
+        enrich_macro_snapshot(snap, "US", self._api_key)
         for series_id, (factor_key, factor_name, unit) in FRED_SERIES.items():
             self._fetch_series(snap, series_id, factor_key, factor_name, unit)
 
@@ -103,7 +102,7 @@ class FredMacroProvider(MacroDataProvider):
     def _fetch_series(self, snap: MacroSnapshot, series_id: str,
                       factor_key: str, factor_name: str, unit: str):
         try:
-            series = self._fred.get_series(series_id)
+            series = fred_series(series_id, self._api_key)
             if series is None or series.empty:
                 snap.factors.append(MacroFactorValue(
                     factor_key=factor_key, factor_name=factor_name,

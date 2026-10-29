@@ -280,7 +280,7 @@ class OptionLabMacroAnalysisTests(unittest.TestCase):
         )
         payload = analysis.to_dict()
 
-        self.assertIn("主力资金/盘口数据缺失或不足", payload["数据缺失原因"])
+        self.assertNotIn("主力资金/盘口数据缺失或不足", payload["数据缺失原因"])
         self.assertIn("引用来源", payload)
         self.assertEqual(payload["因素引用"]["小米在AI、机器人领域有业务布局"][0]["label"], "小米年报")
         self.assertEqual(payload["因素引用"]["小米在AI、机器人领域有业务布局"][0]["url"], "https://ir.mi.com/annual-report")

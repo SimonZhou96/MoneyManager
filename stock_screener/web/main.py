@@ -43,6 +43,7 @@ from .errors import (
     request_validation_exception_handler,
 )
 from .market_intel import router as market_intel_router
+from .macro import router as macro_router
 from .jobs import resume_web_screening_job, run_web_screening_job
 from .options import router as options_router
 from .quant import router as quant_router
@@ -92,6 +93,7 @@ app.add_exception_handler(RequestValidationError, request_validation_exception_h
 app.include_router(options_router)
 app.include_router(quant_router)
 app.include_router(market_intel_router)
+app.include_router(macro_router)
 app.include_router(sectors_router)
 app.include_router(stock_terminal_router)
 app.include_router(topology_router)

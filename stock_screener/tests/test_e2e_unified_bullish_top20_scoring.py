@@ -196,14 +196,13 @@ class E2EUnifiedScoringConsistencyTest(unittest.TestCase):
         """UNIFIED_SCORE_WEIGHTS 应与统一口径一致。"""
         self.assertEqual(UNIFIED_SCORE_WEIGHTS["technical"], 0.0,
                          "技术规则权重应为 0%")
-        self.assertEqual(UNIFIED_SCORE_WEIGHTS["enterprise"], 0.40,
-                         "五模块权重应为 40%")
-        self.assertEqual(UNIFIED_SCORE_WEIGHTS["event_hot"], 0.30,
-                         "事件热点权重应为 30%")
-        self.assertEqual(UNIFIED_SCORE_WEIGHTS["fund_risk"], 0.20,
-                         "资金风险权重应为 20%")
-        self.assertEqual(UNIFIED_SCORE_WEIGHTS["llm"], 0.10,
-                         "LLM复核权重应为 10%")
+        self.assertEqual(UNIFIED_SCORE_WEIGHTS["enterprise"], 0.50,
+                         "五模块权重应为 50%")
+        self.assertEqual(UNIFIED_SCORE_WEIGHTS["event_hot"], 0.375,
+                         "事件热点权重应为 37.5%")
+        self.assertNotIn("fund_risk", UNIFIED_SCORE_WEIGHTS)
+        self.assertEqual(UNIFIED_SCORE_WEIGHTS["llm"], 0.125,
+                         "LLM复核权重应为 12.5%")
         self.assertAlmostEqual(sum(UNIFIED_SCORE_WEIGHTS.values()), 1.0,
                                msg="权重总和应为 100%")
 
@@ -319,10 +318,10 @@ class E2EUnifiedScoringConsistencyTest(unittest.TestCase):
 
         # 验证公式字符串包含正确权重
         self.assertIn("0%", unified.formula, "公式应包含技术权重 0%")
-        self.assertIn("40%", unified.formula, "公式应包含五模块权重 40%")
-        self.assertIn("30%", unified.formula, "公式应包含事件热点权重 30%")
-        self.assertIn("20%", unified.formula, "公式应包含资金风险权重 20%")
-        self.assertIn("10%", unified.formula, "公式应包含 LLM 权重 10%")
+        self.assertIn("50%", unified.formula, "公式应包含五模块权重 50%")
+        self.assertIn("37.5%", unified.formula, "公式应包含事件热点权重 37.5%")
+        self.assertNotIn("资金风险", unified.formula)
+        self.assertIn("12.5%", unified.formula, "公式应包含 LLM 权重 12.5%")
 
         # 验证 CSV 列映射
         csv_cols = unified.to_csv_columns()
@@ -331,7 +330,7 @@ class E2EUnifiedScoringConsistencyTest(unittest.TestCase):
         self.assertIn("技术规则分", csv_cols)
         self.assertIn("宏观五模块分", csv_cols)
         self.assertIn("事件热点分", csv_cols)
-        self.assertIn("资金风险分", csv_cols)
+        self.assertNotIn("资金风险分", csv_cols)
         self.assertIn("LLM复核分", csv_cols)
         self.assertIn("评分缺失项", csv_cols)
 

@@ -61,6 +61,10 @@ class MacroSnapshot:
     cpi_yoy: Optional[float] = None
     core_cpi_yoy: Optional[float] = None
     cpi_trend: str = ""
+    cpi_mom: Optional[float] = None
+    ppi_yoy: Optional[float] = None
+    ppi_mom: Optional[float] = None
+    macro_details: Dict[str, Any] = field(default_factory=dict)
 
     # 经济增长
     pmi_manufacturing: Optional[float] = None
@@ -94,6 +98,8 @@ class MacroSnapshot:
              "provider_status": dict(self.provider_status),
              "factors": [f.__dict__ for f in self.factors],
              "data_gaps": list(self.data_gaps)}
+        r.update(cpi_mom=self.cpi_mom, ppi_yoy=self.ppi_yoy, ppi_mom=self.ppi_mom,
+                 macro_details=self.macro_details)
         for k in ("policy_rate","policy_rate_trend","ten_year_yield","two_year_yield",
                   "yield_spread","lpr_1y","lpr_5y","cpi_yoy","core_cpi_yoy","cpi_trend",
                   "pmi_manufacturing","pmi_services","gdp_yoy","industrial_production_yoy",
@@ -327,6 +333,11 @@ class EnterprisePotentialEvidencePackage:
             parts.append("### 宏观环境")
             parts.append(f"- LPR 1Y: {self.macro.lpr_1y}%, 5Y: {self.macro.lpr_5y}%")
             parts.append(f"- CPI: {self.macro.cpi_yoy}%, PMI: {self.macro.pmi_manufacturing}")
+            parts.append(f"- CPI 环比: {self.macro.cpi_mom}%; PPI 同比: {self.macro.ppi_yoy}%, 环比: {self.macro.ppi_mom}%")
+            parts.append(f"- 本国国债 2Y: {self.macro.two_year_yield}%, 10Y: {self.macro.ten_year_yield}%, 10Y−2Y: {self.macro.yield_spread} 个百分点")
+            for name, detail in self.macro.macro_details.items():
+                latest = detail.get("latest") or {}
+                parts.append(f"- {name} 最新变化及口径: {latest}; 来源: {detail.get('source')}")
             parts.append(f"- GDP: {self.macro.gdp_yoy}%, M2: {self.macro.m2_yoy}%")
             parts.append(f"- VIX: {self.macro.vix}, DXY: {self.macro.dxy}")
             parts.append(f"- 恒指: {self.macro.hsi}, SP500: {self.macro.sp500}\n")

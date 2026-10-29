@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -28,6 +29,11 @@ from .search_providers import FallbackSearchProvider, NullSearchProvider, Search
 
 
 DEFAULT_ANALYSIS_PROFILE = "default"
+
+
+def selection_cache_profile(profile: str) -> str:
+    """Version model judgements without discarding reusable company-news caches."""
+    return "no_main_force_v1:" + hashlib.sha256(profile.encode()).hexdigest()[:32]
 
 
 def env_flag(name: str, default: bool) -> bool:
@@ -59,7 +65,10 @@ class MySqlSignalAnalysisRepository:
             db.init_signal_analysis_schema()
             db.upsert_signal_analysis_results(rows)
             db.init_signal_analysis_cache_schema()
-            db.upsert_signal_analysis_cache(rows)
+            db.upsert_signal_analysis_cache([
+                {**row, "analysis_profile": selection_cache_profile(row.get("analysis_profile") or DEFAULT_ANALYSIS_PROFILE)}
+                for row in rows
+            ])
             db.init_company_news_cache_schema()
             db.upsert_company_news_cache(rows)
         finally:
@@ -80,7 +89,7 @@ class MySqlSignalAnalysisRepository:
                 market=market,
                 code=code,
                 timeframe=timeframe,
-                analysis_profile=analysis_profile,
+                analysis_profile=selection_cache_profile(analysis_profile),
                 trade_date=trade_date,
             )
         finally:

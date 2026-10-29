@@ -97,13 +97,12 @@ HOT_SECTOR_MARK_CRITERIA = (
 
 # DEPRECATED: use scoring.constants.ENTRY_WEIGHTS and scoring.constants.HOLDING_WEIGHTS instead
 # 统一评分权重：技术规则决定 Top20 入围，不参与最终评分（0%）；
-# 五模块/事件热点/资金风险/LLM 复核构成最终评分口径。
+# 五模块/事件热点/LLM 复核构成最终评分口径；主力资金不参与评分。
 UNIFIED_SCORE_WEIGHTS = {
     "technical": 0.00,
-    "enterprise": 0.40,
-    "event_hot": 0.30,
-    "fund_risk": 0.20,
-    "llm": 0.10,
+    "enterprise": 0.50,
+    "event_hot": 0.375,
+    "llm": 0.125,
 }
 
 
@@ -202,22 +201,6 @@ def _event_hot_unified_score(result: "SignalAnalysisResult") -> Tuple[float, Lis
     return _clamp_score(score), missing
 
 
-def _fund_risk_unified_score(row: Optional["ScreeningSignalRow"]) -> Tuple[float, List[str]]:
-    if row is None:
-        return 50.0, ["资金风险数据缺失按50中性补齐"]
-    score_value = _optional_float(row.main_force_risk_score)
-    if score_value is not None:
-        return _clamp_score(100.0 - score_value), []
-    level = (row.main_force_risk_level or "").strip()
-    if level == "高":
-        return 35.0, []
-    if level == "中":
-        return 55.0, []
-    if level in {"低", "无", "无明显风险"}:
-        return 80.0, []
-    return 50.0, ["主力资金风险缺失按50中性补齐"]
-
-
 def _llm_unified_score(result: "SignalAnalysisResult") -> Tuple[float, List[str]]:
     missing = []
     reliability = result.reliability_score
@@ -245,7 +228,6 @@ class UnifiedScoreBreakdown:
     technical_score: float
     enterprise_score: float
     event_hot_score: float
-    fund_risk_score: float
     llm_score: float
     missing_items: List[str] = field(default_factory=list)
     enterprise_module_scores: Dict[str, Optional[float]] = field(default_factory=dict)
@@ -258,7 +240,6 @@ class UnifiedScoreBreakdown:
             "技术规则分": f"{self.technical_score:.1f}",
             "宏观五模块分": f"{self.enterprise_score:.1f}",
             "事件热点分": f"{self.event_hot_score:.1f}",
-            "资金风险分": f"{self.fund_risk_score:.1f}",
             "LLM复核分": f"{self.llm_score:.1f}",
             "评分缺失项": "；".join(self.missing_items),
             "宏观分": "" if module.get("macro") is None else f"{module['macro']:.1f}",
@@ -278,23 +259,20 @@ def compute_unified_score(
     technical_score, technical_missing = _technical_unified_score(row)
     enterprise_score, enterprise_missing, module_scores = _enterprise_unified_score(raw)
     event_hot_score, event_hot_missing = _event_hot_unified_score(result)
-    fund_risk_score, fund_missing = _fund_risk_unified_score(row)
     llm_score, llm_missing = _llm_unified_score(result)
 
     final = (
         technical_score * UNIFIED_SCORE_WEIGHTS["technical"]
         + enterprise_score * UNIFIED_SCORE_WEIGHTS["enterprise"]
         + event_hot_score * UNIFIED_SCORE_WEIGHTS["event_hot"]
-        + fund_risk_score * UNIFIED_SCORE_WEIGHTS["fund_risk"]
         + llm_score * UNIFIED_SCORE_WEIGHTS["llm"]
     )
     final = _clamp_score(final)
     formula = (
         f"技术 {technical_score:.1f}*0% + "
-        f"五模块 {enterprise_score:.1f}*40% + "
-        f"事件热点 {event_hot_score:.1f}*30% + "
-        f"资金风险 {fund_risk_score:.1f}*20% + "
-        f"LLM复核 {llm_score:.1f}*10% = {final:.1f}"
+        f"五模块 {enterprise_score:.1f}*50% + "
+        f"事件热点 {event_hot_score:.1f}*37.5% + "
+        f"LLM复核 {llm_score:.1f}*12.5% = {final:.1f}"
     )
     return UnifiedScoreBreakdown(
         final_score=final,
@@ -302,13 +280,11 @@ def compute_unified_score(
         technical_score=technical_score,
         enterprise_score=enterprise_score,
         event_hot_score=event_hot_score,
-        fund_risk_score=fund_risk_score,
         llm_score=llm_score,
         missing_items=[
             *technical_missing,
             *enterprise_missing,
             *event_hot_missing,
-            *fund_missing,
             *llm_missing,
         ],
         enterprise_module_scores=module_scores,
@@ -392,12 +368,6 @@ class ScreeningSignalRow:
             "pe_ratio": self.pe_ratio,
             "market_cap": self.market_cap,
             "conditions_met": self.conditions_met,
-            "main_force_risk_level": self.main_force_risk_level,
-            "main_force_risk_score": self.main_force_risk_score,
-            "main_force_risk_signals": self.main_force_risk_signals,
-            "main_force_risk_summary": self.main_force_risk_summary,
-            "main_force_market_data_observation": self.main_force_market_data_observation,
-            "main_force_data_gap": self.main_force_missing_data,
         }
 
 
