@@ -293,7 +293,7 @@ def compute_unified_score(
 
 @dataclass(frozen=True)
 class ScreeningSignalRow:
-    """One stock row loaded from a screening result CSV."""
+    """One passed stock supplied by the screening task."""
 
     index: int
     code: str
@@ -318,7 +318,7 @@ class ScreeningSignalRow:
     raw: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_csv_row(cls, row: Dict[str, str], index: int, default_market: str) -> "ScreeningSignalRow":
+    def from_record(cls, row: dict, index: int, default_market: str) -> "ScreeningSignalRow":
         code = _string(row.get("股票代码") or row.get("code"))
         market_label = _string(row.get("市场") or row.get("market") or default_market)
         return cls(
@@ -505,7 +505,7 @@ class SignalAnalysisResult:
         task_id: str,
         market: str,
         check_date: date,
-        csv_path: str,
+        csv_path: Optional[str] = None,
         timeframe: str = "1d",
         analysis_profile: str = "default",
     ) -> Dict[str, Any]:
@@ -561,6 +561,7 @@ class AnalysisRunResult:
     """Result returned to the scheduler after best-effort analysis."""
 
     success: bool
+    report_markdown: str = ""
     artifact_paths: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     results_by_code: Dict[str, SignalAnalysisResult] = field(default_factory=dict)

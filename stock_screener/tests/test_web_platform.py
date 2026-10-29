@@ -75,17 +75,14 @@ class WebPlatformTests(unittest.TestCase):
             validate_rule_chain_key("Bad-Key")
 
     def test_create_screening_task_stores_selected_pool_types(self):
-        class FakeBackgroundTasks:
-            def __init__(self):
-                self.tasks = []
-
-            def add_task(self, fn, *args, **kwargs):
-                self.tasks.append((fn, args, kwargs))
-
         class FakeDB:
             def __init__(self):
+                self.conn = mock.Mock()
                 self.created_job = None
                 self.created_locks = None
+
+            def get_active_screening_jobs(self, *args):
+                return []
 
             def get_screening_run_locks(self, run_date, markets, timeframe, chain_key=None, pool_scope=None):
                 return []
@@ -104,7 +101,6 @@ class WebPlatformTests(unittest.TestCase):
                 self.created_locks = kwargs
 
         db = FakeDB()
-        background = FakeBackgroundTasks()
         payload = ScreeningTaskRequest(
             markets=["HK"],
             timeframe="1d",
@@ -116,27 +112,23 @@ class WebPlatformTests(unittest.TestCase):
             "chain_key": "default_zuoyi_and_other",
             "chain_timeframe": "*",
             "chain_name": "默认链",
-        }):
+        }), mock.patch('web.main.screening_queue'), \
+             mock.patch('web.main.acquire_screening_locks', return_value={'token': 'test'}), \
+             mock.patch('web.main.enqueue_web_screening_job') as enqueue:
             result = create_screening_task(
                 payload,
-                background,
                 CurrentUser(id=7, username="tester", role="admin"),
                 db,
             )
 
-        self.assertEqual(result["runner"], "web_backend")
+        self.assertEqual(result["runner"], "rq")
         self.assertEqual(result["pool_types"], ["major_index", "all_etf"])
-        self.assertEqual(db.created_job["execution_mode"], "web_backend")
+        self.assertEqual(db.created_job["execution_mode"], "rq")
         self.assertEqual(db.created_job["options"]["pool_types"], ["major_index", "all_etf"])
         self.assertEqual(db.created_locks["pool_scope"], "major_index,all_etf")
-        self.assertEqual(len(background.tasks), 1)
-        self.assertEqual(background.tasks[0][1][2], ["HK"])
+        enqueue.assert_called_once()
 
     def test_create_screening_task_checks_artifact_directory_before_persisting_job(self):
-        class FakeBackgroundTasks:
-            def add_task(self, *args, **kwargs):
-                raise AssertionError("background task must not be scheduled")
-
         class FakeDB:
             def __init__(self):
                 self.created_job = False
@@ -160,7 +152,6 @@ class WebPlatformTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "只读目录"):
                 create_screening_task(
                     ScreeningTaskRequest(markets=["HK"], pool_types=["best"]),
-                    FakeBackgroundTasks(),
                     CurrentUser(id=801, username="artifact-test", role="admin"),
                     db,
                 )
@@ -183,6 +174,22 @@ class WebPlatformTests(unittest.TestCase):
 
             def update_web_screening_job(self, _job_id, status, task_ids=None, **_kwargs):
                 events.append(("job_updated", status, task_ids))
+                return True
+
+            def get_web_screening_job(self, _job_id):
+                return {'task_ids': [], 'markets': ['HK'], 'options': {}}
+
+            def get_task_report_checkpoint(self, _task_type, _task_id):
+                return {}
+
+            def save_task_report_checkpoint(self, *args, **kwargs):
+                return True
+
+            def get_task_by_id(self, _task_id):
+                return {'status': 'completed'}
+
+            def update_screening_run_lock(self, *args, **kwargs):
+                pass
 
             def close(self):
                 pass
@@ -191,18 +198,22 @@ class WebPlatformTests(unittest.TestCase):
             events.append(("market_started",))
             kwargs["on_task_created"]("task-hk-1")
             events.append(("market_finishing",))
-            return SimpleNamespace(task_id="task-hk-1", csv_paths=[], market="HK", passed=[])
+            return SimpleNamespace(task_id="task-hk-1", csv_paths=[], market="HK", passed=[], error=None, skipped=False)
 
         with mock.patch("web.jobs.MarketDatabase", FakeDB), \
              mock.patch("web.jobs.get_default_screening_params", return_value={}), \
              mock.patch("web.jobs.run_market_screening_worker", side_effect=run_market), \
-             mock.patch("web.jobs._record_artifacts"):
+             mock.patch("web.jobs.publish_task_report", return_value=None), \
+             mock.patch('web.jobs.get_current_job'), \
+             mock.patch('web.jobs.release_screening_locks'), \
+             mock.patch('web.jobs.finish_web_screening_job'):
             run_web_screening_job(
                 mysql_config=object(), job_id="job-1", markets=["HK"], timeframe="1d",
                 artifact_root="/tmp/moneymanager-test-artifacts", enable_ai_analysis=False,
+                screening_lock={'token': 'test'},
             )
 
-        callback_update = ("job_updated", "running", ["task-hk-1"])
+        callback_update = ("job_updated", None, ["task-hk-1"])
         self.assertIn(callback_update, events)
         self.assertLess(events.index(callback_update), events.index(("market_finishing",)))
 

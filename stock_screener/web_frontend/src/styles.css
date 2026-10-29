@@ -681,6 +681,18 @@ tr.selected-row td:first-child { box-shadow: inset 3px 0 0 #c9a84c, inset 0 1px 
   color: #c9a84c;
   background: rgba(201,168,76,0.06);
 }
+.task-refresh-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 112px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.task-refresh-button:focus-visible { outline: 2px solid #c9a84c; outline-offset: 3px; }
+.task-refresh-button:disabled { opacity: .6; cursor: wait; }
 .info-list {
   display: grid;
   gap: 10px;

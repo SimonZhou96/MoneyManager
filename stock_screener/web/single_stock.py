@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import csv
-import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import date
@@ -17,6 +15,7 @@ from stock_pool import POOL_TYPE_ALL_ETF
 from signal_analysis.service import build_macro_score_scorer, build_market_intel_service, run_signal_analysis_for_market
 from signal_analysis.service import run_signal_analysis_for_row
 from signal_analysis.models import ScreeningSignalRow
+from task_reports import publish_task_report
 from timeframe import parse_timeframe
 
 
@@ -67,6 +66,7 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
     warnings: List[str] = []
     ai_analysis: Optional[dict] = None
     data_source = ""
+    screening_passed = False
     macro_analysis_cache: Dict[str, Any] = {}
 
     db = MarketDatabase(mysql_config)
@@ -116,6 +116,7 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
                 return analysis
             signal_analysis_loader = load_signal_analysis
         result = rule_engine.evaluate_stock(stock, context, signal_analysis_loader=signal_analysis_loader)
+        screening_passed = bool(result.passed)
         rule_details = _rule_details(rule_engine, result.filter_outputs)
 
         db.insert_single_stock_rule_details(run_id, rule_details)
@@ -124,9 +125,13 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
             analysis = macro_analysis_cache.get(stock.code)
             if analysis is not None:
                 ai_analysis = _analysis_to_response_dict(analysis)
-        elif result.passed and not rule_engine.requires_market_intel_macro_score():
-            ai_analysis, ai_warnings = _run_single_ai(mysql_config, run_id, market, timeframe, stock, result.filter_outputs)
-            warnings.extend(ai_warnings)
+        records = [{
+            'code': stock.code, 'name': stock.name or stock.code, 'sector': stock.sector or stock.industry or '',
+            'market_cap': stock.market_cap, 'pe_ratio': stock.pe_ratio,
+            'conditions_met': '|'.join(_conditions_met(result.filter_outputs)),
+        }] if result.passed else []
+        publish_task_report(mysql_config, db, 'single_stock', run_id, [market], timeframe,
+                            {market: records}, request.chain_key or '')
 
         db.finish_single_stock_run(
             run_id=run_id,
@@ -159,13 +164,14 @@ def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockReq
             "conditions_met": _conditions_met(result.filter_outputs),
             "zuoyi": _zuoyi_summary(result.filter_outputs),
             "ai_analysis": ai_analysis,
+            "report": db.get_task_report_checkpoint('single_stock', run_id),
             "warnings": warnings,
         }
     except Exception as exc:
         warnings.append(f"{type(exc).__name__}: {exc}")
         db.finish_single_stock_run(
             run_id=run_id,
-            passed=False,
+            passed=screening_passed,
             status="failed",
             data_source=data_source,
             warnings=warnings,
@@ -297,40 +303,11 @@ def _run_single_ai(
     stock: StockInfo,
     outputs,
 ) -> tuple[Optional[dict], List[str]]:
-    warnings: List[str] = []
-    with tempfile.TemporaryDirectory(prefix="single_stock_ai_") as tmp_dir:
-        csv_path = Path(tmp_dir) / f"{run_id}.csv"
-        with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=["股票代码", "市场", "名称", "pe", "市值", "所属板块", "满足的条件"],
-            )
-            writer.writeheader()
-            writer.writerow({
-                "股票代码": stock.code,
-                "市场": market,
-                "名称": stock.name or stock.code,
-                "pe": stock.pe_ratio or "",
-                "市值": stock.market_cap or "",
-                "所属板块": stock.sector or stock.industry or "",
-                "满足的条件": "|".join(_conditions_met(outputs)),
-            })
-        result = run_signal_analysis_for_market(
-            mysql_config=mysql_config,
-            task_id=run_id,
-            market=market,
-            csv_path=str(csv_path),
-            check_date=date.today(),
-            timeframe=timeframe,
-            enabled=True,
-        )
-        warnings.extend(result.warnings or [])
-        analysis = (result.results_by_code or {}).get(stock.code)
-        if analysis is None:
-            if result.skipped_reason:
-                warnings.append(result.skipped_reason)
-            return None, warnings
-        return _analysis_to_response_dict(analysis), warnings
+    row = _build_macro_signal_row(stock, market)
+    row.conditions_met = '|'.join(_conditions_met(outputs))
+    result, warnings = run_signal_analysis_for_row(mysql_config, task_id=run_id, row=row,
+                                                   market=market, timeframe=timeframe, enabled=True)
+    return (_analysis_to_response_dict(result) if result else None), warnings
 
 
 def _build_macro_signal_row(stock: StockInfo, market: str) -> ScreeningSignalRow:

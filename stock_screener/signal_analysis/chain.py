@@ -99,7 +99,7 @@ class SignalAnalysisRepository(Protocol):
 class SignalAnalysisContext:
     task_id: str
     market: str
-    csv_path: str
+    rows: List[ScreeningSignalRow]
     check_date: date
     settings: AnalysisSettings
     search_provider: SearchProvider
@@ -110,7 +110,6 @@ class SignalAnalysisContext:
     repository: Optional[SignalAnalysisRepository] = None
     manual_hot_news: ManualHotNewsConfig = field(default_factory=ManualHotNewsConfig)
     manual_hot_sectors: ManualHotSectorConfig = field(default_factory=ManualHotSectorConfig)
-    rows: List[ScreeningSignalRow] = field(default_factory=list)
     all_rows: List[ScreeningSignalRow] = field(default_factory=list)
     csv_fieldnames: List[str] = field(default_factory=list)
     market_query: str = ""
@@ -129,6 +128,8 @@ class SignalAnalysisContext:
     results_by_code: Dict[str, SignalAnalysisResult] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     artifact_paths: List[str] = field(default_factory=list)
+    report_markdown: str = ""
+    on_results: Optional[Callable[[Dict[str, SignalAnalysisResult]], None]] = None
     analysis_profile: str = "default"
     force_refresh: bool = False
     aborted: bool = False
@@ -145,28 +146,17 @@ class AnalysisStep(ABC):
         """Mutate the context or mark it aborted."""
 
 
-class LoadCsvSignalsStep(AnalysisStep):
-    name = "LoadCsvSignalsStep"
+class LoadSignalsStep(AnalysisStep):
+    name = "LoadSignalsStep"
 
     def run(self, context: SignalAnalysisContext) -> None:
-        if not os.path.exists(context.csv_path):
-            context.aborted = True
-            context.skipped_reason = f"CSV 不存在: {context.csv_path}"
-            context.warnings.append(context.skipped_reason)
-            return
-
-        with open(context.csv_path, "r", encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
-            context.csv_fieldnames = list(reader.fieldnames or [])
-            context.rows = [
-                ScreeningSignalRow.from_csv_row(row, index=index, default_market=context.market)
-                for index, row in enumerate(reader)
-            ]
         context.all_rows = list(context.rows)
         if not context.rows:
             context.aborted = True
-            context.skipped_reason = "CSV 没有可分析的股票行"
+            context.skipped_reason = "没有入选股票，无需生成报告"
             context.warnings.append(context.skipped_reason)
+        context.rows = [row for row in context.rows if row.code not in context.results_by_code
+                        or context.results_by_code[row.code].analysis_status != 'success']
 
 
 class LoadCachedResultsStep(AnalysisStep):
@@ -189,7 +179,7 @@ class LoadCachedResultsStep(AnalysisStep):
                 context.analysis_profile,
                 context.check_date,
             )
-            if cached:
+            if cached and cached.get('analysis_status', 'success') == 'success':
                 if callable(company_news_getter) and provider_candidates:
                     company_news_cache = _load_valid_company_news_cache(
                         getter=company_news_getter,
@@ -647,6 +637,8 @@ class LLMBatchAnalysisStep(AnalysisStep):
             for result in results:
                 context.results_by_code[result.code] = result
                 success_count += 1
+            if context.on_results:
+                context.on_results(context.results_by_code)
 
         if success_count == 0:
             context.aborted = True
@@ -717,7 +709,6 @@ class PersistAnalysisStep(AnalysisStep):
                 task_id=context.task_id,
                 market=context.market,
                 check_date=context.check_date,
-                csv_path=context.csv_path,
                 timeframe=context.timeframe,
                 analysis_profile=context.analysis_profile,
             )
@@ -735,14 +726,13 @@ class WriteArtifactsStep(AnalysisStep):
     name = "WriteArtifactsStep"
 
     def run(self, context: SignalAnalysisContext) -> None:
-        report_path = analysis_report_path_for_csv(context.csv_path)
-
-        write_analysis_columns_to_csv(context.csv_path, context.results_by_code)
-
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write(_render_artifact_report(context))
-
-        context.artifact_paths.append(report_path)
+        rows = context.all_rows or context.rows
+        if any(row.code not in context.results_by_code or
+               context.results_by_code[row.code].analysis_status != 'success' for row in rows):
+            context.skipped_reason = '部分入选股票 AI 分析未成功，请重试缺失部分'
+            context.aborted = True
+            return
+        context.report_markdown = _render_artifact_report(context)
 
 
 class SignalAnalysisChain:
@@ -750,7 +740,7 @@ class SignalAnalysisChain:
 
     def __init__(self, steps: Optional[List[AnalysisStep]] = None):
         self.steps = steps or [
-            LoadCsvSignalsStep(),
+            LoadSignalsStep(),
             LoadCachedResultsStep(),
             BuildSearchQueriesStep(),
             MarketIntelEvidenceStep(),
@@ -816,7 +806,8 @@ class SignalAnalysisChain:
             i += 1
 
         return AnalysisRunResult(
-            success=bool(context.artifact_paths),
+            success=bool(context.report_markdown),
+            report_markdown=context.report_markdown,
             artifact_paths=list(context.artifact_paths),
             warnings=list(context.warnings),
             results_by_code=dict(context.results_by_code),
@@ -1335,7 +1326,7 @@ def write_analysis_columns_to_csv(
                 result = results_by_code.get(code)
                 if result is not None:
                     market = (row.get("market") or row.get("市场") or "").strip()
-                    signal_row = ScreeningSignalRow.from_csv_row(row, index=0, default_market=market)
+                    signal_row = ScreeningSignalRow.from_record(row, index=0, default_market=market)
                     output.update(result.to_csv_columns(signal_row))
                 writer.writerow(output)
         os.replace(temp_path, csv_path)
@@ -1517,7 +1508,6 @@ def _render_artifact_report(context: SignalAnalysisContext) -> str:
                 task_id=context.task_id,
                 market=context.market,
                 check_date=context.check_date,
-                csv_path=context.csv_path,
                 timeframe=context.timeframe,
                 analysis_profile=context.analysis_profile,
             )

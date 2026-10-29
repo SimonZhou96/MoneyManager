@@ -833,23 +833,13 @@ def get_default_screening_params() -> dict:
 
 
 class ScreeningPostProcessor:
-    """Shared passed-stock CSV, main-force risk, and AI report processing."""
+    """Enrich passed records before task-owned AI report generation."""
 
     def __init__(
         self,
         mysql_config: MySqlConfig,
-        csv_base: str,
-        today_str: str,
-        enable_ai_analysis: bool = False,
-        chain_key: Optional[str] = None,
-        chain_name: Optional[str] = None,
     ):
         self.mysql_config = mysql_config
-        self.csv_base = csv_base
-        self.today_str = today_str
-        self.enable_ai_analysis = bool(enable_ai_analysis)
-        self.chain_key = chain_key or ""
-        self.chain_name = chain_name or self.chain_key
 
     def process(
         self,
@@ -857,64 +847,15 @@ class ScreeningPostProcessor:
         timeframe: str,
         task_id: str,
         passed: List[dict],
-    ) -> List[str]:
-        csv_paths: List[str] = []
+    ) -> List[dict]:
         if not passed:
-            print(f"  {market_label(market)} 无满足条件的股票，不生成 CSV")
-            return csv_paths
+            return []
 
         enrich_records_with_names(self.mysql_config, task_id, market, passed)
         enrich_records_with_sectors(self.mysql_config, task_id, market, passed)
         etf_codes = get_market_etf_codes(self.mysql_config, market)
         annotate_records_with_instrument_type(passed, etf_codes)
-        csv_path = market_signal_report_path(self.csv_base, market, timeframe, self.today_str, ".csv")
-        check_date = date.fromisoformat(self.today_str)
-        write_screening_csv(passed, csv_path)
-        csv_paths.append(csv_path)
-        print(f"✓ CSV 已导出: {csv_path}")
-
-        if self.enable_ai_analysis:
-            self._run_ai_analysis(market, timeframe, task_id, csv_path, check_date, csv_paths)
-        return csv_paths
-
-    def _run_ai_analysis(
-        self,
-        market: str,
-        timeframe: str,
-        task_id: str,
-        csv_path: str,
-        check_date: date,
-        csv_paths: List[str],
-    ) -> None:
-        try:
-            analysis_result = run_signal_analysis_for_market(
-                mysql_config=self.mysql_config,
-                task_id=task_id,
-                market=market,
-                csv_path=csv_path,
-                check_date=check_date,
-                timeframe=timeframe,
-                chain_key=self.chain_key,
-                chain_name=self.chain_name,
-                enabled=True,
-            )
-            for warning in analysis_result.warnings:
-                print(f"[AI分析] {market_label(market)}: {warning}")
-            results_by_code = getattr(analysis_result, "results_by_code", {}) or {}
-            if results_by_code:
-                try:
-                    write_analysis_columns_to_csv(csv_path, results_by_code)
-                    print(f"✓ AI 辅助分析已写回主 CSV: {csv_path}")
-                except Exception as e:
-                    print(f"[AI分析] {market_label(market)} 主 CSV 写回失败但不影响飞书发送: {type(e).__name__}: {e}")
-            if analysis_result.artifact_paths:
-                csv_paths.extend(analysis_result.artifact_paths)
-                for artifact_path in analysis_result.artifact_paths:
-                    print(f"✓ AI 辅助分析文件已导出: {artifact_path}")
-            elif analysis_result.skipped_reason:
-                print(f"[AI分析] {market_label(market)} 跳过: {analysis_result.skipped_reason}")
-        except Exception as e:
-            print(f"[AI分析] {market_label(market)} 失败但不影响 CSV/飞书发送: {type(e).__name__}: {e}")
+        return passed
 
 
 def run_market_screening_worker(
@@ -922,10 +863,7 @@ def run_market_screening_worker(
     market: str,
     timeframe: str,
     default_params: dict,
-    csv_base: str,
-    today_str: str,
     verbose: bool = False,
-    enable_ai_analysis: bool = False,
     chain_key: Optional[str] = None,
     pool_types: Optional[List[str]] = None,
     task_id: Optional[str] = None,
@@ -970,14 +908,7 @@ def run_market_screening_worker(
 
         print(f"  {market_label(market)}: {len(passed)} 只通过")
 
-        csv_paths = ScreeningPostProcessor(
-            mysql_config=mysql_config,
-            csv_base=csv_base,
-            today_str=today_str,
-            enable_ai_analysis=enable_ai_analysis,
-            chain_key=chain_key,
-            chain_name=chain_key,
-        ).process(
+        ScreeningPostProcessor(mysql_config).process(
             market=market,
             timeframe=timeframe,
             task_id=task_id,
@@ -988,7 +919,6 @@ def run_market_screening_worker(
             market=market,
             task_id=task_id,
             passed=passed,
-            csv_paths=csv_paths,
         )
     except Exception as e:
         return MarketScreeningResult(

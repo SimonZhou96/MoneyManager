@@ -7,10 +7,9 @@ from __future__ import annotations
 
 import os
 import hashlib
-import tempfile
 from datetime import date
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, Dict, List, Optional
 
 from db import MarketDatabase, MySqlConfig
 from market_intel.macro_llm import MacroScoreJsonClient, MacroScoreLLMScorer
@@ -154,7 +153,7 @@ def run_signal_analysis_for_market(
     mysql_config: MySqlConfig,
     task_id: str,
     market: str,
-    csv_path: str,
+    rows: List[ScreeningSignalRow],
     check_date: Optional[date] = None,
     timeframe: str = "1d",
     chain_key: str = "",
@@ -165,6 +164,8 @@ def run_signal_analysis_for_market(
     repository_override: Optional[MySqlSignalAnalysisRepository] = None,
     search_provider_override: Optional[SearchProvider] = None,
     llm_provider_override: Optional[LLMProvider] = None,
+    initial_results: Optional[Dict[str, SignalAnalysisResult]] = None,
+    on_results: Optional[Callable[[Dict[str, SignalAnalysisResult]], None]] = None,
 ) -> AnalysisRunResult:
     """Run optional post-screening analysis without affecting the main screening flow."""
     should_run = env_flag("ENABLE_LLM_ANALYSIS", True) if enabled is None else bool(enabled)
@@ -186,7 +187,7 @@ def run_signal_analysis_for_market(
         context = SignalAnalysisContext(
             task_id=task_id,
             market=market,
-            csv_path=csv_path,
+            rows=list(rows),
             check_date=check_date or date.today(),
             settings=settings,
             search_provider=search_provider,
@@ -201,6 +202,8 @@ def run_signal_analysis_for_market(
             analysis_profile=analysis_profile,
             force_refresh=force_refresh,
             market_intel_service=market_intel_service,
+            results_by_code=dict(initial_results or {}),
+            on_results=on_results,
         )
         return SignalAnalysisChain().run(context)
     finally:
@@ -223,50 +226,12 @@ def run_signal_analysis_for_row(
     force_refresh: bool = False,
 ) -> tuple[Optional[SignalAnalysisResult], List[str]]:
     run_date = check_date or date.today()
-    with tempfile.TemporaryDirectory(prefix="signal_analysis_row_") as tmp_dir:
-        csv_path = Path(tmp_dir) / f"{row.code}.csv"
-        fieldnames = [
-            "股票代码", "市场", "名称", "标的类型", "pe", "市值", "所属板块", "满足的条件",
-            "主力流出风险", "主力风险分", "主力风险信号", "主力风险说明",
-            "资金与盘面观察", "资金流向数据", "盘口数据", "龙虎榜数据", "成交量分布数据",
-        ]
-        csv_row = {
-            "股票代码": row.code,
-            "市场": row.market_label or row.market,
-            "名称": row.name,
-            "标的类型": row.instrument_type,
-            "pe": row.pe_ratio,
-            "市值": row.market_cap,
-            "所属板块": row.sector,
-            "满足的条件": row.conditions_met,
-            "主力流出风险": row.main_force_risk_level,
-            "主力风险分": row.main_force_risk_score,
-            "主力风险信号": row.main_force_risk_signals,
-            "主力风险说明": row.main_force_risk_summary,
-            "资金与盘面观察": row.main_force_market_data_observation,
-            "资金流向数据": row.main_force_fund_flow_data,
-            "盘口数据": row.main_force_order_book_data,
-            "龙虎榜数据": row.main_force_lhb_data,
-            "成交量分布数据": row.main_force_chip_data,
-        }
-        import csv
-
-        with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerow(csv_row)
-        result = run_signal_analysis_for_market(
-            mysql_config=mysql_config,
-            task_id=task_id,
-            market=market,
-            csv_path=str(csv_path),
-            check_date=run_date,
-            timeframe=timeframe,
-            enabled=enabled,
-            analysis_profile=analysis_profile,
-            force_refresh=force_refresh,
-        )
-        return (result.results_by_code or {}).get(row.code), list(result.warnings or [])
+    result = run_signal_analysis_for_market(
+        mysql_config=mysql_config, task_id=task_id, market=market, rows=[row],
+        check_date=run_date, timeframe=timeframe, enabled=enabled,
+        analysis_profile=analysis_profile, force_refresh=force_refresh,
+    )
+    return (result.results_by_code or {}).get(row.code), list(result.warnings or [])
 
 
 def _prepare_analysis_providers(
