@@ -432,10 +432,112 @@ function commonRuleChains(markets: string[], rulesByMarket: Record<string, Rules
     .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.priority - b.priority || a.chain_key.localeCompare(b.chain_key))
 }
 
+function Login({ onLogin }: { onLogin: (user: User) => void }) {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    if (loading) return
+    setError('')
+    setLoading(true)
+    try {
+      const result = await api<{ user: User }>('/api/auth/login', {
+        method: 'POST', body: JSON.stringify({ username: username.trim(), password }),
+      })
+      setPassword('')
+      onLogin(result.user)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '登录失败，请稍后重试')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return <main className="login-shell">
+    <form className="login-panel" onSubmit={submit} aria-labelledby="login-title" aria-busy={loading}>
+      <div>
+        <p className="eyebrow">STOCK SCREENER</p>
+        <h1 id="login-title">登录 MoneyManager</h1>
+        <p className="muted">登录后查看筛选任务与 AI 分析报告</p>
+      </div>
+      <label htmlFor="login-username">账号
+        <input id="login-username" name="username" autoComplete="username" autoCapitalize="none" spellCheck={false}
+          required maxLength={64} value={username} onChange={event => setUsername(event.target.value)} placeholder="请输入分配的账号" />
+      </label>
+      <label htmlFor="login-password">密码
+        <input id="login-password" name="password" type="password" autoComplete="current-password"
+          required value={password} onChange={event => setPassword(event.target.value)} placeholder="请输入密码" />
+      </label>
+      {error && <div className="error" role="alert">{error}</div>}
+      <button className="primary" type="submit" disabled={loading || !username.trim() || !password}>{loading ? '登录中…' : '登录'}</button>
+      <p className="login-account-note">账号由管理员分配，如需开通或重置密码，请联系管理员。</p>
+    </form>
+  </main>
+}
+
 function App() {
+  const [user, setUser] = useState<User | null>(null)
+  const [checking, setChecking] = useState(true)
+  const [sessionError, setSessionError] = useState('')
+  const [sessionRevision, setSessionRevision] = useState(0)
+
+  useEffect(() => {
+    let active = true
+    let authRequired = false
+    const onAuthRequired = () => {
+      authRequired = true
+      if (active) setUser(null)
+    }
+    window.addEventListener('auth-required', onAuthRequired)
+    setChecking(true)
+    setSessionError('')
+    api<User>('/api/auth/me').then(result => {
+      if (active) setUser(result)
+    }).catch(err => {
+      if (active) {
+        setUser(null)
+        // AUTH_REQUIRED is handled separately from a failed session check.
+        if (!authRequired) setSessionError(err instanceof Error ? err.message : '无法验证登录状态，请重试')
+      }
+    }).finally(() => { if (active) setChecking(false) })
+    return () => {
+      active = false
+      window.removeEventListener('auth-required', onAuthRequired)
+    }
+  }, [sessionRevision])
+
+  if (checking) return <main className="loading" role="status">正在验证登录状态…</main>
+  if (sessionError) return <main className="login-shell"><section className="login-panel">
+    <h1>连接暂不可用</h1>
+    <p className="error" role="alert">{sessionError}</p>
+    <button className="primary" onClick={() => setSessionRevision(value => value + 1)}>重试</button>
+  </section></main>
+  if (!user) return <Login onLogin={setUser} />
+  return <ScreeningApp user={user} onLogout={() => setUser(null)} />
+}
+
+function ScreeningApp({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const [logoutError, setLogoutError] = useState('')
+  const [loggingOut, setLoggingOut] = useState(false)
   const [page, setPage] = useState(() => new URLSearchParams(window.location.search).get('page') === 'reports' ? 'reports' : 'codeScreening')
   const [selectedTaskId, setSelectedTaskId] = useState('')
   const [selectedJobId, setSelectedJobId] = useState('')
+
+  async function logout() {
+    setLoggingOut(true)
+    setLogoutError('')
+    try {
+      await api('/api/auth/logout', { method: 'POST' })
+      onLogout()
+    } catch (err) {
+      setLogoutError(err instanceof Error ? err.message : '退出失败，请重试')
+    } finally {
+      setLoggingOut(false)
+    }
+  }
 
   function changePage(next: string) {
     const url = new URL(window.location.href)
@@ -471,7 +573,9 @@ function App() {
           <button className={page === 'rules' ? 'active' : ''} onClick={() => changePage('rules')}>规则链</button>
         </nav>
         <div className="sidebar-footer">
-          <span>MoneyManager</span>
+          <span className="session-username" title={user.username}>{user.username}</span>
+          <button className="secondary" disabled={loggingOut} onClick={logout}>{loggingOut ? '正在退出…' : '退出登录'}</button>
+          {logoutError && <div className="inline-error" role="alert">{logoutError}</div>}
         </div>
       </aside>
       <main className="content">
@@ -970,24 +1074,27 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
 
   // ---- stock name search with debounce ----
   useEffect(() => {
-    if (searchQuery.trim().length < 1) {
+    if (searchQuery.trim().length < 1 || selectedStock) {
       setSearchResults([])
       setSearchOpen(false)
+      setSearchLoading(false)
       return
     }
+    let cancelled = false
     const timer = setTimeout(async () => {
       setSearchLoading(true)
       try {
         const data = await api<{ results: StockSearchResult[] }>(
           `/api/stocks/search?q=${encodeURIComponent(searchQuery.trim())}&market=${market}&limit=10`
         )
+        if (cancelled) return
         setSearchResults(data.results || [])
         setSearchOpen(true)
       } catch { /* ignore search errors */ }
-      finally { setSearchLoading(false) }
+      finally { if (!cancelled) setSearchLoading(false) }
     }, 300)
-    return () => clearTimeout(timer)
-  }, [searchQuery, market])
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [searchQuery, market, selectedStock])
 
   // ---- select stock from autocomplete ----
   function selectStock(stock: StockSearchResult) {
@@ -1348,8 +1455,13 @@ function CodeScreening({ openTask }: { openTask: (taskId: string) => void }) {
             <div className="stock-search">
               <input
                 value={searchQuery}
-                onChange={event => setSearchQuery(event.target.value)}
-                onFocus={() => { if (searchResults.length > 0) setSearchOpen(true) }}
+                onChange={event => {
+                  setSelectedStock(null)
+                  setSearchQuery(event.target.value)
+                  setSearchResults([])
+                  setSearchOpen(false)
+                }}
+                onFocus={() => { if (!selectedStock && searchResults.length > 0) setSearchOpen(true) }}
                 onBlur={() => setTimeout(() => setSearchOpen(false), 200)}
                 placeholder="输入股票名称，如：腾讯 / Apple / 茅台"
                 autoComplete="off"

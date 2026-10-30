@@ -5,6 +5,9 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     ...options
   })
   const payload = await response.json().catch(() => null)
+  if (payload?.error_code === 'AUTH_REQUIRED' || response.status === 401) {
+    window.dispatchEvent(new Event('auth-required'))
+  }
   if (payload?.ok === false) {
     throw new Error(payload.message || '请求失败，请稍后重试')
   }
