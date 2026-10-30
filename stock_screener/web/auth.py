@@ -72,10 +72,10 @@ def require_user(
     token: Optional[str] = Cookie(default=None, alias=session_cookie_name()),
 ) -> CurrentUser:
     if not token:
-        return CurrentUser(id=0, username="访客", role="guest")
+        raise BusinessError("AUTH_REQUIRED", "请先登录后再访问")
     user = db.get_user_by_session_token(token)
     if not user:
-        return CurrentUser(id=0, username="访客", role="guest")
+        raise BusinessError("AUTH_REQUIRED", "请先登录后再访问")
     return CurrentUser(id=int(user["id"]), username=user["username"], role=user["role"])
 
 
@@ -84,10 +84,10 @@ def optional_user(
     token: Optional[str] = Cookie(default=None, alias=session_cookie_name()),
 ) -> Optional[CurrentUser]:
     if not token:
-        return CurrentUser(id=0, username="访客", role="guest")
+        return None
     user = db.get_user_by_session_token(token)
     if not user:
-        return CurrentUser(id=0, username="访客", role="guest")
+        return None
     return CurrentUser(id=int(user["id"]), username=user["username"], role=user["role"])
 
 
