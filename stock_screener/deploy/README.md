@@ -325,6 +325,28 @@ podman compose -f deploy/podman-compose.yml exec -T mysql \
   mysql -uroot -p"$MYSQL_ROOT_PASSWORD" market_data < sql/005_web_platform.sql
 podman compose -f deploy/podman-compose.yml exec -T mysql \
   mysql -uroot -p"$MYSQL_ROOT_PASSWORD" market_data < sql/006_enable_hard_filters.sql
+podman compose -f deploy/podman-compose.yml exec -T mysql \
+  mysql -uroot -p"$MYSQL_ROOT_PASSWORD" market_data < sql/020_screening_reports.sql
+```
+
+报告搜索使用 MySQL 全文索引。Compose 启动参数将
+`innodb_ft_min_token_size` 设为 `1`，以便索引短中文分词；修改 MySQL 启动参数后需
+重建 MySQL 容器（保留挂载的数据目录），然后再创建报告全文索引。启用该参数后，
+全文索引必须在新配置下创建或重建。可先执行：
+
+```bash
+podman compose -f deploy/podman-compose.yml up -d --force-recreate mysql
+```
+
+部署后，新生成的报告会写入 MySQL；已有 ES 报告不会自动回填。
+
+Web API 启动时会幂等初始化报告表；如果在启用该参数前已经创建过报告表，删除并
+重建 `screening_reports` 的全文索引后，短中文关键词才会生效：
+
+```sql
+ALTER TABLE screening_reports
+    DROP INDEX ft_screening_reports_search,
+    ADD FULLTEXT KEY ft_screening_reports_search (search_tokens);
 ```
 
 如果没有在当前 shell 加载 `.env`，`MYSQL_ROOT_PASSWORD` 会是空值。重新执行：

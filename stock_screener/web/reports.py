@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from db import MarketDatabase
-from task_reports import ElasticsearchReportRepository
+from report_store import MySqlReportRepository
 from .auth import CurrentUser, get_db, require_user
 from .business import BusinessError
 
@@ -14,12 +14,8 @@ from .business import BusinessError
 router = APIRouter(prefix='/api/reports', tags=['reports'])
 
 
-def report_repository():
-    store = ElasticsearchReportRepository.from_env()
-    try:
-        yield store
-    finally:
-        store.close()
+def report_repository(db: MarketDatabase = Depends(get_db)):
+    return MySqlReportRepository(db)
 
 
 class ReportRetryRequest(BaseModel):

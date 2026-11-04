@@ -16,10 +16,10 @@ from signal_analysis.chain import (
     MarketIntelEvidenceStep,
     MarketIntelFinalizeEvidencePacksStep,
     ApplyManualHotNewsStep,
+    BuildReportContentStep,
     SearchContextStep,
     SignalAnalysisChain,
     SignalAnalysisContext,
-    WriteArtifactsStep,
     _render_markdown_report,
     write_analysis_columns_to_csv,
 )
@@ -95,7 +95,7 @@ class FakeLLMProvider:
     def model_name(self):
         return "fake-model"
 
-    def analyze_batch(self, market, signals, market_documents, sector_documents, hot_sectors, company_documents):
+    def analyze_batch(self, market, signals, market_documents, sector_documents, hot_sectors, company_documents, **kwargs):
         return [
             SignalAnalysisResult(
                 code=row.code,
@@ -416,61 +416,53 @@ class MarketIntelSignalAnalysisIntegrationTest(unittest.TestCase):
             "US.AAPL stock intel headline",
         )
 
-    def test_write_artifacts_uses_market_intel_report_when_evidence_packs_exist(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            csv_path = Path(tmp_dir) / "screening_result_2026-05-25_A.csv"
-            with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=["股票代码", "市场", "名称", "标的类型"])
-                writer.writeheader()
-                writer.writerow({"股票代码": "600519", "市场": "A股", "名称": "贵州茅台", "标的类型": "股票"})
-
-            row = ScreeningSignalRow(
-                index=0,
-                code="600519",
-                market="A",
-                market_label="A股",
-                name="贵州茅台",
-                pe_ratio="",
-                market_cap="",
-                sector="白酒",
-                conditions_met="左一战法",
-            )
-            context = SignalAnalysisContext(
-                task_id="task-A",
-                market="A",
-                csv_path=str(csv_path),
-                check_date=date(2026, 5, 25),
-                settings=AnalysisSettings(),
-                search_provider=NullSearchProvider(),
-                llm_provider=NullLLMProvider(),
-                rows=[row],
-                all_rows=[row],
-                evidence_packs={
-                    "600519": {
-                        "market": "A",
-                        "code": "600519",
-                        "stock_context": {"items": [{"title": "贵州茅台经营稳健", "summary": "渠道反馈稳定"}]},
-                        "data_gaps": [],
-                    }
+    def test_report_step_builds_structured_content_from_market_intel(self):
+        row = ScreeningSignalRow(
+            index=0,
+            code="600519",
+            market="A",
+            market_label="A股",
+            name="贵州茅台",
+            pe_ratio="",
+            market_cap="",
+            sector="白酒",
+            conditions_met="左一战法",
+        )
+        context = SignalAnalysisContext(
+            task_id="task-A",
+            market="A",
+            check_date=date(2026, 5, 25),
+            settings=AnalysisSettings(),
+            search_provider=NullSearchProvider(),
+            llm_provider=NullLLMProvider(),
+            rows=[row],
+            all_rows=[row],
+            evidence_packs={
+                "600519": {
+                    "market": "A",
+                    "code": "600519",
+                    "stock_context": {"items": [{"title": "贵州茅台经营稳健", "summary": "渠道反馈稳定"}]},
+                    "data_gaps": [],
                 },
-                results_by_code={
-                    "600519": SignalAnalysisResult(
-                        code="600519",
-                        name="贵州茅台",
-                        reliability_score=86,
-                        confidence_score=74,
-                        signal_bias="bullish",
-                        summary="信号较强，但仍需要观察资金连续性。",
-                    )
-                },
-            )
+            },
+            results_by_code={
+                "600519": SignalAnalysisResult(
+                    code="600519",
+                    name="贵州茅台",
+                    reliability_score=86,
+                    confidence_score=74,
+                    signal_bias="bullish",
+                    summary="信号较强，但仍需要观察资金连续性。",
+                )
+            },
+        )
 
-            WriteArtifactsStep().run(context)
+        BuildReportContentStep().run(context)
 
-            report_text = Path(context.artifact_paths[0]).read_text(encoding="utf-8")
-            self.assertIn("# 多股票市场情报与AI复核报告", report_text)
-            self.assertIn("饼图：股票评级分布", report_text)
-            self.assertIn("## 10. 数据缺失与来源说明", report_text)
+        stock = context.report_content["stocks"][0]
+        self.assertEqual(stock["name"], "贵州茅台")
+        self.assertEqual(stock["analysis"]["summary"], "信号较强，但仍需要观察资金连续性。")
+        self.assertEqual(stock["evidence"]["stock_context"]["items"][0]["title"], "贵州茅台经营稳健")
 
 
 class SignalAnalysisTest(unittest.TestCase):
@@ -1936,52 +1928,35 @@ class SignalAnalysisTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
                 provider.analyze_batch("HK", signals, [], [], [], {})
 
-    def test_chain_writes_artifacts_and_keeps_going_when_search_and_db_fail(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            csv_path = self.write_csv(tmp_dir)
-            context = SignalAnalysisContext(
-                task_id="task-HK",
-                market="HK",
-                csv_path=csv_path,
-                check_date=date(2026, 5, 9),
-                settings=AnalysisSettings(batch_size=20, search_max_results=2),
-                search_provider=FakeSearchProvider(should_fail=True),
-                llm_provider=FakeLLMProvider(),
-                repository=ExplodingRepository(),
-            )
+    def test_chain_builds_structured_content_and_keeps_going_when_search_and_db_fail(self):
+        row = ScreeningSignalRow.from_record({
+            'code': 'HK.00001', 'name': 'Test HK', 'market': '港股', 'sector': 'Finance',
+            'conditions_met': '左一战法-看涨|EMA突破', 'pe_ratio': '10', 'market_cap': '1000',
+        }, 0, 'HK')
+        search_provider = FakeSearchProvider(should_fail=True)
+        context = SignalAnalysisContext(
+            task_id="task-HK",
+            market="HK",
+            rows=[row],
+            check_date=date(2026, 5, 9),
+            settings=AnalysisSettings(batch_size=20, search_max_results=2),
+            search_provider=search_provider,
+            llm_provider=FakeLLMProvider(),
+            repository=ExplodingRepository(),
+        )
 
-            result = SignalAnalysisChain().run(context)
+        result = SignalAnalysisChain().run(context)
 
-            self.assertTrue(result.success)
-            self.assertEqual(len(result.artifact_paths), 1)
-            for artifact in result.artifact_paths:
-                self.assertTrue(Path(artifact).exists())
-            self.assertFalse(Path(csv_path.replace(".csv", "_ai.csv")).exists())
-            self.assertTrue(any("搜索失败" in warning for warning in result.warnings))
-            self.assertTrue(any("落库失败" in warning for warning in result.warnings))
-            self.assertEqual(context.search_provider.company_batch_calls, [["HK.00001"]])
-
-            with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
-                rows = list(csv.DictReader(f))
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["股票代码"], "HK.00001")
-            self.assertEqual(rows[0]["信号可靠性评分"], "82.50")
-            self.assertEqual(rows[0]["信号可靠性评分口径"], RELIABILITY_SCORE_CRITERIA)
-            self.assertEqual(rows[0]["辅助方向判断"], "bullish")
-            self.assertEqual(rows[0]["辅助方向判断口径"], SIGNAL_BIAS_CRITERIA)
-            self.assertEqual(rows[0]["市场热点新闻"], "港股市场热点")
-            self.assertEqual(rows[0]["公司热点新闻"], "公司热点")
-            self.assertEqual(rows[0]["新闻影响判断"], "利好")
-            self.assertEqual(rows[0]["新闻来源"], "https://example.com/news")
-            self.assertEqual(rows[0]["热点板块标记"], "重点")
-            self.assertEqual(rows[0]["热点板块标记口径"], HOT_SECTOR_MARK_CRITERIA)
-            self.assertEqual(result.results_by_code["HK.00001"].reliability_score, 82.5)
-            report = Path(result.artifact_paths[0]).read_text(encoding="utf-8")
-            self.assertIn("资金与盘面观察", report)
-            self.assertIn("整体资金净流入5.71万", report)
-            self.assertIn("卖一量2.82万股", report)
-            self.assertNotIn("外部数据状态", report)
-            self.assertNotIn("数据覆盖", report)
+        self.assertTrue(result.success)
+        self.assertEqual(result.artifact_paths, [])
+        self.assertEqual(result.report_content['market'], 'HK')
+        self.assertEqual(result.report_content['passed_count'], 1)
+        self.assertEqual(result.report_content['stocks'][0]['code'], 'HK.00001')
+        self.assertEqual(result.report_content['stocks'][0]['analysis']['reliability_score'], 82.5)
+        self.assertIn('evidence', result.report_content['stocks'][0])
+        self.assertTrue(any("搜索失败" in warning for warning in result.warnings))
+        self.assertTrue(any("落库失败" in warning for warning in result.warnings))
+        self.assertEqual(search_provider.company_batch_calls, [["HK.00001"]])
 
     def test_markdown_report_shows_per_stock_matched_rules_for_unified_and_legacy_conditions(self):
         rows = [
@@ -2011,7 +1986,6 @@ class SignalAnalysisTest(unittest.TestCase):
         context = SignalAnalysisContext(
             task_id="task-HK",
             market="HK",
-            csv_path="unused.csv",
             check_date=date(2026, 6, 5),
             settings=AnalysisSettings(),
             search_provider=NullSearchProvider(),
@@ -2083,7 +2057,6 @@ class SignalAnalysisTest(unittest.TestCase):
             context = SignalAnalysisContext(
                 task_id="task-HK",
                 market="HK",
-                csv_path=csv_path,
                 check_date=date(2026, 5, 9),
                 settings=AnalysisSettings(batch_size=50, search_max_results=2),
                 search_provider=provider,
@@ -2099,7 +2072,7 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertEqual(len(result.results_by_code), 23)
         self.assertFalse(any("公司事件批量搜索未匹配" in warning for warning in result.warnings))
 
-    def test_chain_searches_company_events_only_for_stocks_and_reports_etf_theme(self):
+    def test_structured_report_includes_stock_and_etf_analysis(self):
         rows = [
             {
                 "股票代码": "HK.00001",
@@ -2123,35 +2096,28 @@ class SignalAnalysisTest(unittest.TestCase):
             },
         ]
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            csv_path = self.write_csv(tmp_dir, rows=rows)
-            provider = FakeSearchProvider()
-            context = SignalAnalysisContext(
-                task_id="task-HK",
-                market="HK",
-                csv_path=csv_path,
-                check_date=date(2026, 5, 9),
-                settings=AnalysisSettings(batch_size=20, search_max_results=2),
-                search_provider=provider,
-                llm_provider=FakeLLMProvider(),
-            )
+        signal_rows = [ScreeningSignalRow.from_record(row, index, "HK") for index, row in enumerate(rows)]
+        provider = FakeSearchProvider()
+        context = SignalAnalysisContext(
+            task_id="task-HK",
+            market="HK",
+            rows=signal_rows,
+            check_date=date(2026, 5, 9),
+            settings=AnalysisSettings(batch_size=20, search_max_results=2),
+            search_provider=provider,
+            llm_provider=FakeLLMProvider(),
+        )
 
-            with patch.dict(os.environ, {"SIGNAL_COMPANY_SEARCH_BATCH_SIZE": "10", "SIGNAL_ENABLE_API_HOT_SECTORS": "0"}):
-                result = SignalAnalysisChain().run(context)
-
-            report = Path(result.artifact_paths[0]).read_text(encoding="utf-8")
+        with patch.dict(os.environ, {"SIGNAL_COMPANY_SEARCH_BATCH_SIZE": "10", "SIGNAL_ENABLE_API_HOT_SECTORS": "0"}):
+            result = SignalAnalysisChain().run(context)
 
         self.assertTrue(result.success)
         self.assertEqual(provider.company_batch_calls, [["HK.00001"]])
         self.assertTrue(any("ETF 基金 跟踪指数" in query for query in provider.search_queries))
-        self.assertNotIn("执行警告", report)
-        self.assertNotIn("所属方向", report)
-        self.assertNotIn("未补齐", report)
-        self.assertIn("## 三、主力流出风险观察", report)
-        self.assertIn("## 六、个股观察", report)
-        self.assertIn("## 七、ETF/基金观察", report)
-        self.assertIn("不适用，按基金/ETF主题观察", report)
-        self.assertIn("主题资料暂缺", report)
+        self.assertEqual([stock['code'] for stock in result.report_content['stocks']],
+                         ['HK.00001', 'HK.03033'])
+        self.assertEqual(result.report_content['stocks'][1]['instrument_type'], 'ETF')
+        self.assertEqual(result.artifact_paths, [])
         self.assertFalse(any("HK.03033" in warning and "公司事件批量搜索" in warning for warning in result.warnings))
 
     def test_chain_batch_search_failure_does_not_fallback_to_per_stock_search(self):
@@ -2253,9 +2219,9 @@ class SignalAnalysisTest(unittest.TestCase):
         self.assertEqual(result.skipped_reason, "LLM provider 额度不足，跳过 AI 辅助分析")
         self.assertTrue(any("insufficient_quota" in warning for warning in result.warnings))
 
-    def test_markdown_report_explains_information_gap_reasons(self):
+    def test_structured_report_preserves_information_gap_reasons(self):
         class GapLLMProvider(FakeLLMProvider):
-            def analyze_batch(self, market, signals, market_documents, sector_documents, hot_sectors, company_documents):
+            def analyze_batch(self, market, signals, market_documents, sector_documents, hot_sectors, company_documents, **kwargs):
                 return [
                     SignalAnalysisResult(
                         code=row.code,
@@ -2284,35 +2250,29 @@ class SignalAnalysisTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             csv_path = self.write_csv(tmp_dir)
-            context = SignalAnalysisContext(
-                task_id="task-HK",
-                market="HK",
-                csv_path=csv_path,
-                check_date=date(2026, 5, 9),
-                settings=AnalysisSettings(batch_size=20, search_max_results=2),
-                search_provider=FakeSearchProvider(),
-                llm_provider=GapLLMProvider(),
-                manual_hot_sectors=ManualHotSectorConfig(hot_sectors=["创新药"], sources=["manual_config"]),
-            )
+            with open(csv_path, "r", encoding="utf-8-sig", newline="") as handle:
+                row_data = next(csv.DictReader(handle))
+            row = ScreeningSignalRow.from_record(row_data, 0, "HK")
+        context = SignalAnalysisContext(
+            task_id="task-HK",
+            market="HK",
+            rows=[row],
+            check_date=date(2026, 5, 9),
+            settings=AnalysisSettings(batch_size=20, search_max_results=2),
+            search_provider=FakeSearchProvider(),
+            llm_provider=GapLLMProvider(),
+            manual_hot_sectors=ManualHotSectorConfig(hot_sectors=["创新药"], sources=["manual_config"]),
+        )
 
-            with patch.dict(os.environ, {"SIGNAL_ENABLE_API_HOT_SECTORS": "0"}):
-                result = SignalAnalysisChain().run(context)
+        with patch.dict(os.environ, {"SIGNAL_ENABLE_API_HOT_SECTORS": "0"}):
+            result = SignalAnalysisChain().run(context)
 
-            report_path = result.artifact_paths[0]
-            report = Path(report_path).read_text(encoding="utf-8")
-
-        self.assertIn("## 一、核心结论", report)
-        self.assertIn("## 三、主力流出风险观察", report)
-        self.assertIn("## 六、个股观察", report)
-        self.assertIn("主力流出风险", report)
-        self.assertIn("成交量分布", report)
-        self.assertIn("最大成交量区间", report)
-        self.assertIn("信息缺口", report)
-        self.assertIn("缺少明确公司事件", report)
-        self.assertIn("目前信息不足，无法判断新闻方向", report)
-        self.assertIn("热点板块未直接匹配", report)
-        self.assertIn("判断信心偏低", report)
-        self.assertNotIn("规则链", report)
+        self.assertTrue(result.success)
+        stock = result.report_content['stocks'][0]
+        self.assertEqual(stock['analysis']['summary'], '搜索信息不足，无法形成明确判断')
+        self.assertIn('规则链未形成强确认', stock['analysis']['risk_factors'])
+        self.assertIn('data_gaps', stock['analysis'])
+        self.assertEqual(result.artifact_paths, [])
 
     def test_write_analysis_columns_refreshes_existing_ai_columns_in_place(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

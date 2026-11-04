@@ -60,22 +60,26 @@
 .report-facts dd { font-size: 12px; color: #c3bdaf; margin: 0; }
 .report-symbols { color: #c6ad73; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; margin-bottom: 0; }
 .report-symbols span { display: block; color: #8490a0; font-family: ui-monospace, monospace; font-size: 11px; }
-.report-markdown { color: #bfc4cc; font-size: 14px; line-height: 1.95; overflow-wrap: anywhere; }
-.report-markdown > :first-child { margin-top: 0; }
-.report-document .report-markdown h1, .report-document .report-markdown h2, .report-document .report-markdown h3 { color: #e6d8b7; line-height: 1.6; margin: 28px 0 14px; }
-.report-markdown h1 { font-size: 24px; }
-.report-document .report-markdown h2 { font-size: 20px; padding-bottom: 10px; border-bottom: 1px solid #2b313c; }
-.report-markdown h3 { font-size: 16px; }
-.report-markdown strong { color: #e0d5bb; }
-.report-markdown blockquote { margin: 20px 0; padding: 12px 18px; border-left: 3px solid #b39753; background: #202017; color: #bcb49f; }
-.report-markdown blockquote p { margin: 0; }
-.report-markdown a { color: #ddbd67; text-underline-offset: 4px; }
-.report-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 20px 0; font-size: 13px; }
-.report-markdown th, .report-markdown td { border: 1px solid #303847; padding: 10px 14px; text-align: left; }
-.report-markdown th { color: #d3c49e; background: #1b222d; }
-.report-markdown tr:nth-child(even) { background: #141b24; }
-.report-markdown pre { padding: 16px; background: #0b1119; border: 1px solid #29313d; border-radius: 6px; overflow: auto; }
-.report-markdown code { font-size: 12px; color: #d8c087; }
+.report-structured { color: #bfc4cc; font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; }
+.report-content-section { margin: 28px 0; }
+.report-content-section > h3 { color: #e6d8b7; font-size: 19px; padding-bottom: 10px; border-bottom: 1px solid #2b313c; }
+.report-market-hot { color: #c6ad73; }
+.report-stock-list { display: grid; gap: 14px; }
+.report-stock-card { background: #141a23; border: 1px solid #2b313c; border-radius: 8px; padding: 18px; }
+.report-stock-card > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.report-stock-card h4 { margin: 0; color: #e0d5bb; font-size: 16px; }
+.report-stock-code { color: #8490a0; font: 11px ui-monospace, monospace; }
+.report-stock-score { color: #ddbd67; white-space: nowrap; font-size: 12px; }
+.report-stock-meta { color: #949dab; font-size: 12px; }
+.report-stock-summary { color: #d1d4da; }
+.report-stock-tags { display: flex; flex-wrap: wrap; gap: 7px; }
+.report-stock-tags span { color: #c6ad73; background: #242117; border-radius: 4px; padding: 3px 7px; font-size: 11px; }
+.report-content-group { margin-top: 14px; }
+.report-content-group h4 { margin: 0 0 5px; color: #d3c49e; font-size: 12px; }
+.report-content-group ul { margin: 0; padding-left: 20px; }
+.report-content-group a { color: #ddbd67; text-underline-offset: 4px; }
+.report-content-disclaimer { border-left: 3px solid #b39753; padding: 10px 14px; background: #202017; color: #bcb49f; }
+.report-content-empty { color: #9a9589; }
 @media (max-width: 900px) { .reports-grid { grid-template-columns: minmax(0, 1fr); } .report-document.panel { padding: 24px; } }
 @media (max-width: 560px) {
   .reports-header { flex-direction: column; gap: 14px; }

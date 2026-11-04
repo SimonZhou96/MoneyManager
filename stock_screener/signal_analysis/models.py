@@ -561,7 +561,7 @@ class AnalysisRunResult:
     """Result returned to the scheduler after best-effort analysis."""
 
     success: bool
-    report_markdown: str = ""
+    report_content: Dict[str, Any] = field(default_factory=dict)
     artifact_paths: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     results_by_code: Dict[str, SignalAnalysisResult] = field(default_factory=dict)

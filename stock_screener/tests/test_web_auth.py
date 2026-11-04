@@ -30,7 +30,7 @@ def test_signed_out_api_cannot_read_business_data(path):
     db = mock.Mock()
     app.dependency_overrides[get_db] = lambda: db
     try:
-        with mock.patch('web.reports.ElasticsearchReportRepository.from_env') as report_store:
+        with mock.patch('web.reports.MySqlReportRepository') as report_store:
             # No lifespan: this test must never initialize a real database.
             response = TestClient(app).get(path)
             assert response.json()['error_code'] == 'AUTH_REQUIRED'

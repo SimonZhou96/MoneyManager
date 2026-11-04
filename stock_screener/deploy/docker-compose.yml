@@ -1,7 +1,7 @@
 services:
   mysql:
     image: docker.io/library/mysql:8.0
-    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--innodb-ft-min-token-size=1"]
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-123456}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-market_data}

@@ -11,6 +11,7 @@ from unittest.mock import patch
 from filters import FilterOutput, FilterResult
 from rule_engine import RuleExecutionContext, RULE_EXECUTION_CALLBACK_CACHE_KEY
 import task_reports
+from report_store import MySqlReportRepository
 
 
 TEST_NOTICE = '【本地测试：技术条件模拟通过，不代表真实行情满足条件】'
@@ -21,7 +22,7 @@ def local_screening_test(codes: list[str]):
     """Simulate technical rule outputs only for this process's explicit list."""
     codes = frozenset(codes)
     execute_rule = RuleExecutionContext.execute
-    save_report = task_reports.ElasticsearchReportRepository.save
+    save_report = MySqlReportRepository.save
     analyze_report = task_reports.run_signal_analysis_for_market
 
     def execute(execution, rule_key):
@@ -55,14 +56,16 @@ def local_screening_test(codes: list[str]):
 
     def save(store, report):
         if codes.intersection(report.get('codes') or []):
-            for key in ('title', 'summary', 'content_markdown', 'content_text'):
-                if TEST_NOTICE not in report.get(key, ''):
-                    report[key] = TEST_NOTICE + '\n\n' + report.get(key, '')
+            report['title'] = TEST_NOTICE + ' ' + report.get('title', '')
+            content = dict(report.get('content') or {})
+            if TEST_NOTICE not in content.get('disclaimer', ''):
+                content['disclaimer'] = TEST_NOTICE + ' ' + content.get('disclaimer', '')
+            report['content'] = content
         return save_report(store, report)
 
     with patch.object(RuleExecutionContext, 'execute', execute), \
             patch.object(task_reports, 'run_signal_analysis_for_market', analyze), \
-            patch.object(task_reports.ElasticsearchReportRepository, 'save', save):
+            patch.object(MySqlReportRepository, 'save', save):
         yield
 
 

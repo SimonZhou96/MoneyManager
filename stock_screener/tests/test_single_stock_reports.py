@@ -63,12 +63,13 @@ class SingleStockReportTests(unittest.TestCase):
         patch('web.single_stock._load_stock_info', return_value=StockInfo(market='US', code='US.AAPL', name='Apple')).start()
         patch('web.single_stock._fetch_single_kline', return_value=(None, 'fixture')).start()
         patch('web.single_stock.create_rule_engine_from_db', return_value=self.engine).start()
-        patch('task_reports.ElasticsearchReportRepository.from_env', return_value=self.index).start()
+        patch('task_reports.MySqlReportRepository', return_value=self.index).start()
         patch('task_reports.run_signal_analysis_for_market', side_effect=self.analyze).start()
 
     def analyze(self, **kwargs):
         self.assertEqual(self.db.run['status'], 'running')
-        return AnalysisRunResult(success=True, report_markdown='# Apple\n宏观政策、公司信息及技术风险',
+        return AnalysisRunResult(success=True, report_content={'market': 'US', 'stocks': [
+            {'code': 'US.AAPL', 'name': 'Apple', 'analysis': {'summary': '宏观政策、公司信息及技术风险'}}]},
                                  results_by_code={'US.AAPL': SignalAnalysisResult(code='US.AAPL', name='Apple')})
 
     def run_single(self):
@@ -88,18 +89,18 @@ class SingleStockReportTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['task_type'], 'single_stock')
         self.assertEqual(response.json()['codes'], ['AAPL', 'US.AAPL'])
-        self.assertIn('技术风险', response.json()['content_markdown'])
+        self.assertIn('技术风险', str(response.json()['content']))
 
-    def test_single_es_failure_keeps_draft_and_never_completes(self):
+    def test_single_mysql_failure_keeps_draft_and_never_completes(self):
         self.index.fail = True
-        with self.assertRaisesRegex(RuntimeError, 'ES unavailable'):
+        with self.assertRaisesRegex(Exception, 'MySQL unavailable'):
             self.run_single()
         self.assertEqual(self.db.states, ['running', 'failed'])
         self.assertIn('draft', self.db.checkpoint)
         self.assertEqual(self.db.checkpoint['report_id'], 'single_stock-single-one')
         self.assertFalse(self.index.documents)
 
-    def test_single_es_retry_saves_same_report_without_rescreening_or_model(self):
+    def test_single_mysql_retry_saves_same_report_without_rescreening_or_model(self):
         from web.jobs import retry_task_report
         self.index.fail = True
         with self.assertRaises(RuntimeError):
@@ -124,7 +125,7 @@ class SingleStockReportTests(unittest.TestCase):
     def test_single_task_detail_exposes_report_status_not_unfinished_draft(self):
         from unittest.mock import Mock
         checkpoint = {'status': 'saving', 'report_id': 'single_stock-single-one',
-                      'draft': {'content_markdown': 'unpublished'}, 'records_by_market': {'US': []}}
+                      'draft': {'content': {'unpublished': True}}, 'records_by_market': {'US': []}}
         db = Mock()
         db.get_single_stock_run.return_value = {
             'run_id': 'single-one', 'status': 'failed', 'report': checkpoint,

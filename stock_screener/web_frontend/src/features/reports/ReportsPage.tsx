@@ -1,8 +1,46 @@
 import React, { useEffect, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { api } from '../../api'
 import './reports.css'
+
+export type ReportAnalysis = {
+  analysis_status?: string
+  summary?: string
+  reliability_score?: number | null
+  confidence_score?: number | null
+  signal_bias?: string
+  positive_factors?: string[]
+  risk_factors?: string[]
+  macro_factors?: string[]
+  company_events?: string[]
+  market_hot_news?: string[]
+  company_hot_news?: string[]
+  news_impact?: string
+  source_urls?: string[]
+  data_gaps?: string[]
+  factor_citations?: Record<string, { label?: string; url?: string }[]>
+}
+export type ReportStock = {
+  code: string
+  name: string
+  instrument_type?: string
+  screening?: { sector?: string; conditions_met?: string; pe_ratio?: string; market_cap?: string }
+  score?: { final_score?: number; formula?: string }
+  analysis?: ReportAnalysis
+}
+export type ReportMarket = {
+  market: string
+  market_label?: string
+  task_date?: string
+  timeframe?: string
+  hot_sectors?: string[]
+  stocks: ReportStock[]
+}
+export type ReportContent = {
+  schema_version: number
+  overview: { task_id: string; task_type: string; task_date: string; timeframe: string; passed_count: number }
+  markets: ReportMarket[]
+  disclaimer?: string
+}
 
 export type ReportDocument = {
   report_id: string
@@ -18,7 +56,7 @@ export type ReportDocument = {
   task_date?: string
   timeframe?: string
   chain_key?: string
-  content_markdown?: string
+  content?: ReportContent
   highlights?: Record<string, { text: string; matched: boolean }[][]>
 }
 export type ReportList = { reports: ReportDocument[]; total: number; page: number; page_size: number }
@@ -38,6 +76,46 @@ function ReportHighlight({ text = '', parts }: { text?: string; parts?: { text: 
 function reportTime(value: string) {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
+}
+
+function TextList({ title, items }: { title: string; items?: string[] }) {
+  if (!items?.length) return null
+  return <div className="report-content-group"><h4>{title}</h4><ul>{items.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></div>
+}
+
+function ReportContentView({ content }: { content?: ReportContent }) {
+  if (!content) return <div className="report-content-empty">该报告暂无结构化正文。</div>
+  return <div className="report-structured">
+    <section className="report-content-section"><h3>任务概况</h3>
+      <dl className="report-facts"><div><dt>任务日期</dt><dd>{content.overview?.task_date || '—'}</dd></div>
+        <div><dt>分析周期</dt><dd>{content.overview?.timeframe || '—'}</dd></div>
+        <div><dt>入选数量</dt><dd>{content.overview?.passed_count ?? 0} 只</dd></div></dl>
+    </section>
+    {(content.markets || []).map(market => <section className="report-content-section" key={market.market}>
+      <h3>{market.market_label || market.market} · 入选分析</h3>
+      {!!market.hot_sectors?.length && <p className="report-market-hot">热点方向：{market.hot_sectors.join('、')}</p>}
+      <div className="report-stock-list">{market.stocks.map(stock => <article className="report-stock-card" key={stock.code}>
+        <header><div><h4>{stock.name}</h4><span className="report-stock-code">{stock.code}</span></div>
+          <div className="report-stock-score">综合评分 {stock.score?.final_score ?? '—'}</div></header>
+        <p className="report-stock-meta">{stock.instrument_type || '股票'}{stock.screening?.sector ? ` · ${stock.screening.sector}` : ''}
+          {stock.screening?.conditions_met ? ` · 命中：${stock.screening.conditions_met}` : ''}</p>
+        {stock.analysis?.summary && <p className="report-stock-summary">{stock.analysis.summary}</p>}
+        <div className="report-stock-tags"><span>信号可靠性 {stock.analysis?.reliability_score ?? '—'}</span>
+          <span>模型置信度 {stock.analysis?.confidence_score ?? '—'}</span><span>方向 {stock.analysis?.signal_bias || '—'}</span></div>
+        <TextList title="支撑因素" items={stock.analysis?.positive_factors} />
+        <TextList title="风险因素" items={stock.analysis?.risk_factors} />
+        <TextList title="宏观与政策" items={stock.analysis?.macro_factors} />
+        <TextList title="公司事件" items={stock.analysis?.company_events} />
+        <TextList title="市场热点新闻" items={stock.analysis?.market_hot_news} />
+        <TextList title="公司热点新闻" items={stock.analysis?.company_hot_news} />
+        <TextList title="数据缺失" items={stock.analysis?.data_gaps} />
+        {!!stock.analysis?.source_urls?.length && <div className="report-content-group"><h4>信息来源</h4><ul>
+          {stock.analysis.source_urls.map((url, index) => <li key={`${url}-${index}`}><a href={/^https?:\/\//i.test(url) ? url : undefined} target="_blank" rel="noopener noreferrer">{url}</a></li>)}
+        </ul></div>}
+      </article>)}</div>
+    </section>)}
+    {content.disclaimer && <p className="report-content-disclaimer">{content.disclaimer}</p>}
+  </div>
 }
 
 export function ReportsPage() {
@@ -117,7 +195,7 @@ export function ReportsPage() {
   return <section className="reports-page" ref={pageRef}>
     <header className="page-header reports-header">
       <div><p className="eyebrow">RESEARCH LIBRARY</p><h1>报告查询</h1><p>汇集每次任务的 AI 分析，回看宏观背景、公司信息与技术依据。</p></div>
-      <span className="reports-mode">ES · 已归档报告</span>
+      <span className="reports-mode">MySQL · 任务报告</span>
     </header>
 
     {location.reportId ? <button className="secondary-button reports-back" aria-label="返回报告列表" onClick={() => navigateReports({ ...location, reportId: '' })}>← 返回报告列表</button>
@@ -137,11 +215,7 @@ export function ReportsPage() {
           <dl className="report-facts"><div><dt>生成时间 · 上海</dt><dd>{reportTime(report.generated_at)}</dd></div><div><dt>入选数量</dt><dd>{report.passed_count} 只</dd></div><div><dt>任务 ID</dt><dd className="report-task-id">{report.task_id}</dd></div><div><dt>报告 ID</dt><dd className="report-task-id">{report.report_id}</dd></div></dl>
           <p className="report-symbols">{report.names.join(' · ')}{report.codes.length > 0 && <span>{report.codes.join(' / ')}</span>}</p>
         </header>
-        <div className="report-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml disallowedElements={['img', 'script', 'iframe', 'style']}
-          urlTransform={url => /^https?:\/\//i.test(url) ? url : ''}
-          components={{ a: ({ href, children }) => href ? <a href={href} target="_blank" rel="noopener noreferrer">{children} ↗</a> : <span>{children}</span> }}>
-          {report.content_markdown || '该报告暂无正文。'}
-        </ReactMarkdown></div>
+        <ReportContentView content={report.content} />
       </article>
       : !list?.reports.length ? <div className="panel reports-state"><span className="reports-state-icon">⌕</span><h2>{location.q ? '没有找到相关报告' : '还没有归档报告'}</h2><p>{location.q ? '试试公司名称、完整股票代码，或减少关键词。' : '有股票入选且 AI 报告成功入库后，会自动出现在这里。'}</p>{location.q && <button className="secondary-button" onClick={() => navigateReports({ q: '', page: 1, reportId: '' })}>查看全部报告</button>}</div>
       : <><div className="reports-list-heading"><h2>报告列表 <span>{list.total} 篇</span></h2><span>{location.q ? `“${location.q}”的搜索结果 · 相关性优先` : '最近生成优先'}</span></div>

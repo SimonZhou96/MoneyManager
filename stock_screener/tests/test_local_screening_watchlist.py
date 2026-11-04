@@ -40,19 +40,18 @@ class LocalScreeningWatchlistTests(unittest.TestCase):
 
     def test_report_is_visibly_marked_but_normal_stock_report_is_unchanged(self):
         from scripts.run_local_screening_test import local_screening_test
-        from task_reports import ElasticsearchReportRepository
+        from report_store import MySqlReportRepository
         documents = []
-        # Capture the real storage boundary, not the report generation pipeline.
-        with patch.object(ElasticsearchReportRepository, 'save', lambda store, report: documents.append(dict(report))):
+        # Capture the MySQL report boundary, not the report generation pipeline.
+        with patch.object(MySqlReportRepository, 'save', lambda store, report: documents.append(dict(report))):
             with local_screening_test(['HK.00700']):
-                store = ElasticsearchReportRepository(None)
+                store = MySqlReportRepository(None)
                 store.save({'codes': ['HK.00700'], 'title': '腾讯', 'summary': '摘要',
-                            'content_markdown': '# 分析', 'content_text': '分析'})
+                            'content': {'disclaimer': '分析'}})
                 store.save({'codes': ['US.AAPL'], 'title': 'Apple', 'summary': '摘要',
-                            'content_markdown': '# 分析', 'content_text': '分析'})
+                            'content': {'disclaimer': '分析'}})
         self.assertIn('本地测试', documents[0]['title'])
-        self.assertIn('技术条件模拟通过', documents[0]['content_markdown'])
-        self.assertIn('本地测试', documents[0]['content_text'])
+        self.assertIn('技术条件模拟通过', documents[0]['content']['disclaimer'])
         self.assertEqual(documents[1]['title'], 'Apple')
 
     def test_report_model_receives_explicit_simulation_notice(self):

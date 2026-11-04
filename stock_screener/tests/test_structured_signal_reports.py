@@ -44,8 +44,9 @@ class StructuredSignalReportTests(unittest.TestCase):
         with patch('builtins.open', side_effect=AssertionError('No report CSV or MD files allowed')):
             result = SignalAnalysisChain().run(context)
         self.assertTrue(result.success, result.warnings)
-        self.assertIn('腾讯', result.report_markdown)
-        self.assertIn('阿里', result.report_markdown)
+        stock_names = [stock['name'] for stock in result.report_content['stocks']]
+        self.assertEqual(stock_names, ['腾讯', '阿里'])
+        self.assertEqual(result.report_content['schema_version'], 1)
         self.assertEqual(result.artifact_paths, [])
 
     def test_empty_input_never_calls_model(self):
@@ -53,7 +54,7 @@ class StructuredSignalReportTests(unittest.TestCase):
         result = SignalAnalysisChain().run(self.context(rows=[], llm=llm))
         self.assertFalse(result.success)
         self.assertEqual(llm.calls, 0)
-        self.assertEqual(result.report_markdown, '')
+        self.assertEqual(result.report_content, {})
 
     def test_partial_model_output_does_not_publish_placeholder_report(self):
         llm = TestLLM()
@@ -61,7 +62,7 @@ class StructuredSignalReportTests(unittest.TestCase):
         result = SignalAnalysisChain().run(self.context(llm=llm))
         self.assertFalse(result.success)
         self.assertIn('HK.00700', result.results_by_code)
-        self.assertEqual(result.report_markdown, '')
+        self.assertEqual(result.report_content, {})
 
     def test_missing_model_cannot_report_success(self):
         result = SignalAnalysisChain().run(self.context(llm=NullLLMProvider()))

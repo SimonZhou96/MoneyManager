@@ -34,6 +34,7 @@ from .models import (
     SignalAnalysisResult,
     compute_unified_score,
 )
+from .report_content import ReportContentBuilder
 from .search_providers import SearchProvider
 
 from signal_analysis.renderers import RetailReportRenderer
@@ -128,7 +129,7 @@ class SignalAnalysisContext:
     results_by_code: Dict[str, SignalAnalysisResult] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     artifact_paths: List[str] = field(default_factory=list)
-    report_markdown: str = ""
+    report_content: Dict[str, Any] = field(default_factory=dict)
     on_results: Optional[Callable[[Dict[str, SignalAnalysisResult]], None]] = None
     analysis_profile: str = "default"
     force_refresh: bool = False
@@ -722,8 +723,8 @@ class PersistAnalysisStep(AnalysisStep):
             context.warnings.append(f"AI 分析结果落库失败: {type(exc).__name__}: {exc}")
 
 
-class WriteArtifactsStep(AnalysisStep):
-    name = "WriteArtifactsStep"
+class BuildReportContentStep(AnalysisStep):
+    name = "BuildReportContentStep"
 
     def run(self, context: SignalAnalysisContext) -> None:
         rows = context.all_rows or context.rows
@@ -732,7 +733,7 @@ class WriteArtifactsStep(AnalysisStep):
             context.skipped_reason = '部分入选股票 AI 分析未成功，请重试缺失部分'
             context.aborted = True
             return
-        context.report_markdown = _render_artifact_report(context)
+        context.report_content = ReportContentBuilder().build_market_content(context)
 
 
 class SignalAnalysisChain:
@@ -752,7 +753,7 @@ class SignalAnalysisChain:
             LLMBatchAnalysisStep(),
             NormalizeAnalysisStep(),
             PersistAnalysisStep(),
-            WriteArtifactsStep(),
+            BuildReportContentStep(),
         ]
 
     def run(self, context: SignalAnalysisContext) -> AnalysisRunResult:
@@ -806,8 +807,8 @@ class SignalAnalysisChain:
             i += 1
 
         return AnalysisRunResult(
-            success=bool(context.report_markdown),
-            report_markdown=context.report_markdown,
+            success=bool(context.report_content),
+            report_content=dict(context.report_content),
             artifact_paths=list(context.artifact_paths),
             warnings=list(context.warnings),
             results_by_code=dict(context.results_by_code),

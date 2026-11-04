@@ -19,6 +19,7 @@ import secrets
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -80,7 +81,7 @@ def _json_or_none(value: Any):
         return None
     if isinstance(value, str):
         return value
-    return json.dumps(_mysql_safe_value(value), ensure_ascii=False)
+    return json.dumps(_mysql_safe_value(value), ensure_ascii=False, allow_nan=False)
 
 
 def _mysql_safe_float(value: Any):
@@ -96,13 +97,28 @@ def _mysql_safe_float(value: Any):
 
 
 def _mysql_safe_value(value: Any):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        number = float(value)
+        return number if math.isfinite(number) else None
     if isinstance(value, dict):
         return {str(k): _mysql_safe_value(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_mysql_safe_value(v) for v in value]
+    if isinstance(value, (list, tuple, set)):
+        values = sorted(value, key=str) if isinstance(value, set) else value
+        return [_mysql_safe_value(v) for v in values]
     if isinstance(value, float):
         return value if math.isfinite(value) else None
-    return value
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    # Normalize NumPy and other database scalar wrappers without importing them.
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            return _mysql_safe_value(item())
+        except (TypeError, ValueError):
+            pass
+    return str(value)
 
 
 def _option_payload(item: Any) -> dict:
@@ -907,6 +923,41 @@ class MarketDatabase:
                 else:
                     raise
 
+    def init_screening_reports_schema(self) -> None:
+        """Create the task report store and its MySQL full-text index."""
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS screening_reports (
+                    report_id VARCHAR(191) NOT NULL,
+                    task_id VARCHAR(191) NOT NULL,
+                    task_type VARCHAR(32) NOT NULL,
+                    title VARCHAR(512) NOT NULL,
+                    summary VARCHAR(1024) NOT NULL,
+                    markets_json JSON NOT NULL,
+                    codes_json JSON NOT NULL,
+                    names_json JSON NOT NULL,
+                    passed_count INT UNSIGNED NOT NULL DEFAULT 0,
+                    generated_at DATETIME(6) NOT NULL,
+                    task_date DATE NOT NULL,
+                    timeframe VARCHAR(32) NOT NULL DEFAULT '',
+                    chain_key VARCHAR(128) NOT NULL DEFAULT '',
+                    content_json JSON NOT NULL,
+                    content_text MEDIUMTEXT NOT NULL,
+                    search_tokens MEDIUMTEXT NOT NULL,
+                    revision BIGINT NOT NULL DEFAULT 1,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                        ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (report_id),
+                    UNIQUE KEY uk_screening_reports_task (task_type, task_id),
+                    KEY idx_screening_reports_generated (generated_at, report_id),
+                    FULLTEXT KEY ft_screening_reports_search (search_tokens)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                COMMENT='任务筛选报告与全文检索'
+                """
+            )
+
     def init_web_schema(self):
         """初始化 Web、Agent 和 artifact 相关表。"""
         self.init_schema("1d")
@@ -916,6 +967,7 @@ class MarketDatabase:
         self.init_sector_schema()
         self.init_signal_analysis_schema()
         self.init_main_force_risk_schema()
+        self.init_screening_reports_schema()
         with self.conn.cursor() as cursor:
             cursor.execute(
                 """
