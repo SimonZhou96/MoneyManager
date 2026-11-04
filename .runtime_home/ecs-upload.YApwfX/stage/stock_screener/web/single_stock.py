@@ -1,0 +1,366 @@
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from api.screen_service import create_rule_engine_from_db, get_strategy_condition_labels
+from db import MarketDatabase, MySqlConfig
+from filters import FilterContext, StockInfo
+from kline_fetcher import KlineFetcherFactory
+from market import normalize_market
+from stock_pool import POOL_TYPE_ALL_ETF
+from signal_analysis.service import build_macro_score_scorer, build_market_intel_service, run_signal_analysis_for_market
+from signal_analysis.service import run_signal_analysis_for_row
+from signal_analysis.models import ScreeningSignalRow
+from task_reports import publish_task_report
+from timeframe import parse_timeframe
+
+
+@dataclass
+class SingleStockRequest:
+    market: str
+    code: str
+    timeframe: str
+    chain_key: Optional[str] = None
+    user_id: Optional[int] = None
+    run_id: Optional[str] = None
+
+
+def normalize_stock_code(market: str, code: str) -> str:
+    market = normalize_market(market)
+    value = str(code or "").strip().upper()
+    if not value:
+        raise ValueError("股票代码不能为空")
+    if market == "HK":
+        if value.startswith("HK."):
+            return f"HK.{value[3:].zfill(5)}"
+        if value.isdigit():
+            return f"HK.{value.zfill(5)}"
+        return value
+    if market == "US":
+        return value if value.startswith("US.") else f"US.{value}"
+    if market == "A":
+        if value.startswith(("SH.", "SZ.", "BJ.")):
+            return value
+        if value.endswith(".SS"):
+            return f"SH.{value[:-3]}"
+        if value.endswith(".SZ"):
+            return f"SZ.{value[:-3]}"
+        if value.isdigit() and len(value) == 6:
+            if value.startswith(("6", "9")):
+                return f"SH.{value}"
+            if value.startswith(("8", "4")):
+                return f"BJ.{value}"
+            return f"SZ.{value}"
+    return value
+
+
+def run_single_stock_analysis(mysql_config: MySqlConfig, request: SingleStockRequest) -> Dict[str, Any]:
+    market = normalize_market(request.market)
+    timeframe = parse_timeframe(request.timeframe)
+    normalized_code = normalize_stock_code(market, request.code)
+    run_id = request.run_id or str(uuid.uuid4())
+    warnings: List[str] = []
+    ai_analysis: Optional[dict] = None
+    data_source = ""
+    screening_passed = False
+    macro_analysis_cache: Dict[str, Any] = {}
+
+    db = MarketDatabase(mysql_config)
+    db.init_web_schema()
+    db.create_single_stock_run({
+        "run_id": run_id,
+        "user_id": request.user_id,
+        "market": market,
+        "code": request.code,
+        "normalized_code": normalized_code,
+        "timeframe": timeframe,
+        "chain_key": request.chain_key,
+        "status": "running",
+    })
+
+    try:
+        stock = _load_stock_info(db, market, normalized_code)
+        stock.kline_df, data_source = _fetch_single_kline(db, stock, timeframe)
+        if stock.kline_df is None or stock.kline_df.empty:
+            warnings.append("未获取到可用 K 线数据")
+
+        context = FilterContext(check_date=date.today(), market=market, db=db, verbose=False)
+        context.timeframe = timeframe
+        rule_engine = create_rule_engine_from_db(db, market, timeframe, request.chain_key)
+        if rule_engine.requires_market_intel_macro_score():
+            market_intel_service = build_market_intel_service(mysql_config, enabled=True)
+            macro_score_scorer = build_macro_score_scorer()
+            context.set_cache("market_intel_service", market_intel_service)
+            context.set_cache("macro_score_scorer", macro_score_scorer)
+        signal_analysis_loader = None
+        if rule_engine.requires_signal_analysis():
+            def load_signal_analysis(current_stock: StockInfo):
+                cached = macro_analysis_cache.get(current_stock.code)
+                if cached is not None:
+                    return cached
+                analysis, ai_warnings = run_signal_analysis_for_row(
+                    mysql_config=mysql_config,
+                    task_id=f"{run_id}:macro:{current_stock.code}",
+                    row=_build_macro_signal_row(current_stock, market),
+                    market=market,
+                    check_date=context.check_date,
+                    timeframe=timeframe,
+                    enabled=True,
+                )
+                warnings.extend(ai_warnings)
+                macro_analysis_cache[current_stock.code] = analysis
+                return analysis
+            signal_analysis_loader = load_signal_analysis
+        result = rule_engine.evaluate_stock(stock, context, signal_analysis_loader=signal_analysis_loader)
+        screening_passed = bool(result.passed)
+        rule_details = _rule_details(rule_engine, result.filter_outputs)
+
+        db.insert_single_stock_rule_details(run_id, rule_details)
+
+        if rule_engine.requires_signal_analysis():
+            analysis = macro_analysis_cache.get(stock.code)
+            if analysis is not None:
+                ai_analysis = _analysis_to_response_dict(analysis)
+        records = [{
+            'code': stock.code, 'name': stock.name or stock.code, 'sector': stock.sector or stock.industry or '',
+            'market_cap': stock.market_cap, 'pe_ratio': stock.pe_ratio,
+            'conditions_met': '|'.join(_conditions_met(result.filter_outputs)),
+        }] if result.passed else []
+        publish_task_report(mysql_config, db, 'single_stock', run_id, [market], timeframe,
+                            {market: records}, request.chain_key or '')
+
+        db.finish_single_stock_run(
+            run_id=run_id,
+            passed=result.passed,
+            status="completed",
+            data_source=data_source,
+            warnings=warnings,
+            ai_analysis=ai_analysis,
+        )
+
+        return {
+            "run_id": run_id,
+            "market": market,
+            "code": normalized_code,
+            "name": stock.name or normalized_code,
+            "sector": stock.sector,
+            "industry": stock.industry,
+            "market_cap": stock.market_cap,
+            "pe_ratio": stock.pe_ratio,
+            "timeframe": timeframe,
+            "passed": bool(result.passed),
+            "data_source": data_source,
+            "rule_chain": {
+                "chain_key": rule_engine.chain_config.chain_key,
+                "chain_timeframe": rule_engine.chain_config.timeframe,
+                "chain_name": rule_engine.chain_config.chain_name,
+                "passed": bool(result.passed),
+                "details": rule_details,
+            },
+            "conditions_met": _conditions_met(result.filter_outputs),
+            "zuoyi": _zuoyi_summary(result.filter_outputs),
+            "ai_analysis": ai_analysis,
+            "report": db.get_task_report_checkpoint('single_stock', run_id),
+            "warnings": warnings,
+        }
+    except Exception as exc:
+        warnings.append(f"{type(exc).__name__}: {exc}")
+        db.finish_single_stock_run(
+            run_id=run_id,
+            passed=screening_passed,
+            status="failed",
+            data_source=data_source,
+            warnings=warnings,
+            ai_analysis=None,
+        )
+        raise
+    finally:
+        if 'context' in locals():
+            market_intel_service = context.get_cache("market_intel_service")
+            repository = getattr(market_intel_service, "repository", None)
+            close = getattr(repository, "close", None)
+            if callable(close):
+                close()
+        db.close()
+
+
+def _load_stock_info(db: MarketDatabase, market: str, code: str) -> StockInfo:
+    rows = db.get_stocks_by_codes(market, [code], include_fundamentals=True)
+    item = dict(rows[0]) if rows else {"code": code}
+    name = item.get("name") or code
+    sector = item.get("sector")
+    industry = item.get("industry")
+    market_cap = item.get("market_cap")
+    pe_ratio = item.get("pe_ratio")
+    pb_ratio = item.get("pb_ratio")
+
+    pool_rows = []
+    if hasattr(db, "get_stock_pool_records_by_codes"):
+        pool_rows = db.get_stock_pool_records_by_codes(market, [code])
+    for pool_item in pool_rows or []:
+        if (not name or name == code) and pool_item.get("name"):
+            name = pool_item.get("name")
+        if market_cap is None and pool_item.get("market_cap") is not None:
+            market_cap = pool_item.get("market_cap")
+        if pe_ratio is None and pool_item.get("pe_ratio") is not None:
+            pe_ratio = pool_item.get("pe_ratio")
+        industry_name = pool_item.get("industry_name")
+        if industry_name:
+            industry = industry or industry_name
+            sector = sector or industry_name
+        if pool_item.get("pool_type") == POOL_TYPE_ALL_ETF:
+            industry = industry or "ETF"
+            sector = sector or "ETF"
+
+    memberships = db.get_sector_memberships_by_codes(market, [code]) if hasattr(db, "get_sector_memberships_by_codes") else {}
+    for membership in memberships.get(code, []):
+        sector_name = membership.get("sector_name")
+        if not sector_name:
+            continue
+        sector_type = str(membership.get("sector_type") or "").lower()
+        if sector_type == "industry":
+            industry = industry or sector_name
+            sector = sector or sector_name
+        elif sector_type == "sector":
+            sector = sector or sector_name
+        else:
+            sector = sector or sector_name
+
+    return StockInfo(
+        market=market,
+        code=code,
+        name=name or code,
+        sector=sector,
+        industry=industry,
+        market_cap=market_cap,
+        pe_ratio=pe_ratio,
+        pb_ratio=pb_ratio,
+    )
+
+
+def _fetch_single_kline(db: MarketDatabase, stock: StockInfo, timeframe: str):
+    from kline_fetcher import managed_fetcher_chain
+
+    with managed_fetcher_chain() as fetchers:
+        for fetcher in fetchers:
+            df = fetcher.fetch(stock.code, market=stock.market, timeframe=timeframe, max_count=500)
+            if df is not None and not df.empty:
+                return df, fetcher.get_name()
+    return None, "failed"
+
+
+def _rule_details(rule_engine, outputs) -> List[dict]:
+    metadata_by_impl = {}
+    for item in rule_engine.metadata:
+        metadata_by_impl.setdefault(item.implementation, item)
+    rows = []
+    for index, output in enumerate(outputs):
+        metadata = metadata_by_impl.get(output.filter_name)
+        rows.append({
+            "rule_key": metadata.rule_key if metadata else output.filter_name,
+            "rule_name": metadata.rule_name if metadata else output.filter_name,
+            "rule_type": metadata.rule_type if metadata else "",
+            "strategy_category": metadata.strategy_category if metadata else "",
+            "result": output.result.value,
+            "reason": output.reason or "",
+            "details": output.details or {},
+            "display_order": metadata.display_order if metadata else index,
+        })
+    return rows
+
+
+def _conditions_met(outputs) -> List[str]:
+    labels: List[str] = []
+    for output in outputs:
+        if output.result.value != "pass":
+            continue
+        for label in get_strategy_condition_labels(output.filter_name, output.details):
+            if label not in labels:
+                labels.append(label)
+    return labels
+
+
+def _zuoyi_summary(outputs) -> dict:
+    for output in outputs:
+        if output.filter_name == "ZuoYiStrategizer" and output.result.value == "pass":
+            details = output.details or {}
+            return {
+                "reason": output.reason,
+                "signals": details.get("signals") or [],
+            }
+    return {}
+
+
+def _run_single_ai(
+    mysql_config: MySqlConfig,
+    run_id: str,
+    market: str,
+    timeframe: str,
+    stock: StockInfo,
+    outputs,
+) -> tuple[Optional[dict], List[str]]:
+    row = _build_macro_signal_row(stock, market)
+    row.conditions_met = '|'.join(_conditions_met(outputs))
+    result, warnings = run_signal_analysis_for_row(mysql_config, task_id=run_id, row=row,
+                                                   market=market, timeframe=timeframe, enabled=True)
+    return (_analysis_to_response_dict(result) if result else None), warnings
+
+
+def _build_macro_signal_row(stock: StockInfo, market: str) -> ScreeningSignalRow:
+    return ScreeningSignalRow(
+        index=0,
+        code=stock.code,
+        market=market,
+        market_label=market,
+        name=stock.name or stock.code,
+        pe_ratio="" if stock.pe_ratio is None else str(stock.pe_ratio),
+        market_cap="" if stock.market_cap is None else str(stock.market_cap),
+        sector=stock.sector or stock.industry or "",
+        conditions_met="",
+        raw={},
+    )
+
+
+def _analysis_to_response_dict(analysis) -> dict:
+    return {
+        "code": analysis.code,
+        "name": analysis.name,
+        "analysis_status": analysis.analysis_status,
+        "reliability_score": analysis.reliability_score,
+        "confidence_score": analysis.confidence_score,
+        "signal_bias": analysis.signal_bias,
+        "summary": analysis.summary,
+        "positive_factors": analysis.positive_factors,
+        "risk_factors": analysis.risk_factors,
+        "macro_factors": analysis.macro_factors,
+        "company_events": analysis.company_events,
+        "market_hot_news": analysis.market_hot_news,
+        "company_hot_news": analysis.company_hot_news,
+        "news_impact": analysis.news_impact,
+        "news_sources": analysis.news_sources,
+        "hot_sectors": analysis.hot_sectors,
+        "hot_sector_mark": analysis.hot_sector_mark,
+        "matched_hot_sectors": analysis.matched_hot_sectors,
+        "hot_sector_relevance": analysis.hot_sector_relevance,
+        "hot_sector_reason": analysis.hot_sector_reason,
+        "hot_sector_sources": analysis.hot_sector_sources,
+        "source_urls": analysis.source_urls,
+        "data_gaps": list(getattr(analysis, "data_gaps", []) or []),
+        "evidence_links": [dict(item) for item in (getattr(analysis, "evidence_links", []) or [])],
+        "factor_citations": {
+            str(key): [dict(item) for item in value]
+            for key, value in (getattr(analysis, "factor_citations", {}) or {}).items()
+        },
+        "数据缺失原因": list(getattr(analysis, "data_gaps", []) or []),
+        "引用来源": [dict(item) for item in (getattr(analysis, "evidence_links", []) or [])],
+        "因素引用": {
+            str(key): [dict(item) for item in value]
+            for key, value in (getattr(analysis, "factor_citations", {}) or {}).items()
+        },
+        "model": analysis.model,
+        "error_message": analysis.error_message,
+    }

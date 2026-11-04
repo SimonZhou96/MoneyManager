@@ -1,0 +1,245 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - strong [ref=e6]: MoneyManager
+      - generic [ref=e7]: Stock Screener
+    - navigation [ref=e8]:
+      - button "总览" [ref=e9] [cursor=pointer]
+      - button "全市场筛选" [ref=e10] [cursor=pointer]
+      - button "个股筛选器" [ref=e11] [cursor=pointer]
+      - button "规则链" [ref=e12] [cursor=pointer]
+    - generic [ref=e13]: MoneyManager
+  - main [ref=e15]:
+    - generic [ref=e1428]:
+      - generic [ref=e1429]:
+        - heading "个股筛选器" [level=1] [ref=e1430]
+        - paragraph [ref=e1431]: 输入股票名称，一键筛选并查看K线与分析报告
+      - generic [ref=e1432]:
+        - generic [ref=e1433]:
+          - generic [ref=e1434]: 市场
+          - combobox "市场" [ref=e1435]:
+            - option "港股" [selected]
+            - option "美股"
+            - option "A股"
+        - generic [ref=e1436]:
+          - generic [ref=e1437]: 周期
+          - combobox "周期" [ref=e1438]:
+            - option "1d" [selected]
+            - option "1wk"
+            - option "1mo"
+            - option "3mo"
+            - option "1m"
+            - option "3m"
+            - option "5m"
+            - option "15m"
+            - option "30m"
+            - option "60m"
+        - generic [ref=e1439]:
+          - generic [ref=e1440]: 规则链
+          - combobox "规则链" [ref=e1441]:
+            - option "宏观多维 + 均线金叉混合链 (默认)" [selected]
+            - option "左一战法+宏观标签+五模块评分 (默认)"
+            - option "左一战法 + EMA10 进场 (默认)"
+            - option "金叉全满足链 (默认)"
+            - option "左一战法与其他策略默认链 (默认)"
+            - option "统一看涨技术规则Top20 (默认)"
+            - option "宏观因子分析链 (默认)"
+            - option "企业潜力分析链 (默认)"
+            - option "默认链 + 宏观复核"
+            - option "趋势主力缩量观察链"
+        - generic [ref=e1442]:
+          - generic [ref=e1443]:
+            - generic [ref=e1444]: 股票名称
+            - generic [ref=e1445]:
+              - textbox "股票名称 TENCENT HK.00700 Digital Solution Services" [ref=e1448]:
+                - /placeholder: 输入股票名称，如：腾讯 / Apple / 茅台
+                - text: TENCENT
+              - generic [ref=e1455] [cursor=pointer]:
+                - generic [ref=e1456]: TENCENT
+                - generic [ref=e1457]: HK.00700
+                - generic [ref=e1458]: Digital Solution Services
+          - button "开始筛选" [ref=e1447] [cursor=pointer]
+      - generic [ref=e1459]:
+        - generic [ref=e1460]:
+          - generic [ref=e1461]: 股票名称
+          - strong [ref=e1462]: TENCENT
+        - generic [ref=e1463]:
+          - generic [ref=e1464]: 股票代码
+          - strong [ref=e1465]:
+            - text: HK.00700
+            - button "📋" [ref=e1466] [cursor=pointer]
+        - generic [ref=e1467]:
+          - generic [ref=e1468]: 市场
+          - strong [ref=e1469]: 港股
+        - generic [ref=e1470]:
+          - generic [ref=e1471]: 板块
+          - strong [ref=e1472]: Digital Solution Services
+        - generic [ref=e1473]:
+          - generic [ref=e1474]: 规则链
+          - strong [ref=e1475]: 宏观多维 + 均线金叉混合链 (macro_plus_golden_cross)
+        - generic [ref=e1476]:
+          - generic [ref=e1477]: 周期
+          - strong [ref=e1478]: 1d
+      - generic [ref=e1479]:
+        - generic [ref=e1480]:
+          - generic [ref=e1481]:
+            - generic [ref=e1482]: TENCENT (HK.00700)
+            - generic [ref=e1483]: 1d
+          - generic [ref=e1484]:
+            - button "MA" [ref=e1485] [cursor=pointer]
+            - button "VOL" [ref=e1486] [cursor=pointer]
+            - button "MACD" [ref=e1487] [cursor=pointer]
+            - button "⛶" [ref=e1488] [cursor=pointer]
+        - generic [ref=e1489]:
+          - generic [ref=e1490]:
+            - generic [ref=e1491]: TENCENT (HK.00700)
+            - generic [ref=e1492]: 1d
+          - generic [ref=e1493]:
+            - generic [ref=e1494]:
+              - generic [ref=e1495]: 📊
+              - generic [ref=e1496]: 暂无K线数据
+              - generic [ref=e1497]: 该股票在当前周期下暂无可用K线数据
+              - generic [ref=e1498]: 建议：切换至更长周期（周线/月线），或检查股票代码是否正确
+            - table [ref=e1501]:
+              - row [ref=e1502]:
+                - cell
+                - cell [ref=e1503]:
+                  - link "Charting by TradingView" [ref=e1507] [cursor=pointer]:
+                    - /url: https://www.tradingview.com/?utm_medium=lwc-link&utm_campaign=lwc-chart&utm_source=127.0.0.1/
+                - cell [ref=e1512]
+              - row [ref=e1516]:
+                - cell
+                - cell [ref=e1517]
+                - cell [ref=e1521]
+      - generic [ref=e1524]:
+        - generic [ref=e1525]:
+          - heading "📋 历史筛选记录" [level=3] [ref=e1526]
+          - button "🔄 刷新" [ref=e1527] [cursor=pointer]
+        - generic [ref=e1528]:
+          - generic [ref=e1529]:
+            - heading "评分趋势" [level=4] [ref=e1530]
+            - generic [ref=e1534]:
+              - generic [ref=e1535]: 2026-06-15
+              - generic [ref=e1536]: 2026-10-29
+          - table [ref=e1538]:
+            - rowgroup [ref=e1539]:
+              - row [ref=e1540]:
+                - columnheader "时间" [ref=e1541]
+                - columnheader "规则链" [ref=e1542]
+                - columnheader "状态" [ref=e1543]
+                - columnheader "买入评分" [ref=e1544]
+                - columnheader "较上次" [ref=e1545]
+                - columnheader "操作" [ref=e1546]
+            - rowgroup [ref=e1547]:
+              - row [ref=e1548] [cursor=pointer]:
+                - cell "2026-10-29 15:21:00" [ref=e1549]
+                - cell "unified_bullish_top20" [ref=e1550]
+                - cell "未通过" [ref=e1551]
+                - cell "25.0" [ref=e1553]
+                - cell "↑ 上升 25.0" [ref=e1554]
+                - cell [ref=e1555]:
+                  - button "查看" [ref=e1556]
+              - row [ref=e1557] [cursor=pointer]:
+                - cell "2026-09-09 19:36:30" [ref=e1558]
+                - cell "unified_bullish_top20" [ref=e1559]
+                - cell "未通过" [ref=e1560]
+                - cell "0.0" [ref=e1562]
+                - cell "→ 持平" [ref=e1563]
+                - cell [ref=e1564]:
+                  - button "查看" [ref=e1565]
+              - row [ref=e1566] [cursor=pointer]:
+                - cell "2026-09-09 19:09:19" [ref=e1567]
+                - cell "unified_bullish_top20" [ref=e1568]
+                - cell "未通过" [ref=e1569]
+                - cell "0.0" [ref=e1571]
+                - cell "→ 持平" [ref=e1572]
+                - cell [ref=e1573]:
+                  - button "查看" [ref=e1574]
+              - row [ref=e1575] [cursor=pointer]:
+                - cell "2026-09-09 18:40:18" [ref=e1576]
+                - cell "unified_bullish_top20" [ref=e1577]
+                - cell "未通过" [ref=e1578]
+                - cell "0.0" [ref=e1580]
+                - cell "→ 持平" [ref=e1581]
+                - cell [ref=e1582]:
+                  - button "查看" [ref=e1583]
+              - row [ref=e1584] [cursor=pointer]:
+                - cell "2026-09-09 18:32:51" [ref=e1585]
+                - cell "unified_bullish_top20" [ref=e1586]
+                - cell "未通过" [ref=e1587]
+                - cell "0.0" [ref=e1589]
+                - cell "→ 持平" [ref=e1590]
+                - cell [ref=e1591]:
+                  - button "查看" [ref=e1592]
+              - row [ref=e1593] [cursor=pointer]:
+                - cell "2026-09-09 18:19:53" [ref=e1594]
+                - cell "unified_bullish_top20" [ref=e1595]
+                - cell "未通过" [ref=e1596]
+                - cell "0.0" [ref=e1598]
+                - cell "→ 持平" [ref=e1599]
+                - cell [ref=e1600]:
+                  - button "查看" [ref=e1601]
+              - row [ref=e1602] [cursor=pointer]:
+                - cell "2026-06-16 23:10:52" [ref=e1603]
+                - cell "unified_bullish_top20" [ref=e1604]
+                - cell "未通过" [ref=e1605]
+                - cell "0.0" [ref=e1607]
+                - cell "→ 持平" [ref=e1608]
+                - cell [ref=e1609]:
+                  - button "查看" [ref=e1610]
+              - row [ref=e1611] [cursor=pointer]:
+                - cell "2026-06-15 22:27:10" [ref=e1612]
+                - cell "unified_bullish_top20" [ref=e1613]
+                - cell "未通过" [ref=e1614]
+                - cell "0.0" [ref=e1616]
+                - cell "→ 持平" [ref=e1617]
+                - cell [ref=e1618]:
+                  - button "查看" [ref=e1619]
+              - row [ref=e1620] [cursor=pointer]:
+                - cell "2026-06-15 22:13:06" [ref=e1621]
+                - cell "macro_plus_golden_cross" [ref=e1622]
+                - cell "未通过" [ref=e1623]
+                - cell "0.0" [ref=e1625]
+                - cell "→ 持平" [ref=e1626]
+                - cell [ref=e1627]:
+                  - button "查看" [ref=e1628]
+              - row [ref=e1629] [cursor=pointer]:
+                - cell "2026-06-15 22:02:32" [ref=e1630]
+                - cell "unified_bullish_top20" [ref=e1631]
+                - cell "未通过" [ref=e1632]
+                - cell "0.0" [ref=e1634]
+                - cell "→ 持平" [ref=e1635]
+                - cell [ref=e1636]:
+                  - button "查看" [ref=e1637]
+              - row [ref=e1638] [cursor=pointer]:
+                - cell "2026-06-15 22:02:27" [ref=e1639]
+                - cell "unified_bullish_top20" [ref=e1640]
+                - cell "未通过" [ref=e1641]
+                - cell "0.0" [ref=e1643]
+                - cell "→ 持平" [ref=e1644]
+                - cell [ref=e1645]:
+                  - button "查看" [ref=e1646]
+              - row [ref=e1647] [cursor=pointer]:
+                - cell "2026-06-15 22:01:11" [ref=e1648]
+                - cell "zuoyi_with_macro_enhanced" [ref=e1649]
+                - cell "未通过" [ref=e1650]
+                - cell "0.0" [ref=e1652]
+                - cell "→ 持平" [ref=e1653]
+                - cell [ref=e1654]:
+                  - button "查看" [ref=e1655]
+              - row [ref=e1656] [cursor=pointer]:
+                - cell "2026-06-15 22:00:53" [ref=e1657]
+                - cell "macro_plus_golden_cross" [ref=e1658]
+                - cell "未通过" [ref=e1659]
+                - cell "0.0" [ref=e1661]
+                - cell "→ 持平" [ref=e1662]
+                - cell [ref=e1663]:
+                  - button "查看" [ref=e1664]
+              - row [ref=e1665] [cursor=pointer]:
+                - cell "2026-06-15 16:42:36" [ref=e1666]
+                - cell "macro_plus_golden_cross" [ref=e1667]
+                - cell "未通过" [ref=e1668]
+                - cell "0.0" [ref=e1670]
+                - cell "— —" [ref=e1671]
+                - cell [ref=e1672]:
+                  - button "查看" [ref=e1673]

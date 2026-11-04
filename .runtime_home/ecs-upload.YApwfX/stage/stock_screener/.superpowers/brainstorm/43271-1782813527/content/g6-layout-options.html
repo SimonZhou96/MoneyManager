@@ -1,0 +1,87 @@
+<h2>G6 / Deterministic Layout Options for US.NVDA</h2>
+<p class="subtitle">Goal: turn the current drifting fan into a stable root-centered layered circle, while keeping sector grouping and upstream / downstream / peer meaning.</p>
+
+<div class="cards">
+  <div class="card" data-choice="radial" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="height:260px;position:relative;background:#080d14;border-radius:8px;overflow:hidden">
+        <div style="position:absolute;left:50%;top:50%;width:34px;height:34px;margin:-17px;border-radius:50%;background:#fbbf24;box-shadow:0 0 0 6px rgba(251,191,36,.2)"></div>
+        <div style="position:absolute;left:50%;top:50%;width:150px;height:150px;margin:-75px;border:1px dashed #60a5fa;border-radius:50%"></div>
+        <div style="position:absolute;left:50%;top:50%;width:230px;height:230px;margin:-115px;border:1px dashed #8b5cf6;border-radius:50%"></div>
+        <div style="position:absolute;left:50%;top:50%;width:310px;height:310px;margin:-155px;border:1px dashed #f59e0b;border-radius:50%"></div>
+        <div style="position:absolute;left:50%;top:12%;color:#93c5fd;font-size:12px;transform:translateX(-50%)">Upstream</div>
+        <div style="position:absolute;left:50%;bottom:10%;color:#fbbf24;font-size:12px;transform:translateX(-50%)">Downstream</div>
+        <div style="position:absolute;left:8%;top:50%;color:#c4b5fd;font-size:12px">Peer</div>
+        <div style="position:absolute;right:8%;top:50%;color:#c4b5fd;font-size:12px">Peer</div>
+        <div style="position:absolute;left:47%;top:18%;width:8px;height:8px;border-radius:50%;background:#fff7cc"></div>
+        <div style="position:absolute;left:60%;top:28%;width:8px;height:8px;border-radius:50%;background:#fff7cc"></div>
+        <div style="position:absolute;left:38%;top:32%;width:8px;height:8px;border-radius:50%;background:#fff7cc"></div>
+        <div style="position:absolute;left:20%;top:55%;width:8px;height:8px;border-radius:50%;background:#fff7cc"></div>
+        <div style="position:absolute;right:20%;top:55%;width:8px;height:8px;border-radius:50%;background:#fff7cc"></div>
+        <div style="position:absolute;left:46%;bottom:18%;width:8px;height:8px;border-radius:50%;background:#fff7cc"></div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. G6 RadialLayout as Pre-Layout</h3>
+      <p>Use G6 / @antv/layout radial only to calculate deterministic root-centered rings, then render with preset coordinates.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Native layered circle</li><li>Designed for hierarchical relationships</li><li>Has overlap controls</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>Need constrain direction sectors</li><li>Need post-process sector/hull grouping</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="custom-radial" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="height:260px;position:relative;background:#080d14;border-radius:8px;overflow:hidden">
+        <div style="position:absolute;left:50%;top:50%;width:34px;height:34px;margin:-17px;border-radius:50%;background:#fbbf24"></div>
+        <div style="position:absolute;left:50%;top:50%;width:280px;height:280px;margin:-140px;border:1px solid rgba(148,163,184,.18);border-radius:50%"></div>
+        <div style="position:absolute;left:44%;top:8%;width:90px;height:70px;border:1px dashed #60a5fa;border-radius:50%;background:rgba(96,165,250,.08)"></div>
+        <div style="position:absolute;left:15%;top:42%;width:95px;height:78px;border:1px dashed #8b5cf6;border-radius:50%;background:rgba(139,92,246,.08)"></div>
+        <div style="position:absolute;right:15%;top:42%;width:95px;height:78px;border:1px dashed #8b5cf6;border-radius:50%;background:rgba(139,92,246,.08)"></div>
+        <div style="position:absolute;left:42%;bottom:8%;width:110px;height:84px;border:1px dashed #f59e0b;border-radius:50%;background:rgba(245,158,11,.08)"></div>
+        <div style="position:absolute;left:48%;top:18%;width:8px;height:8px;border-radius:50%;background:#fff7cc"></div>
+        <div style="position:absolute;left:25%;top:50%;width:8px;height:8px;border-radius:50%;background:#fff7cc"></div>
+        <div style="position:absolute;right:25%;top:50%;width:8px;height:8px;border-radius:50%;background:#fff7cc"></div>
+        <div style="position:absolute;left:48%;bottom:18%;width:8px;height:8px;border-radius:50%;background:#fff7cc"></div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. Custom Deterministic Radial Tree</h3>
+      <p>Keep no G6 layout; rewrite our layout as strict depth rings with fixed direction arcs and sector wedges.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Full control</li><li>Direction semantics preserved</li><li>Stable by construction</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>We already tried variants</li><li>More geometry to maintain</li><li>Harder to get polished quickly</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" data-choice="combo" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="height:260px;position:relative;background:#080d14;border-radius:8px;overflow:hidden">
+        <div style="position:absolute;left:50%;top:50%;width:34px;height:34px;margin:-17px;border-radius:50%;background:#fbbf24"></div>
+        <div style="position:absolute;left:36%;top:18%;width:125px;height:80px;border:1px solid #60a5fa;border-radius:8px;background:rgba(96,165,250,.08)"></div>
+        <div style="position:absolute;left:12%;top:46%;width:125px;height:80px;border:1px solid #8b5cf6;border-radius:8px;background:rgba(139,92,246,.08)"></div>
+        <div style="position:absolute;right:12%;top:46%;width:125px;height:80px;border:1px solid #8b5cf6;border-radius:8px;background:rgba(139,92,246,.08)"></div>
+        <div style="position:absolute;left:36%;bottom:12%;width:125px;height:80px;border:1px solid #f59e0b;border-radius:8px;background:rgba(245,158,11,.08)"></div>
+        <div style="position:absolute;left:41%;top:31%;width:7px;height:7px;border-radius:50%;background:#fff7cc"></div>
+        <div style="position:absolute;left:50%;top:31%;width:7px;height:7px;border-radius:50%;background:#fff7cc"></div>
+        <div style="position:absolute;right:20%;top:59%;width:7px;height:7px;border-radius:50%;background:#fff7cc"></div>
+        <div style="position:absolute;left:22%;top:59%;width:7px;height:7px;border-radius:50%;background:#fff7cc"></div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. G6 Combo / ComboCombined</h3>
+      <p>Model each sector as a G6 combo, let G6 group containers carry the visual grouping.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul><li>Native group containers</li><li>Built-in combo interactions</li><li>Can replace hull plugin</li></ul></div>
+        <div class="cons"><h4>Cons</h4><ul><li>ComboCombined defaults to force outside</li><li>More data/render refactor</li><li>Less appropriate for fast fix</li></ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Initial recommendation</h3>
+  <p>Prefer <strong>A: G6 RadialLayout as a deterministic pre-layout</strong>. It directly targets the thing that is broken in the screenshot: root-centered layered circles. We can still keep upstream/downstream/peer as post-processed angle sectors and keep our aggregate/hull UI.</p>
+</div>

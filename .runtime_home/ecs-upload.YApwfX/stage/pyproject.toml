@@ -1,0 +1,24 @@
+[project]
+name = "moneymanager"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "db>=0.1.1",
+    "futu>=0.0.1",
+    "pandas>=3.0.3",
+    "pandas-stubs~=3.0.3",
+    "pymysql>=1.2.0",
+    "networkx>=3.0",
+    "fastapi>=0.138.0",
+    "py-mini-racer>=0.6.0",
+    "booktype>=1.5",
+    "rq>=2.10.0",
+    "elasticsearch==9.5.1",
+    "ipykernel>=7.3.0",
+    "web-py>=0.76",
+    "requests==2.34.1",
+    "optional>=0.0.1",
+    "scikit-learn>=1.5,<2",
+    "exchange-calendars>=4.5,<5",
+    "threadpoolctl>=3.1",
+]

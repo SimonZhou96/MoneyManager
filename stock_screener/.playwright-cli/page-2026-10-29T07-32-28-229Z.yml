@@ -1,0 +1,212 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - strong [ref=e6]: MoneyManager
+      - generic [ref=e7]: Stock Screener
+    - navigation [ref=e8]:
+      - button "总览" [ref=e9] [cursor=pointer]
+      - button "全市场筛选" [ref=e10] [cursor=pointer]
+      - button "个股筛选器" [ref=e11] [cursor=pointer]
+      - button "规则链" [ref=e12] [cursor=pointer]
+    - generic [ref=e13]: MoneyManager
+  - main [ref=e15]:
+    - generic [ref=e1428]:
+      - generic [ref=e1429]:
+        - heading "个股筛选器" [level=1] [ref=e1430]
+        - paragraph [ref=e1431]: 输入股票名称，一键筛选并查看K线与分析报告
+      - generic [ref=e1432]:
+        - generic [ref=e1433]:
+          - generic [ref=e1434]: 市场
+          - combobox "市场" [ref=e1435]:
+            - option "港股" [selected]
+            - option "美股"
+            - option "A股"
+        - generic [ref=e1436]:
+          - generic [ref=e1437]: 周期
+          - combobox "周期" [ref=e1438]:
+            - option "1d" [selected]
+            - option "1wk"
+            - option "1mo"
+            - option "3mo"
+            - option "1m"
+            - option "3m"
+            - option "5m"
+            - option "15m"
+            - option "30m"
+            - option "60m"
+        - generic [ref=e1439]:
+          - generic [ref=e1440]: 规则链
+          - combobox "规则链" [ref=e1441]:
+            - option "宏观多维 + 均线金叉混合链 (默认)"
+            - option "左一战法+宏观标签+五模块评分 (默认)"
+            - option "左一战法 + EMA10 进场 (默认)"
+            - option "金叉全满足链 (默认)"
+            - option "左一战法与其他策略默认链 (默认)"
+            - option "统一看涨技术规则Top20 (默认)" [selected]
+            - option "宏观因子分析链 (默认)"
+            - option "企业潜力分析链 (默认)"
+            - option "默认链 + 宏观复核"
+            - option "趋势主力缩量观察链"
+        - generic [ref=e1442]:
+          - generic [ref=e1443]:
+            - generic [ref=e1444]: 股票名称
+            - generic [ref=e1445]:
+              - textbox "股票名称 TENCENT HK.00700 Digital Solution Services" [ref=e1448]:
+                - /placeholder: 输入股票名称，如：腾讯 / Apple / 茅台
+                - text: TENCENT
+              - generic [ref=e1455] [cursor=pointer]:
+                - generic [ref=e1456]: TENCENT
+                - generic [ref=e1457]: HK.00700
+                - generic [ref=e1458]: Digital Solution Services
+          - button "开始筛选" [ref=e1687] [cursor=pointer]
+      - generic [ref=e1459]:
+        - generic [ref=e1460]:
+          - generic [ref=e1461]: 股票名称
+          - strong [ref=e1462]: TENCENT
+        - generic [ref=e1463]:
+          - generic [ref=e1464]: 股票代码
+          - strong [ref=e1465]:
+            - text: HK.00700
+            - button "📋" [ref=e1466] [cursor=pointer]
+        - generic [ref=e1467]:
+          - generic [ref=e1468]: 市场
+          - strong [ref=e1469]: 港股
+        - generic [ref=e1470]:
+          - generic [ref=e1471]: 板块
+          - strong [ref=e1472]: Digital Solution Services
+        - generic [ref=e1473]:
+          - generic [ref=e1474]: 规则链
+          - strong [ref=e1475]: 统一看涨技术规则Top20 (unified_bullish_top20)
+        - generic [ref=e1476]:
+          - generic [ref=e1477]: 周期
+          - strong [ref=e1478]: 1d
+      - generic [ref=e1479]:
+        - generic [ref=e1480]:
+          - generic [ref=e1481]:
+            - generic [ref=e1482]: TENCENT (HK.00700)
+            - generic [ref=e1483]: 1d
+          - generic [ref=e1484]:
+            - button "MA" [ref=e1485] [cursor=pointer]
+            - button "VOL" [ref=e1486] [cursor=pointer]
+            - button "MACD" [ref=e1487] [cursor=pointer]
+            - button "⛶" [ref=e1488] [cursor=pointer]
+        - generic [ref=e1489]:
+          - generic [ref=e1490]:
+            - generic [ref=e1491]: TENCENT (HK.00700)
+            - generic [ref=e1492]: 1d
+          - table [ref=e1501]:
+            - row [ref=e1502]:
+              - cell
+              - cell [ref=e1503]:
+                - link "Charting by TradingView" [ref=e1507] [cursor=pointer]:
+                  - /url: https://www.tradingview.com/?utm_medium=lwc-link&utm_campaign=lwc-chart&utm_source=127.0.0.1/
+              - cell [ref=e1512]
+            - row [ref=e1516]:
+              - cell
+              - cell [ref=e1517]
+              - cell [ref=e1521]
+      - generic [ref=e1688]:
+        - heading "筛选报告" [level=2] [ref=e1689]
+        - generic [ref=e1690]:
+          - button "📊 本次结果" [ref=e1691] [cursor=pointer]
+          - button "📋 历史记录" [ref=e1692] [cursor=pointer]
+        - generic [ref=e1693]:
+          - generic [ref=e1694]:
+            - generic [ref=e1695]:
+              - generic [ref=e1696]: 强规避
+              - generic [ref=e1697]: 信号极弱
+              - generic [ref=e1698]: "可信度: 中"
+            - generic [ref=e1699]:
+              - generic [ref=e1700]: "0.0"
+              - generic [ref=e1701]: / 100
+              - generic [ref=e1702]: 买入评分
+            - paragraph [ref=e1703]: 当前买入评分为 0.0，处于"强规避"区间。5 条策略规则中无通过项。各维度信号均衡，尚不足以形成明确买入信号。
+            - paragraph [ref=e1704]: ⚠ 宏观面、事件热度、资金风险、AI分析未计算，本次评分未纳入该维度。
+          - generic [ref=e1706]:
+            - generic: "0.0"
+            - generic [ref=e1707]:
+              - generic "强规避" [ref=e1708]
+              - generic "观望偏弱" [ref=e1709]
+              - generic "中性观望" [ref=e1710]
+              - generic "偏买入" [ref=e1711]
+              - generic "强买入" [ref=e1712]
+            - generic [ref=e1713]:
+              - generic [ref=e1714]: 强规避
+              - generic [ref=e1715]: 观望偏弱
+              - generic [ref=e1716]: 中性观望
+              - generic [ref=e1717]: 偏买入
+              - generic [ref=e1718]: 强买入
+        - generic [ref=e1719]:
+          - generic [ref=e1720]:
+            - heading "▲ 主要加分项" [level=4] [ref=e1721]:
+              - generic [ref=e1722]: ▲
+              - text: 主要加分项
+            - paragraph [ref=e1723]: 暂无加分项
+          - generic [ref=e1724]:
+            - heading "▼ 主要扣分项" [level=4] [ref=e1725]:
+              - generic [ref=e1726]: ▼
+              - text: 主要扣分项
+            - list [ref=e1727]:
+              - listitem [ref=e1728]:
+                - generic [ref=e1729]: MACD金叉
+                - generic [ref=e1730]: "-5.0"
+                - paragraph [ref=e1731]: 未形成MACD金叉
+              - listitem [ref=e1732]:
+                - generic [ref=e1733]: 均线金叉
+                - generic [ref=e1734]: "-5.0"
+                - paragraph [ref=e1735]: 未形成均线金叉
+              - listitem [ref=e1736]:
+                - generic [ref=e1737]: EMA金叉
+                - generic [ref=e1738]: "-5.0"
+                - paragraph [ref=e1739]: 未形成均线金叉
+        - generic [ref=e1740]:
+          - generic [ref=e1741]: "数据来源: Web 后端直连"
+          - generic [ref=e1742]: "完成时间: 2026-10-29 07:23:53.350567"
+          - generic [ref=e1743]: "规则链: 统一看涨技术规则Top20 (unified_bullish_top20)"
+        - group [ref=e1745]:
+          - generic "数据诊断 5 正常 1 缺失 · 数据完整度 83% · 大部分数据可用，评分基本可靠" [ref=e1746] [cursor=pointer]:
+            - generic [ref=e1747]: 数据诊断
+            - generic [ref=e1748]:
+              - generic [ref=e1749]: 5 正常
+              - generic [ref=e1750]: 1 缺失
+            - generic [ref=e1751]: · 数据完整度 83% · 大部分数据可用，评分基本可靠
+        - generic [ref=e1753]:
+          - heading "规则明细" [level=3] [ref=e1754]
+          - generic [ref=e1755]:
+            - button "全部5" [ref=e1756] [cursor=pointer]
+            - button "通过0" [ref=e1757] [cursor=pointer]
+            - button "失败3" [ref=e1758] [cursor=pointer]
+            - button "未计算2" [ref=e1759] [cursor=pointer]
+          - table [ref=e1761]:
+            - rowgroup [ref=e1762]:
+              - row [ref=e1763]:
+                - columnheader "规则" [ref=e1764]
+                - columnheader "类型" [ref=e1765]
+                - columnheader "结果" [ref=e1766]
+                - columnheader "原因" [ref=e1767]
+            - rowgroup [ref=e1768]:
+              - row [ref=e1769]:
+                - cell "MACD金叉" [ref=e1770]
+                - cell "strategy" [ref=e1771]
+                - cell "失败" [ref=e1772]
+                - cell "未形成MACD金叉" [ref=e1774]
+              - row [ref=e1775]:
+                - cell "均线金叉" [ref=e1776]
+                - cell "strategy" [ref=e1777]
+                - cell "失败" [ref=e1778]
+                - cell "未形成均线金叉" [ref=e1780]
+              - row [ref=e1781]:
+                - cell "EMA金叉" [ref=e1782]
+                - cell "strategy" [ref=e1783]
+                - cell "失败" [ref=e1784]
+                - cell "未形成均线金叉" [ref=e1786]
+              - row [ref=e1787]:
+                - cell "市场情报宏观评分" [ref=e1788]
+                - cell "strategy" [ref=e1789]
+                - cell "错误" [ref=e1790]
+                - cell "缺少 macro_score_scorer，无法执行宏观评分" [ref=e1792]
+              - row [ref=e1793]:
+                - cell "公司时事与热点板块关联" [ref=e1794]
+                - cell "strategy" [ref=e1795]
+                - cell "—" [ref=e1796]
+                - cell "缺少宏观分析结果，无法判断公司时事与热点板块的关联" [ref=e1798]

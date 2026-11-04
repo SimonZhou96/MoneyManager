@@ -1,0 +1,528 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - strong [ref=e6]: MoneyManager
+      - generic [ref=e7]: Stock Screener
+    - navigation [ref=e8]:
+      - button "总览" [ref=e9] [cursor=pointer]
+      - button "个股筛选器" [ref=e10] [cursor=pointer]
+      - button "量化实验室" [ref=e11] [cursor=pointer]
+      - button "规则链" [active] [ref=e12] [cursor=pointer]
+    - generic [ref=e14]: MoneyManager
+  - main [ref=e15]:
+    - generic [ref=e36]:
+      - generic [ref=e37]:
+        - heading "规则链" [level=1] [ref=e38]
+        - paragraph [ref=e39]: 拖拽节点编排规则链，或切换到 JSON 模式直接编辑表达式
+      - generic [ref=e40]:
+        - combobox [ref=e41]:
+          - option "HK" [selected]
+          - option "US"
+          - option "A"
+        - combobox [ref=e42]:
+          - option "1d" [selected]
+          - option "1wk"
+          - option "1mo"
+          - option "3mo"
+          - option "1m"
+          - option "3m"
+          - option "5m"
+          - option "15m"
+          - option "30m"
+          - option "60m"
+        - generic [ref=e43]:
+          - generic [ref=e44]: 规则链
+          - combobox "规则链" [ref=e45]:
+            - option "宏观多维 + 均线金叉混合链"
+            - option "左一战法+宏观标签+五模块评分"
+            - option "左一战法 + EMA10 进场"
+            - option "金叉全满足链"
+            - option "左一战法与其他策略默认链"
+            - option "统一看涨技术规则Top20" [selected]
+            - option "宏观因子分析链"
+            - option "企业潜力分析链"
+            - option "默认链 + 宏观复核"
+            - option "趋势主力缩量观察链"
+        - button "新建" [ref=e46] [cursor=pointer]
+      - generic [ref=e47]: 拖拽左侧规则到画布，用 AND/OR 逻辑门连接。改动自动同步到 JSON 表达式。
+      - generic [ref=e48]:
+        - heading "规则链列表" [level=2] [ref=e49]
+        - table [ref=e51]:
+          - rowgroup [ref=e52]:
+            - row "规则链 规则链 Key 周期 启用状态 priority description" [ref=e53]:
+              - columnheader "规则链" [ref=e54]
+              - columnheader "规则链 Key" [ref=e55]
+              - columnheader "周期" [ref=e56]
+              - columnheader "启用状态" [ref=e57]
+              - columnheader "priority" [ref=e58]
+              - columnheader "description" [ref=e59]
+          - rowgroup [ref=e60]:
+            - row "宏观多维 + 均线金叉混合链（默认生效） macro_plus_golden_cross * 默认候选 50 至少一种宏观策略命中 && 至少一种均线/MACD金叉" [ref=e61] [cursor=pointer]:
+              - cell "宏观多维 + 均线金叉混合链（默认生效）" [ref=e62]
+              - cell "macro_plus_golden_cross" [ref=e63]
+              - cell "*" [ref=e64]
+              - cell "默认候选" [ref=e65]
+              - cell "50" [ref=e66]
+              - cell "至少一种宏观策略命中 && 至少一种均线/MACD金叉" [ref=e67]
+            - row "左一战法+宏观标签+五模块评分 zuoyi_with_macro_enhanced * 默认候选 50 门禁(硬筛选+左一+技术)→标签层(宏观因子跑通即过,sector/news/macro_score出pass/fail标签)→五模块综合评分(所有通过门禁的股票都评分)" [ref=e68] [cursor=pointer]:
+              - cell "左一战法+宏观标签+五模块评分" [ref=e69]
+              - cell "zuoyi_with_macro_enhanced" [ref=e70]
+              - cell "*" [ref=e71]
+              - cell "默认候选" [ref=e72]
+              - cell "50" [ref=e73]
+              - cell "门禁(硬筛选+左一+技术)→标签层(宏观因子跑通即过,sector/news/macro_score出pass/fail标签)→五模块综合评分(所有通过门禁的股票都评分)" [ref=e74]
+            - row "左一战法 + EMA10 进场 zuoyi_and_ema10 * 默认候选 90 底左一策略与 EMA10 同时成立时考虑入市买入" [ref=e75] [cursor=pointer]:
+              - cell "左一战法 + EMA10 进场" [ref=e76]
+              - cell "zuoyi_and_ema10" [ref=e77]
+              - cell "*" [ref=e78]
+              - cell "默认候选" [ref=e79]
+              - cell "90" [ref=e80]
+              - cell "底左一策略与 EMA10 同时成立时考虑入市买入" [ref=e81]
+            - row "金叉全满足链 golden_cross_all * 默认候选 100 金叉全满足" [ref=e82] [cursor=pointer]:
+              - cell "金叉全满足链" [ref=e83]
+              - cell "golden_cross_all" [ref=e84]
+              - cell "*" [ref=e85]
+              - cell "默认候选" [ref=e86]
+              - cell "100" [ref=e87]
+              - cell "金叉全满足" [ref=e88]
+            - row "左一战法与其他策略默认链 default_zuoyi_and_other * 默认候选 200 启用硬筛选全部通过 && 左一战法命中 && 至少一个其他策略命中" [ref=e89] [cursor=pointer]:
+              - cell "左一战法与其他策略默认链" [ref=e90]
+              - cell "default_zuoyi_and_other" [ref=e91]
+              - cell "*" [ref=e92]
+              - cell "默认候选" [ref=e93]
+              - cell "200" [ref=e94]
+              - cell "启用硬筛选全部通过 && 左一战法命中 && 至少一个其他策略命中" [ref=e95]
+            - row "统一看涨技术规则Top20 unified_bullish_top20 * 默认候选 400 遍历所有启用看涨技术规则，按命中数选Top20后进入AI复核" [ref=e96] [cursor=pointer]:
+              - cell "统一看涨技术规则Top20" [ref=e97]
+              - cell "unified_bullish_top20" [ref=e98]
+              - cell "*" [ref=e99]
+              - cell "默认候选" [ref=e100]
+              - cell "400" [ref=e101]
+              - cell "遍历所有启用看涨技术规则，按命中数选Top20后进入AI复核" [ref=e102]
+            - row "宏观因子分析链 macro_factor_only * 默认候选 500 独立规则链：仅运行宏观因子采集与分析" [ref=e103] [cursor=pointer]:
+              - cell "宏观因子分析链" [ref=e104]
+              - cell "macro_factor_only" [ref=e105]
+              - cell "*" [ref=e106]
+              - cell "默认候选" [ref=e107]
+              - cell "500" [ref=e108]
+              - cell "独立规则链：仅运行宏观因子采集与分析" [ref=e109]
+            - row "企业潜力分析链 enterprise_potential_analysis * 默认候选 510 独立规则链：五模块（宏观+行业+企业质量+估值+交易）综合评分，输出BUY/WATCH/SKIP" [ref=e110] [cursor=pointer]:
+              - cell "企业潜力分析链" [ref=e111]
+              - cell "enterprise_potential_analysis" [ref=e112]
+              - cell "*" [ref=e113]
+              - cell "默认候选" [ref=e114]
+              - cell "510" [ref=e115]
+              - cell "独立规则链：五模块（宏观+行业+企业质量+估值+交易）综合评分，输出BUY/WATCH/SKIP" [ref=e116]
+            - row "默认链 + 宏观复核 default_zuoyi_macro_review * 可试跑 200 默认技术链未通过也继续执行公司时事热点板块、热点新闻与市场情报宏观评分；最终结果仍需技术链与宏观规则同时通过" [ref=e117] [cursor=pointer]:
+              - cell "默认链 + 宏观复核" [ref=e118]
+              - cell "default_zuoyi_macro_review" [ref=e119]
+              - cell "*" [ref=e120]
+              - cell "可试跑" [ref=e121]
+              - cell "200" [ref=e122]
+              - cell "默认技术链未通过也继续执行公司时事热点板块、热点新闻与市场情报宏观评分；最终结果仍需技术链与宏观规则同时通过" [ref=e123]
+            - row "趋势主力缩量观察链 trend_capital_accumulation_watch * 可试跑 300 默认关闭的试跑链：基于现有上涨趋势/放量规则做观察，主力资金与热点板块原子规则接入后可扩展" [ref=e124] [cursor=pointer]:
+              - cell "趋势主力缩量观察链" [ref=e125]
+              - cell "trend_capital_accumulation_watch" [ref=e126]
+              - cell "*" [ref=e127]
+              - cell "可试跑" [ref=e128]
+              - cell "300" [ref=e129]
+              - cell "默认关闭的试跑链：基于现有上涨趋势/放量规则做观察，主力资金与热点板块原子规则接入后可扩展" [ref=e130]
+      - generic [ref=e131]:
+        - heading "规则链编辑" [level=2] [ref=e132]
+        - generic [ref=e134]:
+          - button "🎨 可视化编排" [ref=e135] [cursor=pointer]
+          - button "📝 JSON 编辑" [ref=e136] [cursor=pointer]
+        - generic [ref=e137]:
+          - generic [ref=e138]:
+            - generic [ref=e139]:
+              - generic [ref=e140]: 规则链 Key
+              - textbox "规则链 Key" [ref=e141]: unified_bullish_top20
+            - generic [ref=e142]:
+              - generic [ref=e143]: 适用周期
+              - combobox "适用周期" [ref=e144]:
+                - option "通用" [selected]
+                - option "1d"
+                - option "1wk"
+                - option "1mo"
+                - option "3mo"
+                - option "1m"
+                - option "3m"
+                - option "5m"
+                - option "15m"
+                - option "30m"
+                - option "60m"
+            - generic [ref=e145]:
+              - generic [ref=e146]: 规则链名称
+              - textbox "规则链名称" [ref=e147]: 统一看涨技术规则Top20
+          - generic [ref=e148]:
+            - generic [ref=e149]:
+              - generic [ref=e150]: 优先级
+              - spinbutton "优先级" [ref=e151]: "400"
+            - generic [ref=e152]:
+              - generic [ref=e153]: 说明
+              - textbox "说明" [ref=e154]: 遍历所有启用看涨技术规则，按命中数选Top20后进入AI复核
+            - generic [ref=e155] [cursor=pointer]:
+              - checkbox "启用为默认候选" [checked] [ref=e156]
+              - text: 启用为默认候选
+        - generic [ref=e158]:
+          - generic [ref=e159]:
+            - textbox "搜索规则..." [ref=e161]
+            - generic [ref=e162]: 拖拽规则到画布
+            - generic [ref=e163]:
+              - generic [ref=e164] [cursor=pointer]:
+                - generic [ref=e165]: 🏷 硬筛选
+                - generic [ref=e166]: 5 条
+                - generic [ref=e167]: ▾
+              - generic [ref=e168]:
+                - generic "按市值上下限筛选" [ref=e169]:
+                  - generic [ref=e170]: 市值范围
+                  - generic [ref=e171]: market_cap_range
+                - generic "按 K 线计算每日平均交易量" [ref=e172]:
+                  - generic [ref=e173]: 每日平均交易量范围
+                  - generic [ref=e174]: avg_daily_volume_range
+                - generic "按最新收盘价筛选" [ref=e175]:
+                  - generic [ref=e176]: 价格范围
+                  - generic [ref=e177]: price_range
+                - generic "按 PE 上下限筛选" [ref=e178]:
+                  - generic [ref=e179]: PE 范围
+                  - generic [ref=e180]: pe_range
+                - generic "要求 PE 为正" [ref=e181]:
+                  - generic [ref=e182]: 公司盈利
+                  - generic [ref=e183]: profitability
+            - generic [ref=e184]:
+              - generic [ref=e185] [cursor=pointer]:
+                - generic [ref=e186]: 📊 技术信号
+                - generic [ref=e187]: 41 条
+                - generic [ref=e188]: ▾
+              - generic [ref=e189]:
+                - generic "当前周期15根K线内左一战法看涨/看跌信号" [ref=e190]:
+                  - generic [ref=e191]: 左一战法
+                  - generic [ref=e192]: zuoyi_signal
+                - generic "当前周期15根K线内左一战法看涨信号" [ref=e193]:
+                  - generic [ref=e194]: 左一战法-看涨
+                  - generic [ref=e195]: zuoyi_bullish_signal
+                - generic "EMA 短线向上突破长线" [ref=e196]:
+                  - generic [ref=e197]: EMA 突破
+                  - generic [ref=e198]: ema_breakout
+                - generic "RSI 低于等于阈值" [ref=e199]:
+                  - generic [ref=e200]: RSI 超卖
+                  - generic [ref=e201]: rsi_oversold
+                - generic "RSI 高于等于阈值" [ref=e202]:
+                  - generic [ref=e203]: RSI 超买
+                  - generic [ref=e204]: rsi_overbought
+                - generic "当日成交量大于前三日最大值" [ref=e205]:
+                  - generic [ref=e206]: 放量超前三日
+                  - generic [ref=e207]: volume_spike_prior3
+                - generic "当日跌幅在指定区间" [ref=e208]:
+                  - generic [ref=e209]: 当日跌 6%~6.5%
+                  - generic [ref=e210]: daily_drop_6_65
+                - generic "当日涨幅在指定区间" [ref=e211]:
+                  - generic [ref=e212]: 当日涨 4%~4.5%
+                  - generic [ref=e213]: daily_rise_4_45
+                - generic "六态物理能量相位框架：COMPRESS(势能积蓄)→RELEASE(势能释放)→TRENDING(动能主导)→EXHAUSTION(动能衰竭)→PEAK(到顶)→CRASH(空方动能)。RELEASE或TRENDING时触发看涨信号" [ref=e214]:
+                  - generic [ref=e215]: 能量相位看涨
+                  - generic [ref=e216]: energy_phase_bullish
+                - generic "看涨规则：看涨吞没" [ref=e217]:
+                  - generic [ref=e218]: 看涨吞没
+                  - generic [ref=e219]: bullish_engulfing
+                - generic "看跌规则：看跌吞没" [ref=e220]:
+                  - generic [ref=e221]: 看跌吞没
+                  - generic [ref=e222]: bearish_engulfing
+                - generic "看涨规则：锤子线反转" [ref=e223]:
+                  - generic [ref=e224]: 锤子线反转
+                  - generic [ref=e225]: hammer_reversal
+                - generic "看跌规则：射击之星反转" [ref=e226]:
+                  - generic [ref=e227]: 射击之星反转
+                  - generic [ref=e228]: shooting_star_reversal
+                - generic "看涨规则：早晨之星" [ref=e229]:
+                  - generic [ref=e230]: 早晨之星
+                  - generic [ref=e231]: morning_star
+                - generic "看跌规则：黄昏之星" [ref=e232]:
+                  - generic [ref=e233]: 黄昏之星
+                  - generic [ref=e234]: evening_star
+                - generic "看涨规则：曙光初现" [ref=e235]:
+                  - generic [ref=e236]: 曙光初现
+                  - generic [ref=e237]: piercing_line
+                - generic "看跌规则：乌云盖顶" [ref=e238]:
+                  - generic [ref=e239]: 乌云盖顶
+                  - generic [ref=e240]: dark_cloud_cover
+                - generic "看涨规则：红三兵" [ref=e241]:
+                  - generic [ref=e242]: 红三兵
+                  - generic [ref=e243]: three_white_soldiers
+                - generic "看跌规则：三只乌鸦" [ref=e244]:
+                  - generic [ref=e245]: 三只乌鸦
+                  - generic [ref=e246]: three_black_crows
+                - generic "中性规则：十字星" [ref=e247]:
+                  - generic [ref=e248]: 十字星
+                  - generic [ref=e249]: doji_indecision
+                - generic "看涨规则：看涨光头光脚" [ref=e250]:
+                  - generic [ref=e251]: 看涨光头光脚
+                  - generic [ref=e252]: bullish_marubozu
+                - generic "看跌规则：看跌光头光脚" [ref=e253]:
+                  - generic [ref=e254]: 看跌光头光脚
+                  - generic [ref=e255]: bearish_marubozu
+                - generic "看涨规则：均线金叉" [ref=e256]:
+                  - generic [ref=e257]: 均线金叉
+                  - generic [ref=e258]: sma_golden_cross
+                - generic "看跌规则：均线死叉" [ref=e259]:
+                  - generic [ref=e260]: 均线死叉
+                  - generic [ref=e261]: sma_death_cross
+                - generic "看涨规则：EMA金叉" [ref=e262]:
+                  - generic [ref=e263]: EMA金叉
+                  - generic [ref=e264]: ema_golden_cross
+                - generic "看跌规则：EMA死叉" [ref=e265]:
+                  - generic [ref=e266]: EMA死叉
+                  - generic [ref=e267]: ema_death_cross
+                - generic "看涨规则：MACD金叉" [ref=e268]:
+                  - generic [ref=e269]: MACD金叉
+                  - generic [ref=e270]: macd_bullish_cross
+                - generic "看跌规则：MACD死叉" [ref=e271]:
+                  - generic [ref=e272]: MACD死叉
+                  - generic [ref=e273]: macd_bearish_cross
+                - generic "看涨规则：布林下轨反弹" [ref=e274]:
+                  - generic [ref=e275]: 布林下轨反弹
+                  - generic [ref=e276]: bollinger_lower_rebound
+                - generic "看跌规则：布林上轨回落" [ref=e277]:
+                  - generic [ref=e278]: 布林上轨回落
+                  - generic [ref=e279]: bollinger_upper_rejection
+                - generic "看涨规则：成交量加权均价上穿" [ref=e280]:
+                  - generic [ref=e281]: 成交量加权均价上穿
+                  - generic [ref=e282]: vwap_bullish_reclaim
+                - generic "看跌规则：成交量加权均价下破" [ref=e283]:
+                  - generic [ref=e284]: 成交量加权均价下破
+                  - generic [ref=e285]: vwap_bearish_loss
+                - generic "看涨规则：ATR向上突破" [ref=e286]:
+                  - generic [ref=e287]: ATR向上突破
+                  - generic [ref=e288]: atr_up_breakout
+                - generic "看跌规则：ATR向下跌破" [ref=e289]:
+                  - generic [ref=e290]: ATR向下跌破
+                  - generic [ref=e291]: atr_down_breakdown
+                - generic "看涨规则：KDJ金叉" [ref=e292]:
+                  - generic [ref=e293]: KDJ金叉
+                  - generic [ref=e294]: kdj_bullish_cross
+                - generic "准备反弹规则：低位KDJ金叉" [ref=e295]:
+                  - generic [ref=e296]: 低位KDJ金叉
+                  - generic [ref=e297]: kdj_low_bullish_cross
+                - generic "看跌规则：KDJ死叉" [ref=e298]:
+                  - generic [ref=e299]: KDJ死叉
+                  - generic [ref=e300]: kdj_bearish_cross
+                - generic "看涨规则：RSI超卖回升" [ref=e301]:
+                  - generic [ref=e302]: RSI超卖回升
+                  - generic [ref=e303]: rsi_bullish_rebound
+                - generic "看跌规则：RSI超买回落" [ref=e304]:
+                  - generic [ref=e305]: RSI超买回落
+                  - generic [ref=e306]: rsi_bearish_pullback
+                - generic "看涨规则：放量突破" [ref=e307]:
+                  - generic [ref=e308]: 放量突破
+                  - generic [ref=e309]: volume_price_breakout
+                - generic "看跌规则：放量跌破" [ref=e310]:
+                  - generic [ref=e311]: 放量跌破
+                  - generic [ref=e312]: volume_price_breakdown
+            - generic [ref=e313]:
+              - generic [ref=e314] [cursor=pointer]:
+                - generic [ref=e315]: 🌐 宏观评估
+                - generic [ref=e316]: 5 条
+                - generic [ref=e317]: ▾
+              - generic [ref=e318]:
+                - generic "复用 AI 分析结果，判断公司时事是否与热点板块形成共振" [ref=e319]:
+                  - generic [ref=e320]: 公司时事与热点板块关联
+                  - generic [ref=e321]: company_event_hot_sector_link
+                - generic "复用 AI 分析结果，判断公司时事是否被热点新闻验证" [ref=e322]:
+                  - generic [ref=e323]: 公司时事与热点新闻关联
+                  - generic [ref=e324]: company_event_hot_news_link
+                - generic "基于公司事件、热点板块与新闻证据生成时间感知宏观评分" [ref=e325]:
+                  - generic [ref=e326]: 市场情报宏观评分
+                  - generic [ref=e327]: market_intel_macro_score_link
+                - generic "采集中国宏观（CPI/PMI/M2/LPR）+全球指标（VIX/DXY/美债/恒指/SP500），通过akshare+yfinance拉取结构化宏观因子快照" [ref=e328]:
+                  - generic [ref=e329]: 宏观因子采集与分析
+                  - generic [ref=e330]: macro_factor_analysis
+                - generic "五模块综合评分：宏观(30%)+行业(25%)+企业质量(25%)+估值(10%)+交易(10%)，规则型打分，输出BUY/WATCH/SKIP决策" [ref=e331]:
+                  - generic [ref=e332]: 企业潜力分析
+                  - generic [ref=e333]: enterprise_potential_analysis
+          - generic [ref=e334]:
+            - generic [ref=e335]:
+              - button "+ AND 门" [ref=e336] [cursor=pointer]
+              - button "+ OR 门" [ref=e337] [cursor=pointer]
+              - button "清空画布" [ref=e338] [cursor=pointer]
+              - button "刷新表达式" [ref=e339] [cursor=pointer]
+              - generic [ref=e340]: ✅ 表达式有效
+            - application [ref=e342]:
+              - generic [ref=e344]:
+                - generic:
+                  - generic:
+                    - img
+                  - group [ref=e374]:
+                    - generic [ref=e549]:
+                      - generic [ref=e551]:
+                        - generic [ref=e552]: 技术信号
+                        - generic [ref=e553]: zuoyi_bullish_signal
+                      - strong [ref=e555]: 左一战法-看涨
+              - img
+              - generic "Control Panel" [ref=e382]:
+                - button "Zoom In" [disabled]:
+                  - img
+                - button "Zoom Out" [ref=e383] [cursor=pointer]:
+                  - img [ref=e384]
+                - button "Fit View" [ref=e386] [cursor=pointer]:
+                  - img [ref=e387]
+                - button "Toggle Interactivity" [ref=e389] [cursor=pointer]:
+                  - img [ref=e390]
+              - img "Mini Map" [ref=e393]
+              - link "React Flow attribution" [ref=e399] [cursor=pointer]:
+                - /url: https://reactflow.dev
+                - text: React Flow
+          - generic [ref=e402]: 选中一个节点查看属性
+        - generic [ref=e403]:
+          - generic [ref=e404]: JSON 格式有效
+          - button "保存" [ref=e405] [cursor=pointer]
+          - button "删除" [ref=e406] [cursor=pointer]
+      - generic [ref=e407]:
+        - heading "原子规则" [level=2] [ref=e408]
+        - generic [ref=e409]:
+          - generic [ref=e410]:
+            - generic [ref=e411]: 搜索规则
+            - textbox "搜索规则" [ref=e412]:
+              - /placeholder: 规则名、Key、实现类
+          - generic [ref=e413]:
+            - generic [ref=e414]: 规则类型
+            - combobox "规则类型" [ref=e415]:
+              - option "全部类型" [selected]
+              - option "硬筛选"
+              - option "策略规则"
+          - generic [ref=e416]:
+            - generic [ref=e417]: 方向
+            - combobox "方向" [ref=e418]:
+              - option "全部方向" [selected]
+              - option "看涨"
+              - option "看跌"
+              - option "中性"
+              - option "未标明"
+          - generic [ref=e419]: 共 51 条
+        - generic [ref=e420]:
+          - button "上一页" [disabled] [ref=e421]
+          - generic [ref=e422]: 1 / 5
+          - button "下一页" [ref=e423] [cursor=pointer]
+        - generic [ref=e424]:
+          - generic [ref=e425]:
+            - generic [ref=e426]: 看涨规则
+            - generic [ref=e427]: 12 条
+          - table [ref=e429]:
+            - rowgroup [ref=e430]:
+              - row "规则 Key 规则名 方向 规则类型 strategy_category 实现类 启用状态 排序" [ref=e431]:
+                - columnheader "规则 Key" [ref=e432]
+                - columnheader "规则名" [ref=e433]
+                - columnheader "方向" [ref=e434]
+                - columnheader "规则类型" [ref=e435]
+                - columnheader "strategy_category" [ref=e436]
+                - columnheader "实现类" [ref=e437]
+                - columnheader "启用状态" [ref=e438]
+                - columnheader "排序" [ref=e439]
+            - rowgroup [ref=e440]:
+              - row "zuoyi_bullish_signal 左一战法-看涨 看涨 strategy technical ZuoYiStrategizer 启用 115" [ref=e441] [cursor=pointer]:
+                - cell "zuoyi_bullish_signal" [ref=e442]
+                - cell "左一战法-看涨" [ref=e443]
+                - cell "看涨" [ref=e444]
+                - cell "strategy" [ref=e445]
+                - cell "technical" [ref=e446]
+                - cell "ZuoYiStrategizer" [ref=e447]
+                - cell "启用" [ref=e448]
+                - cell "115" [ref=e449]
+              - row "ema_breakout EMA 突破 看涨 strategy technical EMABreakoutStrategizer 启用 120" [ref=e450] [cursor=pointer]:
+                - cell "ema_breakout" [ref=e451]
+                - cell "EMA 突破" [ref=e452]
+                - cell "看涨" [ref=e453]
+                - cell "strategy" [ref=e454]
+                - cell "technical" [ref=e455]
+                - cell "EMABreakoutStrategizer" [ref=e456]
+                - cell "启用" [ref=e457]
+                - cell "120" [ref=e458]
+              - row "rsi_oversold RSI 超卖 看涨 strategy technical RSIOversoldStrategizer 启用 130" [ref=e459] [cursor=pointer]:
+                - cell "rsi_oversold" [ref=e460]
+                - cell "RSI 超卖" [ref=e461]
+                - cell "看涨" [ref=e462]
+                - cell "strategy" [ref=e463]
+                - cell "technical" [ref=e464]
+                - cell "RSIOversoldStrategizer" [ref=e465]
+                - cell "启用" [ref=e466]
+                - cell "130" [ref=e467]
+              - row "volume_spike_prior3 放量超前三日 看涨 strategy technical TodayVolumeExceedsPrior3MaxStrategizer 启用 150" [ref=e468] [cursor=pointer]:
+                - cell "volume_spike_prior3" [ref=e469]
+                - cell "放量超前三日" [ref=e470]
+                - cell "看涨" [ref=e471]
+                - cell "strategy" [ref=e472]
+                - cell "technical" [ref=e473]
+                - cell "TodayVolumeExceedsPrior3MaxStrategizer" [ref=e474]
+                - cell "启用" [ref=e475]
+                - cell "150" [ref=e476]
+              - row "daily_rise_4_45 当日涨 4%~4.5% 看涨 strategy technical DailyRise4To45Strategizer 启用 170" [ref=e477] [cursor=pointer]:
+                - cell "daily_rise_4_45" [ref=e478]
+                - cell "当日涨 4%~4.5%" [ref=e479]
+                - cell "看涨" [ref=e480]
+                - cell "strategy" [ref=e481]
+                - cell "technical" [ref=e482]
+                - cell "DailyRise4To45Strategizer" [ref=e483]
+                - cell "启用" [ref=e484]
+                - cell "170" [ref=e485]
+              - row "energy_phase_bullish 能量相位看涨 看涨 strategy technical EnergyPhaseClassifier 启用 180" [ref=e486] [cursor=pointer]:
+                - cell "energy_phase_bullish" [ref=e487]
+                - cell "能量相位看涨" [ref=e488]
+                - cell "看涨" [ref=e489]
+                - cell "strategy" [ref=e490]
+                - cell "technical" [ref=e491]
+                - cell "EnergyPhaseClassifier" [ref=e492]
+                - cell "启用" [ref=e493]
+                - cell "180" [ref=e494]
+              - row "bullish_engulfing 看涨吞没 看涨 strategy technical TechnicalPatternStrategizer 启用 300" [ref=e495] [cursor=pointer]:
+                - cell "bullish_engulfing" [ref=e496]
+                - cell "看涨吞没" [ref=e497]
+                - cell "看涨" [ref=e498]
+                - cell "strategy" [ref=e499]
+                - cell "technical" [ref=e500]
+                - cell "TechnicalPatternStrategizer" [ref=e501]
+                - cell "启用" [ref=e502]
+                - cell "300" [ref=e503]
+              - row "hammer_reversal 锤子线反转 看涨 strategy technical TechnicalPatternStrategizer 启用 320" [ref=e504] [cursor=pointer]:
+                - cell "hammer_reversal" [ref=e505]
+                - cell "锤子线反转" [ref=e506]
+                - cell "看涨" [ref=e507]
+                - cell "strategy" [ref=e508]
+                - cell "technical" [ref=e509]
+                - cell "TechnicalPatternStrategizer" [ref=e510]
+                - cell "启用" [ref=e511]
+                - cell "320" [ref=e512]
+              - row "morning_star 早晨之星 看涨 strategy technical TechnicalPatternStrategizer 启用 340" [ref=e513] [cursor=pointer]:
+                - cell "morning_star" [ref=e514]
+                - cell "早晨之星" [ref=e515]
+                - cell "看涨" [ref=e516]
+                - cell "strategy" [ref=e517]
+                - cell "technical" [ref=e518]
+                - cell "TechnicalPatternStrategizer" [ref=e519]
+                - cell "启用" [ref=e520]
+                - cell "340" [ref=e521]
+              - row "piercing_line 曙光初现 看涨 strategy technical TechnicalPatternStrategizer 启用 360" [ref=e522] [cursor=pointer]:
+                - cell "piercing_line" [ref=e523]
+                - cell "曙光初现" [ref=e524]
+                - cell "看涨" [ref=e525]
+                - cell "strategy" [ref=e526]
+                - cell "technical" [ref=e527]
+                - cell "TechnicalPatternStrategizer" [ref=e528]
+                - cell "启用" [ref=e529]
+                - cell "360" [ref=e530]
+              - row "three_white_soldiers 红三兵 看涨 strategy technical TechnicalPatternStrategizer 启用 380" [ref=e531] [cursor=pointer]:
+                - cell "three_white_soldiers" [ref=e532]
+                - cell "红三兵" [ref=e533]
+                - cell "看涨" [ref=e534]
+                - cell "strategy" [ref=e535]
+                - cell "technical" [ref=e536]
+                - cell "TechnicalPatternStrategizer" [ref=e537]
+                - cell "启用" [ref=e538]
+                - cell "380" [ref=e539]
+              - row "bullish_marubozu 看涨光头光脚 看涨 strategy technical TechnicalPatternStrategizer 启用 410" [ref=e540] [cursor=pointer]:
+                - cell "bullish_marubozu" [ref=e541]
+                - cell "看涨光头光脚" [ref=e542]
+                - cell "看涨" [ref=e543]
+                - cell "strategy" [ref=e544]
+                - cell "technical" [ref=e545]
+                - cell "TechnicalPatternStrategizer" [ref=e546]
+                - cell "启用" [ref=e547]
+                - cell "410" [ref=e548]

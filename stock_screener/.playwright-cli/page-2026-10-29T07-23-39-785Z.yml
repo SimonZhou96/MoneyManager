@@ -1,0 +1,123 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - strong [ref=e6]: MoneyManager
+      - generic [ref=e7]: Stock Screener
+    - navigation [ref=e8]:
+      - button "总览" [ref=e9] [cursor=pointer]
+      - button "全市场筛选" [ref=e10] [cursor=pointer]
+      - button "个股筛选器" [ref=e11] [cursor=pointer]
+      - button "规则链" [ref=e12] [cursor=pointer]
+    - generic [ref=e13]: MoneyManager
+  - main [ref=e15]:
+    - generic [ref=e1428]:
+      - generic [ref=e1429]:
+        - heading "个股筛选器" [level=1] [ref=e1430]
+        - paragraph [ref=e1431]: 输入股票名称，一键筛选并查看K线与分析报告
+      - generic [ref=e1432]:
+        - generic [ref=e1433]:
+          - generic [ref=e1434]: 市场
+          - combobox "市场" [ref=e1435]:
+            - option "港股" [selected]
+            - option "美股"
+            - option "A股"
+        - generic [ref=e1436]:
+          - generic [ref=e1437]: 周期
+          - combobox "周期" [ref=e1438]:
+            - option "1d" [selected]
+            - option "1wk"
+            - option "1mo"
+            - option "3mo"
+            - option "1m"
+            - option "3m"
+            - option "5m"
+            - option "15m"
+            - option "30m"
+            - option "60m"
+        - generic [ref=e1439]:
+          - generic [ref=e1440]: 规则链
+          - combobox "规则链" [ref=e1441]:
+            - option "宏观多维 + 均线金叉混合链 (默认)" [selected]
+            - option "左一战法+宏观标签+五模块评分 (默认)"
+            - option "左一战法 + EMA10 进场 (默认)"
+            - option "金叉全满足链 (默认)"
+            - option "左一战法与其他策略默认链 (默认)"
+            - option "统一看涨技术规则Top20 (默认)"
+            - option "宏观因子分析链 (默认)"
+            - option "企业潜力分析链 (默认)"
+            - option "默认链 + 宏观复核"
+            - option "趋势主力缩量观察链"
+        - generic [ref=e1442]:
+          - generic [ref=e1443]:
+            - generic [ref=e1444]: 股票名称
+            - generic [ref=e1445]:
+              - textbox "股票名称 TENCENT HK.00700 Digital Solution Services" [ref=e1448]:
+                - /placeholder: 输入股票名称，如：腾讯 / Apple / 茅台
+                - text: TENCENT
+              - generic [ref=e1455] [cursor=pointer]:
+                - generic [ref=e1456]: TENCENT
+                - generic [ref=e1457]: HK.00700
+                - generic [ref=e1458]: Digital Solution Services
+          - button "筛选中..." [disabled] [ref=e1674]
+      - generic [ref=e1459]:
+        - generic [ref=e1460]:
+          - generic [ref=e1461]: 股票名称
+          - strong [ref=e1462]: TENCENT
+        - generic [ref=e1463]:
+          - generic [ref=e1464]: 股票代码
+          - strong [ref=e1465]:
+            - text: HK.00700
+            - button "📋" [ref=e1466] [cursor=pointer]
+        - generic [ref=e1467]:
+          - generic [ref=e1468]: 市场
+          - strong [ref=e1469]: 港股
+        - generic [ref=e1470]:
+          - generic [ref=e1471]: 板块
+          - strong [ref=e1472]: Digital Solution Services
+        - generic [ref=e1473]:
+          - generic [ref=e1474]: 规则链
+          - strong [ref=e1475]: 宏观多维 + 均线金叉混合链 (macro_plus_golden_cross)
+        - generic [ref=e1476]:
+          - generic [ref=e1477]: 周期
+          - strong [ref=e1478]: 1d
+      - generic [ref=e1479]:
+        - generic [ref=e1480]:
+          - generic [ref=e1481]:
+            - generic [ref=e1482]: TENCENT (HK.00700)
+            - generic [ref=e1483]: 1d
+          - generic [ref=e1484]:
+            - button "MA" [ref=e1485] [cursor=pointer]
+            - button "VOL" [ref=e1486] [cursor=pointer]
+            - button "MACD" [ref=e1487] [cursor=pointer]
+            - button "⛶" [ref=e1488] [cursor=pointer]
+        - generic [ref=e1489]:
+          - generic [ref=e1490]:
+            - generic [ref=e1491]: TENCENT (HK.00700)
+            - generic [ref=e1492]: 1d
+          - generic [ref=e1493]:
+            - generic: 加载更多K线数据...
+            - table [ref=e1501]:
+              - row [ref=e1502]:
+                - cell
+                - cell [ref=e1503]:
+                  - link "Charting by TradingView" [ref=e1507] [cursor=pointer]:
+                    - /url: https://www.tradingview.com/?utm_medium=lwc-link&utm_campaign=lwc-chart&utm_source=127.0.0.1/
+                - cell [ref=e1512]
+              - row [ref=e1516]:
+                - cell
+                - cell [ref=e1517]
+                - cell [ref=e1521]
+      - generic [ref=e1675]:
+        - generic [ref=e1678]: "执行筛选规则: TENCENT (40%)"
+        - generic [ref=e1679]:
+          - generic [ref=e1680]: 初始化
+          - generic [ref=e1681]: 查询股票
+          - generic [ref=e1682]: 获取K线
+          - generic [ref=e1683]: 执行规则
+          - generic [ref=e1684]: 读取结果
+          - generic [ref=e1685]: 保存报告
+      - generic [ref=e1524]:
+        - generic [ref=e1525]:
+          - heading "📋 历史筛选记录" [level=3] [ref=e1526]
+          - button "🔄 刷新" [ref=e1527] [cursor=pointer]
+        - paragraph [ref=e1686]: 暂无历史筛选记录

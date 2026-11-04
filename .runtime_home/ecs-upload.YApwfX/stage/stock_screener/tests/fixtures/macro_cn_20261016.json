@@ -1,0 +1,21 @@
+{
+  "verified_on": "2026-10-16",
+  "akshare_version": "1.19.1",
+  "inflation": {
+    "period": "2026-09",
+    "cpi": {"yoy": 0.9, "mom": 0.2, "previous_yoy": 0.8, "previous_mom": 0.4},
+    "ppi": {"yoy": 5.0, "mom": 1.2, "previous_yoy": 3.8, "previous_mom": 0.4},
+    "official_sources": [
+      "https://www.stats.gov.cn/sj/zxfbhjd/202610/t20261014_1965477.html",
+      "https://www.stats.gov.cn/sj/zxfbhjd/202610/t20261014_1965476.html"
+    ]
+  },
+  "bonds": {
+    "source": "AKShare bond_zh_us_rate / Eastmoney",
+    "rows_in_24_month_window": 496,
+    "date": "2026-10-15",
+    "2y": 1.2579,
+    "10y": 1.6601,
+    "spread_bp": 40.22
+  }
+}

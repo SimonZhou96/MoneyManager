@@ -1,0 +1,47 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - strong [ref=e6]: MoneyManager
+      - generic [ref=e7]: Stock Screener
+    - navigation [ref=e8]:
+      - button "总览" [ref=e9] [cursor=pointer]
+      - button "个股筛选器" [ref=e10] [cursor=pointer]
+      - button "量化实验室" [ref=e11] [cursor=pointer]
+      - button "规则链" [ref=e12] [cursor=pointer]
+      - button "产业拓扑" [ref=e13] [cursor=pointer]
+    - generic [ref=e15]: MoneyManager
+  - main [ref=e16]:
+    - generic [ref=e37]:
+      - generic [ref=e38]:
+        - textbox "输入股票代码或名称" [ref=e40]: Apple (US.AAPL)
+        - generic [ref=e41]:
+          - text: 深度
+          - combobox "深度" [ref=e42]:
+            - option "1度" [selected]
+            - option "2度"
+            - option "3度"
+            - option "4度"
+            - option "5度"
+        - button "开始拓扑" [active] [ref=e43] [cursor=pointer]
+        - button "刷新关系" [ref=e44] [cursor=pointer]
+        - generic [ref=e57]: 关系 生成中 | LLM调用 0 | 缓存 0 | stale 1 | 后台已启动
+      - generic [ref=e58]:
+        - textbox "搜索公司 / 代码 / 板块" [ref=e59]
+        - generic "关系类型过滤" [ref=e60]:
+          - button "上游" [ref=e61] [cursor=pointer]
+          - button "下游" [ref=e62] [cursor=pointer]
+          - button "同业" [ref=e63] [cursor=pointer]
+        - generic [ref=e64]:
+          - checkbox "只看重点" [ref=e65]
+          - text: 只看重点
+        - generic [ref=e66]:
+          - checkbox "显示边标签" [ref=e67]
+          - text: 显示边标签
+        - generic [ref=e68]: 显示 1/1 节点 · 0/0 关系
+      - generic [ref=e69]:
+        - generic [ref=e70]:
+          - generic [ref=e71]: 上游
+          - generic [ref=e72]: 下游
+          - generic [ref=e73]: 同业
+          - generic [ref=e74]: 中心
+        - generic [ref=e75]: 滚轮缩放 · 拖拽画布 · 双击节点展开 · 悬浮查看详情

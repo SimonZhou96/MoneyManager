@@ -1,0 +1,244 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - strong [ref=e6]: MoneyManager
+      - generic [ref=e7]: Stock Screener
+    - navigation [ref=e8]:
+      - button "总览" [ref=e9] [cursor=pointer]
+      - button "全市场筛选" [active] [ref=e10] [cursor=pointer]
+      - button "个股筛选器" [ref=e11] [cursor=pointer]
+      - button "规则链" [ref=e12] [cursor=pointer]
+    - generic [ref=e13]: MoneyManager
+  - main [ref=e15]:
+    - generic [ref=e36]:
+      - generic [ref=e37]:
+        - heading "全市场筛选" [level=1] [ref=e38]
+        - paragraph [ref=e39]: 创建异步筛选任务并查看逐股票处理进度
+      - generic [ref=e40]:
+        - heading "新增全市场筛选任务" [level=2] [ref=e41]
+        - generic [ref=e42]:
+          - generic [ref=e43]:
+            - generic [ref=e44]: 市场
+            - generic [ref=e45]:
+              - generic [ref=e46] [cursor=pointer]:
+                - checkbox "市场 港股 美股 A股" [checked] [ref=e47]
+                - text: 港股
+              - generic [ref=e48] [cursor=pointer]:
+                - checkbox "美股" [checked] [ref=e49]
+                - text: 美股
+              - generic [ref=e50] [cursor=pointer]:
+                - checkbox "A股" [checked] [ref=e51]
+                - text: A股
+          - generic [ref=e52]:
+            - generic [ref=e53]: 周期
+            - combobox "周期" [ref=e54]:
+              - option "1d" [selected]
+              - option "1wk"
+              - option "1mo"
+              - option "3mo"
+              - option "1m"
+              - option "3m"
+              - option "5m"
+              - option "15m"
+              - option "30m"
+              - option "60m"
+          - generic [ref=e55]:
+            - generic [ref=e56]: 股票池
+            - generic [ref=e57]:
+              - generic [ref=e58] [cursor=pointer]:
+                - checkbox "股票池 优选池 核心指数 行业前五 两年新股 全部ETF" [checked] [ref=e59]
+                - text: 优选池
+              - generic [ref=e60] [cursor=pointer]:
+                - checkbox "核心指数" [ref=e61]
+                - text: 核心指数
+              - generic [ref=e62] [cursor=pointer]:
+                - checkbox "行业前五" [ref=e63]
+                - text: 行业前五
+              - generic [ref=e64] [cursor=pointer]:
+                - checkbox "两年新股" [ref=e65]
+                - text: 两年新股
+              - generic [ref=e66] [cursor=pointer]:
+                - checkbox "全部ETF" [ref=e67]
+                - text: 全部ETF
+          - button "创建筛选任务" [ref=e69] [cursor=pointer]
+      - generic [ref=e70]:
+        - heading "当前任务" [level=2] [ref=e71]
+        - button "刷新" [ref=e73] [cursor=pointer]
+        - table [ref=e79]:
+          - rowgroup [ref=e80]:
+            - row [ref=e81]:
+              - columnheader "任务组 ID" [ref=e82]
+              - columnheader "市场" [ref=e83]
+              - columnheader "周期" [ref=e84]
+              - columnheader "规则链" [ref=e85]
+              - columnheader "状态" [ref=e86]
+              - columnheader "创建时间" [ref=e87]
+          - rowgroup [ref=e88]:
+            - row [ref=e89] [cursor=pointer]:
+              - cell "13fc0241-e9ae-4e58-85a3-c7c701b52a30" [ref=e90]
+              - cell "HK" [ref=e91]
+              - cell "1d" [ref=e92]
+              - cell "宏观多维 + 均线金叉混合链" [ref=e93]
+              - cell "已完成" [ref=e94]
+              - cell "2026-09-09 17:31:04.914075" [ref=e96]
+            - row [ref=e97] [cursor=pointer]:
+              - cell "347c2dc5-41b4-456d-94b9-ea6ad08c96f2" [ref=e98]
+              - cell "HK, US, A" [ref=e99]
+              - cell "1d" [ref=e100]
+              - cell "左一战法与其他策略默认链" [ref=e101]
+              - cell "运行中" [ref=e102]
+              - cell "2026-05-29 15:26:56.560763" [ref=e104]
+            - row [ref=e105] [cursor=pointer]:
+              - cell "7ff340fc-cb28-4e9f-b3e4-8851dbcccc12" [ref=e106]
+              - cell "HK" [ref=e107]
+              - cell "1d" [ref=e108]
+              - cell "默认链 + 宏观复核" [ref=e109]
+              - cell "已完成" [ref=e110]
+              - cell "2026-05-28 11:34:40.212976" [ref=e112]
+            - row [ref=e113] [cursor=pointer]:
+              - cell "01baad49-d0a3-49b8-b79e-69443698616d" [ref=e114]
+              - cell "HK" [ref=e115]
+              - cell "1d" [ref=e116]
+              - cell "默认链 + 宏观复核" [ref=e117]
+              - cell "已完成" [ref=e118]
+              - cell "2026-05-26 21:04:02.375073" [ref=e120]
+            - row [ref=e121] [cursor=pointer]:
+              - cell "e3ec3131-8a8e-49a0-88fb-d1aa3f1bf251" [ref=e122]
+              - cell "US" [ref=e123]
+              - cell "1d" [ref=e124]
+              - cell "左一战法与其他策略默认链" [ref=e125]
+              - cell "已完成" [ref=e126]
+              - cell "2026-05-26 21:00:10.817230" [ref=e128]
+            - row [ref=e129] [cursor=pointer]:
+              - cell "5dc8165a-30f7-4a3e-b6cd-8a8ba37e0d30" [ref=e130]
+              - cell "HK" [ref=e131]
+              - cell "1d" [ref=e132]
+              - cell "默认链 + 宏观复核" [ref=e133]
+              - cell "已完成" [ref=e134]
+              - cell "2026-05-26 20:53:49.928678" [ref=e136]
+            - row [ref=e137] [cursor=pointer]:
+              - cell "cfac8c51-c284-4102-aa39-65b9dee9c09d" [ref=e138]
+              - cell "US" [ref=e139]
+              - cell "1d" [ref=e140]
+              - cell "左一战法与其他策略默认链" [ref=e141]
+              - cell "已完成" [ref=e142]
+              - cell "2026-05-26 20:52:05.710673" [ref=e144]
+            - row [ref=e145] [cursor=pointer]:
+              - cell "d13c34a5-5c47-4bf5-a239-3c5471249519" [ref=e146]
+              - cell "US" [ref=e147]
+              - cell "1d" [ref=e148]
+              - cell "左一战法与其他策略默认链" [ref=e149]
+              - cell "已完成" [ref=e150]
+              - cell "2026-05-26 20:44:24.910175" [ref=e152]
+            - row [ref=e153] [cursor=pointer]:
+              - cell "45bd60b9-7997-4db8-929d-da0f33d47500" [ref=e154]
+              - cell "HK" [ref=e155]
+              - cell "1d" [ref=e156]
+              - cell "默认链 + 宏观复核" [ref=e157]
+              - cell "已完成" [ref=e158]
+              - cell "2026-05-26 20:39:01.172885" [ref=e160]
+            - row [ref=e161] [cursor=pointer]:
+              - cell "062aa31b-6a4a-4560-8334-1081e083d0c8" [ref=e162]
+              - cell "US" [ref=e163]
+              - cell "1d" [ref=e164]
+              - cell "左一战法与其他策略默认链" [ref=e165]
+              - cell "已完成" [ref=e166]
+              - cell "2026-05-26 20:31:56.370697" [ref=e168]
+            - row [ref=e169] [cursor=pointer]:
+              - cell "d4589bac-6753-47b9-87b3-acc093a59085" [ref=e170]
+              - cell "HK" [ref=e171]
+              - cell "1d" [ref=e172]
+              - cell "默认链 + 宏观复核" [ref=e173]
+              - cell "已完成" [ref=e174]
+              - cell "2026-05-26 20:19:00.131540" [ref=e176]
+            - row [ref=e177] [cursor=pointer]:
+              - cell "cef03168-feb3-4f8d-9dc4-0b5433977cbd" [ref=e178]
+              - cell "HK" [ref=e179]
+              - cell "1d" [ref=e180]
+              - cell "默认链 + 宏观复核" [ref=e181]
+              - cell "已完成" [ref=e182]
+              - cell "2026-05-26 19:58:16.890521" [ref=e184]
+            - row [ref=e185] [cursor=pointer]:
+              - cell "9f1f8111-7752-468d-ab84-36c49854c5e1" [ref=e186]
+              - cell "US" [ref=e187]
+              - cell "1d" [ref=e188]
+              - cell "默认链 + 宏观复核" [ref=e189]
+              - cell "已完成" [ref=e190]
+              - cell "2026-05-26 19:08:29.579125" [ref=e192]
+            - row [ref=e193] [cursor=pointer]:
+              - cell "d6744dd6-ec24-4157-b1fb-3d3f1eff6e98" [ref=e194]
+              - cell "US" [ref=e195]
+              - cell "1d" [ref=e196]
+              - cell "左一战法与其他策略默认链" [ref=e197]
+              - cell "已完成" [ref=e198]
+              - cell "2026-05-26 18:45:48.720622" [ref=e200]
+            - row [ref=e201] [cursor=pointer]:
+              - cell "ebeab2da-bc39-4a12-b8df-41974f975507" [ref=e202]
+              - cell "US" [ref=e203]
+              - cell "1d" [ref=e204]
+              - cell "左一战法与其他策略默认链" [ref=e205]
+              - cell "已完成" [ref=e206]
+              - cell "2026-05-26 18:44:02.912005" [ref=e208]
+            - row [ref=e209] [cursor=pointer]:
+              - cell "0b7b4797-251a-4c22-b12a-f68bb12132c1" [ref=e210]
+              - cell "US" [ref=e211]
+              - cell "1d" [ref=e212]
+              - cell "左一战法与其他策略默认链" [ref=e213]
+              - cell "已完成" [ref=e214]
+              - cell "2026-05-26 18:41:26.468073" [ref=e216]
+            - row [ref=e217] [cursor=pointer]:
+              - cell "336c5673-aa31-4b16-b1df-f2421bfc68d8" [ref=e218]
+              - cell "US" [ref=e219]
+              - cell "1d" [ref=e220]
+              - cell "左一战法与其他策略默认链" [ref=e221]
+              - cell "已完成" [ref=e222]
+              - cell "2026-05-26 18:27:28.959345" [ref=e224]
+            - row [ref=e225] [cursor=pointer]:
+              - cell "8df806a7-8d4a-43d8-a191-a365d70aea84" [ref=e226]
+              - cell "HK" [ref=e227]
+              - cell "1d" [ref=e228]
+              - cell "左一战法与其他策略默认链" [ref=e229]
+              - cell "已完成" [ref=e230]
+              - cell "2026-05-26 11:35:22.188976" [ref=e232]
+            - row [ref=e233] [cursor=pointer]:
+              - cell "4f91c392-e2af-49b2-8f17-44edb2cb6cce" [ref=e234]
+              - cell "HK" [ref=e235]
+              - cell "1d" [ref=e236]
+              - cell "左一战法与其他策略默认链" [ref=e237]
+              - cell "已完成" [ref=e238]
+              - cell "2026-05-25 21:37:57.875426" [ref=e240]
+            - row [ref=e241] [cursor=pointer]:
+              - cell "efdd3dd7-851e-4b3a-b72e-25eea18bff2b" [ref=e242]
+              - cell "HK" [ref=e243]
+              - cell "1d" [ref=e244]
+              - cell "左一战法与其他策略默认链" [ref=e245]
+              - cell "已完成" [ref=e246]
+              - cell "2026-05-25 18:07:50.024605" [ref=e248]
+            - row [ref=e249] [cursor=pointer]:
+              - cell "e9dcd0b1-6fd1-4721-87fb-2fcd646669a4" [ref=e250]
+              - cell "HK" [ref=e251]
+              - cell "1d" [ref=e252]
+              - cell "左一战法与其他策略默认链" [ref=e253]
+              - cell "已完成" [ref=e254]
+              - cell "2026-05-25 17:13:00.352508" [ref=e256]
+            - row [ref=e257] [cursor=pointer]:
+              - cell "44c4c459-a3bf-4dac-bad4-0fde83a14cd9" [ref=e258]
+              - cell "US" [ref=e259]
+              - cell "1d" [ref=e260]
+              - cell "左一战法与其他策略默认链" [ref=e261]
+              - cell "已完成" [ref=e262]
+              - cell "2026-05-15 14:17:09.474656" [ref=e264]
+            - row [ref=e265] [cursor=pointer]:
+              - cell "49a6262d-1746-4f99-bfe2-3151c02e6430" [ref=e266]
+              - cell "A" [ref=e267]
+              - cell "1d" [ref=e268]
+              - cell "左一战法与其他策略默认链" [ref=e269]
+              - cell "已完成" [ref=e270]
+              - cell "2026-05-15 14:17:09.465417" [ref=e272]
+            - row [ref=e273] [cursor=pointer]:
+              - cell "2fbab044-ca34-470a-8afa-cec861ef2b15" [ref=e274]
+              - cell "HK" [ref=e275]
+              - cell "1d" [ref=e276]
+              - cell "左一战法与其他策略默认链" [ref=e277]
+              - cell "已完成" [ref=e278]
+              - cell "2026-05-15 14:17:09.455234" [ref=e280]

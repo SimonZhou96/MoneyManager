@@ -1,0 +1,32 @@
+[     117ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ http://localhost:5173/node_modules/.vite/deps/chunk-5LUJUZZY.js?v=c1f7f236:21550
+[     180ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:5173/favicon.ico:0
+[  156099ms] TypeError: Cannot read properties of undefined (reading 'getZoom')
+    at _Graph.getZoom (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=c1f7f236:63898:34)
+    at _Graph.<anonymous> (http://localhost:5173/src/features/industryTopology/TopologyCanvas.tsx?t=1782286811899:420:30)
+    at doEmit (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=c1f7f236:12819:20)
+    at EventEmitter3.emit (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=c1f7f236:12822:7)
+    at emit (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=c1f7f236:60199:11)
+    at ViewportController.<anonymous> (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=c1f7f236:62654:9)
+    at Generator.next (<anonymous>)
+    at http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=c1f7f236:62502:67
+    at new Promise (<anonymous>)
+    at __awaiter26 (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=c1f7f236:62484:10)
+[  340763ms] [LOG] [vite] server connection lost. Polling for restart... @ http://localhost:5173/@vite/client:559
+[  341340ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ http://localhost:5173/node_modules/.vite/deps/chunk-5LUJUZZY.js?v=c1f7f236:21550
+[  341394ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://localhost:5173/api/rules?market=HK&timeframe=1d:0
+[  343215ms] [LOG] [vite] server connection lost. Polling for restart... @ http://localhost:5173/@vite/client:559
+[  343218ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:5173/:0
+[  344222ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:5173/:0
+[  345224ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:5173/:0
+[  346948ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ http://localhost:5173/node_modules/.vite/deps/chunk-5LUJUZZY.js?v=c1f7f236:21550
+[  354893ms] TypeError: Cannot read properties of undefined (reading 'getZoom')
+    at _Graph.getZoom (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=c1f7f236:63898:34)
+    at _Graph.<anonymous> (http://localhost:5173/src/features/industryTopology/TopologyCanvas.tsx:420:30)
+    at doEmit (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=c1f7f236:12819:20)
+    at EventEmitter3.emit (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=c1f7f236:12822:7)
+    at emit (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=c1f7f236:60199:11)
+    at ViewportController.<anonymous> (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=c1f7f236:62654:9)
+    at Generator.next (<anonymous>)
+    at http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=c1f7f236:62502:67
+    at new Promise (<anonymous>)
+    at __awaiter26 (http://localhost:5173/node_modules/.vite/deps/@antv_g6.js?v=c1f7f236:62484:10)

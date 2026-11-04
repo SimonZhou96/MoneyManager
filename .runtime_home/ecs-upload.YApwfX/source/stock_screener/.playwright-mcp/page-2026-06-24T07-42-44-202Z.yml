@@ -1,0 +1,27 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - strong [ref=e6]: MoneyManager
+      - generic [ref=e7]: Stock Screener
+    - navigation [ref=e8]:
+      - button "总览" [ref=e9] [cursor=pointer]
+      - button "个股筛选器" [ref=e10] [cursor=pointer]
+      - button "量化实验室" [ref=e11] [cursor=pointer]
+      - button "规则链" [ref=e12] [cursor=pointer]
+      - button "产业拓扑" [active] [ref=e13] [cursor=pointer]
+    - generic [ref=e15]: MoneyManager
+  - main [ref=e16]:
+    - generic [ref=e37]:
+      - generic [ref=e38]:
+        - textbox "输入股票代码或名称" [ref=e40]
+        - generic [ref=e41]:
+          - text: 深度
+          - combobox "深度" [ref=e42]:
+            - option "1度"
+            - option "2度"
+            - option "3度" [selected]
+            - option "4度"
+            - option "5度"
+        - button "开始拓扑" [disabled] [ref=e43] [cursor=pointer]
+        - button "刷新关系" [disabled] [ref=e44] [cursor=pointer]
+      - generic [ref=e45]: 选择股票后点击"开始拓扑"
