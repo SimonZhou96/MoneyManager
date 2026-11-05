@@ -4,7 +4,7 @@
 MySQL 存储层
 
 设计要点：
-- stocks：股票主数据，(market, code) 唯一约束
+- stock_pools：股票资料与池成员关系；股票查询按 (market, code) 聚合
 - ema_breakout_signals_{timeframe}：按 timeframe 分表，每张表只存一种周期的信号
 - screening_results：筛选结果
 """
@@ -34,6 +34,23 @@ try:
 except Exception as e:  # pragma: no cover
     pymysql = None
     _PYMYSQL_IMPORT_ERROR = e
+
+
+# Extra catalog metadata retained in the single physical stock table.
+STOCK_POOL_CATALOG_COLUMNS = {
+    "exchange": "VARCHAR(32) NULL", "currency": "VARCHAR(16) NULL",
+    "lot_size": "INT NULL", "status": "VARCHAR(16) NULL",
+    "delisting_date": "DATE NULL", "sector": "VARCHAR(128) NULL",
+    "sector_code": "VARCHAR(64) NULL", "industry": "VARCHAR(128) NULL",
+    "pb_ratio": "DECIMAL(20,6) NULL", "source": "VARCHAR(32) NULL",
+    "name_zh": "VARCHAR(255) NULL", "name_en": "VARCHAR(255) NULL",
+    "instrument_type": "VARCHAR(16) NULL", "catalog_seen_at": "DATETIME(6) NULL",
+}
+STOCK_CATALOG_FIELDS = (
+    "name", "exchange", "currency", "lot_size", "status", "listing_date",
+    "delisting_date", "sector", "sector_code", "industry", "industry_code",
+    "market_cap", "pe_ratio", "pb_ratio", "source",
+)
 
 
 MYSQL_RETRYABLE_ERROR_CODES = {1205, 1213}
@@ -688,42 +705,9 @@ class MarketDatabase:
     # ------------------------------------------------------------------
 
     def init_schema(self, timeframe: str = "1d"):
-        """初始化表结构（stocks + ema_breakout_signals_{timeframe} + screening_results）"""
+        """初始化股票池资料、信号和筛选结果表。"""
+        self.init_stock_pool_schema()
         with self.conn.cursor() as cursor:
-            # stocks 表
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS stocks (
-                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    market VARCHAR(8) NOT NULL,
-                    code VARCHAR(32) NOT NULL,
-                    name VARCHAR(255) NULL,
-                    exchange VARCHAR(32) NULL,
-                    currency VARCHAR(16) NULL,
-                    lot_size INT NULL,
-                    status VARCHAR(16) NULL,
-                    listing_date DATE NULL,
-                    delisting_date DATE NULL,
-                    sector VARCHAR(128) NULL COMMENT '板块名称',
-                    sector_code VARCHAR(64) NULL COMMENT '板块代码',
-                    industry VARCHAR(128) NULL COMMENT '行业名称',
-                    industry_code VARCHAR(64) NULL COMMENT '行业代码',
-                    market_cap DECIMAL(28,2) NULL COMMENT '市值',
-                    pe_ratio DECIMAL(20,6) NULL COMMENT '市盈率',
-                    pb_ratio DECIMAL(20,6) NULL COMMENT '市净率',
-                    source VARCHAR(32) NULL,
-                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-                    PRIMARY KEY (id),
-                    UNIQUE KEY uk_stocks_market_code (market, code),
-                    KEY idx_stocks_market (market),
-                    KEY idx_stocks_code (code),
-                    KEY idx_stocks_sector (sector),
-                    KEY idx_stocks_industry (industry)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-                """
-            )
-
             # 按 timeframe 创建 EMA 信号表
             self._ensure_ema_table(timeframe)
 
@@ -1286,196 +1270,142 @@ class MarketDatabase:
             )
 
     # ------------------------------------------------------------------
-    # stocks
+    # Stock catalog (stored only in stock_pools)
     # ------------------------------------------------------------------
 
     def stock_count(self, market: str) -> int:
         with self.conn.cursor() as cursor:
-            cursor.execute("SELECT COUNT(1) FROM stocks WHERE market=%s", (market,))
+            cursor.execute("SELECT COUNT(DISTINCT code) FROM stock_pools WHERE market=%s", (market,))
             row = cursor.fetchone()
             return int(row[0]) if row else 0
 
     def upsert_stocks(self, market: str, stocks: Iterable[dict], source: Optional[str] = None):
+        """Update shared data in every membership; use catalog only for an unpooled code.
+
+        catalog is a storage bucket, never an automatic screening pool. Keep this
+        API so existing data providers/enrichment callers need no table knowledge.
+        Missing values preserve the existing data and pool-specific fields.
+        """
+        from worker.names import choose_names, is_chinese
+        columns = STOCK_CATALOG_FIELDS + ("name_zh", "name_en")
         rows = []
         for item in stocks:
-            rows.append(
-                (
-                    market,
-                    str(item.get("code") or "").strip(),
-                    item.get("name"),
-                    item.get("exchange"),
-                    item.get("currency"),
-                    item.get("lot_size"),
-                    item.get("status"),
-                    item.get("listing_date"),
-                    item.get("delisting_date"),
-                    item.get("sector"),
-                    item.get("sector_code"),
-                    item.get("industry"),
-                    item.get("industry_code"),
-                    item.get("market_cap"),
-                    item.get("pe_ratio"),
-                    item.get("pb_ratio"),
-                    source or item.get("source"),
-                )
-            )
-        rows = [r for r in rows if r[1]]
-        if not rows:
-            return
-
-        sql = """
-            INSERT INTO stocks
-                (market, code, name, exchange, currency, lot_size, status,
-                 listing_date, delisting_date,
-                 sector, sector_code, industry, industry_code,
-                 market_cap, pe_ratio, pb_ratio, source)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON DUPLICATE KEY UPDATE
-                name=VALUES(name),
-                exchange=VALUES(exchange),
-                currency=VALUES(currency),
-                lot_size=VALUES(lot_size),
-                status=VALUES(status),
-                listing_date=VALUES(listing_date),
-                delisting_date=VALUES(delisting_date),
-                sector=COALESCE(VALUES(sector), sector),
-                sector_code=COALESCE(VALUES(sector_code), sector_code),
-                industry=COALESCE(VALUES(industry), industry),
-                industry_code=COALESCE(VALUES(industry_code), industry_code),
-                market_cap=COALESCE(VALUES(market_cap), market_cap),
-                pe_ratio=COALESCE(VALUES(pe_ratio), pe_ratio),
-                pb_ratio=COALESCE(VALUES(pb_ratio), pb_ratio),
-                source=VALUES(source)
-        """
-        def operation():
-            with self.conn.cursor() as cursor:
-                cursor.executemany(sql, rows)
-
-        self._execute_with_retry(operation, label="upsert_stocks")
-
-    def get_stocks(self, market: str, include_fundamentals: bool = False) -> List[dict]:
-        with self.conn.cursor() as cursor:
-            if include_fundamentals:
-                cursor.execute(
-                    """SELECT code, name, sector, sector_code, industry, industry_code,
-                              market_cap, pe_ratio, pb_ratio
-                       FROM stocks WHERE market=%s ORDER BY code""",
-                    (market,),
-                )
-                rows = cursor.fetchall() or []
-                return [
-                    {
-                        "code": r[0], "name": r[1],
-                        "sector": r[2], "sector_code": r[3],
-                        "industry": r[4], "industry_code": r[5],
-                        "market_cap": float(r[6]) if r[6] else None,
-                        "pe_ratio": float(r[7]) if r[7] else None,
-                        "pb_ratio": float(r[8]) if r[8] else None,
-                    }
-                    for r in rows
-                ]
-            else:
-                cursor.execute(
-                    "SELECT code, name, sector, industry FROM stocks WHERE market=%s ORDER BY code",
-                    (market,),
-                )
-                rows = cursor.fetchall() or []
-                return [{"code": r[0], "name": r[1], "sector": r[2], "industry": r[3]} for r in rows]
-
-    def get_stocks_by_codes(self, market: str, codes: List[str], include_fundamentals: bool = True) -> List[dict]:
-        """按 code 列表查询股票，用于自选股补全基本面"""
-        if not codes:
-            return []
-        codes = [str(c).strip() for c in codes if str(c).strip()]
-        if not codes:
-            return []
-        placeholders = ",".join(["%s"] * len(codes))
-        with self.conn.cursor() as cursor:
-            if include_fundamentals:
-                cursor.execute(
-                    f"""SELECT code, name, sector, sector_code, industry, industry_code,
-                               market_cap, pe_ratio, pb_ratio
-                        FROM stocks WHERE market=%s AND code IN ({placeholders})""",
-                    [market] + codes,
-                )
-            else:
-                cursor.execute(
-                    f"SELECT code, name, sector, industry FROM stocks WHERE market=%s AND code IN ({placeholders})",
-                    [market] + codes,
-                )
-            rows = cursor.fetchall() or []
-            if include_fundamentals:
-                return [
-                    {"code": r[0], "name": r[1], "sector": r[2], "sector_code": r[3],
-                     "industry": r[4], "industry_code": r[5],
-                     "market_cap": float(r[6]) if r[6] else None,
-                     "pe_ratio": float(r[7]) if r[7] else None,
-                     "pb_ratio": float(r[8]) if r[8] else None}
-                    for r in rows
-                ]
-            return [{"code": r[0], "name": r[1], "sector": r[2], "industry": r[3]} for r in rows]
-
-    def search_stocks_by_name(self, market: str, keyword: str, limit: int = 10) -> List[dict]:
-        """模糊搜索股票名称，支持中英文。按匹配精度 + 市值降序排列。"""
-        pattern = f"%{keyword}%"
-        prefix = f"{keyword}%"
-        with self.conn.cursor() as cursor:
-            cursor.execute(
-                """SELECT DISTINCT code, name, sector, industry, market_cap
-                   FROM stocks
-                   WHERE market = %s
-                     AND (name LIKE %s OR code LIKE %s)
-                   ORDER BY
-                     CASE WHEN name = %s THEN 0
-                          WHEN name LIKE %s THEN 1
-                          ELSE 2
-                     END,
-                     market_cap DESC
-                   LIMIT %s""",
-                (market, pattern, pattern, keyword, prefix, int(limit)),
-            )
-            rows = cursor.fetchall() or []
-            return [
-                {
-                    "code": r[0],
-                    "name": r[1] or "",
-                    "sector": r[2] or "",
-                    "industry": r[3] or "",
-                    "market_cap": float(r[4]) if r[4] else None,
-                }
-                for r in rows
-            ]
-
-    def update_stock_sector(self, market, code, sector=None, sector_code=None, industry=None, industry_code=None):
-        sql = """UPDATE stocks SET
-                    sector=COALESCE(%s,sector), sector_code=COALESCE(%s,sector_code),
-                    industry=COALESCE(%s,industry), industry_code=COALESCE(%s,industry_code)
-                 WHERE market=%s AND code=%s"""
-        with self.conn.cursor() as cursor:
-            cursor.execute(sql, (sector, sector_code, industry, industry_code, market, code))
-
-    def batch_update_stock_sectors(self, market: str, sector_data: Iterable[dict]):
-        rows = []
-        for item in sector_data:
             code = str(item.get("code") or "").strip()
             if not code:
                 continue
-            rows.append((
-                item.get("sector"), item.get("sector_code"),
-                item.get("industry"), item.get("industry_code"),
-                market, code,
-            ))
+            data = dict(item)
+            data["source"] = source or item.get("source")
+            data["industry"] = data.get("industry") or data.get("industry_name")
+            incoming_name = data.get("name")
+            if incoming_name:
+                data.update(choose_names(market, code,
+                    incoming_name if is_chinese(incoming_name) else data.get("name_zh"),
+                    incoming_name if not is_chinese(incoming_name) else data.get("name_en")))
+            values = tuple(data.get(column) if data.get(column) != "" else None for column in columns)
+            rows.append((code, values))
         if not rows:
             return
-        sql = """UPDATE stocks SET
-                    sector=COALESCE(%s,sector), sector_code=COALESCE(%s,sector_code),
-                    industry=COALESCE(%s,industry), industry_code=COALESCE(%s,industry_code)
-                 WHERE market=%s AND code=%s"""
+        names = ", ".join(columns)
+        placeholders = ", ".join(["%s"] * len(columns))
+        insert_sql = f"""
+            INSERT INTO stock_pools (market, pool_type, code, {names})
+            SELECT %s, 'catalog', %s, {placeholders} FROM DUAL
+            WHERE NOT EXISTS (SELECT 1 FROM stock_pools WHERE market=%s AND code=%s)
+            ON DUPLICATE KEY UPDATE code=VALUES(code)
+        """
+        assignments = ", ".join(f"`{column}`=COALESCE(%s, `{column}`)" for column in columns)
+        update_sql = f"""UPDATE stock_pools SET {assignments},
+            industry_name=COALESCE(%s, industry_name),
+            name=CASE WHEN market='US' THEN COALESCE(name_en, name, code)
+                      ELSE COALESCE(name_zh, name_en, name, code) END
+            WHERE market=%s AND code=%s"""
+
         def operation():
             with self.conn.cursor() as cursor:
-                cursor.executemany(sql, rows)
+                cursor.executemany(insert_sql, [(market, code, *values, market, code) for code, values in rows])
+                cursor.executemany(update_sql, [(*values, values[columns.index("industry")], market, code) for code, values in rows])
 
-        self._execute_with_retry(operation, label="batch_update_stock_sectors")
+        self._execute_with_retry(operation, label="upsert_stocks")
+
+    @staticmethod
+    def stock_catalog_sql() -> str:
+        """One row per security; fill metadata gaps across all memberships.
+
+        Aggregation happens before LIMIT or JOIN so duplicate memberships cannot
+        hide search candidates or multiply sector results.
+        """
+        return """SELECT market, code,
+            CASE WHEN market='US'
+                 THEN COALESCE(MAX(NULLIF(name_en, '')), MAX(NULLIF(name, '')), code)
+                 ELSE COALESCE(MAX(NULLIF(name_zh, '')), MAX(NULLIF(name_en, '')), MAX(NULLIF(name, '')), code)
+            END AS name,
+            MAX(NULLIF(name_zh, '')) AS name_zh, MAX(NULLIF(name_en, '')) AS name_en,
+            COALESCE(MAX(NULLIF(sector, '')), MAX(NULLIF(industry_name, ''))) AS sector,
+            MAX(NULLIF(sector_code, '')) AS sector_code,
+            COALESCE(MAX(NULLIF(industry, '')), MAX(NULLIF(industry_name, ''))) AS industry,
+            MAX(NULLIF(industry_code, '')) AS industry_code,
+            MAX(market_cap) AS market_cap, MAX(pe_ratio) AS pe_ratio,
+            MAX(pb_ratio) AS pb_ratio
+            FROM stock_pools GROUP BY market, code"""
+
+    def get_stocks(self, market: str, include_fundamentals: bool = False) -> List[dict]:
+        return self._get_catalog_stocks(market, None, include_fundamentals)
+
+    def get_stocks_by_codes(self, market: str, codes: List[str], include_fundamentals: bool = True) -> List[dict]:
+        codes = [str(code).strip() for code in codes if str(code).strip()]
+        if not codes:
+            return []
+        return self._get_catalog_stocks(market, codes, include_fundamentals)
+
+    def _get_catalog_stocks(self, market: str, codes: Optional[List[str]], include_fundamentals: bool) -> List[dict]:
+        fields = ["code", "name", "sector", "industry"]
+        if include_fundamentals:
+            fields = ["code", "name", "sector", "sector_code", "industry", "industry_code",
+                      "market_cap", "pe_ratio", "pb_ratio"]
+        where = "market=%s"
+        args = [market]
+        if codes is not None:
+            where += " AND code IN (" + ",".join(["%s"] * len(codes)) + ")"
+            args.extend(codes)
+        with self.conn.cursor() as cursor:
+            cursor.execute(f"SELECT {', '.join(fields)} FROM ({self.stock_catalog_sql()}) catalog WHERE {where} ORDER BY code", args)
+            result = [dict(zip(fields, row)) for row in (cursor.fetchall() or [])]
+        for item in result:
+            for field in ("market_cap", "pe_ratio", "pb_ratio"):
+                if field in item and item[field] is not None:
+                    item[field] = float(item[field])
+        return result
+
+    def search_stocks_by_name(self, market: str, keyword: str, limit: int = 10) -> List[dict]:
+        """Search the deduplicated stock-pool catalog by name or code."""
+        from worker.names import simplified
+        keyword = simplified(keyword)
+        pattern, prefix = f"%{keyword}%", f"{keyword}%"
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                f"""SELECT code, name, sector, industry, market_cap
+                    FROM ({self.stock_catalog_sql()}) catalog
+                    WHERE market=%s AND (name LIKE %s OR code LIKE %s OR name_zh LIKE %s OR name_en LIKE %s)
+                    ORDER BY CASE WHEN name=%s THEN 0 WHEN name LIKE %s THEN 1 ELSE 2 END,
+                             market_cap DESC, code
+                    LIMIT %s""",
+                (market, pattern, pattern, pattern, pattern, keyword, prefix, int(limit)),
+            )
+            return [{"code": r[0], "name": r[1] or "", "sector": r[2] or "",
+                     "industry": r[3] or "", "market_cap": float(r[4]) if r[4] is not None else None}
+                    for r in (cursor.fetchall() or [])]
+
+    def get_catalog_instrument_types(self, market: str) -> Dict[str, str]:
+        with self.conn.cursor() as cursor:
+            cursor.execute("SELECT code, instrument_type FROM stock_pools WHERE market=%s AND pool_type='catalog' AND instrument_type IS NOT NULL", (market,))
+            return dict(cursor.fetchall())
+
+    def update_stock_sector(self, market, code, sector=None, sector_code=None, industry=None, industry_code=None):
+        self.batch_update_stock_sectors(market, [{"code": code, "sector": sector,
+            "sector_code": sector_code, "industry": industry, "industry_code": industry_code}])
+
+    def batch_update_stock_sectors(self, market: str, sector_data: Iterable[dict]):
+        self.upsert_stocks(market, sector_data)
 
     # ------------------------------------------------------------------
     # EMA 突破信号（按 timeframe 分表）
@@ -5938,25 +5868,8 @@ class MarketDatabase:
     # ------------------------------------------------------------------
 
     def migrate_add_sector_columns(self):
-        """幂等迁移：为 stocks 表补充板块列（如果旧库缺少）"""
-        alter_statements = [
-            ("stocks", "sector", "ALTER TABLE stocks ADD COLUMN sector VARCHAR(128) NULL AFTER delisting_date"),
-            ("stocks", "sector_code", "ALTER TABLE stocks ADD COLUMN sector_code VARCHAR(64) NULL AFTER sector"),
-            ("stocks", "industry", "ALTER TABLE stocks ADD COLUMN industry VARCHAR(128) NULL AFTER sector_code"),
-            ("stocks", "industry_code", "ALTER TABLE stocks ADD COLUMN industry_code VARCHAR(64) NULL AFTER industry"),
-            ("stocks", "market_cap", "ALTER TABLE stocks ADD COLUMN market_cap DECIMAL(28,2) NULL AFTER industry_code"),
-            ("stocks", "pe_ratio", "ALTER TABLE stocks ADD COLUMN pe_ratio DECIMAL(20,6) NULL AFTER market_cap"),
-            ("stocks", "pb_ratio", "ALTER TABLE stocks ADD COLUMN pb_ratio DECIMAL(20,6) NULL AFTER pe_ratio"),
-        ]
-        with self.conn.cursor() as cursor:
-            for table, column, alter_sql in alter_statements:
-                try:
-                    cursor.execute(f"SELECT `{column}` FROM `{table}` LIMIT 1")
-                except Exception:
-                    try:
-                        cursor.execute(alter_sql)
-                    except Exception:
-                        pass
+        """Compatibility entry point: metadata now belongs to stock_pools."""
+        self.init_stock_pool_schema()
 
     # ------------------------------------------------------------------
     # Stock Pool Tables
@@ -5992,6 +5905,7 @@ class MarketDatabase:
                     PRIMARY KEY (id),
                     UNIQUE KEY uk_pool_market_type_code (market, pool_type, code),
                     KEY idx_pool_market (market),
+                    KEY idx_pool_market_code (market, code),
                     KEY idx_pool_type (pool_type),
                     KEY idx_pool_market_cap (market_cap),
                     KEY idx_pool_listing_date (listing_date),
@@ -6021,6 +5935,14 @@ class MarketDatabase:
                 COMMENT='股票池更新记录'
                 """
             )
+            cursor.execute("SHOW COLUMNS FROM stock_pools")
+            existing = {row[0] for row in cursor.fetchall()}
+            missing = [f"ADD COLUMN `{name}` {definition}" for name, definition in STOCK_POOL_CATALOG_COLUMNS.items() if name not in existing]
+            if missing:
+                cursor.execute("ALTER TABLE stock_pools " + ", ".join(missing))
+            cursor.execute("SHOW INDEX FROM stock_pools")
+            if "idx_pool_market_code" not in {row[2] for row in cursor.fetchall()}:
+                cursor.execute("ALTER TABLE stock_pools ADD KEY idx_pool_market_code (market, code)")
             self.init_stock_index_constituents_schema()
 
     def init_stock_index_constituents_schema(self):
@@ -6063,6 +5985,9 @@ class MarketDatabase:
         if not stocks:
             return
 
+        from worker.names import choose_names, is_chinese
+        previous = {row["code"]: row for row in self.get_stocks_by_codes(
+            market, [str(item.get("code") or "").strip() for item in stocks], include_fundamentals=False)}
         rows = []
         for item in stocks:
             rows.append(
@@ -6070,7 +5995,10 @@ class MarketDatabase:
                     market,
                     pool_type,
                     str(item.get("code") or "").strip(),
-                    item.get("name"),
+                    choose_names(market, str(item.get("code") or "").strip(),
+                        item.get("name") if is_chinese(item.get("name")) else None,
+                        item.get("name") if not is_chinese(item.get("name")) else None,
+                        previous.get(str(item.get("code") or "").strip()))["name"],
                     _mysql_safe_float(item.get("market_cap")),
                     _mysql_safe_float(item.get("price")),
                     _mysql_safe_float(item.get("pe_ratio")),

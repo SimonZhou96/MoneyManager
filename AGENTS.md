@@ -6,6 +6,13 @@
 No previous sessions found.
 </claude-mem-context>
 
+# Skill Usage Preference
+
+- Do not use any `superpowers` skills unless the user explicitly requests them.
+- This preference applies to all tasks in this project, including startup,
+  planning, implementation, debugging, review, and verification. Do not
+  automatically invoke `superpowers` based on task type or skill descriptions.
+
 # Stock Screener Rule Engine
 
 This project uses a database-driven rule engine for `MoneyManager/stock_screener`.
@@ -368,6 +375,22 @@ screening and must never block the original CSV or Feishu delivery path.
   with `MarketDatabase.init_signal_analysis_schema`.
 - `screening_signal_analysis` is keyed by `(task_id, market, code)` and stores
   model output for audit, not for screening decisions.
+
+# Stock Catalog Storage
+
+- `stock_pools` is the single physical table for stock metadata and pool
+  membership. Do not recreate the retired `stocks` table.
+- Keep the existing `MarketDatabase` catalog APIs; they aggregate memberships
+  by `(market, code)` for search, counts, fundamentals, and sector joins.
+- `pool_type='catalog'` stores metadata for a stock outside the screening pools;
+  it must not participate in the default screening universe.
+- See `stock_screener/docs/stock-catalog.md` for migration and rollback steps.
+- Daily directory synchronization lives in `stock_screener/worker/` and runs at
+  00:00 Asia/Shanghai. A/HK names prefer simplified Chinese, then English, then
+  code; US names use English, then code. Preserve aliases and the existing pools.
+- See `stock_screener/docs/daily-stock-catalog.md` for quotas and local service
+  management. Reinstall the LaunchAgent after code/config changes to refresh its
+  runtime snapshot under Application Support. Never put secrets in its plist.
 
 # Stock Sector Enrichment
 

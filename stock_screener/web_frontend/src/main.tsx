@@ -432,7 +432,7 @@ function commonRuleChains(markets: string[], rulesByMarket: Record<string, Rules
     .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.priority - b.priority || a.chain_key.localeCompare(b.chain_key))
 }
 
-function Login({ onLogin }: { onLogin: (user: User) => void }) {
+function Login({ onLogin, notice = '' }: { onLogin: (user: User) => void; notice?: string }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -463,6 +463,7 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
         <h1 id="login-title">登录 MoneyManager</h1>
         <p className="muted">登录后查看筛选任务与 AI 分析报告</p>
       </div>
+      {notice && <p className="muted" role="status">{notice}</p>}
       <label htmlFor="login-username">账号
         <input id="login-username" name="username" autoComplete="username" autoCapitalize="none" spellCheck={false}
           required maxLength={64} value={username} onChange={event => setUsername(event.target.value)} placeholder="请输入分配的账号" />
@@ -483,19 +484,28 @@ function App() {
   const [checking, setChecking] = useState(true)
   const [sessionError, setSessionError] = useState('')
   const [sessionRevision, setSessionRevision] = useState(0)
+  const [loginNotice, setLoginNotice] = useState('')
+  const knownSession = useRef(false)
 
   useEffect(() => {
     let active = true
     let authRequired = false
     const onAuthRequired = () => {
       authRequired = true
-      if (active) setUser(null)
+      if (active) {
+        if (knownSession.current) setLoginNotice('登录已过期，请重新登录后继续选股')
+        knownSession.current = false
+        setUser(null)
+      }
     }
     window.addEventListener('auth-required', onAuthRequired)
     setChecking(true)
     setSessionError('')
     api<User>('/api/auth/me').then(result => {
-      if (active) setUser(result)
+      if (active) {
+        knownSession.current = true
+        setUser(result)
+      }
     }).catch(err => {
       if (active) {
         setUser(null)
@@ -515,8 +525,16 @@ function App() {
     <p className="error" role="alert">{sessionError}</p>
     <button className="primary" onClick={() => setSessionRevision(value => value + 1)}>重试</button>
   </section></main>
-  if (!user) return <Login onLogin={setUser} />
-  return <ScreeningApp user={user} onLogout={() => setUser(null)} />
+  if (!user) return <Login notice={loginNotice} onLogin={result => {
+    knownSession.current = true
+    setLoginNotice('')
+    setUser(result)
+  }} />
+  return <ScreeningApp user={user} onLogout={() => {
+    knownSession.current = false
+    setLoginNotice('')
+    setUser(null)
+  }} />
 }
 
 function ScreeningApp({ user, onLogout }: { user: User; onLogout: () => void }) {

@@ -539,7 +539,7 @@ def startup() -> None:
         db.init_industry_topology_schema()
         db.init_market_intel_schema()
         db.init_stock_terminal_schema()
-        # 初始化核心 schema（stocks/kline 表 + 规则元数据/规则链表）
+        # 初始化核心 schema（股票池/kline 表 + 规则元数据/规则链表）
         db.init_schema("1d")
         username = os.getenv("WEB_BOOTSTRAP_USERNAME", "").strip()
         password = os.getenv("WEB_BOOTSTRAP_PASSWORD", "").strip()

@@ -390,7 +390,7 @@ def run_screening_task(
                     print("✗ 自选股列表无有效股票")
                 db.update_task_status(task_id, "failed")
                 return
-            # 自选股补全基本面（从 stocks 表按 code 查）
+            # 自选股补全基本面（从 stock_pools 按 code 聚合查询）
             try:
                 fund_list = db.get_stocks_by_codes(market, [s["code"] for s in stocks], include_fundamentals=True)
                 fund_by_code = {r["code"]: r for r in fund_list}

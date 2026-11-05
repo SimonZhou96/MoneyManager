@@ -53,6 +53,7 @@ Available commands:
   rules            Start rule-chain editor in the Web UI
   backend          Start backend API service
   frontend         Start frontend web service
+  catalog-worker   Start daily stock/ETF directory sync worker (00:00 Asia/Shanghai)
 EOF
 }
 
@@ -127,6 +128,11 @@ dispatch() {
   fi
 
   case "${command}" in
+    catalog-worker)
+      load_env
+      cd "${STOCK_SCREENER_DIR}"
+      exec "$(resolve_python)" -m worker.stock_catalog --daemon "$@"
+      ;;
     screening|screen|stock-screener)
       exec "${SCRIPTS_DIR}/run_screening.sh" "$@"
       ;;

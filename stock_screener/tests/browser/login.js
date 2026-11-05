@@ -29,6 +29,7 @@ async page => {
     await page.goto('http://127.0.0.1:5189/?page=reports&q=腾讯')
     await page.getByRole('heading', { name: '登录 MoneyManager' }).waitFor()
     if (await page.locator('.sidebar').count() || businessRequests.length) throw new Error('Signed-out users must not mount business pages or request business data')
+    if (await page.getByText('登录已过期，请重新登录后继续选股', { exact: true }).count()) throw new Error('First-time visitors must not see an expiry notice')
     if (await page.getByRole('link', { name: /注册/ }).count()) throw new Error('Registration must not be available')
     await page.screenshot({ path: '.runtime_home/login-desktop.png' })
     await page.setViewportSize({ width: 390, height: 844 })
@@ -59,6 +60,7 @@ async page => {
     await page.getByRole('button', { name: '搜索报告', exact: true }).click()
     await page.getByRole('heading', { name: '登录 MoneyManager' }).waitFor()
     if (await page.locator('.sidebar').count()) throw new Error('Expired sessions must unmount business content')
+    await page.getByText('登录已过期，请重新登录后继续选股', { exact: true }).waitFor()
     return 'PASS: login gate, assigned account, errors, deep link, reload, logout, expiry, service retry and mobile'
   } finally {
     await page.unroute('**/api/**')

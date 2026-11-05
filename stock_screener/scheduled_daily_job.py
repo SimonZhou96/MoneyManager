@@ -264,12 +264,15 @@ def has_merged_pool_stocks(db: MarketDatabase, market: str, pool_types: Optional
 
 
 def get_etf_codes(db: MarketDatabase, market: str) -> set[str]:
-    """获取指定市场 ETF 股票池中的代码集合，用于标注标的类型。"""
-    return {
+    """Directory types take precedence over historical ETF pool membership."""
+    legacy = {
         (s.get("code") or "").strip()
         for s in db.get_stock_pool(market, POOL_TYPE_ALL_ETF, limit=None)
         if (s.get("code") or "").strip()
     }
+    reader = getattr(db, "get_catalog_instrument_types", None)
+    types = reader(market) if reader else {}
+    return (legacy - set(types)) | {code for code, kind in types.items() if kind == "ETF"}
 
 
 def get_market_etf_codes(mysql_config: MySqlConfig, market: str) -> set[str]:

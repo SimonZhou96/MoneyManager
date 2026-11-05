@@ -38,7 +38,7 @@ class StockNameProvider(ABC):
 
 
 class DatabaseStockNameProvider(StockNameProvider):
-    """Resolve names from local `stocks` and `stock_pools` tables."""
+    """Resolve names from the local stock-pool catalog."""
 
     def __init__(self, db: Any):
         self.db = db
@@ -50,7 +50,7 @@ class DatabaseStockNameProvider(StockNameProvider):
 
         if hasattr(self.db, "get_stocks_by_codes"):
             for item in self.db.get_stocks_by_codes(market, query_codes, include_fundamentals=False):
-                _put_candidate(resolved, market, item.get("code"), item.get("name"), "stocks")
+                _put_candidate(resolved, market, item.get("code"), item.get("name"), "stock_pools")
 
         if hasattr(self.db, "get_stock_pool_records_by_codes"):
             for item in self.db.get_stock_pool_records_by_codes(market, query_codes):

@@ -458,10 +458,10 @@ def _query_sector_stocks(
     db: MarketDatabase, market: str, sector_name: str, limit: int
 ) -> List[dict]:
     """查询成分股，并在当前请求中实时读取最近两根日 K。"""
-    sql = """
+    sql = f"""
         SELECT DISTINCT m.code, s.name, s.market_cap
         FROM stock_sector_memberships m
-        LEFT JOIN stocks s
+        LEFT JOIN ({db.stock_catalog_sql()}) s
             ON s.market = m.market AND s.code = m.code
         WHERE m.market = %s AND m.sector_name = %s
         ORDER BY s.market_cap DESC
