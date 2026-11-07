@@ -77,7 +77,7 @@ def evaluate_options(
             market=market,
             code=code,
             risk_profile=risk_profile_from_request(payload),
-            user_id=user.id,
+            user_id=user.user_id,
             max_loss=payload.max_loss,
             capital=payload.capital,
             planned_holding_days=payload.planned_holding_days,
@@ -111,7 +111,7 @@ def evaluate_options_batch(
         repo.save_run(parent_run_id, {
             "run_id": parent_run_id,
             "mode": "batch",
-            "user_id": user.id,
+            "user_id": user.user_id,
             "market": market,
             "code": None,
             "risk_profile": profile.label,
@@ -126,7 +126,7 @@ def evaluate_options_batch(
                 market=market,
                 code=code,
                 risk_profile=profile,
-                user_id=user.id,
+                user_id=user.user_id,
                 max_loss=payload.max_loss,
                 capital=payload.capital,
                 planned_holding_days=payload.planned_holding_days,
@@ -189,7 +189,7 @@ def get_evaluation(
     if not hasattr(repo, "get_option_evaluation_run"):
         raise BusinessError("OPTION_EVALUATION_NOT_FOUND", "期权评估记录不存在")
     run = repo.get_option_evaluation_run(run_id)
-    if not run or run.get("user_id") is None or int(run["user_id"]) != user.id:
+    if not run or run.get("user_id") is None or str(run["user_id"]) != user.user_id:
         raise BusinessError("OPTION_EVALUATION_NOT_FOUND", "期权评估记录不存在")
     if run.get("mode") == "batch":
         items = repo.list_option_evaluation_items(run_id) if hasattr(repo, "list_option_evaluation_items") else []
@@ -205,8 +205,8 @@ def save_order_plan(
     service: OptionLabService = Depends(get_option_service),
 ) -> Dict[str, Any]:
     try:
-        assert_candidate_owner(service.repository, payload.candidate_id, user.id)
-        plan = service.save_order_plan(payload.candidate_id, user_id=user.id)
+        assert_candidate_owner(service.repository, payload.candidate_id, user.user_id)
+        plan = service.save_order_plan(payload.candidate_id, user_id=user.user_id)
     except Exception as exc:
         raise BusinessError("OPTION_ORDER_PLAN_FAILED", f"保存订单建议失败: {exc}") from exc
     return plan_to_response(plan)
@@ -220,7 +220,7 @@ def fill_order_plan(
     service: OptionLabService = Depends(get_option_service),
 ) -> Dict[str, Any]:
     try:
-        assert_plan_owner(service.repository, plan_id, user.id)
+        assert_plan_owner(service.repository, plan_id, user.user_id)
         return service.record_fill(
             plan_id=plan_id,
             filled_price=payload.filled_price,
@@ -239,7 +239,7 @@ def list_positions(
 ) -> Dict[str, Any]:
     repo = service.repository
     if hasattr(repo, "list_option_tracked_positions"):
-        return {"positions": repo.list_option_tracked_positions(user_id=user.id)}
+        return {"positions": repo.list_option_tracked_positions(user_id=user.user_id)}
     return {"positions": list(getattr(repo, "positions", {}).values())}
 
 
@@ -250,7 +250,7 @@ def get_position(
     service: OptionLabService = Depends(get_option_service),
 ) -> Dict[str, Any]:
     position = service.repository.get_position(position_id)
-    if not position or not position_belongs_to_user(position, user.id):
+    if not position or not position_belongs_to_user(position, user.user_id):
         raise BusinessError("OPTION_POSITION_NOT_FOUND", "期权监控持仓不存在")
     events = []
     if hasattr(service.repository, "list_option_monitor_events"):
@@ -268,7 +268,7 @@ def refresh_position(
 ) -> Dict[str, Any]:
     try:
         position = service.repository.get_position(position_id)
-        if not position or not position_belongs_to_user(position, user.id):
+        if not position or not position_belongs_to_user(position, user.user_id):
             raise BusinessError("OPTION_POSITION_NOT_FOUND", "期权监控持仓不存在")
         return {"events": service.refresh_position(position_id)}
     except BusinessError:
@@ -284,7 +284,7 @@ def run_monitor(
 ) -> Dict[str, Any]:
     repo = service.repository
     if hasattr(repo, "list_option_tracked_positions"):
-        positions = repo.list_option_tracked_positions(user_id=user.id, status="active")
+        positions = repo.list_option_tracked_positions(user_id=user.user_id, status="active")
     else:
         positions = list(getattr(repo, "positions", {}).values())
     events = []
@@ -351,29 +351,29 @@ def _display_contract_rows(details: List[dict]) -> List[dict]:
     return rows
 
 
-def assert_candidate_owner(repo, candidate_id: str, user_id: int) -> None:
+def assert_candidate_owner(repo, candidate_id: str, user_id: str) -> None:
     candidate = repo.get_candidate(candidate_id)
     if not candidate:
         raise BusinessError("OPTION_CANDIDATE_NOT_FOUND", "期权策略候选不存在")
     run_id = candidate.get("run_id") if isinstance(candidate, dict) else getattr(candidate, "run_id", None)
     if hasattr(repo, "get_option_evaluation_run") and run_id:
         run = repo.get_option_evaluation_run(run_id)
-        if run and run.get("user_id") is not None and int(run["user_id"]) != user_id:
+        if run and run.get("user_id") is not None and str(run["user_id"]) != user_id:
             raise BusinessError("OPTION_CANDIDATE_NOT_FOUND", "期权策略候选不存在")
 
 
-def assert_plan_owner(repo, plan_id: str, user_id: int) -> None:
+def assert_plan_owner(repo, plan_id: str, user_id: str) -> None:
     plan = repo.get_order_plan(plan_id)
     if not plan:
         raise BusinessError("OPTION_ORDER_PLAN_NOT_FOUND", "订单建议不存在")
     owner = plan.get("user_id") if isinstance(plan, dict) else None
-    if owner is None or int(owner) != user_id:
+    if owner is None or str(owner) != user_id:
         raise BusinessError("OPTION_ORDER_PLAN_NOT_FOUND", "订单建议不存在")
 
 
-def position_belongs_to_user(position: dict, user_id: int) -> bool:
+def position_belongs_to_user(position: dict, user_id: str) -> bool:
     owner = position.get("user_id")
-    return owner is not None and int(owner) == user_id
+    return owner is not None and str(owner) == user_id
 
 
 def model_to_dict(model: BaseModel) -> dict:

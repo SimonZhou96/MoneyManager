@@ -25,7 +25,7 @@ class SingleStockRequest:
     code: str
     timeframe: str
     chain_key: Optional[str] = None
-    user_id: Optional[int] = None
+    user_id: Optional[str] = None
     run_id: Optional[str] = None
 
 

@@ -8,6 +8,7 @@ import { StockTerminalPanel, type StockTerminalRow } from './features/stockTermi
 import { KlineChart } from './features/marketAnalysis/components/KlineChart'
 import { RuleChainEditor } from './features/ruleEditor/RuleChainEditor'
 import { ReportsPage } from './features/reports/ReportsPage'
+import { ProviderSettingsPage } from './features/providerSettings/ProviderSettingsPage'
 import type { ExpressionNode } from './features/ruleEditor/types'
 import {
   TradingBiasCard, ScoreBreakdownCards, FactorSummary,
@@ -20,7 +21,7 @@ import {
 import type { DiagItem } from './features/screeningReport/EnhancedDataDiagnostics'
 import './styles.css'
 
-type User = { id: number; username: string; role: string }
+type User = { user_id: string; username: string; role: string }
 type Task = {
   task_id: string
   market: string
@@ -585,6 +586,7 @@ function ScreeningApp({ user, onLogout }: { user: User; onLogout: () => void }) 
           <button className={page === 'marketScreening' ? 'active' : ''} onClick={() => changePage('marketScreening')}>全市场筛选</button>
           <button className={page === 'codeScreening' ? 'active' : ''} onClick={() => changePage('codeScreening')}>个股筛选器</button>
           <button className={page === 'reports' ? 'active' : ''} onClick={() => changePage('reports')}>报告查询</button>
+          <button className={page === 'providerSettings' ? 'active' : ''} onClick={() => changePage('providerSettings')}>API 配置</button>
           {/* 暂时隐藏，等个股实验室和规则链完善后再开放 */}
           {/* <button className={page === 'options' ? 'active' : ''} onClick={() => setPage('options')}>期权实验室</button> */}
           {/* <button className={page === 'marketAnalysis' ? 'active' : ''} onClick={() => setPage('marketAnalysis')}>大盘分析</button> */}
@@ -603,6 +605,7 @@ function ScreeningApp({ user, onLogout }: { user: User; onLogout: () => void }) 
         {page === 'codeScreening' && <CodeScreening openTask={(taskId) => { setSelectedTaskId(taskId); setPage('task') }} />}
         {page === 'marketScreening' && <MarketScreeningCenter openJob={(jobId) => { setSelectedJobId(jobId); setPage('job') }} />}
         {page === 'reports' && <ReportsPage />}
+        {page === 'providerSettings' && <ProviderSettingsPage />}
         {page === 'options' && <OptionLab />}
         {/* 暂时隐藏，等大盘分析完善后再开放 */}
         {/* {page === 'marketAnalysis' && <MarketAnalysisPage />} */}

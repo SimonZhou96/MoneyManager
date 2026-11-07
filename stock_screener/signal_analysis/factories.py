@@ -8,6 +8,8 @@ from __future__ import annotations
 import os
 from typing import List
 
+from account_provider_config import current_account_user_id, provider_config_value
+
 from .llm_providers import (
     CodexResponsesLLMProvider,
     DeepSeekLLMProvider,
@@ -77,30 +79,30 @@ class SearchProviderFactory:
 
     @staticmethod
     def _tavily_from_env(settings: AnalysisSettings) -> SearchProvider:
-        api_key = os.getenv("TAVILY_API_KEY", "").strip()
+        api_key = (provider_config_value("TAVILY_API_KEY", "") or "").strip()
         if not api_key:
             return NullSearchProvider()
-        endpoint = os.getenv("TAVILY_API_ENDPOINT", "https://api.tavily.com/search").strip()
+        endpoint = (provider_config_value("TAVILY_API_ENDPOINT", "https://api.tavily.com/search") or "").strip()
         timeout = _env_int("SIGNAL_SEARCH_TIMEOUT_SEC", min(30, settings.timeout_sec))
         return TavilySearchProvider(api_key=api_key, endpoint=endpoint, timeout_sec=timeout)
 
     @staticmethod
     def _zhipu_from_env(settings: AnalysisSettings) -> SearchProvider:
         api_key = (
-            os.getenv("ZHIPUAI_API_KEY", "").strip()
-            or os.getenv("ZHIPU_API_KEY", "").strip()
-            or os.getenv("BIGMODEL_API_KEY", "").strip()
+            (provider_config_value("ZHIPUAI_API_KEY", "") or "").strip()
+            or (provider_config_value("ZHIPU_API_KEY", "") or "").strip()
+            or (provider_config_value("BIGMODEL_API_KEY", "") or "").strip()
         )
         if not api_key:
             return NullSearchProvider()
-        endpoint = os.getenv(
+        endpoint = provider_config_value(
             "ZHIPUAI_WEB_SEARCH_ENDPOINT",
             "https://open.bigmodel.cn/api/paas/v4/web_search",
         ).strip()
         timeout = _env_int("SIGNAL_SEARCH_TIMEOUT_SEC", min(30, settings.timeout_sec))
-        search_engine = os.getenv("ZHIPUAI_WEB_SEARCH_ENGINE", "search_std").strip() or "search_std"
-        content_size = os.getenv("ZHIPUAI_WEB_SEARCH_CONTENT_SIZE", "medium").strip() or "medium"
-        recency_filter = os.getenv("ZHIPUAI_WEB_SEARCH_RECENCY_FILTER", "noLimit").strip() or "noLimit"
+        search_engine = (provider_config_value("ZHIPUAI_WEB_SEARCH_ENGINE", "search_std") or "").strip() or "search_std"
+        content_size = (provider_config_value("ZHIPUAI_WEB_SEARCH_CONTENT_SIZE", "medium") or "").strip() or "medium"
+        recency_filter = (provider_config_value("ZHIPUAI_WEB_SEARCH_RECENCY_FILTER", "noLimit") or "").strip() or "noLimit"
         return ZhipuWebSearchProvider(
             api_key=api_key,
             endpoint=endpoint,
@@ -112,7 +114,7 @@ class SearchProviderFactory:
 
     @staticmethod
     def _provider_order_from_env() -> List[str]:
-        explicit_order = os.getenv("SIGNAL_SEARCH_PROVIDER_ORDER", "").strip()
+        explicit_order = (provider_config_value("SIGNAL_SEARCH_PROVIDER_ORDER", "") or "").strip()
         if explicit_order:
             return SearchProviderFactory._dedupe_provider_names(explicit_order.split(","))
         return list(SearchProviderFactory.DEFAULT_PROVIDER_ORDER)
@@ -174,11 +176,11 @@ class LLMProviderFactory:
 
     @staticmethod
     def _provider_order_from_env() -> List[str]:
-        explicit_order = os.getenv("LLM_PROVIDER_ORDER", "").strip()
+        explicit_order = (provider_config_value("LLM_PROVIDER_ORDER", "") or "").strip()
         if explicit_order:
             return LLMProviderFactory._dedupe_provider_names(explicit_order.split(","))
 
-        preferred = os.getenv("LLM_PROVIDER", "").strip()
+        preferred = (provider_config_value("LLM_PROVIDER", "") or "").strip()
         if preferred:
             return LLMProviderFactory._dedupe_provider_names([
                 preferred,
@@ -207,11 +209,11 @@ class LLMProviderFactory:
 
     @staticmethod
     def _openai_compatible_from_env(settings: AnalysisSettings) -> LLMProvider:
-        api_key = os.getenv("LLM_API_KEY", "").strip()
-        model = os.getenv("LLM_MODEL", "").strip()
+        api_key = (provider_config_value("LLM_API_KEY", "") or "").strip()
+        model = (provider_config_value("LLM_MODEL", "") or "").strip()
         if not api_key or not model:
             return NullLLMProvider()
-        api_base = os.getenv("LLM_API_BASE", "https://api.openai.com").strip()
+        api_base = (provider_config_value("LLM_API_BASE", "https://api.openai.com") or "").strip()
         return OpenAICompatibleLLMProvider(
             api_key=api_key,
             model=model,
@@ -221,12 +223,14 @@ class LLMProviderFactory:
 
     @staticmethod
     def _codex_responses_from_env(settings: AnalysisSettings) -> LLMProvider:
-        api_key = os.getenv("CODEX_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
-        model = os.getenv("CODEX_LLM_MODEL", "gpt-5.2-codex").strip()
+        api_key = (provider_config_value("CODEX_API_KEY", "") or "").strip()
+        if not api_key and current_account_user_id() is None:
+            api_key = (provider_config_value("LLM_API_KEY", "") or "").strip()
+        model = (provider_config_value("CODEX_LLM_MODEL", "gpt-5.2-codex") or "").strip()
         if not api_key or not model:
             return NullLLMProvider()
-        api_base = os.getenv("CODEX_API_BASE", "https://api.openai.com").strip()
-        reasoning_effort = os.getenv("CODEX_REASONING_EFFORT", "medium").strip()
+        api_base = (provider_config_value("CODEX_API_BASE", "https://api.openai.com") or "").strip()
+        reasoning_effort = (provider_config_value("CODEX_REASONING_EFFORT", "medium") or "").strip()
         return CodexResponsesLLMProvider(
             api_key=api_key,
             model=model,
@@ -237,15 +241,17 @@ class LLMProviderFactory:
 
     @staticmethod
     def _deepseek_from_env(settings: AnalysisSettings) -> LLMProvider:
-        api_key = os.getenv("DEEPSEEK_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
+        api_key = (provider_config_value("DEEPSEEK_API_KEY", "") or "").strip()
+        if not api_key and current_account_user_id() is None:
+            api_key = (provider_config_value("LLM_API_KEY", "") or "").strip()
         model = (
-            os.getenv("DEEPSEEK_LLM_MODEL", "").strip()
-            or os.getenv("DEEPSEEK_MODEL", "").strip()
+            (provider_config_value("DEEPSEEK_LLM_MODEL", "") or "").strip()
+            or (provider_config_value("DEEPSEEK_MODEL", "") or "").strip()
             or "deepseek-v4-flash"
         )
         if not api_key or not model:
             return NullLLMProvider()
-        api_base = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").strip()
+        api_base = (provider_config_value("DEEPSEEK_API_BASE", "https://api.deepseek.com") or "").strip()
         return DeepSeekLLMProvider(
             api_key=api_key,
             model=model,

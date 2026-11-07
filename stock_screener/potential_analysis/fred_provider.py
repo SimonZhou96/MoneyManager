@@ -17,6 +17,7 @@ from typing import List, Optional
 from .models import MacroFactorValue, MacroSnapshot
 from .providers import MacroDataProvider
 from .macro_timeseries import _fred_client, fred_series, enrich_macro_snapshot
+from account_provider_config import provider_config_value
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ class FredMacroProvider(MacroDataProvider):
     def _try_init(self):
         try:
             import os
-            key = self._api_key or os.getenv("FRED_API_KEY", "")
+            key = self._api_key or provider_config_value("FRED_API_KEY", "") or ""
             if not key:
                 self._init_error = "FRED_API_KEY 未设置"
                 return
@@ -139,7 +140,7 @@ class FredMacroProvider(MacroDataProvider):
                 source=self.name, status="ok",
             ))
         except Exception as e:
-            logger.warning(f"FRED {series_id} 获取失败: {e}")
+            logger.warning("FRED %s 获取失败 (%s)", series_id, type(e).__name__)
             snap.factors.append(MacroFactorValue(
                 factor_key=factor_key, factor_name=factor_name,
                 source=self.name, status="error",

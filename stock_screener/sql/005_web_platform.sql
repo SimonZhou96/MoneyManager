@@ -3,6 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS web_users (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     username VARCHAR(128) NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     role VARCHAR(32) NOT NULL DEFAULT 'admin',
@@ -10,6 +11,7 @@ CREATE TABLE IF NOT EXISTS web_users (
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id),
+    UNIQUE KEY uk_web_users_user_id (user_id),
     UNIQUE KEY uk_web_users_username (username),
     KEY idx_web_users_active (is_active)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Web fixed login users';
@@ -17,7 +19,7 @@ CREATE TABLE IF NOT EXISTS web_users (
 CREATE TABLE IF NOT EXISTS web_sessions (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     session_hash CHAR(64) NOT NULL,
-    user_id BIGINT UNSIGNED NOT NULL,
+    user_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     expires_at DATETIME(6) NOT NULL,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     last_seen_at DATETIME(6) NULL,
@@ -26,6 +28,18 @@ CREATE TABLE IF NOT EXISTS web_sessions (
     KEY idx_web_sessions_user (user_id),
     KEY idx_web_sessions_expires (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Web server sessions';
+
+CREATE TABLE IF NOT EXISTS web_account_provider_configs (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    provider_key VARCHAR(64) NOT NULL,
+    config_ciphertext LONGBLOB NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_web_provider_config_user_provider (user_id, provider_key),
+    KEY idx_web_provider_config_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Encrypted account-level provider settings';
 
 CREATE TABLE IF NOT EXISTS web_login_attempts (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -40,7 +54,7 @@ CREATE TABLE IF NOT EXISTS web_login_attempts (
 CREATE TABLE IF NOT EXISTS web_screening_jobs (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     job_id VARCHAR(64) NOT NULL,
-    user_id BIGINT UNSIGNED NULL,
+    user_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
     markets JSON NULL,
     timeframe VARCHAR(8) NOT NULL,
     status VARCHAR(32) NOT NULL DEFAULT 'queued',
@@ -103,7 +117,7 @@ CREATE TABLE IF NOT EXISTS screening_artifacts (
 CREATE TABLE IF NOT EXISTS single_stock_runs (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     run_id VARCHAR(64) NOT NULL,
-    user_id BIGINT UNSIGNED NULL,
+    user_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
     market VARCHAR(8) NOT NULL,
     code VARCHAR(32) NOT NULL,
     normalized_code VARCHAR(32) NOT NULL,

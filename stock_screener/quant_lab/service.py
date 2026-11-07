@@ -32,7 +32,7 @@ class QuantLabService:
         self.data_provider = data_provider
         self.strategy = strategy
 
-    def submit_backtest(self, payload: dict, user_id: int | None = None) -> dict[str, Any]:
+    def submit_backtest(self, payload: dict, user_id: str | None = None) -> dict[str, Any]:
         run_id = str(uuid.uuid4())
         self.repository.create_quant_backtest_run(
             {
@@ -48,12 +48,12 @@ class QuantLabService:
         )
         return {"run_id": run_id, "status": "queued"}
 
-    def get_backtest(self, run_id: str, user_id: int | None = None) -> dict[str, Any] | None:
+    def get_backtest(self, run_id: str, user_id: str | None = None) -> dict[str, Any] | None:
         row = self.repository.get_quant_backtest_run(run_id)
         if not row:
             return None
         owner_id = row.get("user_id")
-        if user_id is not None and owner_id is not None and int(owner_id) != int(user_id):
+        if user_id is not None and owner_id is not None and str(owner_id) != user_id:
             return None
         return {
             "run_id": row.get("run_id"),
@@ -119,7 +119,7 @@ class QuantLabService:
 
     # ── 策略回测 ──
 
-    def submit_strategy_backtest(self, payload: dict, user_id: int | None = None) -> dict[str, Any]:
+    def submit_strategy_backtest(self, payload: dict, user_id: str | None = None) -> dict[str, Any]:
         run_id = str(uuid.uuid4())
         self.repository.create_quant_backtest_run({
             "run_id": run_id, "user_id": user_id, "status": "queued",
@@ -309,7 +309,7 @@ class QuantLabService:
 
     # ── 参数优化 ──
 
-    def submit_optimization(self, payload: dict, user_id: int | None = None) -> dict[str, Any]:
+    def submit_optimization(self, payload: dict, user_id: str | None = None) -> dict[str, Any]:
         run_id = str(uuid.uuid4())
         self.repository.create_quant_backtest_run({
             "run_id": run_id, "user_id": user_id, "status": "queued",

@@ -9,6 +9,8 @@
 
 import json
 import os
+import hashlib
+from account_provider_config import provider_config_value
 import time
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
@@ -25,7 +27,7 @@ except ImportError:
 FEISHU_FILE_SIZE_LIMIT = 30 * 1024 * 1024
 
 # Token 缓存（提前 5 分钟过期）
-_token_cache: Optional[Tuple[str, float]] = None
+_token_cache: dict[str, Tuple[str, float]] = {}
 _TOKEN_EXPIRE_BUFFER = 300
 
 
@@ -82,10 +84,11 @@ def get_tenant_access_token(app_id: str, app_secret: str) -> Optional[str]:
     获取 tenant_access_token（带缓存）
     文档: https://open.feishu.cn/document/server-docs/authentication-management/access-token/tenant_access_token
     """
-    global _token_cache
     now = time.time()
-    if _token_cache and _token_cache[1] > now:
-        return _token_cache[0]
+    cache_key = hashlib.sha256(f"{app_id}\0{app_secret}".encode("utf-8")).hexdigest()
+    cached = _token_cache.get(cache_key)
+    if cached and cached[1] > now:
+        return cached[0]
 
     if not _HAS_REQUESTS:
         print("获取 token 失败: requests 不可用", file=__import__("sys").stderr)
@@ -106,7 +109,7 @@ def get_tenant_access_token(app_id: str, app_secret: str) -> Optional[str]:
             return None
         token = data.get("tenant_access_token")
         expire = data.get("expire", 7200)
-        _token_cache = (token, now + expire - _TOKEN_EXPIRE_BUFFER)
+        _token_cache[cache_key] = (token, now + expire - _TOKEN_EXPIRE_BUFFER)
         return token
     except Exception as e:
         print(f"获取 token 异常: {e}", file=__import__("sys").stderr)
@@ -215,9 +218,9 @@ def send_file_to_chat(
         是否成功
     """
     _load_dotenv()
-    app_id = app_id or os.getenv("FEISHU_APP_ID", "").strip()
-    app_secret = app_secret or os.getenv("FEISHU_APP_SECRET", "").strip()
-    chat_id = chat_id or os.getenv("FEISHU_CHAT_ID", "").strip()
+    app_id = app_id or (provider_config_value("FEISHU_APP_ID", "") or "").strip()
+    app_secret = app_secret or (provider_config_value("FEISHU_APP_SECRET", "") or "").strip()
+    chat_id = chat_id or (provider_config_value("FEISHU_CHAT_ID", "") or "").strip()
 
     if not app_id or not app_secret or not chat_id:
         print("缺少配置: 请设置 FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_CHAT_ID", file=__import__("sys").stderr)

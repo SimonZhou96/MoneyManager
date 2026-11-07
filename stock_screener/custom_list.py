@@ -368,7 +368,7 @@ class CustomListJobService:
 
     def create_job(
         self,
-        user_id: Optional[int],
+        user_id: Optional[str],
         market: str,
         timeframe: str,
         chain: dict,

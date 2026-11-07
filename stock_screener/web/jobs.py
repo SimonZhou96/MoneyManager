@@ -17,8 +17,10 @@ from feishu_notifier import send_screening_result
 from market import market_label, normalize_market
 from scheduled_daily_job import get_default_screening_params, run_market_screening_worker
 from task_reports import notify_task_report, publish_task_report
+from account_provider_config import provider_config_value
 from .business import BusinessError
 from .queue import release_screening_locks
+from .provider_context import persisted_job_provider_context
 
 
 def finish_web_screening_job(
@@ -143,7 +145,16 @@ def enqueue_web_screening_job(
         raise BusinessError('SCREENING_ENQUEUE_FAILED', 'RQ 入队失败，任务已取消或正在确认停止') from exc
 
 
-def run_web_screening_job(
+def run_web_screening_job(*args, **kwargs) -> None:
+    mysql_config = kwargs.get("mysql_config") or (args[0] if args else None)
+    job_id = kwargs.get("job_id") or (args[1] if len(args) > 1 else None)
+    if mysql_config is None or not job_id:
+        raise RuntimeError("Web screening job requires mysql_config and job_id")
+    with persisted_job_provider_context(mysql_config, "web_screening", str(job_id)):
+        _run_web_screening_job(*args, **kwargs)
+
+
+def _run_web_screening_job(
     mysql_config: MySqlConfig,
     job_id: str,
     markets: List[str],
@@ -186,7 +197,7 @@ def run_web_screening_job(
         params = get_default_screening_params()
         if chain_key:
             params["chain_key"] = chain_key
-        webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
+        webhook_url = (provider_config_value("FEISHU_WEBHOOK_URL", "") or "").strip()
 
         for raw_market in markets:
             market = normalize_market(raw_market)
@@ -289,6 +300,11 @@ def enqueue_report_retry(db: MarketDatabase, task_type: str, task_id: str, user)
 
 
 def retry_task_report(mysql_config: MySqlConfig, task_type: str, task_id: str) -> None:
+    with persisted_job_provider_context(mysql_config, task_type, task_id):
+        _retry_task_report(mysql_config, task_type, task_id)
+
+
+def _retry_task_report(mysql_config: MySqlConfig, task_type: str, task_id: str) -> None:
     db = MarketDatabase(mysql_config)
     try:
         if not db.claim_report_retry(task_type, task_id, 'queued', status='running'):

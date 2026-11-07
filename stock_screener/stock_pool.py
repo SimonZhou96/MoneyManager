@@ -27,6 +27,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import pandas as pd
 
 from market import normalize_market
+from account_provider_config import provider_config_value
 
 
 POOL_TYPE_BEST = "best"
@@ -258,8 +259,8 @@ class FundaEtfHoldingsProvider(USMajorIndexConstituentProvider):
     source = "funda"
 
     def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, timeout: int = 20):
-        self.api_key = (api_key or os.getenv("FUNDA_API_KEY") or "").strip()
-        self.api_base = (api_base or os.getenv("FUNDA_API_BASE") or "https://api.funda.ai").rstrip("/")
+        self.api_key = (api_key or provider_config_value("FUNDA_API_KEY") or "").strip()
+        self.api_base = (api_base or provider_config_value("FUNDA_API_BASE") or "https://api.funda.ai").rstrip("/")
         self.timeout = int(timeout)
 
     def fetch(self, definitions: Iterable[tuple]) -> List[dict]:

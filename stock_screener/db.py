@@ -17,6 +17,7 @@ import math
 import re
 import secrets
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -957,6 +958,7 @@ class MarketDatabase:
                 """
                 CREATE TABLE IF NOT EXISTS web_users (
                     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    user_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
                     username VARCHAR(128) NOT NULL,
                     password_hash VARCHAR(255) NOT NULL,
                     role VARCHAR(32) NOT NULL DEFAULT 'admin',
@@ -965,6 +967,7 @@ class MarketDatabase:
                     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
                         ON UPDATE CURRENT_TIMESTAMP(6),
                     PRIMARY KEY (id),
+                    UNIQUE KEY uk_web_users_user_id (user_id),
                     UNIQUE KEY uk_web_users_username (username),
                     KEY idx_web_users_active (is_active)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -976,7 +979,7 @@ class MarketDatabase:
                 CREATE TABLE IF NOT EXISTS web_sessions (
                     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
                     session_hash CHAR(64) NOT NULL,
-                    user_id BIGINT UNSIGNED NOT NULL,
+                    user_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
                     expires_at DATETIME(6) NOT NULL,
                     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
                     last_seen_at DATETIME(6) NULL,
@@ -986,6 +989,23 @@ class MarketDatabase:
                     KEY idx_web_sessions_expires (expires_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 COMMENT='Web 服务端 Session'
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS web_account_provider_configs (
+                    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                    user_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    provider_key VARCHAR(64) NOT NULL,
+                    config_ciphertext LONGBLOB NOT NULL,
+                    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+                        ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_web_provider_config_user_provider (user_id, provider_key),
+                    KEY idx_web_provider_config_user (user_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                COMMENT='账号级加密 Provider 配置'
                 """
             )
             cursor.execute(
@@ -1055,7 +1075,7 @@ class MarketDatabase:
                 CREATE TABLE IF NOT EXISTS single_stock_runs (
                     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
                     run_id VARCHAR(64) NOT NULL,
-                    user_id BIGINT UNSIGNED NULL,
+                    user_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
                     market VARCHAR(8) NOT NULL,
                     code VARCHAR(32) NOT NULL,
                     normalized_code VARCHAR(32) NOT NULL,
@@ -1121,7 +1141,7 @@ class MarketDatabase:
                 CREATE TABLE IF NOT EXISTS web_screening_jobs (
                     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
                     job_id VARCHAR(64) NOT NULL,
-                    user_id BIGINT UNSIGNED NULL,
+                    user_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
                     markets JSON NULL,
                     timeframe VARCHAR(8) NOT NULL,
                     status VARCHAR(32) NOT NULL DEFAULT 'queued',
@@ -2141,26 +2161,31 @@ class MarketDatabase:
     # Web auth
     # ------------------------------------------------------------------
 
-    def upsert_web_user(self, username: str, password: str, role: str = "admin", is_active: bool = True) -> int:
+    def upsert_web_user(self, username: str, password: str, role: str = "admin", is_active: bool = True) -> str:
         username = str(username or "").strip()
         if not username:
             raise ValueError("username is required")
         password_hash = hash_password(password)
+        user_id = str(uuid.uuid4())
         sql = """
-            INSERT INTO web_users (username, password_hash, role, is_active)
-            VALUES (%s,%s,%s,%s)
+            INSERT INTO web_users (user_id, username, password_hash, role, is_active)
+            VALUES (%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
                 password_hash=VALUES(password_hash),
                 role=VALUES(role),
                 is_active=VALUES(is_active)
         """
         with self.conn.cursor() as cursor:
-            cursor.execute(sql, (username, password_hash, role, 1 if is_active else 0))
-            return int(cursor.lastrowid or 0)
+            cursor.execute(sql, (user_id, username, password_hash, role, 1 if is_active else 0))
+            cursor.execute("SELECT user_id FROM web_users WHERE username=%s LIMIT 1", (username,))
+            row = cursor.fetchone()
+        if not row or not row[0]:
+            raise RuntimeError("账号写入成功但未能读取 user_id")
+        return str(row[0])
 
     def get_web_user_by_username(self, username: str) -> Optional[dict]:
         sql = """
-            SELECT id, username, password_hash, role, is_active, created_at, updated_at
+            SELECT user_id, username, password_hash, role, is_active, created_at, updated_at
             FROM web_users WHERE username=%s LIMIT 1
         """
         with self.conn.cursor() as cursor:
@@ -2169,7 +2194,7 @@ class MarketDatabase:
         if not row:
             return None
         return {
-            "id": int(row[0]),
+            "user_id": str(row[0]),
             "username": row[1],
             "password_hash": row[2],
             "role": row[3],
@@ -2196,21 +2221,21 @@ class MarketDatabase:
             row = cursor.fetchone()
         return int(row[0] or 0) if row else 0
 
-    def create_web_session(self, user_id: int, ttl_hours: int = 24) -> str:
+    def create_web_session(self, user_id: str, ttl_hours: int = 24) -> str:
         token = secrets.token_urlsafe(48)
         expires_at = _utcnow() + timedelta(hours=ttl_hours)
         with self.conn.cursor() as cursor:
             cursor.execute(
                 "INSERT INTO web_sessions (session_hash, user_id, expires_at, last_seen_at) VALUES (%s,%s,%s,%s)",
-                (session_hash(token), int(user_id), expires_at, _utcnow()),
+                (session_hash(token), str(user_id), expires_at, _utcnow()),
             )
         return token
 
     def get_user_by_session_token(self, token: str) -> Optional[dict]:
         sql = """
-            SELECT u.id, u.username, u.role, u.is_active, s.expires_at
+            SELECT u.user_id, u.username, u.role, u.is_active, s.expires_at
             FROM web_sessions s
-            JOIN web_users u ON u.id=s.user_id
+            JOIN web_users u ON u.user_id=s.user_id
             WHERE s.session_hash=%s
             LIMIT 1
         """
@@ -2225,7 +2250,34 @@ class MarketDatabase:
             cursor.execute("UPDATE web_sessions SET last_seen_at=%s WHERE session_hash=%s", (_utcnow(), session_hash(token)))
         if not bool(row[3]):
             return None
-        return {"id": int(row[0]), "username": row[1], "role": row[2], "is_active": bool(row[3])}
+        return {"user_id": str(row[0]), "username": row[1], "role": row[2], "is_active": bool(row[3])}
+
+    def list_web_provider_config_ciphertexts(self, user_id: str) -> Dict[str, bytes]:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT provider_key, config_ciphertext FROM web_account_provider_configs WHERE user_id=%s",
+                (str(user_id),),
+            )
+            rows = cursor.fetchall()
+        return {str(row[0]): bytes(row[1]) for row in rows or []}
+
+    def upsert_web_provider_config_ciphertext(self, user_id: str, provider_key: str, ciphertext: bytes) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO web_account_provider_configs (user_id, provider_key, config_ciphertext)
+                VALUES (%s,%s,%s)
+                ON DUPLICATE KEY UPDATE config_ciphertext=VALUES(config_ciphertext)
+                """,
+                (str(user_id), str(provider_key), bytes(ciphertext)),
+            )
+
+    def delete_web_provider_config_ciphertext(self, user_id: str, provider_key: str) -> None:
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM web_account_provider_configs WHERE user_id=%s AND provider_key=%s",
+                (str(user_id), str(provider_key)),
+            )
 
     def delete_web_session(self, token: str) -> None:
         with self.conn.cursor() as cursor:
@@ -2238,7 +2290,7 @@ class MarketDatabase:
     def create_web_screening_job(
         self,
         job_id: str,
-        user_id: Optional[int],
+        user_id: Optional[str],
         markets: List[str],
         timeframe: str,
         options: Optional[dict] = None,
@@ -3844,7 +3896,7 @@ class MarketDatabase:
             row = cursor.fetchone()
         return self._option_order_plan_from_row(row) if row else None
 
-    def list_option_order_plans(self, user_id: Optional[int] = None, limit: int = 50) -> List[dict]:
+    def list_option_order_plans(self, user_id: Optional[str] = None, limit: int = 50) -> List[dict]:
         if user_id is None:
             sql = """
                 SELECT plan_id, candidate_id, user_id, status, contract_details_json,
@@ -3978,7 +4030,7 @@ class MarketDatabase:
 
     def list_option_tracked_positions(
         self,
-        user_id: Optional[int] = None,
+        user_id: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 100,
     ) -> List[dict]:
@@ -4282,7 +4334,7 @@ class MarketDatabase:
     def get_candidate(self, candidate_id: str) -> Optional[dict]:
         return self.get_option_strategy_candidate(candidate_id)
 
-    def save_order_plan(self, plan_or_candidate_id: Any, user_id: Optional[int] = None) -> dict:
+    def save_order_plan(self, plan_or_candidate_id: Any, user_id: Optional[str] = None) -> dict:
         if isinstance(plan_or_candidate_id, dict) or hasattr(plan_or_candidate_id, "to_dict"):
             payload = _option_payload(plan_or_candidate_id)
         else:
@@ -5148,7 +5200,7 @@ class MarketDatabase:
                 """
                 CREATE TABLE IF NOT EXISTS screening_signal_analysis (
                     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    task_id VARCHAR(36) NOT NULL COMMENT '筛选任务 ID',
+                    task_id VARCHAR(64) NOT NULL COMMENT '筛选任务 ID',
                     market VARCHAR(8) NOT NULL COMMENT '市场: HK/US/A',
                     code VARCHAR(32) NOT NULL COMMENT '股票代码',
                     name VARCHAR(255) NULL COMMENT '股票名称',
@@ -5191,6 +5243,21 @@ class MarketDatabase:
                 COMMENT='选股结果搜索与模型辅助分析'
                 """
             )
+            cursor.execute(
+                """
+                SELECT CHARACTER_MAXIMUM_LENGTH
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'screening_signal_analysis'
+                  AND COLUMN_NAME = 'task_id'
+                """
+            )
+            task_id_column = cursor.fetchone()
+            if task_id_column and int(task_id_column[0] or 0) < 64:
+                cursor.execute(
+                    "ALTER TABLE screening_signal_analysis "
+                    "MODIFY COLUMN task_id VARCHAR(64) NOT NULL COMMENT '筛选任务 ID'"
+                )
             signal_analysis_alters = [
                 ("market_hot_news", "ALTER TABLE screening_signal_analysis ADD COLUMN market_hot_news JSON NULL COMMENT '市场热点新闻' AFTER company_events"),
                 ("company_hot_news", "ALTER TABLE screening_signal_analysis ADD COLUMN company_hot_news JSON NULL COMMENT '公司热点新闻' AFTER market_hot_news"),

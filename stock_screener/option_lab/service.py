@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 import os
+from account_provider_config import provider_config_value
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -83,7 +84,7 @@ class OptionLabService:
         market: str,
         code: str,
         risk_profile: RiskProfile,
-        user_id: Optional[int] = None,
+        user_id: Optional[str] = None,
         max_loss: Optional[float] = None,
         capital: Optional[float] = None,
         planned_holding_days: Optional[int] = None,
@@ -222,7 +223,7 @@ class OptionLabService:
         if callable(save):
             save(cache_key, row)
 
-    def save_order_plan(self, candidate_id: str, user_id: Optional[int] = None) -> OrderPlan | dict:
+    def save_order_plan(self, candidate_id: str, user_id: Optional[str] = None) -> OrderPlan | dict:
         candidate = self.repository.get_candidate(candidate_id)
         if not candidate:
             raise ValueError(f"期权策略候选不存在: {candidate_id}")
@@ -339,7 +340,7 @@ class OptionLabService:
 
     def _send_feishu_events(self, events: List[dict]) -> None:
         important = [item for item in events if item.get("提醒级别") in {"紧急", "重要"}]
-        webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
+        webhook_url = (provider_config_value("FEISHU_WEBHOOK_URL", "") or "").strip()
         if not important or not webhook_url:
             return
         try:

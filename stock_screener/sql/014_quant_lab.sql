@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS quant_backtest_runs (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     run_id VARCHAR(64) NOT NULL,
-    user_id BIGINT UNSIGNED NULL,
+    user_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
     status VARCHAR(32) NOT NULL DEFAULT 'running',
     progress_pct INT NOT NULL DEFAULT 0,
     current_stage VARCHAR(64) NULL,
@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS quant_equity_curve (
 CREATE TABLE IF NOT EXISTS quant_paper_accounts (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     account_id VARCHAR(64) NOT NULL,
-    user_id BIGINT UNSIGNED NULL,
+    user_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL,
     name VARCHAR(128) NOT NULL,
     cash DECIMAL(20,6) NOT NULL,
     equity DECIMAL(20,6) NOT NULL,

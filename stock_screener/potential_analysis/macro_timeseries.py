@@ -10,6 +10,7 @@ import threading
 import time
 
 import pandas as pd
+from account_provider_config import provider_config_value
 
 SUCCESS_TTL = 6 * 3600
 FAILURE_TTL = 60
@@ -54,13 +55,18 @@ def _fred_client(api_key):
 
 
 def fred_series(series_id, api_key=None):
-    key = api_key or os.getenv("FRED_API_KEY", "")
+    key = api_key or provider_config_value("FRED_API_KEY", "") or ""
     if not key:
         raise RuntimeError("FRED_API_KEY 未设置")
     # A single observation window also allows the existing Provider to reuse CPI/DGS reads.
     start = (pd.Timestamp.now(tz="UTC").tz_localize(None) - pd.DateOffset(months=38)).date().isoformat()
     def load():
-        series = _fred_client(key).get_series(series_id, observation_start=start)
+        try:
+            series = _fred_client(key).get_series(series_id, observation_start=start)
+        except Exception as exc:
+            # FRED keys are query parameters in the upstream URL. Do not surface
+            # upstream exception text where it could contain the configured key.
+            raise RuntimeError(f"FRED series request failed ({type(exc).__name__})") from None
         if series is None or series.dropna().empty:
             raise ValueError(f"{series_id}: 无有效数据")
         return series
@@ -236,7 +242,7 @@ def _load_bonds(country, api_key=None):
 def get_macro_timeseries(category, country, api_key=None):
     if country not in {"CN", "US"} or category not in {"inflation", "bond_yields"}:
         raise ValueError("country 仅支持 CN/US，category 仅支持 inflation/bond_yields")
-    key = (api_key or os.getenv("FRED_API_KEY", "")) if country == "US" else ""
+    key = (api_key or provider_config_value("FRED_API_KEY", "") or "") if country == "US" else ""
     loader = _load_inflation if category == "inflation" else _load_bonds
     return _cache.get((category, country, key), lambda: loader(country, api_key))
 

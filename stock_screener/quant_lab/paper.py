@@ -7,7 +7,7 @@ class PaperTradingService:
     def __init__(self, repository):
         self.repository = repository
 
-    def create_account(self, user_id: int | None, name: str, initial_cash: float) -> dict:
+    def create_account(self, user_id: str | None, name: str, initial_cash: float) -> dict:
         return {
             "account_id": str(uuid.uuid4()),
             "user_id": user_id,

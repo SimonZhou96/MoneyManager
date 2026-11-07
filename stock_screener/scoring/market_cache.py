@@ -11,6 +11,7 @@ Phase 1 实现：
 
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+from account_provider_config import provider_config_value
 
 from .models import (
     MarketTemperature,
@@ -719,7 +720,7 @@ class MarketCache:
 
                 from signal_analysis.search_providers import TavilySearchProvider
 
-                api_key = os.getenv("TAVILY_API_KEY", "").strip()
+                api_key = (provider_config_value("TAVILY_API_KEY", "") or "").strip()
                 if api_key:
                     client = TavilySearchProvider(api_key=api_key)
                     for query in queries[:3]:

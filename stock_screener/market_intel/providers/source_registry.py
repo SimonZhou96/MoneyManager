@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import os
 from typing import Dict, List
+from account_provider_config import provider_config_value
 
 
 @dataclass(frozen=True)
@@ -149,7 +150,7 @@ def source_status_payload() -> List[Dict[str, object]]:
 
 
 def enabled_provider_order() -> List[str]:
-    configured = os.getenv("MARKET_INTEL_PROVIDER_ORDER", "").strip()
+    configured = (provider_config_value("MARKET_INTEL_PROVIDER_ORDER", "") or "").strip()
     names = configured.split(",") if configured else [
         "cailianpress",
         "sina",

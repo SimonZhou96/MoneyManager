@@ -3,7 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS screening_signal_analysis (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    task_id VARCHAR(36) NOT NULL COMMENT '筛选任务 ID',
+    task_id VARCHAR(64) NOT NULL COMMENT '筛选任务 ID',
     market VARCHAR(8) NOT NULL COMMENT '市场: HK/US/A',
     code VARCHAR(32) NOT NULL COMMENT '股票代码',
     name VARCHAR(255) NULL COMMENT '股票名称',
@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS screening_signal_analysis (
     KEY idx_signal_analysis_status (analysis_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 COMMENT='选股结果搜索与模型辅助分析';
+
+-- Upgrade existing deployments; the report publisher appends a market suffix to task IDs.
+ALTER TABLE screening_signal_analysis
+    MODIFY COLUMN task_id VARCHAR(64) NOT NULL COMMENT '筛选任务 ID';
 
 CREATE TABLE IF NOT EXISTS signal_analysis_cache (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

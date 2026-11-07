@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List
+from account_provider_config import provider_config_value
 
 from .models import SearchDocument
 
@@ -84,22 +85,22 @@ class WebSearchHotSectorProvider:
     name = "deepseek_hot_sector"
 
     def __init__(self, api_key: str = ""):
-        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY", "").strip()
-        self.api_base = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").strip()
-        self.model = os.getenv("DEEPSEEK_LLM_MODEL", "deepseek-chat").strip()
-        self.tavily_key = os.getenv("TAVILY_API_KEY", "").strip()
+        self.api_key = api_key or (provider_config_value("DEEPSEEK_API_KEY", "") or "").strip()
+        self.api_base = (provider_config_value("DEEPSEEK_API_BASE", "https://api.deepseek.com") or "").strip()
+        self.model = (provider_config_value("DEEPSEEK_LLM_MODEL", "deepseek-chat") or "deepseek-chat").strip()
+        self.tavily_key = (provider_config_value("TAVILY_API_KEY", "") or "").strip()
         self.zhipu_key = (
-            os.getenv("ZHIPUAI_API_KEY", "").strip()
-            or os.getenv("ZHIPU_API_KEY", "").strip()
-            or os.getenv("BIGMODEL_API_KEY", "").strip()
+            (provider_config_value("ZHIPUAI_API_KEY", "") or "").strip()
+            or (provider_config_value("ZHIPU_API_KEY", "") or "").strip()
+            or (provider_config_value("BIGMODEL_API_KEY", "") or "").strip()
         )
-        self.zhipu_endpoint = os.getenv(
+        self.zhipu_endpoint = provider_config_value(
             "ZHIPUAI_WEB_SEARCH_ENDPOINT",
             "https://open.bigmodel.cn/api/paas/v4/web_search",
         ).strip()
-        self.zhipu_search_engine = os.getenv("ZHIPUAI_WEB_SEARCH_ENGINE", "search_std").strip() or "search_std"
-        self.zhipu_content_size = os.getenv("ZHIPUAI_WEB_SEARCH_CONTENT_SIZE", "medium").strip() or "medium"
-        self.zhipu_recency_filter = os.getenv("ZHIPUAI_WEB_SEARCH_RECENCY_FILTER", "noLimit").strip() or "noLimit"
+        self.zhipu_search_engine = (provider_config_value("ZHIPUAI_WEB_SEARCH_ENGINE", "search_std") or "").strip() or "search_std"
+        self.zhipu_content_size = (provider_config_value("ZHIPUAI_WEB_SEARCH_CONTENT_SIZE", "medium") or "").strip() or "medium"
+        self.zhipu_recency_filter = (provider_config_value("ZHIPUAI_WEB_SEARCH_RECENCY_FILTER", "noLimit") or "").strip() or "noLimit"
 
     @property
     def is_available(self) -> bool:

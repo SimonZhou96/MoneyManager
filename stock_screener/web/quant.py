@@ -51,7 +51,7 @@ def create_backtest(
 ) -> Dict[str, Any]:
     if payload.end < payload.start:
         raise BusinessError("QUANT_INVALID_DATE_RANGE", "回测结束日期不能早于开始日期")
-    result = service.submit_backtest(payload.model_dump(mode="json"), user_id=user.id)
+    result = service.submit_backtest(payload.model_dump(mode="json"), user_id=user.user_id)
     background_tasks.add_task(_run_backtest_background, result["run_id"], service)
     return result
 
@@ -62,7 +62,7 @@ def get_backtest(
     user: CurrentUser = Depends(require_user),
     service: QuantLabService = Depends(get_quant_service),
 ) -> Dict[str, Any]:
-    row = service.get_backtest(run_id, user_id=user.id)
+    row = service.get_backtest(run_id, user_id=user.user_id)
     if not row:
         raise BusinessError("QUANT_BACKTEST_NOT_FOUND", "回测任务不存在")
     return row
@@ -87,7 +87,7 @@ def create_paper_account(
     db=Depends(get_db),
 ) -> Dict[str, Any]:
     service = PaperTradingService(repository=db)
-    return service.create_account(user_id=user.id, name=payload.name, initial_cash=payload.initial_cash)
+    return service.create_account(user_id=user.user_id, name=payload.name, initial_cash=payload.initial_cash)
 
 
 # ── 策略回测 ──
@@ -127,7 +127,7 @@ def create_strategy_backtest(
 ) -> Dict[str, Any]:
     if payload.end < payload.start:
         raise BusinessError("QUANT_INVALID_DATE_RANGE", "回测结束日期不能早于开始日期")
-    result = service.submit_strategy_backtest(payload.model_dump(mode="json"), user_id=user.id)
+    result = service.submit_strategy_backtest(payload.model_dump(mode="json"), user_id=user.user_id)
     background_tasks.add_task(_run_strategy_backtest_background, result["run_id"], service)
     return result
 
@@ -146,7 +146,7 @@ def create_optimization(
         total_combos *= len(v)
     if total_combos > 200:
         raise BusinessError("QUANT_PARAM_SPACE_TOO_LARGE", f"参数组合过多({total_combos})，请缩小搜索空间（≤200组）")
-    result = service.submit_optimization(payload.model_dump(mode="json"), user_id=user.id)
+    result = service.submit_optimization(payload.model_dump(mode="json"), user_id=user.user_id)
     background_tasks.add_task(_run_optimization_background, result["run_id"], service)
     return result
 

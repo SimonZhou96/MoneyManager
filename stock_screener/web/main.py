@@ -50,6 +50,11 @@ from .queue import acquire_screening_locks, release_screening_locks, screening_q
 from .options import router as options_router
 from .quant import router as quant_router
 from .reports import router as reports_router
+from .provider_settings import router as provider_settings_router
+from .provider_context import activate_account_provider_context
+from .provider_context import activate_optional_account_provider_context
+from .provider_context import persisted_job_provider_context
+from account_provider_config import provider_config_value
 from .sectors import router as sectors_router
 from .stock_terminal import router as stock_terminal_router
 from .topology import router as topology_router
@@ -93,14 +98,17 @@ app = FastAPI(title="MoneyManager Stock Screener", version="0.1.0")
 app.add_exception_handler(BusinessError, business_error_handler)
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
-app.include_router(options_router)
-app.include_router(quant_router)
-app.include_router(reports_router)
-app.include_router(market_intel_router)
-app.include_router(macro_router)
-app.include_router(sectors_router)
-app.include_router(stock_terminal_router)
-app.include_router(topology_router)
+_account_provider_dependencies = [Depends(activate_account_provider_context)]
+_optional_account_provider_dependencies = [Depends(activate_optional_account_provider_context)]
+app.include_router(options_router, dependencies=_account_provider_dependencies)
+app.include_router(quant_router, dependencies=_optional_account_provider_dependencies)
+app.include_router(reports_router, dependencies=_account_provider_dependencies)
+app.include_router(market_intel_router, dependencies=_account_provider_dependencies)
+app.include_router(macro_router, dependencies=_account_provider_dependencies)
+app.include_router(sectors_router, dependencies=_account_provider_dependencies)
+app.include_router(stock_terminal_router, dependencies=_account_provider_dependencies)
+app.include_router(provider_settings_router)
+app.include_router(topology_router, dependencies=_optional_account_provider_dependencies)
 
 SCREENING_RESULT_SCORE_FIELDS = ("technical_score", "macro_score", "final_score", "score_details")
 
@@ -138,6 +146,12 @@ class CustomListScreeningTaskRequest(BaseModel):
 
 def run_custom_list_backend_job(job_id: str) -> None:
     mysql_config = mysql_config_from_env()
+    with persisted_job_provider_context(mysql_config, "web_screening", job_id):
+        _run_custom_list_backend_job(job_id)
+
+
+def _run_custom_list_backend_job(job_id: str) -> None:
+    mysql_config = mysql_config_from_env()
     db = MarketDatabase(mysql_config)
     try:
         job = db.get_web_screening_job(job_id)
@@ -173,7 +187,7 @@ def run_custom_list_backend_job(job_id: str) -> None:
         report = publish_task_report(mysql_config, db, 'custom_list', job_id, [market], timeframe,
                                      {market: result.passed}, options.get('chain_key') or '')
         db.update_web_screening_job(job_id, "completed", finished=True)
-        webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
+        webhook_url = (provider_config_value("FEISHU_WEBHOOK_URL", "") or "").strip()
         if options.get("send_feishu") and webhook_url:
             try:
                 notify_task_report(report, job_id)
@@ -232,6 +246,12 @@ def _clear_progress(run_id: str) -> None:
 
 
 def run_single_stock_web_job(run_id: str) -> None:
+    mysql_config = mysql_config_from_env()
+    with persisted_job_provider_context(mysql_config, "single_stock", run_id):
+        _run_single_stock_web_job(run_id)
+
+
+def _run_single_stock_web_job(run_id: str) -> None:
     """在 web 后台线程中执行单股筛选，并更新 single_stock_runs 表和进度。"""
     mysql_config = mysql_config_from_env()
     db = MarketDatabase(mysql_config)
@@ -516,7 +536,7 @@ class RuleChainUpsertRequest(BaseModel):
 
 
 def require_read_user(user: CurrentUser = Depends(require_user)) -> CurrentUser:
-    enforce_rate_limit(f"user:{user.id}:read", WEB_READ_RULE)
+    enforce_rate_limit(f"user:{user.user_id}:read", WEB_READ_RULE)
     return user
 
 
@@ -561,8 +581,8 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Marke
     ok, user, message = authenticate(db, payload.username.strip(), payload.password, ip_address)
     if not ok or not user:
         raise BusinessError("LOGIN_FAILED", message or "登录失败，请检查账号或密码")
-    create_login_session(db, response, int(user["id"]))
-    return {"user": {"id": user["id"], "username": user["username"], "role": user["role"]}}
+    create_login_session(db, response, str(user["user_id"]))
+    return {"user": {"user_id": user["user_id"], "username": user["username"], "role": user["role"]}}
 
 
 @app.post("/api/auth/logout")
@@ -576,7 +596,7 @@ def logout(response: Response, request: Request, db: MarketDatabase = Depends(ge
 def me(user: Optional[CurrentUser] = Depends(optional_user)):
     if user is None:
         raise BusinessError("AUTH_REQUIRED", "请先登录后再访问")
-    return {"id": user.id, "username": user.username, "role": user.role}
+    return {"user_id": user.user_id, "username": user.username, "role": user.role}
 
 
 def create_full_market_task(
@@ -591,7 +611,7 @@ def create_full_market_task(
         pool_types = normalize_pool_types(payload.pool_types or CANONICAL_POOL_TYPES)
     except ValueError as exc:
         raise BusinessError("INVALID_SCREENING_TASK", str(exc)) from exc
-    enforce_rate_limit(f"user:{user.id}:create_task", CREATE_TASK_RULE)
+    enforce_rate_limit(f"user:{user.user_id}:create_task", CREATE_TASK_RULE)
     run_date = _run_date()
     if chain_by_market:
         chain_by_market = {market: resolve_rule_chain(db, [market], timeframe=timeframe, chain_key=chain_by_market.get(market))['chain_key'] for market in markets}
@@ -643,7 +663,7 @@ def create_full_market_task(
         if any(item['status'] == 'completed' for item in db.get_screening_run_locks(
                 run_date, markets, timeframe, chain_key=chain_key, pool_scope=pool_scope)):
             raise BusinessError('SCREENING_ALREADY_COMPLETED', '今日同条件已筛选成功，无需重复运行')
-        db.create_web_screening_job(job_id=job_id, user_id=user.id, markets=markets, timeframe=timeframe,
+        db.create_web_screening_job(job_id=job_id, user_id=user.user_id, markets=markets, timeframe=timeframe,
                                     options=options, execution_mode='rq')
         db.create_screening_run_locks(
             job_id=job_id,
@@ -686,7 +706,7 @@ def create_custom_list_task(
     user: CurrentUser = Depends(require_user),
     db: MarketDatabase = Depends(get_db),
 ):
-    enforce_rate_limit(f"user:{user.id}:create_task", CREATE_TASK_RULE)
+    enforce_rate_limit(f"user:{user.user_id}:create_task", CREATE_TASK_RULE)
     try:
         market = normalize_market(payload.market)
         timeframe = validate_timeframe(payload.timeframe)
@@ -696,7 +716,7 @@ def create_custom_list_task(
     chain = resolve_rule_chain(db, [market], timeframe=timeframe, chain_key=payload.chain_key)
     try:
         result = CustomListJobService(db).create_job(
-            user_id=user.id,
+            user_id=user.user_id,
             market=market,
             timeframe=timeframe,
             chain=chain,
@@ -883,7 +903,7 @@ def get_task_artifacts(task_id: str, _: CurrentUser = Depends(require_read_user)
 
 @app.get("/api/artifacts/{artifact_id}/download")
 def download_artifact(artifact_id: str, user: CurrentUser = Depends(require_user), db: MarketDatabase = Depends(get_db)):
-    enforce_rate_limit(f"user:{user.id}:artifact_download", ARTIFACT_DOWNLOAD_RULE)
+    enforce_rate_limit(f"user:{user.user_id}:artifact_download", ARTIFACT_DOWNLOAD_RULE)
     artifact = db.get_screening_artifact(artifact_id)
     if not artifact:
         raise BusinessError("ARTIFACT_NOT_FOUND", "文件不存在")
@@ -899,7 +919,7 @@ def download_artifact(artifact_id: str, user: CurrentUser = Depends(require_user
 
 @app.post("/api/screening/single-stock")
 def single_stock(payload: SingleStockApiRequest, user: CurrentUser = Depends(require_user), db: MarketDatabase = Depends(get_db)):
-    enforce_rate_limit(f"user:{user.id}:single_stock", SINGLE_STOCK_RULE)
+    enforce_rate_limit(f"user:{user.user_id}:single_stock", SINGLE_STOCK_RULE)
     try:
         market = normalize_market(payload.market)
         timeframe = validate_timeframe(payload.timeframe)
@@ -911,7 +931,7 @@ def single_stock(payload: SingleStockApiRequest, user: CurrentUser = Depends(req
     web_mode = (payload.mode or "web").strip().lower() == "web"
     db.create_single_stock_run({
         "run_id": run_id,
-        "user_id": user.id,
+        "user_id": user.user_id,
         "market": market,
         "code": payload.code,
         "normalized_code": normalized_code,

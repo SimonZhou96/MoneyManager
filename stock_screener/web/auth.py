@@ -14,7 +14,7 @@ from .rate_limit import AGENT_BULK_RULE, enforce_rate_limit
 
 @dataclass(frozen=True)
 class CurrentUser:
-    id: int
+    user_id: str
     username: str
     role: str
 
@@ -48,7 +48,7 @@ def authenticate(db: MarketDatabase, username: str, password: str, ip_address: s
     return True, user, ""
 
 
-def create_login_session(db: MarketDatabase, response: Response, user_id: int) -> None:
+def create_login_session(db: MarketDatabase, response: Response, user_id: str) -> None:
     token = db.create_web_session(user_id=user_id, ttl_hours=session_ttl_hours())
     response.set_cookie(
         key=session_cookie_name(),
@@ -76,7 +76,7 @@ def require_user(
     user = db.get_user_by_session_token(token)
     if not user:
         raise BusinessError("AUTH_REQUIRED", "请先登录后再访问")
-    return CurrentUser(id=int(user["id"]), username=user["username"], role=user["role"])
+    return CurrentUser(user_id=str(user["user_id"]), username=user["username"], role=user["role"])
 
 
 def optional_user(
@@ -88,7 +88,7 @@ def optional_user(
     user = db.get_user_by_session_token(token)
     if not user:
         return None
-    return CurrentUser(id=int(user["id"]), username=user["username"], role=user["role"])
+    return CurrentUser(user_id=str(user["user_id"]), username=user["username"], role=user["role"])
 
 
 def require_agent(authorization: str = Header(default="")) -> None:

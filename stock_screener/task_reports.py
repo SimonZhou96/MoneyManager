@@ -11,6 +11,7 @@ from report_store import MySqlReportRepository
 from signal_analysis.models import ScreeningSignalRow, SignalAnalysisResult
 from signal_analysis.report_content import ReportContentBuilder
 from signal_analysis.service import run_signal_analysis_for_market
+from account_provider_config import provider_config_value
 
 
 class TaskReportPublisher:
@@ -160,7 +161,7 @@ def publish_task_report(mysql_config, db, task_type: str, task_id: str, markets:
 
 
 def notify_task_report(report: dict | None, task_id: str):
-    webhook = os.getenv("FEISHU_WEBHOOK_URL", "").strip()
+    webhook = (provider_config_value("FEISHU_WEBHOOK_URL", "") or "").strip()
     if not webhook:
         return
     text = f"选股任务 {task_id} 已完成"
