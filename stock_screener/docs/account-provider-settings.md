@@ -34,11 +34,13 @@ From `stock_screener/`, run:
 python scripts/migrate_account_user_ids_to_uuid.py
 ```
 
-The script prompts for `MIGRATE-UUID`, assigns UUIDs to existing accounts,
-assigns UUID v4 values to existing accounts, maps ownership rows using the old internal `web_users.id`, converts the
-`user_id` columns to `CHAR(36)`, and creates the provider-config table. It
-stops if an ownership row cannot be mapped. It is safe to rerun after an
-interrupted conversion; completed UUID columns are left in place.
+The script prompts for `MIGRATE-UUID`, assigns UUID v4 values to existing
+accounts, maps ownership rows using the old internal `web_users.id`, converts
+the `user_id` columns to `CHAR(36)`, and creates the provider-config table.
+Optional ownership columns convert the historical `user_id=0` sentinel for
+unowned records to `NULL`; other ownership rows that cannot be mapped stop the
+migration. It is safe to rerun after an interrupted conversion; completed UUID
+columns are left in place.
 
 Deploy the updated application and SQL files, start the web server and workers,
 then confirm login and the API 配置 page. The local and ECS databases must be

@@ -132,16 +132,21 @@ def _ensure_relation_user_id(cursor, table: str, nullability: str, index: str, i
             f"ALTER TABLE `{table}` ADD COLUMN user_id_uuid CHAR(36) "
             "CHARACTER SET ascii COLLATE ascii_bin NULL"
         )
+    zero_sentinel_filter = "AND relation_row.user_id<>0" if nullability == "NULL" else ""
+    zero_sentinel_check = "AND user_id<>0" if nullability == "NULL" else ""
     cursor.execute(
         f"""
         UPDATE `{table}` AS relation_row
         LEFT JOIN web_users AS account_row ON account_row.id=relation_row.user_id
         SET relation_row.user_id_uuid=account_row.user_id
-        WHERE relation_row.user_id IS NOT NULL AND relation_row.user_id_uuid IS NULL
+        WHERE relation_row.user_id IS NOT NULL
+          {zero_sentinel_filter}
+          AND relation_row.user_id_uuid IS NULL
         """
     )
     cursor.execute(
-        f"SELECT COUNT(1) FROM `{table}` WHERE user_id IS NOT NULL AND user_id_uuid IS NULL"
+        f"SELECT COUNT(1) FROM `{table}` "
+        f"WHERE user_id IS NOT NULL {zero_sentinel_check} AND user_id_uuid IS NULL"
     )
     missing = int(cursor.fetchone()[0] or 0)
     if missing:

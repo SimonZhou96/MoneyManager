@@ -413,3 +413,16 @@ pass/fail.
 - After screening, `enrich_records_with_sectors` may run external providers only
   on passed stocks, then backfill `screening_results` and CSV records. Provider
   failures are warnings only and must not block CSV or Feishu delivery.
+
+# Commit and Push Spec Requirement
+
+- For every change set intended to be committed and pushed, add or update the
+  corresponding spec file before committing or pushing. Do not push an
+  implementation change and defer its spec update to a later commit.
+- First check for an existing spec in the affected module's established spec
+  location and update it when it covers the change. If no suitable spec exists,
+  create one following the repository's existing spec organization.
+- Keep the spec aligned with the implementation, including relevant behavior,
+  interfaces, data/schema changes, compatibility constraints, and validation.
+- Summarize the implementation and the spec file added or updated in the
+  commit/push completion report.
