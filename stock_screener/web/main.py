@@ -599,6 +599,22 @@ def me(user: Optional[CurrentUser] = Depends(optional_user)):
     return {"user_id": user.user_id, "username": user.username, "role": user.role}
 
 
+def _check_daily_screening_rules(db, run_date, markets, chain_key, chain_by_market):
+    completed = db.get_completed_screening_rules(run_date, markets)
+    conflicts = [
+        f"{market}/{market_chain}"
+        for market in markets
+        if (market_chain := chain_by_market.get(market) or chain_key)
+        and (market, market_chain) in completed
+    ]
+    if conflicts:
+        scopes = "、".join(conflicts)
+        raise BusinessError(
+            "SCREENING_ALREADY_COMPLETED",
+            f"今日 {scopes} 已按该规则筛选成功，无需重复运行",
+        )
+
+
 def create_full_market_task(
     payload: ScreeningTaskRequest,
     user: CurrentUser,
@@ -621,20 +637,6 @@ def create_full_market_task(
         chain = resolve_rule_chain(db, markets, timeframe=timeframe, chain_key=payload.chain_key)
     chain_key = chain["chain_key"]
     pool_scope = pool_scope_from_types(pool_types)
-    existing_locks = db.get_screening_run_locks(
-        run_date,
-        markets,
-        timeframe,
-        chain_key=chain_key,
-        pool_scope=pool_scope,
-    )
-    completed = [item for item in existing_locks if item.get("status") == "completed"]
-    if completed:
-        scopes = "、".join(f"{item['market']}/{item['timeframe']}/{item.get('chain_key') or chain_key}" for item in completed)
-        raise BusinessError(
-            "SCREENING_ALREADY_COMPLETED",
-            f"今日 {scopes} 已筛选成功，无需重复运行",
-        )
     output_dir = str(artifact_dir())
     mysql_config = mysql_config or mysql_config_from_env()
     job_id = str(uuid.uuid4())
@@ -658,11 +660,7 @@ def create_full_market_task(
         active = db.get_active_screening_jobs(run_date, markets)
         if active:
             raise BusinessError('SCREENING_MARKET_BUSY', f"{active[0]['market']} 市场当日已有进行中的任务 {active[0]['job_id']}")
-        # Recheck after acquiring the market lock: another submission may have
-        # completed between the initial deduplication check and SET NX.
-        if any(item['status'] == 'completed' for item in db.get_screening_run_locks(
-                run_date, markets, timeframe, chain_key=chain_key, pool_scope=pool_scope)):
-            raise BusinessError('SCREENING_ALREADY_COMPLETED', '今日同条件已筛选成功，无需重复运行')
+        _check_daily_screening_rules(db, run_date, markets, chain_key, chain_by_market or {})
         db.create_web_screening_job(job_id=job_id, user_id=user.user_id, markets=markets, timeframe=timeframe,
                                     options=options, execution_mode='rq')
         db.create_screening_run_locks(
@@ -822,6 +820,7 @@ def resume_screening_job(
         active = db.get_active_screening_jobs(run_date, job['markets'], exclude_job_id=job_id)
         if active:
             raise BusinessError('SCREENING_MARKET_BUSY', f"{active[0]['market']} 市场当日已有进行中的任务 {active[0]['job_id']}")
+        _check_daily_screening_rules(db, run_date, remaining, options['chain_key'], options.get('chain_by_market') or {})
         if not db.update_web_screening_job(job_id, 'queued', options=options, expected_status=job['status']):
             raise BusinessError('SCREENING_JOB_NOT_RESUMABLE', '任务状态已变化，请刷新后重试')
         db.create_screening_run_locks(job_id, run_date, job['markets'], job['timeframe'],

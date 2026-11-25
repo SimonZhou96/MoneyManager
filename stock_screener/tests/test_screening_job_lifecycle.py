@@ -1,6 +1,7 @@
 import copy
 import os
 import unittest
+from contextlib import nullcontext
 from datetime import date
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
@@ -41,11 +42,14 @@ class JobDatabase:
     def init_web_schema(self):
         pass
 
-    def get_screening_run_locks(self, run_date, markets, timeframe, chain_key=None, pool_scope=None):
-        return [copy.deepcopy(item) for item in self.locks
-                if item['run_date'] == str(run_date) and item['market'] in markets
-                and item['timeframe'] == timeframe and item['chain_key'] == chain_key
-                and item['pool_scope'] == pool_scope]
+    def get_completed_screening_rules(self, run_date, markets):
+        completed = set()
+        for item in self.locks:
+            if item['run_date'] == str(run_date) and item['market'] in markets and item['status'] == 'completed':
+                options = self.jobs.get(item['job_id'], {}).get('options', {})
+                chain = options.get('chain_by_market', {}).get(item['market']) or item['chain_key']
+                completed.add((item['market'], chain))
+        return completed
 
     def get_active_screening_jobs(self, run_date, markets, exclude_job_id=None):
         return [copy.deepcopy(item) for item in self.locks
@@ -125,7 +129,7 @@ class ScreeningJobLifecycleTests(RedisTestCase):
     def setUp(self):
         super().setUp()
         self.db = JobDatabase()
-        self.user = CurrentUser(id=7, username='tester', role='admin')
+        self.user = CurrentUser(user_id='00000000-0000-4000-8000-000000000007', username='tester', role='admin')
         self.rq_queue = queue.Queue('screening', connection=self.redis)
         patches = [
             patch.dict(os.environ, {'REDIS_URL': 'unix://' + self.socket}),
@@ -137,6 +141,7 @@ class ScreeningJobLifecycleTests(RedisTestCase):
             patch('web.main.artifact_dir', return_value=__import__('pathlib').Path(self.directory.name)),
             patch('web.main.mysql_config_from_env', return_value=MySqlConfig(host='unused', port=3306, user='test', password='test', database='test')),
             patch('web.jobs.MarketDatabase', return_value=self.db),
+            patch('web.jobs.persisted_job_provider_context', side_effect=lambda *_: nullcontext()),
             patch('web.jobs.get_default_screening_params', return_value={}),
             patch('web.jobs.publish_task_report', return_value=None, create=True),
         ]
@@ -160,7 +165,7 @@ class ScreeningJobLifecycleTests(RedisTestCase):
         first = self.submit()
         self.assertEqual(self.rq_queue.count, 1)
         self.assertEqual(self.rq_job(first).func_name, 'web.jobs.run_web_screening_job')
-        self.user = CurrentUser(id=9, username='other', role='admin')
+        self.user = CurrentUser(user_id='00000000-0000-4000-8000-000000000009', username='other', role='admin')
         for changes in [dict(chain='chain_two'), dict(timeframe='1wk'), dict(pools=['all_etf'])]:
             with self.assertRaises(BusinessError) as raised:
                 self.submit(**changes)
@@ -175,12 +180,45 @@ class ScreeningJobLifecycleTests(RedisTestCase):
         self.assertEqual(len(self.db.jobs), 1)
         self.assertIsNone(self.redis.get('screening:active:2026-10-29:HK'))
 
-    def test_existing_completed_scope_stays_deduplicated(self):
+    def test_completed_rule_blocks_same_market_with_any_timeframe_or_pools(self):
         self.db.locks.append(dict(job_id='completed', run_date='2026-10-29', market='HK',
                                   timeframe='1d', chain_key='chain_one', pool_scope='best', status='completed'))
-        with self.assertRaises(BusinessError) as raised:
+        for changes in [{}, dict(timeframe='1wk'), dict(pools=['all_etf'])]:
+            with self.subTest(**changes), self.assertRaises(BusinessError) as raised:
+                self.submit(**changes)
+            self.assertEqual(raised.exception.error_code, 'SCREENING_ALREADY_COMPLETED')
+            self.assertIn('HK/chain_one', raised.exception.message)
+        self.assertFalse(self.redis.exists('screening:active:2026-10-29:HK'))
+        self.assertFalse(self.db.jobs)
+        with patch('web.main._run_date', return_value=date(2026, 10, 30)):
             self.submit()
+        self.submit(chain='chain_two')
+        self.submit(markets=['US'])
+
+    def test_multi_market_submission_uses_each_markets_actual_rule(self):
+        self.db.jobs['completed'] = {'options': {'chain_by_market': {'HK': 'chain_one', 'US': 'chain_two'}}}
+        self.db.locks.append(dict(job_id='completed', run_date='2026-10-29', market='HK',
+                                  timeframe='1d', chain_key='multi-previous', pool_scope='best', status='completed'))
+        with self.assertRaises(BusinessError) as raised:
+            main.create_full_market_task(
+                main.ScreeningTaskRequest(markets=['HK', 'US'], timeframe='1wk'),
+                user=self.user, db=self.db, chain_by_market={'HK': 'chain_one', 'US': 'chain_three'},
+            )
         self.assertEqual(raised.exception.error_code, 'SCREENING_ALREADY_COMPLETED')
+        self.assertEqual(list(self.db.jobs), ['completed'])
+        self.assertEqual(self.rq_queue.count, 0)
+        self.assertIsNone(self.redis.get('screening:active:2026-10-29:US'))
+        self.submit(chain='chain_two')
+
+    def test_resume_cannot_repeat_a_rule_completed_by_another_job(self):
+        first = self.submit()
+        main.cancel_screening_job(first['job_id'], user=self.user, db=self.db)
+        self.db.locks.append(dict(job_id='completed', run_date='2026-10-29', market='HK',
+                                  timeframe='1wk', chain_key='chain_one', pool_scope='best', status='completed'))
+        with self.assertRaises(BusinessError) as raised:
+            main.resume_screening_job(first['job_id'], user=self.user, db=self.db)
+        self.assertEqual(raised.exception.error_code, 'SCREENING_ALREADY_COMPLETED')
+        self.assertEqual(self.db.jobs[first['job_id']]['status'], 'cancelled')
         self.assertFalse(self.redis.exists('screening:active:2026-10-29:HK'))
 
     def test_database_failure_rolls_back_job_and_lock(self):

@@ -126,6 +126,13 @@ type Job = {
   pool_types?: string[]
   summary?: Record<string, unknown>
 }
+type ScreeningJobDetailData = Job & {
+  tasks: Task[]
+  total_count: number
+  completed_count: number
+  passed_count: number
+  error_count: number
+}
 type RuleChain = {
   market: string
   timeframe: string
@@ -303,6 +310,7 @@ const COLUMN_LABELS: Record<string, string> = {
   chain_key: '规则链 Key',
   chain_name: '规则链',
   code: '股票代码',
+  completed_count: '扫描位置',
   created_at: '创建时间',
   current_stock_code: '当前股票',
   current_stock_name: '当前股票名',
@@ -337,6 +345,7 @@ const COLUMN_LABELS: Record<string, string> = {
   task_id: '任务 ID',
   technical_score: '技术分',
   timeframe: '周期',
+  total_count: '股票总数',
   position_id: '持仓编号',
   strategy_name: '策略名称',
   filled_price: '成交价格',
@@ -2576,14 +2585,14 @@ function MarketScreeningCenter({ openJob }: { openJob: (jobId: string) => void }
 }
 
 function ScreeningJobDetail({ jobId }: { jobId: string }) {
-  const [job, setJob] = useState<any>(null); const [stocks, setStocks] = useState<JobStock[]>([])
+  const [job, setJob] = useState<ScreeningJobDetailData | null>(null); const [stocks, setStocks] = useState<JobStock[]>([])
   const [market, setMarket] = useState(''); const [status, setStatus] = useState(''); const [passed, setPassed] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   async function refresh() {
     if (!jobId) return
     const params = new URLSearchParams(); if (market) params.set('market', market); if (status) params.set('processing_status', status); if (passed) params.set('passed', passed)
-    const [jobData, stockData] = await Promise.all([api<any>(`/api/screening/jobs/${jobId}`), api<{ rows: JobStock[] }>(`/api/screening/jobs/${jobId}/stocks?${params}`)])
+    const [jobData, stockData] = await Promise.all([api<ScreeningJobDetailData>(`/api/screening/jobs/${jobId}`), api<{ rows: JobStock[] }>(`/api/screening/jobs/${jobId}/stocks?${params}`)])
     setJob(jobData); setStocks(stockData.rows || [])
   }
   async function resume() {
@@ -2601,10 +2610,16 @@ function ScreeningJobDetail({ jobId }: { jobId: string }) {
   }
   useEffect(() => { refresh().catch(err => setError(String(err))) }, [jobId, market, status, passed])
   useEffect(() => { if (!job || isTerminalTaskStatus(job.status)) return; const timer = window.setInterval(() => refresh().catch(err => setError(String(err))), 3000); return () => window.clearInterval(timer) }, [job?.status, jobId, market, status, passed])
+  const scannedCount = job?.tasks.reduce((total, task) => {
+    // The market counter advances as each scan starts, before its result exists.
+    const current = task.current_stock_code && task.status !== 'completed' ? 1 : 0
+    return total + Math.max(0, task.completed_count - current)
+  }, 0) ?? 0
+  const processedCount = job ? Math.min(job.total_count, Math.max(job.completed_count, scannedCount)) : 0
   return <section>
     <Header title="全市场筛选任务详情" subtitle={jobId} />
     {error && <div className="error">{error}</div>}
-    {job && <><div className="metric-grid task-summary-grid"><Metric label="状态" value={<StatusBadge value={job.status} />} /><Metric label="总进度" value={`${job.completed_count}/${job.total_count}`} /><Metric label="通过" value={job.passed_count} /><Metric label="处理错误" value={job.error_count} /></div>
+    {job && <><div className="metric-grid task-summary-grid"><Metric label="状态" value={<StatusBadge value={job.status} />} /><Metric label="已处理" value={`${processedCount}/${job.total_count}`} /><Metric label="已入选" value={job.passed_count} /><Metric label="处理错误" value={job.error_count} /></div>
       {['queued', 'running', 'cancelling'].includes(job.status) && <div className="toolbar">
         <button type="button" className="secondary-button" disabled={submitting} aria-busy={submitting} onClick={() => cancel().catch(console.error)}>
           {job.status === 'cancelling' ? '确认终止状态' : '终止任务'}

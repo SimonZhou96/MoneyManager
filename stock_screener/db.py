@@ -2469,6 +2469,25 @@ class MarketDatabase:
             for row in rows
         ]
 
+    def get_completed_screening_rules(self, run_date: date, markets: List[str]) -> set[tuple[str, str]]:
+        if not markets:
+            return set()
+        placeholders = ", ".join(["%s"] * len(markets))
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT DISTINCT l.market, COALESCE(
+                    NULLIF(JSON_UNQUOTE(JSON_EXTRACT(j.options_json, CONCAT('$.chain_by_market.', l.market))), 'null'),
+                    l.chain_key
+                )
+                FROM screening_run_locks l
+                LEFT JOIN web_screening_jobs j ON j.job_id = l.job_id
+                WHERE l.run_date = %s AND l.status = 'completed' AND l.market IN ({placeholders})
+                """,
+                (run_date, *markets),
+            )
+            return {tuple(row) for row in cursor.fetchall()}
+
     def get_active_screening_jobs(self, run_date: date, markets: List[str], exclude_job_id: Optional[str] = None) -> List[dict]:
         if not markets:
             return []

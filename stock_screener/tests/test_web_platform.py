@@ -84,8 +84,8 @@ class WebPlatformTests(unittest.TestCase):
             def get_active_screening_jobs(self, *args):
                 return []
 
-            def get_screening_run_locks(self, run_date, markets, timeframe, chain_key=None, pool_scope=None):
-                return []
+            def get_completed_screening_rules(self, run_date, markets):
+                return set()
 
             def create_web_screening_job(self, job_id, user_id, markets, timeframe, options, execution_mode="web_backend"):
                 self.created_job = {
@@ -117,7 +117,7 @@ class WebPlatformTests(unittest.TestCase):
              mock.patch('web.main.enqueue_web_screening_job') as enqueue:
             result = create_screening_task(
                 payload,
-                CurrentUser(id=7, username="tester", role="admin"),
+                CurrentUser(user_id="00000000-0000-4000-8000-000000000007", username="tester", role="admin"),
                 db,
             )
 
@@ -134,9 +134,6 @@ class WebPlatformTests(unittest.TestCase):
                 self.created_job = False
                 self.created_locks = False
 
-            def get_screening_run_locks(self, *args, **kwargs):
-                return []
-
             def create_web_screening_job(self, *args, **kwargs):
                 self.created_job = True
 
@@ -152,7 +149,7 @@ class WebPlatformTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "只读目录"):
                 create_screening_task(
                     ScreeningTaskRequest(markets=["HK"], pool_types=["best"]),
-                    CurrentUser(id=801, username="artifact-test", role="admin"),
+                    CurrentUser(user_id="00000000-0000-4000-8000-000000000801", username="artifact-test", role="admin"),
                     db,
                 )
 
@@ -160,6 +157,7 @@ class WebPlatformTests(unittest.TestCase):
         self.assertFalse(db.created_locks)
 
     def test_web_job_records_market_task_id_before_market_screening_finishes(self):
+        from contextlib import nullcontext
         from types import SimpleNamespace
         from web.jobs import run_web_screening_job
 
@@ -201,6 +199,7 @@ class WebPlatformTests(unittest.TestCase):
             return SimpleNamespace(task_id="task-hk-1", csv_paths=[], market="HK", passed=[], error=None, skipped=False)
 
         with mock.patch("web.jobs.MarketDatabase", FakeDB), \
+             mock.patch("web.jobs.persisted_job_provider_context", return_value=nullcontext()), \
              mock.patch("web.jobs.get_default_screening_params", return_value={}), \
              mock.patch("web.jobs.run_market_screening_worker", side_effect=run_market), \
              mock.patch("web.jobs.publish_task_report", return_value=None), \
