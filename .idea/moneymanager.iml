@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <module external.system.id="pyproject.toml" type="PYTHON_MODULE" version="4">
   <component name="Go" enabled="true" />
+  <component name="GoModuleSettings" enabled="true" />
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/stock_screener/.venv" />
     </content>
-    <orderEntry type="jdk" jdkName="uv (MoneyManager)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="~/Desktop/goworkspace/src/github.com/SimonZhou96/MoneyManager/.venv" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>

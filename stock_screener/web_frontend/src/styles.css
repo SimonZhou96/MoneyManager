@@ -696,6 +696,11 @@ tr.selected-row td:first-child { box-shadow: inset 3px 0 0 #c9a84c, inset 0 1px 
 }
 .task-refresh-button:focus-visible { outline: 2px solid #c9a84c; outline-offset: 3px; }
 .task-refresh-button:disabled { opacity: .6; cursor: wait; }
+.task-stock-list {
+  max-height: min(32rem, 60vh);
+  overflow-y: auto;
+}
+.task-stock-list:focus-visible { outline: 2px solid #c9a84c; outline-offset: 2px; }
 .info-list {
   display: grid;
   gap: 10px;

@@ -400,6 +400,8 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             "temperature": 0.2,
             "response_format": {"type": "json_object"},
         }
+        if self.model == "gpt-6-luna":
+            payload["reasoning_effort"] = "none"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -446,6 +448,8 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             "temperature": 0.2,
             "response_format": {"type": "json_object"},
         }
+        if self.model == "gpt-6-luna":
+            payload["reasoning_effort"] = "none"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -502,14 +506,14 @@ class DeepSeekLLMProvider(OpenAICompatibleLLMProvider):
 
 
 class CodexResponsesLLMProvider(LLMProvider):
-    """OpenAI Codex model implementation using the Responses API."""
+    """OpenAI Responses API implementation."""
 
     name = "codex_responses"
 
     def __init__(
         self,
         api_key: str,
-        model: str = "gpt-5.2-codex",
+        model: str = "gpt-6.1-sol",
         api_base: str = "https://api.openai.com",
         timeout_sec: int = 120,
         reasoning_effort: str = "medium",

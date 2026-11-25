@@ -1,14 +1,14 @@
 # Docker Compose 部署
 
 此目录的 `docker-compose.yml` 为 Docker Compose 准备，服务拓扑与
-`podman-compose.yml` 一致：Caddy、前端静态站点、Web API、后台 Worker、MySQL 和
+`podman-compose.yml` 一致：前端 Nginx、Web API、后台 Worker、MySQL 和
 Redis。API 与 Worker 共用 `Containerfile` 构建；前端静态站点通过
-`Containerfile.frontend` 构建，Caddy 反向代理到前端和 API。
+`Containerfile.frontend` 构建。Nginx 直接监听主机 TCP 80，并将 `/api/` 反向代理到 API。
 
 ## 前置条件
 
 - Docker Engine 及 Docker Compose plugin。
-- 宿主机开放 TCP 80、443；不要向公网开放 MySQL 3306 或 Redis 6379。
+- 当前 HTTP 部署开放 TCP 80；不要向公网开放 MySQL 3306 或 Redis 6379。HTTP 不加密，登录凭据和会话数据会明文传输。
 - 已准备 `stock_screener/.env`，可从 `.env.example` 复制，并设置强密码、
   `AGENT_TOKEN` 与 Web 登录凭据。
 - 仓库自带的 GitHub Actions 部署流程会在 runner 构建镜像归档，传到 ECS 后加载；

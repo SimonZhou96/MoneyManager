@@ -8,9 +8,26 @@ that UUID as a string. Provider settings are stored per `(user_id, provider_key)
 in `web_account_provider_configs` and encrypted with AES-GCM before they reach
 MySQL. The API returns only whether a secret is configured, never its value.
 
-Account provider settings include the LLM provider order and OpenAI-compatible,
-Codex Responses, and DeepSeek credentials; search order, Tavily, and Zhipu Web
-Search; FRED, Funda, market-intel source order; and Feishu webhook/app settings.
+## API configuration fields
+
+The account API 配置 page and its public API accept API keys only:
+
+- LLM: OpenAI Chat Completions, OpenAI Responses, and DeepSeek.
+- Search: Tavily and Zhipu Web Search.
+- Data: FRED and Funda.
+
+API addresses, model names, reasoning settings, provider routing, and search
+options are not account-editable fields. Account-scoped tasks use the built-in
+provider defaults for those values. For example, OpenAI Chat Completions uses
+the `https://api.openai.com` endpoint and `gpt-6-luna` model; OpenAI Responses
+uses the same endpoint and `gpt-6.1-sol` model.
+The public API rejects non-key fields even if a client submits them. Previously
+encrypted non-key values for these groups are ignored by account-scoped tasks;
+they are removed from the saved payload the next time that provider group is
+saved.
+
+Existing encrypted per-account Feishu credentials remain loadable for backward
+compatibility, but are no longer exposed or editable through the API 配置 page.
 MySQL, Redis, session, agent, and other infrastructure settings stay in the
 deployment environment. A user task with an account context does not fall back
 to another account's key or a process-wide provider key. Scheduled jobs without

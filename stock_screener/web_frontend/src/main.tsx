@@ -424,12 +424,23 @@ function _oldestTime(rows: Array<Record<string, unknown>>): string | null {
   return oldest
 }
 
-function commonRuleChains(markets: string[], rulesByMarket: Record<string, RulesResponse | undefined>): RuleChain[] {
-  if (markets.length === 0) return []
-  const firstRules = rulesByMarket[markets[0]]
-  if (!firstRules?.chains) return []
-  return firstRules.chains
-    .filter(chain => markets.every(market => (rulesByMarket[market]?.chains || []).some(item => item.chain_key === chain.chain_key && item.timeframe === chain.timeframe)))
+function commonRuleChains(rules: RulesResponse[]): RuleChain[] {
+  const chainsByMarket = rules.map(({ chains }) => {
+    const byKey = new Map<string, RuleChain>()
+    // The endpoint returns period-specific chains before wildcard chains.
+    for (const chain of chains || []) {
+      if (!byKey.has(chain.chain_key)) byKey.set(chain.chain_key, chain)
+    }
+    return byKey
+  })
+  const [first, ...others] = chainsByMarket
+  const hasExpression = (chain?: RuleChain) => Boolean(chain && Object.keys(chain.expression).length)
+  return Array.from(first?.values() || [])
+    .filter(chain => hasExpression(chain) && others.every(market => hasExpression(market.get(chain.chain_key))))
+    .map(chain => ({
+      ...chain,
+      enabled: chain.enabled && others.every(market => market.get(chain.chain_key)?.enabled),
+    }))
     .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.priority - b.priority || a.chain_key.localeCompare(b.chain_key))
 }
 
@@ -2489,9 +2500,15 @@ function MarketScreeningCenter({ openJob }: { openJob: (jobId: string) => void }
   const [markets, setMarkets] = useState<string[]>(['HK', 'US', 'A'])
   const [timeframe, setTimeframe] = useState('1d')
   const [poolTypes, setPoolTypes] = useState(['best'])
+  const [chainKey, setChainKey] = useState('')
+  const [ruleOptions, setRuleOptions] = useState<{ scope: string; chains: RuleChain[]; error?: string }>()
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
+  const ruleScope = JSON.stringify([timeframe, markets])
+  const currentRules = ruleOptions?.scope === ruleScope ? ruleOptions : undefined
+  const rulesLoading = markets.length > 0 && !currentRules
+  const selectedChainKey = currentRules?.chains.find(chain => chain.chain_key === chainKey)?.chain_key
   async function refresh() {
     setRefreshing(true); setError('')
     try {
@@ -2500,11 +2517,31 @@ function MarketScreeningCenter({ openJob }: { openJob: (jobId: string) => void }
     } finally { setRefreshing(false) }
   }
   useEffect(() => { refresh().catch(err => setError(String(err))) }, [])
+  useEffect(() => {
+    if (!markets.length) return
+    const controller = new AbortController()
+    Promise.all(markets.map(market => api<RulesResponse>(
+      `/api/rules?market=${market}&timeframe=${timeframe}`,
+      { signal: controller.signal },
+    ))).then(rules => {
+      if (controller.signal.aborted) return
+      const chains = commonRuleChains(rules)
+      setRuleOptions({ scope: ruleScope, chains })
+      setChainKey(key => chains.some(chain => chain.chain_key === key) ? key : '')
+    }).catch(err => {
+      if (controller.signal.aborted) return
+      setRuleOptions({ scope: ruleScope, chains: [], error: err instanceof Error ? err.message : '加载规则链失败' })
+      setChainKey('')
+    })
+    return () => controller.abort()
+  }, [markets, timeframe, ruleScope])
   async function submit(event: React.FormEvent) {
-    event.preventDefault(); setLoading(true); setError('')
+    event.preventDefault()
+    if (loading || rulesLoading || !markets.length || !poolTypes.length) return
+    setLoading(true); setError('')
     try {
       const created = await api<{ job_id: string }>('/api/screening/tasks', {
-        method: 'POST', body: JSON.stringify({ markets, timeframe, pool_types: poolTypes, enable_ai_analysis: false, send_feishu: false }),
+        method: 'POST', body: JSON.stringify({ markets, timeframe, pool_types: poolTypes, chain_key: selectedChainKey, enable_ai_analysis: false, send_feishu: false }),
       })
       openJob(created.job_id)
     } catch (err) { setError(err instanceof Error ? err.message : '创建任务失败') } finally { setLoading(false) }
@@ -2516,8 +2553,17 @@ function MarketScreeningCenter({ openJob }: { openJob: (jobId: string) => void }
     <Panel title="新增全市场筛选任务"><form className="screening-form-grid" onSubmit={submit}>
       <Field label="市场"><div className="screening-toggles">{MARKET_OPTIONS.map(item => <label className="check" key={item}><input type="checkbox" checked={markets.includes(item)} onChange={() => toggle(item, markets, setMarkets)} />{MARKET_LABELS[item]}</label>)}</div></Field>
       <Field label="周期"><select value={timeframe} onChange={event => setTimeframe(event.target.value)}>{TIMEFRAME_OPTIONS.map(item => <option key={item}>{item}</option>)}</select></Field>
+      <Field label="规则链">
+        <select value={selectedChainKey || ''} disabled={!markets.length || rulesLoading} onChange={event => setChainKey(event.target.value)}>
+          <option value="">{rulesLoading ? '正在加载规则链…' : '使用系统默认规则链'}</option>
+          {currentRules?.chains.map(chain => (
+            <option key={chain.chain_key} value={chain.chain_key}>{chain.chain_name}{chain.enabled ? '' : '（试跑）'}</option>
+          ))}
+        </select>
+        {currentRules?.error && <small role="status">规则链加载失败，可使用默认规则链。{currentRules.error}</small>}
+      </Field>
       <Field label="股票池"><div className="screening-toggles">{POOL_OPTIONS.map(item => <label className="check" key={item.value}><input type="checkbox" checked={poolTypes.includes(item.value)} onChange={() => toggle(item.value, poolTypes, setPoolTypes)} />{item.label}</label>)}</div></Field>
-      <div className="screening-actions"><button className="primary" disabled={loading || !markets.length || !poolTypes.length}>{loading ? '创建中...' : '创建筛选任务'}</button></div>
+      <div className="screening-actions"><button className="primary" disabled={loading || rulesLoading || !markets.length || !poolTypes.length}>{loading ? '创建中...' : '创建筛选任务'}</button></div>
     </form></Panel>
     {error && <div className="error">{error}</div>}
     <Panel title="当前任务"><div className="toolbar">
@@ -2559,11 +2605,18 @@ function ScreeningJobDetail({ jobId }: { jobId: string }) {
     <Header title="全市场筛选任务详情" subtitle={jobId} />
     {error && <div className="error">{error}</div>}
     {job && <><div className="metric-grid task-summary-grid"><Metric label="状态" value={<StatusBadge value={job.status} />} /><Metric label="总进度" value={`${job.completed_count}/${job.total_count}`} /><Metric label="通过" value={job.passed_count} /><Metric label="处理错误" value={job.error_count} /></div>
-      {['queued', 'running', 'cancelling'].includes(job.status) && <div className="toolbar"><button disabled={submitting} onClick={() => cancel().catch(console.error)}>{job.status === 'cancelling' ? '确认终止状态' : '终止任务'}</button>{job.status === 'cancelling' && <span>正在等待执行进程停止，市场名额尚未释放</span>}</div>}
+      {['queued', 'running', 'cancelling'].includes(job.status) && <div className="toolbar">
+        <button type="button" className="secondary-button" disabled={submitting} aria-busy={submitting} onClick={() => cancel().catch(console.error)}>
+          {job.status === 'cancelling' ? '确认终止状态' : '终止任务'}
+        </button>
+        {job.status === 'cancelling' && <span>正在等待执行进程停止，市场名额尚未释放</span>}
+      </div>}
       {['failed', 'cancelled'].includes(job.status) && <div className="toolbar"><button className="primary" disabled={submitting} onClick={() => resume().catch(console.error)}>继续任务</button></div>}</>}
     <Panel title="市场任务"><Table rows={job?.tasks || []} columns={['market', 'status', 'completed_count', 'total_count', 'current_stock_code']} /></Panel>
     <Panel title="股票处理明细"><div className="toolbar toolbar-row"><Field label="市场"><select value={market} onChange={e => setMarket(e.target.value)}><option value="">全部</option>{MARKET_OPTIONS.map(item => <option key={item}>{item}</option>)}</select></Field><Field label="处理状态"><select value={status} onChange={e => setStatus(e.target.value)}><option value="">全部</option><option value="queued">等待处理</option><option value="running">处理中</option><option value="completed">已完成</option><option value="error">处理错误</option></select></Field><Field label="筛选结果"><select value={passed} onChange={e => setPassed(e.target.value)}><option value="">全部</option><option value="true">满足条件</option><option value="false">不满足条件</option></select></Field></div>
-      <div className="task-stock-list">{stocks.map(stock => <article className="task-stock-row" key={`${stock.task_id}-${stock.code}`}><div><strong>{stock.code} {stock.name || ''}</strong><p><StatusBadge value={stock.processing_status} /> {stock.is_passed === null ? '未完成' : stock.is_passed ? '筛选通过' : '筛选未通过'}</p></div><ScreeningConditionTags stock={stock} /><small>{stock.error_message || readableFilterSummary(stock.filter_summary)}</small></article>)}</div>
+      <div className="task-stock-list" role="region" aria-label="股票处理明细" tabIndex={stocks.length ? 0 : undefined}>
+        {stocks.map(stock => <article className="task-stock-row" key={`${stock.task_id}-${stock.code}`}><div><strong>{stock.code} {stock.name || ''}</strong><p><StatusBadge value={stock.processing_status} /> {stock.is_passed === null ? '未完成' : stock.is_passed ? '筛选通过' : '筛选未通过'}</p></div><ScreeningConditionTags stock={stock} /><small>{stock.error_message || readableFilterSummary(stock.filter_summary)}</small></article>)}
+      </div>
     </Panel>
   </section>
 }

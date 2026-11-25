@@ -27,10 +27,9 @@ type ProviderSettingsResponse = {
 }
 
 const SECTIONS = [
-  { title: '大模型', groupKeys: ['llm_routing', 'llm_openai', 'llm_codex', 'llm_deepseek'] },
-  { title: '新闻搜索', groupKeys: ['search_routing', 'search_tavily', 'search_zhipu'] },
-  { title: '数据服务', groupKeys: ['data_fred', 'data_funda', 'market_intel_routing'] },
-  { title: '飞书', groupKeys: ['feishu_webhook', 'feishu_app'] },
+  { title: '大模型', groupKeys: ['llm_openai', 'llm_codex', 'llm_deepseek'] },
+  { title: '新闻搜索', groupKeys: ['search_tavily', 'search_zhipu'] },
+  { title: '数据服务', groupKeys: ['data_fred', 'data_funda'] },
 ]
 
 export function ProviderSettingsPage() {
@@ -112,7 +111,7 @@ export function ProviderSettingsPage() {
     <header className="page-header">
       <p className="eyebrow">ACCOUNT SETTINGS</p>
       <h1>API 配置</h1>
-      <p>配置当前登录账号使用的大模型、新闻搜索、数据服务和飞书凭证。</p>
+      <p>仅需配置 API Key。服务地址、模型名称和其他参数均使用系统默认值。</p>
     </header>
 
     {!settings && !error && <div className="panel provider-settings-state">正在读取配置…</div>}

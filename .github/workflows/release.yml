@@ -200,7 +200,7 @@ jobs:
             compose config -q
             if ! compose up -d --no-build --remove-orphans; then
               compose ps
-              compose logs --tail=200 web-api caddy
+              compose logs --tail=200 web-api frontend
               exit 1
             fi
             compose ps
@@ -208,16 +208,18 @@ jobs:
             for attempt in $(seq 1 30); do
               if compose exec -T web-api curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1 \
                 && compose exec -T frontend sh -c 'test -s /usr/share/nginx/html/index.html' \
-                && compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+                && compose exec -T frontend nginx -t >/dev/null 2>&1 \
+                && compose exec -T frontend wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1; then
                 break
               fi
               sleep 5
             done
             if ! compose exec -T web-api curl -fsS http://127.0.0.1:8000/healthz \
               || ! compose exec -T frontend sh -c 'test -s /usr/share/nginx/html/index.html' \
-              || ! compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile; then
+              || ! compose exec -T frontend nginx -t \
+              || ! compose exec -T frontend wget -qO- http://127.0.0.1/healthz; then
               compose ps
-              compose logs --tail=200 web-api frontend caddy
+              compose logs --tail=200 web-api frontend
               exit 1
             fi
 

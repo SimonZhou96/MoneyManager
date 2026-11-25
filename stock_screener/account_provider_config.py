@@ -61,57 +61,30 @@ def _field(key: str, env_name: str, label: str, **kwargs: Any) -> ConfigField:
     return ConfigField(key=key, env_name=env_name, label=label, **kwargs)
 
 
-PROVIDER_GROUPS: tuple[ProviderGroup, ...] = (
+API_KEY_PROVIDER_GROUPS: tuple[ProviderGroup, ...] = (
     ProviderGroup(
-        "llm_routing", "大模型路由", "设置账号使用的大模型顺序。每个账号只读取自己的模型密钥。", (
-            _field("provider", "LLM_PROVIDER", "首选提供方", input_type="select", options=(
-                ("openai_compatible", "OpenAI 兼容"), ("codex_responses", "Codex Responses"), ("deepseek", "DeepSeek"),
-            )),
-            _field("provider_order", "LLM_PROVIDER_ORDER", "回退顺序", placeholder="openai_compatible,codex_responses,deepseek"),
-        ),
-    ),
-    ProviderGroup(
-        "llm_openai", "OpenAI 兼容 / 阿里云百炼", "适用于兼容 /v1/chat/completions 的服务。", (
-            _field("api_base", "LLM_API_BASE", "API 地址", placeholder="https://dashscope.aliyuncs.com/compatible-mode"),
+        "llm_openai", "OpenAI", "只需填写 API Key；服务地址和默认模型由系统提供。", (
             _field("api_key", "LLM_API_KEY", "API Key", secret=True, placeholder="留空表示保留已保存的 Key"),
-            _field("model", "LLM_MODEL", "模型名称", placeholder="qwen-plus"),
         ), True,
     ),
     ProviderGroup(
-        "llm_codex", "Codex Responses", "使用 /v1/responses 接口。", (
-            _field("api_base", "CODEX_API_BASE", "API 地址", placeholder="https://api.openai.com"),
+        "llm_codex", "OpenAI Responses", "只需填写 API Key；服务地址、模型和推理设置使用系统默认值。", (
             _field("api_key", "CODEX_API_KEY", "API Key", secret=True, placeholder="留空表示保留已保存的 Key"),
-            _field("model", "CODEX_LLM_MODEL", "模型名称", placeholder="gpt-5.2-codex"),
-            _field("reasoning_effort", "CODEX_REASONING_EFFORT", "推理强度", input_type="select", options=(
-                ("low", "low"), ("medium", "medium"), ("high", "high"),
-            )),
         ), True,
     ),
     ProviderGroup(
-        "llm_deepseek", "DeepSeek", "使用 DeepSeek Chat Completions 接口。", (
-            _field("api_base", "DEEPSEEK_API_BASE", "API 地址", placeholder="https://api.deepseek.com"),
+        "llm_deepseek", "DeepSeek", "只需填写 API Key；服务地址和默认模型由系统提供。", (
             _field("api_key", "DEEPSEEK_API_KEY", "API Key", secret=True, placeholder="留空表示保留已保存的 Key"),
-            _field("model", "DEEPSEEK_LLM_MODEL", "模型名称", placeholder="deepseek-v4-flash"),
         ), True,
     ),
     ProviderGroup(
-        "search_routing", "新闻搜索路由", "按顺序尝试已配置的搜索服务。", (
-            _field("provider_order", "SIGNAL_SEARCH_PROVIDER_ORDER", "搜索顺序", placeholder="tavily,zhipuai,bing_baidu"),
-        ),
-    ),
-    ProviderGroup(
-        "search_tavily", "Tavily", "新闻和公司事件搜索。", (
+        "search_tavily", "Tavily", "只需填写 API Key；搜索服务地址由系统提供。", (
             _field("api_key", "TAVILY_API_KEY", "API Key", secret=True, placeholder="留空表示保留已保存的 Key"),
-            _field("endpoint", "TAVILY_API_ENDPOINT", "API 地址", placeholder="https://api.tavily.com/search"),
         ), True,
     ),
     ProviderGroup(
-        "search_zhipu", "智谱 Web Search", "使用智谱 / BigModel Web Search。", (
+        "search_zhipu", "智谱 Web Search", "只需填写 API Key；搜索参数和服务地址使用系统默认值。", (
             _field("api_key", "ZHIPUAI_API_KEY", "API Key", secret=True, placeholder="留空表示保留已保存的 Key"),
-            _field("endpoint", "ZHIPUAI_WEB_SEARCH_ENDPOINT", "API 地址", placeholder="https://open.bigmodel.cn/api/paas/v4/web_search"),
-            _field("engine", "ZHIPUAI_WEB_SEARCH_ENGINE", "搜索引擎", placeholder="search_std"),
-            _field("content_size", "ZHIPUAI_WEB_SEARCH_CONTENT_SIZE", "内容长度", input_type="select", options=(("small", "small"), ("medium", "medium"), ("large", "large"))),
-            _field("recency_filter", "ZHIPUAI_WEB_SEARCH_RECENCY_FILTER", "时间范围", placeholder="noLimit"),
         ), True,
     ),
     ProviderGroup(
@@ -120,16 +93,15 @@ PROVIDER_GROUPS: tuple[ProviderGroup, ...] = (
         ), True,
     ),
     ProviderGroup(
-        "data_funda", "Funda 基金数据", "美股指数成分和 ETF 持仓数据。", (
+        "data_funda", "Funda 基金数据", "只需填写 API Key；服务地址由系统提供。", (
             _field("api_key", "FUNDA_API_KEY", "API Key", secret=True, placeholder="留空表示保留已保存的 Key"),
-            _field("api_base", "FUNDA_API_BASE", "API 地址", placeholder="https://api.funda.ai"),
         ), True,
     ),
-    ProviderGroup(
-        "market_intel_routing", "市场资讯源顺序", "调整账号任务聚合市场新闻与公告时使用的来源顺序。", (
-            _field("provider_order", "MARKET_INTEL_PROVIDER_ORDER", "资讯源顺序", placeholder="cailianpress,sina,tradingview,eastmoney,global_index"),
-        ),
-    ),
+)
+
+# Feishu credentials are retained for already-configured accounts, but are no
+# longer part of the API-key-only settings API.
+LEGACY_ACCOUNT_PROVIDER_GROUPS: tuple[ProviderGroup, ...] = (
     ProviderGroup(
         "feishu_webhook", "飞书机器人 Webhook", "用于账号发起的任务完成通知。连接测试会向该机器人发送一条测试消息。", (
             _field("webhook_url", "FEISHU_WEBHOOK_URL", "Webhook 地址", secret=True, placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..."),
@@ -144,10 +116,25 @@ PROVIDER_GROUPS: tuple[ProviderGroup, ...] = (
     ),
 )
 
+PROVIDER_GROUPS = API_KEY_PROVIDER_GROUPS + LEGACY_ACCOUNT_PROVIDER_GROUPS
+API_KEY_PROVIDER_GROUP_BY_KEY = {group.key: group for group in API_KEY_PROVIDER_GROUPS}
 PROVIDER_GROUP_BY_KEY = {group.key: group for group in PROVIDER_GROUPS}
+
+# Keep legacy non-key variables isolated from process-wide environment values
+# inside account tasks. They are not accepted by the public settings API.
+LEGACY_PROVIDER_ENV_NAMES = frozenset({
+    "LLM_PROVIDER", "LLM_PROVIDER_ORDER", "LLM_API_BASE", "LLM_MODEL",
+    "CODEX_API_BASE", "CODEX_LLM_MODEL", "CODEX_REASONING_EFFORT",
+    "DEEPSEEK_API_BASE", "DEEPSEEK_LLM_MODEL", "DEEPSEEK_MODEL",
+    "SIGNAL_SEARCH_PROVIDER_ORDER", "TAVILY_API_ENDPOINT",
+    "ZHIPUAI_WEB_SEARCH_ENDPOINT", "ZHIPUAI_WEB_SEARCH_ENGINE",
+    "ZHIPUAI_WEB_SEARCH_CONTENT_SIZE", "ZHIPUAI_WEB_SEARCH_RECENCY_FILTER",
+    "FUNDA_API_BASE", "MARKET_INTEL_PROVIDER_ORDER",
+})
 PROVIDER_ENV_NAMES = frozenset(
     {field.env_name for group in PROVIDER_GROUPS for field in group.fields}
-    | {"DEEPSEEK_MODEL", "ZHIPU_API_KEY", "BIGMODEL_API_KEY"}
+    | LEGACY_PROVIDER_ENV_NAMES
+    | {"ZHIPU_API_KEY", "BIGMODEL_API_KEY"}
 )
 PROVIDER_FIELD_BY_ENV_NAME = {
     field.env_name: (group, field)
@@ -246,7 +233,7 @@ def secret_is_configured(values: Dict[str, str], field: ConfigField) -> bool:
 def public_provider_groups(db, user_id: str) -> list[dict]:
     values = load_account_provider_values(db, user_id)
     groups = []
-    for group in PROVIDER_GROUPS:
+    for group in API_KEY_PROVIDER_GROUPS:
         public = group.to_public_dict(values)
         public["configured"] = any(values.get(field.env_name) for field in group.fields)
         groups.append(public)

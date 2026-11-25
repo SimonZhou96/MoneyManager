@@ -149,6 +149,8 @@ class LLMProviderFactory:
     """Create an LLM provider from environment configuration."""
 
     DEFAULT_PROVIDER_ORDER = ["openai_compatible", "codex_responses", "deepseek"]
+    DEFAULT_OPENAI_MODEL = "gpt-6-luna"
+    DEFAULT_CODEX_MODEL = "gpt-6.1-sol"
 
     @staticmethod
     def from_env(settings: AnalysisSettings) -> LLMProvider:
@@ -210,7 +212,10 @@ class LLMProviderFactory:
     @staticmethod
     def _openai_compatible_from_env(settings: AnalysisSettings) -> LLMProvider:
         api_key = (provider_config_value("LLM_API_KEY", "") or "").strip()
-        model = (provider_config_value("LLM_MODEL", "") or "").strip()
+        model = (
+            provider_config_value("LLM_MODEL", LLMProviderFactory.DEFAULT_OPENAI_MODEL)
+            or LLMProviderFactory.DEFAULT_OPENAI_MODEL
+        ).strip()
         if not api_key or not model:
             return NullLLMProvider()
         api_base = (provider_config_value("LLM_API_BASE", "https://api.openai.com") or "").strip()
@@ -226,7 +231,10 @@ class LLMProviderFactory:
         api_key = (provider_config_value("CODEX_API_KEY", "") or "").strip()
         if not api_key and current_account_user_id() is None:
             api_key = (provider_config_value("LLM_API_KEY", "") or "").strip()
-        model = (provider_config_value("CODEX_LLM_MODEL", "gpt-5.2-codex") or "").strip()
+        model = (
+            provider_config_value("CODEX_LLM_MODEL", LLMProviderFactory.DEFAULT_CODEX_MODEL)
+            or LLMProviderFactory.DEFAULT_CODEX_MODEL
+        ).strip()
         if not api_key or not model:
             return NullLLMProvider()
         api_base = (provider_config_value("CODEX_API_BASE", "https://api.openai.com") or "").strip()

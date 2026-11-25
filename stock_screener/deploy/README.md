@@ -1,10 +1,10 @@
 # MoneyManager Web 选股器云端部署教程
 
-本文档用于把 Web 选股器部署到中国大陆 ECS，并通过本地 OpenD Agent 把富途 OpenD 数据推送到云端。本教程按你的域名 `mmmcashlife.top` 编写。
+本文档用于把 Web 选股器部署到中国大陆 ECS，并通过本地 OpenD Agent 把富途 OpenD 数据推送到云端。当前默认通过 ECS 公网 IP 和 HTTP 访问，不依赖域名。
 
 - 云服务器：Alibaba Cloud 中国大陆 ECS。
 - 部署方式：Podman Compose。
-- 云端服务：Caddy + 前端静态站点 + web-api + web-worker + MySQL + Redis。
+- 云端服务：前端 Nginx + web-api + web-worker + MySQL + Redis。
 - 数据流：服务默认使用 YFinance/AKShare；仅在配置健康的远端 OpenD 后优先使用 OpenD 行情。
 
 > Redis 用于 RQ 后台队列和同市场同日全市场任务锁；Web API 限流仍是进程内滑动窗口。
@@ -12,7 +12,7 @@
 > 中国大陆 ECS 对外提供网站访问通常需要 ICP 备案。备案完成前，不要把域名正式解析到大陆 ECS 并开放 Web 访问。
 > OpenAI/Codex API 不建议从中国大陆 ECS 直连；大陆 ECS 上建议优先关闭 Codex/OpenAI provider，或把 AI worker 放到 OpenAI 支持地区。
 
-## 1. 备案与域名准备
+## 1. 域名备案（仅使用域名时需要）
 
 中国大陆 ECS 建站的关键前置条件是 ICP 备案：
 
@@ -44,21 +44,18 @@
    - 规格：小规模试运行用 `2 vCPU / 4 GB RAM / 80-100 GB ESSD`。
    - 系统：推荐 Ubuntu 22.04/24.04 LTS，命令更统一。
    - 公网：绑定公网 IP。
-2. 安全组入站规则：
+2. 当前 IP + HTTP 部署需要的安全组入站规则：
    - TCP `80`：允许 `0.0.0.0/0`。
-   - TCP `443`：允许 `0.0.0.0/0`。
    - TCP `22`：只允许你的固定公网 IP。
    - 不开放 MySQL `3306`、Redis `6379`。
-3. 域名 DNS：
-   - 添加 `A` 记录，例如 `mmmcashlife.top -> ECS 公网 IP`。
-   - 中国大陆 ECS 请在 ICP 备案通过后再正式解析。
-   - 等 DNS 生效后再启动 Caddy，Caddy 会自动申请 HTTPS 证书。
+3. 当前部署直接访问 `http://ECS公网IP/`，不需要 DNS 或 443 端口。
+   - HTTP 不加密，登录密码、会话 Cookie 和 API 密钥会以明文传输。
+   - 如果以后要通过公网安全访问，应配置 HTTPS 并将 `WEB_COOKIE_SECURE` 改回 `1`。
 
 参考：
 
 - Alibaba Cloud ECS 创建实例：https://www.alibabacloud.com/help/en/ecs/user-guide/create-instances/
 - Alibaba Cloud 安全组：https://www.alibabacloud.com/help/en/ecs/user-guide/manage-ecs-instances-in-security-groups
-- Caddy 自动 HTTPS：https://caddyserver.com/docs/automatic-https
 
 ## 3. 初始化服务器
 
@@ -134,14 +131,13 @@ MYSQL_DATABASE=market_data
 
 WEB_SESSION_COOKIE=moneymanager_session
 WEB_SESSION_TTL_HOURS=24
-WEB_COOKIE_SECURE=1
+WEB_COOKIE_SECURE=0
 WEB_BOOTSTRAP_USERNAME=<你的登录账号>
 WEB_BOOTSTRAP_PASSWORD=<你的登录密码>
 ARTIFACT_DIR=/data/moneymanager/artifacts
 
 REDIS_URL=redis://redis:6379/0
 AGENT_TOKEN=<使用 Agent API 时设置的长随机 token>
-DOMAIN_NAME=mmmcashlife.top
 
 KLINE_USE_FUTU_OPEND=0
 FUTU_HOST=<内网 OpenD 地址，例如 10.0.0.8>
@@ -233,7 +229,7 @@ PY
 
 首次运行前，在 ECS 的部署目录创建 `.env`：从仓库的 `stock_screener/.env.example` 复制并填写生产配置，权限设为 `600`。可先通过 SSH/SCP 放置 `.env.example`，再复制为 `.env`。如果 `.env` 缺失，工作流会先同步部署文件，然后在启动前报错；创建并填写 `.env` 后重新运行即可。该文件由服务器保管，自动部署会保留它以及 `/data/moneymanager` 下的数据库、Redis 和导出文件。ECS 需要已安装 Docker Compose 或 Podman Compose；工作流会在缺少 `rsync` 时尝试安装。
 
-工作流在 GitHub runner 上构建后端和前端静态镜像，将压缩镜像归档传到 ECS，再加载镜像并以 `--no-build` 重启服务。Caddy 仍负责 HTTPS 和 API 反向代理，ECS 不需要在部署期间构建 Python 或 Node 镜像。若首次部署前还没有服务数据目录，可按上文创建 `/data/moneymanager/{mysql,redis,artifacts}`。
+工作流在 GitHub runner 上构建后端和前端静态镜像，将压缩镜像归档传到 ECS，再加载镜像并以 `--no-build` 重启服务。前端 Nginx 直接监听主机 80 端口，提供静态页面并将 `/api/` 和 `/healthz` 反向代理到 Web API。若首次部署前还没有服务数据目录，可按上文创建 `/data/moneymanager/{mysql,redis,artifacts}`。
 
 ## 6. 启动云端服务
 
@@ -252,14 +248,14 @@ podman ps
 
 ```bash
 podman compose -f podman-compose.yml logs -f web-api
-podman compose -f podman-compose.yml logs -f caddy
+podman compose -f podman-compose.yml logs -f frontend
 podman compose -f podman-compose.yml logs -f web-worker
 ```
 
 健康检查：
 
 ```bash
-curl -s https://mmmcashlife.top/healthz
+curl -s http://YOUR_ECS_PUBLIC_IP/healthz
 ```
 
 预期返回：
@@ -271,7 +267,7 @@ curl -s https://mmmcashlife.top/healthz
 浏览器访问：
 
 ```text
-https://mmmcashlife.top
+http://YOUR_ECS_PUBLIC_IP
 ```
 
 使用 `.env` 中的 `WEB_BOOTSTRAP_USERNAME / WEB_BOOTSTRAP_PASSWORD` 登录。
@@ -425,31 +421,24 @@ podman compose -f podman-compose.yml down
 
 ## 11. 常见问题
 
-### 域名打不开
+### 公网 IP 无法访问
 
 检查：
 
 ```bash
-dig +short mmmcashlife.top
-curl -I http://mmmcashlife.top
-curl -I https://mmmcashlife.top
-podman compose -f deploy/podman-compose.yml logs caddy
+curl -I http://YOUR_ECS_PUBLIC_IP
+curl -fsS http://YOUR_ECS_PUBLIC_IP/healthz
+podman compose -f deploy/podman-compose.yml logs frontend
+podman compose -f deploy/podman-compose.yml logs web-api
 ```
 
-确认 DNS 指向 ECS 公网 IP，安全组开放 `80/443`。
+确认 ECS 安全组允许 TCP `80` 入站；当前部署不使用 `443`。
 
 中国大陆 ECS 还需要确认 ICP 备案已通过；备案未完成时，即使服务部署成功，公网域名访问也可能被拦截或无法正常开通。
 
-### HTTPS 证书没有签发
+### 登录后仍提示未登录
 
-Caddy 自动 HTTPS 需要：
-
-- `DOMAIN_NAME` 是真实域名，不是 `localhost`。
-- DNS 已解析到当前 ECS。
-- 80/443 可从公网访问。
-- `/data` 挂载可写，Caddy 证书存储能持久化。
-
-中国大陆 ECS 还需要确保备案通过后再开放域名访问。
+当前直接通过 HTTP 访问时，`.env` 必须设置 `WEB_COOKIE_SECURE=0`，否则浏览器不会在 HTTP 请求中发送会话 Cookie。切换到 HTTPS 后应改回 `1`。
 
 ### Codex/OpenAI 调用失败
 

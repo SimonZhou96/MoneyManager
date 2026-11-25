@@ -1,5 +1,16 @@
+{
+    default_sni {$DOMAIN_NAME:localhost}
+}
+
 {$DOMAIN_NAME:localhost} {
     encode gzip
+
+    tls {
+        issuer acme {
+            profile shortlived
+            disable_tlsalpn_challenge
+        }
+    }
 
     handle /api/* {
         reverse_proxy web-api:8000

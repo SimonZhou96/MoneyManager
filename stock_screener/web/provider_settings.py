@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from account_provider_config import (
-    PROVIDER_GROUP_BY_KEY,
-    PROVIDER_GROUPS,
+    API_KEY_PROVIDER_GROUP_BY_KEY,
+    API_KEY_PROVIDER_GROUPS,
     account_provider_context,
     decrypt_provider_config,
     encrypt_provider_config,
@@ -35,7 +35,7 @@ def get_provider_settings(
     if not encryption_key_configured():
         return {
             "encryption_ready": False,
-            "groups": [group.to_public_dict({}) | {"configured": False} for group in PROVIDER_GROUPS],
+            "groups": [group.to_public_dict({}) | {"configured": False} for group in API_KEY_PROVIDER_GROUPS],
         }
     try:
         groups = public_provider_groups(db, user.user_id)
@@ -53,7 +53,7 @@ def update_provider_settings(
 ):
     if not encryption_key_configured():
         raise HTTPException(status_code=503, detail="服务端未配置账号配置加密密钥")
-    group = PROVIDER_GROUP_BY_KEY.get(provider_key)
+    group = API_KEY_PROVIDER_GROUP_BY_KEY.get(provider_key)
     if not group:
         raise HTTPException(status_code=404, detail="Provider 配置项不存在")
     fields = {field.key: field for field in group.fields}
@@ -94,7 +94,7 @@ def test_provider_settings(
 ):
     if not encryption_key_configured():
         raise HTTPException(status_code=503, detail="服务端未配置账号配置加密密钥")
-    group = PROVIDER_GROUP_BY_KEY.get(provider_key)
+    group = API_KEY_PROVIDER_GROUP_BY_KEY.get(provider_key)
     if not group or not group.testable:
         raise HTTPException(status_code=404, detail="该配置项不支持连接测试")
     fields = {field.key: field for field in group.fields}
@@ -139,7 +139,12 @@ def test_provider_settings(
 def _stored_group_values(db: MarketDatabase, user_id: str, provider_key: str) -> dict[str, str]:
     try:
         ciphertext = db.list_web_provider_config_ciphertexts(user_id).get(provider_key)
-        return decrypt_provider_config(ciphertext) if ciphertext else {}
+        stored = decrypt_provider_config(ciphertext) if ciphertext else {}
+        group = API_KEY_PROVIDER_GROUP_BY_KEY.get(provider_key)
+        if not group:
+            return {}
+        allowed_keys = {field.key for field in group.fields}
+        return {key: value for key, value in stored.items() if key in allowed_keys}
     except Exception as exc:
         raise HTTPException(status_code=503, detail="账号配置无法解密，请检查服务端加密密钥") from exc
 
@@ -183,7 +188,7 @@ def _test_connection(provider_key: str, values: dict[str, str]) -> str:
             provider_names[provider_key], AnalysisSettings(),
         )
         if not getattr(provider, "is_available", False):
-            raise MissingProviderConfig("请填写 API Key 和模型名称")
+            raise MissingProviderConfig("请先填写 API Key")
         headers = {"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"}
         if provider_key == "llm_codex":
             response = requests.post(
@@ -193,15 +198,18 @@ def _test_connection(provider_key: str, values: dict[str, str]) -> str:
                 timeout=timeout,
             )
         else:
+            test_payload = {
+                "model": provider.model,
+                "messages": [{"role": "user", "content": "Reply with OK."}],
+                "max_completion_tokens": 8,
+                "temperature": 0,
+            }
+            if provider.model == LLMProviderFactory.DEFAULT_OPENAI_MODEL:
+                test_payload["reasoning_effort"] = "none"
             response = requests.post(
                 provider.chat_completions_url,
                 headers=headers,
-                json={
-                    "model": provider.model,
-                    "messages": [{"role": "user", "content": "Reply with OK."}],
-                    "max_tokens": 8,
-                    "temperature": 0,
-                },
+                json=test_payload,
                 timeout=timeout,
             )
         if response.status_code >= 400:
@@ -259,7 +267,7 @@ def _test_connection(provider_key: str, values: dict[str, str]) -> str:
 
     if provider_key == "data_funda":
         api_key = _require(values, "FUNDA_API_KEY", "Funda API Key")
-        base = str(values.get("FUNDA_API_BASE") or "https://api.funda.ai").strip().rstrip("/")
+        base = "https://api.funda.ai"
         response = requests.get(
             f"{base}/v1/funds",
             params={"type": "etf-holdings", "ticker": "SPY"},
